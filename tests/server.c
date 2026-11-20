@@ -477,6 +477,21 @@ TEST(NetExceptionsOverWire)
 		ok = exchange(&client, 1, req, 5, resp, &len) &&
 		     exception_is(resp, len, FC_WRITE_SINGLE_REGISTER, EXC_ILLEGAL_DATA_ADDRESS);
 	}
+	if (ok)
+	{
+		/* Diagnostics subfunction 0x0000 echoes the request; others are unsupported. */
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, 0x0000);
+		put_be16(req + 3, 0xBEEF);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 5 &&
+		     memcmp(resp, req, 5) == 0;
+	}
+	if (ok)
+	{
+		put_be16(req + 1, 0x0001);
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_DIAGNOSTICS, EXC_ILLEGAL_FUNCTION);
+	}
 
 	client_close(&client);
 	server_stop();

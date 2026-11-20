@@ -20,12 +20,15 @@ is disconnected.
 | 05 | Write Single Coil | coils | 1 |
 | 06 | Write Single Register | holding registers | 1 |
 | 07 | Read Exception Status | - | 1 byte (status) |
+| 08 | Diagnostics | - | subfunction 0x0000 (echo) |
 | 15 (0x0F) | Write Multiple Coils | coils | 1968 bits |
 | 16 (0x10) | Write Multiple Registers | holding registers | 123 registers |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
-Any other function code gets exception 01. Not supported yet: 08, 11, 12, 17, 20-24, 43.
+Diagnostics (FC 08) takes a 2-byte subfunction and a 2-byte data field: request PDU `[0x08, sub-hi, sub-lo, data-hi, data-lo]` (5 bytes). This TCP simulator implements a minimal, stateless subset with no serial-line diagnostics counters/state: subfunction `0x0000` (Return Query Data) echoes the same 5-byte PDU back to the client. A request with any other length or shape is rejected with exception 03 (illegal data value). Any diagnostics subfunction other than `0x0000` is not supported and is rejected with exception 01 (illegal function).
+
+Any other function code gets exception 01. Not supported yet: 11, 12, 17, 20-24, 43.
 
 ## Exceptions
 

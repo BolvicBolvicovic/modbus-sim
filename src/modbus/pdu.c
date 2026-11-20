@@ -197,6 +197,13 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		resp[0] = req[0];
 		resp[1] = dev->exception_status;
 		return 2;
+	case FC_DIAGNOSTICS:
+		if (req_len != 5)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+		if (get_be16(req + 1) != 0x0000)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+		memcpy(resp, req, 5);
+		return 5;
 	case FC_WRITE_MULTIPLE_COILS:
 		return write_multiple_coils(dev, req, req_len, resp);
 	case FC_WRITE_MULTIPLE_REGISTERS:

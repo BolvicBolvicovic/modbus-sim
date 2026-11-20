@@ -231,6 +231,45 @@ TEST(ReadExceptionStatusRejectsMalformedRequest)
 	arena_release(arena);
 }
 
+TEST(DiagnosticsReturnQueryDataEchoesRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(memcmp(resp, req, 5) == 0);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		short_req[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12 };
+	u8		extra[]     = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsUnsupportedSubfunctionIsIllegalFunction)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x01, 0x00, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_FUNCTION);
+	arena_release(arena);
+}
+
 TEST(MbapHeaderRoundTripAndValidation)
 {
 	u8		buf[MBAP_HEADER_SIZE];
