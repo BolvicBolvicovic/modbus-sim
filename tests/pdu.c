@@ -231,6 +231,66 @@ TEST(ReadExceptionStatusRejectsMalformedRequest)
 	arena_release(arena);
 }
 
+TEST(GetComEventCounterReturnsStatusAndCount)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
+	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
+	ASSERT_EQ(resp[1] == 0x00 && resp[2] == 0x00);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x02);
+	arena_release(arena);
+}
+
+TEST(GetComEventCounterCountsHandledRequests)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
+	u8		bad[]  = { 0x03, 0x00, 0x00, 0x00, 0x00 };	/* illegal quantity -> exception */
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
+	run(dev, bad, sizeof(bad), resp);
+	ASSERT_EQ(resp[0] == 0x83 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x03);
+	arena_release(arena);
+}
+
+TEST(GetComEventCounterWrapsAt16Bits)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->com_event_count = 0xFFFF;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[1] == 0x00 && resp[2] == 0x00);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00);
+	arena_release(arena);
+}
+
+TEST(GetComEventCounterRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		extra[] = { FC_GET_COM_EVENT_COUNTER, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_COUNTER | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
 TEST(DiagnosticsReturnQueryDataEchoesRequest)
 {
 	arena_t*	arena = ARENA_ALLOC();

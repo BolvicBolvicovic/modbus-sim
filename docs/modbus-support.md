@@ -21,6 +21,7 @@ is disconnected.
 | 06 | Write Single Register | holding registers | 1 |
 | 07 | Read Exception Status | - | 1 byte (status) |
 | 08 | Diagnostics | - | subfunction 0x0000 (echo) |
+| 11 (0x0B) | Get Com Event Counter | - | status + event count |
 | 15 (0x0F) | Write Multiple Coils | coils | 1968 bits |
 | 16 (0x10) | Write Multiple Registers | holding registers | 123 registers |
 
@@ -28,7 +29,9 @@ Read Exception Status (FC 07) takes no request data (PDU is only the function co
 
 Diagnostics (FC 08) takes a 2-byte subfunction and a 2-byte data field: request PDU `[0x08, sub-hi, sub-lo, data-hi, data-lo]` (5 bytes). This TCP simulator implements a minimal, stateless subset with no serial-line diagnostics counters/state: subfunction `0x0000` (Return Query Data) echoes the same 5-byte PDU back to the client. A request with any other length or shape is rejected with exception 03 (illegal data value). Any diagnostics subfunction other than `0x0000` is not supported and is rejected with exception 01 (illegal function).
 
-Any other function code gets exception 01. Not supported yet: 11, 12, 17, 20-24, 43.
+Get Com Event Counter (FC 11 / 0x0B) is a serial-diagnostics function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x0B`, 1 byte). A normal response is `[FC 0x0B][Status Hi][Status Lo][Event Count Hi][Event Count Lo]` (5 bytes). In this simulator the status is always `0x0000` (device ready); busy/error status `0xFFFF` is not modeled. Each device keeps a 16-bit communication event counter that is incremented once for every Modbus request PDU processed for that device (including requests that produce an exception response and including the FC 11 request itself). The response returns the counter value after that increment, and the counter wraps to 0 after 65535. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value). (Note: exception code 0x0B in this project means Gateway Target Device Failed to Respond; it is unrelated to FC 11.)
+
+Any other function code gets exception 01. Not supported yet: 12, 17, 20-24, 43.
 
 ## Exceptions
 

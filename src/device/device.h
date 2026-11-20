@@ -69,6 +69,7 @@ struct device_t
 	char		name[DEVICE_NAME_MAX];
 	u8		unit_id;
 	u8		exception_status;	/* FC 07 (Read Exception Status) response byte */
+	u16		com_event_count;	/* FC 11 (Get Com Event Counter), wraps modulo 65536 */
 	u64		start_ms;		/* ramps count their time from here */
 	fault_t		fault;
 	u32		point_count;

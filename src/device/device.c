@@ -29,6 +29,7 @@ device_new(arena_t* arena, u64 start_ms)
 
 	dev->unit_id         = 1;
 	dev->exception_status = 0;
+	dev->com_event_count  = 0;
 	dev->start_ms        = start_ms;
 	return dev;
 }
