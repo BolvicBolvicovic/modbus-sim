@@ -28,6 +28,7 @@ is disconnected.
 | 17 (0x11) | Report Server ID | - | byte count + server ID + run indicator |
 | 20 (0x14) | Read File Record | file records | 1..N sub-requests (by PDU size) |
 | 21 (0x15) | Write File Record | file records | 1..N sub-requests (by PDU size) |
+| 22 (0x16) | Mask Write Register | holding registers | 1 register |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -51,7 +52,11 @@ Writable scope is coherent with FC 20 and config-backed storage: a sub-request m
 
 All-or-nothing semantics apply across the whole request: all sub-requests are validated for shape/values/framing, record ranges, and availability/writability before any change is applied. A request is rejected with exception 03 (illegal data value) if Byte Count or request length/framing is invalid (`0x09-0xFB`, does not match the total encoded sub-request lengths, or a sub-request is truncated/misaligned), any reference type is not `0x06`, any record number is above `0x270F` or a range exceeds `0x270F`, or any record length is 0. It is rejected with exception 02 (illegal data address) if any requested file number or any record in any requested range is not configured/available. On any exception no file records are modified. FC 21 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
 
-Any other function code gets exception 01. Not supported yet: 22-24, 43.
+Mask Write Register (FC 22 / 0x16) modifies one holding register using an AND mask and an OR mask. The request PDU is `[0x16][Ref Addr Hi][Ref Addr Lo][And_Mask Hi][And_Mask Lo][Or_Mask Hi][Or_Mask Lo]` (7 bytes). The normal response echoes the request PDU on success. The referenced holding register is read and updated as `Result = (Current Contents AND And_Mask) OR (Or_Mask AND (NOT And_Mask))`; any 16-bit mask values are accepted.
+
+Target scope and semantics are the same as a single holding-register write (FC 06): the reference address must be a configured/defined holding register address. A request to an undefined/out-of-table or otherwise unavailable holding-register address is rejected with exception 02 (illegal data address). The current value is taken from request-time device state (after normal tick processing), and applying the mask write follows existing write behavior, including freezing the owning point as static if it was a ramp. The request must be exactly 7 bytes; any other length or shape is rejected with exception 03 (illegal data value). FC 22 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
+
+Any other function code gets exception 01. Not supported yet: 23-24, 43.
 
 ## Exceptions
 

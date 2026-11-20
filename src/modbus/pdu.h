@@ -20,6 +20,7 @@
 #define FC_REPORT_SERVER_ID		0x11
 #define FC_READ_FILE_RECORD		0x14
 #define FC_WRITE_FILE_RECORD		0x15
+#define FC_MASK_WRITE_REGISTER		0x16
 
 /* Exception codes. */
 #define EXC_ILLEGAL_FUNCTION		0x01

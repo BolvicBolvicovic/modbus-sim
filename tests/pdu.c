@@ -706,3 +706,61 @@ TEST(WriteFileRecordUnavailableWhenNoFileRecordsConfigured)
 	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }
+
+TEST(MaskWriteRegisterAppliesFormulaAndEchoes)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xF2, 0x02, 0x00, 0x25 };
+	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	/* holding[0] starts at 0x1234: (0x1234 & 0xF202) | (0x0025 & ~0xF202) = 0x1225 */
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
+	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x25);
+	arena_release(arena);
+}
+
+TEST(MaskWriteRegisterRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		short_req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00 };
+	u8		extra[]     = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(MaskWriteRegisterUnavailableAddressIsAddressError)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		missing[]  = { FC_MASK_WRITE_REGISTER, 0x00, 0x05, 0xFF, 0xFF, 0x00, 0x00 };
+	u8		readonly[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	point_t		p = { 0 };
+
+	run(dev, missing, sizeof(missing), resp);
+	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+
+	/* input register 0 exists, but holding register 0 is not configured here */
+	dev = make_device(arena);
+	dev->point_count = 0;
+	memset(&dev->spaces[SPACE_HOLDING], 0, sizeof(dev->spaces[SPACE_HOLDING]));
+	p.kind = POINT_STATIC;
+	p.space = SPACE_INPUT;
+	p.type = VT_U16;
+	p.address = 0;
+	p.static_value = 7;
+	device_add_point(dev, &p);
+	run(dev, readonly, sizeof(readonly), resp);
+	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}

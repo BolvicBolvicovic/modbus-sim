@@ -1286,3 +1286,65 @@ TEST(NetWriteFileRecordUnknownUnitAndUnconfigured)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetMaskWriteRegisterSuccessMalformedAndUnknownUnit)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (holding 0 (static 4660))"
+				    "  (input 0 (static 7)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		/* holding[0] starts at 4660 (0x1234): (0x1234 & 0xF202) | (0x0025 & ~0xF202) = 0x1225 */
+		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xF2, 0x02, 0x00, 0x25 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(req) &&
+		     memcmp(resp, req, sizeof(req)) == 0;
+	}
+	if (ok)
+	{
+		u8 req[8];
+
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x1225;
+	}
+	if (ok)
+	{
+		u8 short_req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00 };
+
+		ok = exchange(&client, 1, short_req, sizeof(short_req), resp, &len) &&
+		     exception_is(resp, len, FC_MASK_WRITE_REGISTER, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		u8 missing[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x05, 0xFF, 0xFF, 0x00, 0x00 };
+
+		ok = exchange(&client, 1, missing, sizeof(missing), resp, &len) &&
+		     exception_is(resp, len, FC_MASK_WRITE_REGISTER, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00 };
+
+		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_MASK_WRITE_REGISTER, EXC_GATEWAY_TARGET_FAILED);
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
+
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
+		     resp[3] == 0x00 && resp[4] == 0x05;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}

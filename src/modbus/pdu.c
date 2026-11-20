@@ -331,6 +331,33 @@ write_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return req_len;
 }
 
+static u32
+mask_write_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	u32	address  = 0;
+	u16	and_mask = 0;
+	u16	or_mask  = 0;
+	u16	current  = 0;
+	u16	result   = 0;
+
+	if (req_len != 7)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	address  = get_be16(req + 1);
+	and_mask = get_be16(req + 3);
+	or_mask  = get_be16(req + 5);
+
+	if (!device_read(dev, SPACE_HOLDING, address, 1, &current))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	result = (u16)((current & and_mask) | (or_mask & (u16)~and_mask));
+	if (!device_write(dev, SPACE_HOLDING, address, 1, &result))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	memcpy(resp, req, 7);
+	return 7;
+}
+
 /* --- dispatch --- */
 
 u32
@@ -402,6 +429,8 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return read_file_record(dev, req, req_len, resp);
 	case FC_WRITE_FILE_RECORD:
 		return write_file_record(dev, req, req_len, resp);
+	case FC_MASK_WRITE_REGISTER:
+		return mask_write_register(dev, req, req_len, resp);
 	default:
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 	}
