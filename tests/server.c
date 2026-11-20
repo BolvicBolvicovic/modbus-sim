@@ -1348,3 +1348,163 @@ TEST(NetMaskWriteRegisterSuccessMalformedAndUnknownUnit)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetReadWriteMultipleRegistersSuccessAndOverlap)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (holding 0 (static 4660))"
+				    "  (holding 1 (static 22136))"
+				    "  (holding 2 (static 3))"
+				    "  (input 0 (static 7)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		/* Read 0,1 while writing 0,1 -> response reflects post-write values. */
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x04, 0xAA, 0xAA, 0xBB, 0xBB };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == 6 &&
+		     resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04 &&
+		     register_value(resp, len, 0) == 0xAAAA && register_value(resp, len, 1) == 0xBBBB;
+	}
+	if (ok)
+	{
+		u8 req[8];
+
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 2);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 6 &&
+		     register_value(resp, len, 0) == 0xAAAA && register_value(resp, len, 1) == 0xBBBB;
+	}
+	if (ok)
+	{
+		/* Overlap: read 1,2 while writing 0,1 -> read sees new 1 and old 2. */
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0x65 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == 6 &&
+		     resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04 &&
+		     register_value(resp, len, 0) == 0x0065 && register_value(resp, len, 1) == 0x0003;
+	}
+	if (ok)
+	{
+		u8 req[8];
+
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 3);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 8 &&
+		     register_value(resp, len, 0) == 0x0064 && register_value(resp, len, 1) == 0x0065 &&
+		     register_value(resp, len, 2) == 0x0003;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReadWriteMultipleRegistersErrorsAndAllOrNothing)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (holding 0 (static 10))"
+				    "  (holding 1 (static 20))"
+				    "  (input 0 (static 7)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		u8 bad_qty[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, bad_qty, sizeof(bad_qty), resp, &len) &&
+		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		u8 bad_bc[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00 };
+
+		ok = exchange(&client, 1, bad_bc, sizeof(bad_bc), resp, &len) &&
+		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		/* Read range unavailable (holding 2 undefined): must not apply write to holding 0. */
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x63 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 req[8];
+
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 10;
+	}
+	if (ok)
+	{
+		/* Write range unavailable (holding 2 undefined): must not apply any write. */
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0x65 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 req[8];
+
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 2);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 6 &&
+		     register_value(resp, len, 0) == 10 && register_value(resp, len, 1) == 20;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReadWriteMultipleRegistersUnknownUnitAndNonHoldingTarget)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (holding 1 (static 10))"
+				    "  (input 0 (static 7)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x01 };
+
+		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_GATEWAY_TARGET_FAILED);
+	}
+	if (ok)
+	{
+		/* input register 0 exists but holding target does not */
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
+
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
+		     resp[3] == 0x00 && resp[4] == 0x02;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}

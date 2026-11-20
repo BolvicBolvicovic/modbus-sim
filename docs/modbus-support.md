@@ -29,6 +29,7 @@ is disconnected.
 | 20 (0x14) | Read File Record | file records | 1..N sub-requests (by PDU size) |
 | 21 (0x15) | Write File Record | file records | 1..N sub-requests (by PDU size) |
 | 22 (0x16) | Mask Write Register | holding registers | 1 register |
+| 23 (0x17) | Read/Write Multiple Registers | holding registers | read 1-125, write 1-121 |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -56,7 +57,13 @@ Mask Write Register (FC 22 / 0x16) modifies one holding register using an AND ma
 
 Target scope and semantics are the same as a single holding-register write (FC 06): the reference address must be a configured/defined holding register address. A request to an undefined/out-of-table or otherwise unavailable holding-register address is rejected with exception 02 (illegal data address). The current value is taken from request-time device state (after normal tick processing), and applying the mask write follows existing write behavior, including freezing the owning point as static if it was a ramp. The request must be exactly 7 bytes; any other length or shape is rejected with exception 03 (illegal data value). FC 22 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
 
-Any other function code gets exception 01. Not supported yet: 23-24, 43.
+Read/Write Multiple Registers (FC 23 / 0x17) performs a write to holding registers followed by a read from holding registers in a single transaction. The request PDU is `[0x17][Read Starting Address Hi][Read Starting Address Lo][Quantity to Read Hi][Quantity to Read Lo][Write Starting Address Hi][Write Starting Address Lo][Quantity to Write Hi][Quantity to Write Lo][Write Byte Count][Write Registers Value...]` (10 + Write Byte Count bytes), where Quantity to Read is 1-125 (`0x0001-0x007D`), Quantity to Write is 1-121 (`0x0001-0x0079`), and Write Byte Count is `2 * Quantity to Write`. The normal response PDU is `[0x17][Byte Count][Read Registers Value...]` where Byte Count is `2 * Quantity to Read`.
+
+Both the read range and the write range target holding registers only and must be fully defined/configured addresses (coherent with existing holding-register read/write semantics). Addresses are not created. The write operation is performed before the read operation, so the read result reflects post-write values, including when the read and write ranges overlap. Writes follow existing holding-register write behavior (e.g. freezing a ramp point to static).
+
+The request is all-or-nothing: shape/values/lengths and availability of both ranges are validated before applying any write. A request is rejected with exception 03 (illegal data value) if the request is too short or has the wrong length for the declared byte count, Quantity to Read or Quantity to Write is out of range, or Write Byte Count is not `2 * Quantity to Write`. It is rejected with exception 02 (illegal data address) if any address in the read range or the write range is undefined/unavailable per existing semantics. On any exception no holding registers are modified. FC 23 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
+
+Any other function code gets exception 01. Not supported yet: 24, 43.
 
 ## Exceptions
 
@@ -72,9 +79,12 @@ Checks run in this order: function, request shape and quantity (03), then addres
 ## Writes are all-or-nothing
 
 If any address of a write is undefined, nothing is written and the answer is exception 02.
-Only coils (05, 15) and holding registers (06, 16) can be written: Modbus has no function code
+Only coils (05, 15) and holding registers (06, 16, 22, 23) can be written: Modbus has no function code
 that writes input registers or discrete inputs. A write to an address that exists only as an
 input register or discrete input is exception 02, because the target table has no such point.
+Read/Write Multiple Registers (FC 23, 0x17) is also all-or-nothing: availability of both the read and
+write holding-register ranges is validated before applying the write, so an unavailable/malformed
+request modifies no holding registers.
 Write File Record (FC 21, 0x15) is also all-or-nothing: every sub-request is validated (shape and
 configured availability/writability) before applying any change, so an unavailable or malformed
 request modifies no file records. FC 21 can update only configured file-record ranges (see above).

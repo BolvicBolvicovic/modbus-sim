@@ -168,6 +168,56 @@ write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
 }
 
 static u32
+read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	u16	write_words[121];
+	u16	read_words[MB_MAX_READ_REGISTERS];
+	u32	read_addr   = 0;
+	u32	read_qty    = 0;
+	u32	write_addr  = 0;
+	u32	write_qty   = 0;
+	u32	byte_count  = 0;
+
+	if (req_len < 10)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	read_addr  = get_be16(req + 1);
+	read_qty   = get_be16(req + 3);
+	write_addr = get_be16(req + 5);
+	write_qty  = get_be16(req + 7);
+	byte_count = req[9];
+
+	if (read_qty < 1 || read_qty > 0x007D || write_qty < 1 || write_qty > 0x0079)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	if (byte_count != write_qty * 2 || req_len != 10 + byte_count)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	for (u32 i = 0; i < write_qty; i++)
+		write_words[i] = get_be16(req + 10 + i * 2);
+
+	/* All-or-nothing: validate availability of both ranges before applying any write. */
+	if (!device_read(dev, SPACE_HOLDING, write_addr, write_qty, read_words))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	if (!device_read(dev, SPACE_HOLDING, read_addr, read_qty, read_words))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	if (!device_write(dev, SPACE_HOLDING, write_addr, write_qty, write_words))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	/* Write happens before read; result reflects post-write values (including overlap). */
+	if (!device_read(dev, SPACE_HOLDING, read_addr, read_qty, read_words))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	resp[0] = req[0];
+	resp[1] = (u8)(read_qty * 2);
+	for (u32 i = 0; i < read_qty; i++)
+		put_be16(resp + 2 + i * 2, read_words[i]);
+
+	return 2 + read_qty * 2;
+}
+
+static u32
 read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
 	u32	byte_count    = 0;
@@ -425,6 +475,8 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return write_multiple_coils(dev, req, req_len, resp);
 	case FC_WRITE_MULTIPLE_REGISTERS:
 		return write_multiple_registers(dev, req, req_len, resp);
+	case FC_READ_WRITE_MULTIPLE_REGISTERS:
+		return read_write_multiple_registers(dev, req, req_len, resp);
 	case FC_READ_FILE_RECORD:
 		return read_file_record(dev, req, req_len, resp);
 	case FC_WRITE_FILE_RECORD:

@@ -764,3 +764,159 @@ TEST(MaskWriteRegisterUnavailableAddressIsAddressError)
 	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }
+
+TEST(ReadWriteMultipleRegistersSuccessAndReadback)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x00, 0x00, 0x02,	/* read addr 0, qty 2 */
+		0x00, 0x00, 0x00, 0x02,	/* write addr 0, qty 2 */
+		0x04,			/* byte count */
+		0xAA, 0xAA, 0xBB, 0xBB,	/* write values */
+	};
+	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x02 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 6);
+	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04);
+	ASSERT_EQ(resp[2] == 0xAA && resp[3] == 0xAA && resp[4] == 0xBB && resp[5] == 0xBB);
+
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 6);
+	ASSERT_EQ(resp[2] == 0xAA && resp[3] == 0xAA && resp[4] == 0xBB && resp[5] == 0xBB);
+	arena_release(arena);
+}
+
+TEST(ReadWriteMultipleRegistersWriteBeforeReadWithOverlap)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	point_t		p     = { 0 };
+	u8		req[]  = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x01, 0x00, 0x03,	/* read addr 1, qty 3 */
+		0x00, 0x00, 0x00, 0x03,	/* write addr 0, qty 3 */
+		0x06,
+		0x00, 0x64, 0x00, 0x65, 0x00, 0x66,	/* 100,101,102 */
+	};
+	u8		resp[MODBUS_MAX_PDU];
+	u16		out[4] = { 0, 0, 0, 0 };
+
+	p.kind = POINT_STATIC;
+	p.space = SPACE_HOLDING;
+	p.type = VT_U16;
+	for (u32 i = 0; i < 4; i++) { p.address = i; p.static_value = 10 + i; device_add_point(dev, &p); }
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 8);
+	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x06);
+	/* read of 1,2,3 after write to 0,1,2 => 101,102,13 */
+	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x65);
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x66);
+	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x0D);
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, out));
+	ASSERT_EQ(out[0] == 100 && out[1] == 101 && out[2] == 102 && out[3] == 13);
+	arena_release(arena);
+}
+
+TEST(ReadWriteMultipleRegistersRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		resp[MODBUS_MAX_PDU];
+	u8		short_req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8		bad_rqty0[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01 };
+	u8		bad_rqty[]  = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01 };
+	u8		bad_wqty0[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	u8		bad_wqty[]  = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7A, 0xF4 };
+	u8		bad_bc[]    = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00 };
+	u8		bad_len[]   = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01, 0x00 };
+
+	run(dev, short_req, sizeof(short_req), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_rqty0, sizeof(bad_rqty0), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_rqty, sizeof(bad_rqty), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_wqty0, sizeof(bad_wqty0), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_wqty, sizeof(bad_wqty), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_bc, sizeof(bad_bc), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_len, sizeof(bad_len), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(ReadWriteMultipleRegistersUnavailableAddressIsAllOrNothing)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	point_t		p     = { 0 };
+	u8		resp[MODBUS_MAX_PDU];
+	u16		out[2] = { 0, 0 };
+	u8		bad_read[] = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x01, 0x00, 0x02,	/* read addr 1, qty 2 (addr 2 undefined) */
+		0x00, 0x00, 0x00, 0x01,	/* write addr 0, qty 1 */
+		0x02, 0x00, 0x63,
+	};
+	u8		bad_write[] = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x00, 0x00, 0x01,	/* read addr 0, qty 1 */
+		0x00, 0x00, 0x00, 0x02,	/* write addr 0, qty 2 (addr 1 undefined for holding?) */
+		0x04, 0x00, 0x63, 0x00, 0x64,
+	};
+
+	p.kind = POINT_STATIC;
+	p.space = SPACE_HOLDING;
+	p.type = VT_U16;
+	p.address = 0; p.static_value = 10; device_add_point(dev, &p);
+	p.address = 1; p.static_value = 20; device_add_point(dev, &p);
+
+	run(dev, bad_read, sizeof(bad_read), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 2, out));
+	ASSERT_EQ(out[0] == 10 && out[1] == 20);
+
+	/* Rebuild device so holding 1 is undefined: keep only holding 0 and add holding 2 separately */
+	dev = device_new(arena, 0);
+	p.address = 0; p.static_value = 10; device_add_point(dev, &p);
+	p.address = 2; p.static_value = 30; device_add_point(dev, &p);
+
+	run(dev, bad_write, sizeof(bad_write), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, out));
+	ASSERT_EQ(out[0] == 10);
+	out[0] = 0;
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 2, 1, out));
+	ASSERT_EQ(out[0] == 30);
+	arena_release(arena);
+}
+
+TEST(ReadWriteMultipleRegistersRejectsNonHoldingTarget)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	point_t		p     = { 0 };
+	u8		req[]  = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x00, 0x00, 0x01,
+		0x00, 0x00, 0x00, 0x01,
+		0x02, 0x00, 0x01,
+	};
+	u8		resp[MODBUS_MAX_PDU];
+
+	p.kind = POINT_STATIC;
+	p.space = SPACE_INPUT;
+	p.type = VT_U16;
+	p.address = 0;
+	p.static_value = 7;
+	device_add_point(dev, &p);
+
+	run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
