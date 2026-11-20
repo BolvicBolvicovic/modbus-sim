@@ -60,6 +60,32 @@ struct space_t
 	u16	owner[ADDRESS_SPACE_SIZE];
 };
 
+#define DEVICE_MAX_FILES		16
+#define DEVICE_MAX_FILE_SEGMENTS	64
+
+/* Name: file_segment_t
+ * Description: one contiguous block of 16-bit register values in a file,
+ * starting at Modbus record number `record`.
+ * */
+typedef struct file_segment_t file_segment_t;
+struct file_segment_t
+{
+	u16	record;
+	u16	length;
+	u16*	values;	/* length entries, arena-backed */
+};
+
+/* Name: device_file_t
+ * Description: configured FC 20 (Read File Record) storage for one file number.
+ * */
+typedef struct device_file_t device_file_t;
+struct device_file_t
+{
+	u16		file_no;
+	u32		segment_count;
+	file_segment_t	segments[DEVICE_MAX_FILE_SEGMENTS];
+};
+
 /* Name: device_t
  * Description: one simulated Modbus device (one unit id).
  * */
@@ -75,8 +101,11 @@ struct device_t
 	u16		message_count;		/* FC 12 message counter, wraps modulo 65536 */
 	u64		start_ms;		/* ramps count their time from here */
 	fault_t		fault;
+	arena_t*	arena;			/* backing arena for dynamic config storage */
 	u32		point_count;
 	point_t*	points;			/* DEVICE_MAX_POINTS entries */
+	u32		file_count;
+	device_file_t*	files;			/* DEVICE_MAX_FILES entries */
 	space_t		spaces[SPACE_COUNT];
 };
 
@@ -95,6 +124,17 @@ bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty,
 /* Writes `qty` consecutive addresses. Fails (and writes nothing) if any address is
  * out of range or undefined. A written ramp point becomes static. */
 bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
+
+/* Adds `length` consecutive file-record register values starting at `record`
+ * in file `file_no`. Values are copied into the device arena. Returns NULL on
+ * success, or a static error message. */
+const char*	device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 length,
+				       const u16* values);
+
+/* Reads `length` consecutive file-record registers starting at `record` in
+ * `file_no`. Fails if the file or any requested record is not defined. */
+bool		device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 length,
+					 u16* out);
 
 /* True for SPACE_COIL and SPACE_DISCRETE. */
 bool		space_is_bit(space_kind_t space);

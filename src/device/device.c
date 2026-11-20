@@ -27,6 +27,11 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev->points)
 		return NULL;
 
+	dev->files = ARENA_PUSH_ARRAY(arena, device_file_t, DEVICE_MAX_FILES);
+	if (!dev->files)
+		return NULL;
+
+	dev->arena            = arena;
 	dev->unit_id          = 1;
 	dev->exception_status = 0;
 	dev->server_id        = 0;
@@ -168,6 +173,95 @@ device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16*
 
 		table->value[address + i] = in[i];
 		dev->points[owner - 1].kind = POINT_STATIC;
+	}
+	return true;
+}
+
+static device_file_t*
+find_file(const device_t* dev, u16 file_no)
+{
+	for (u32 i = 0; i < dev->file_count; i++)
+	{
+		if (dev->files[i].file_no == file_no)
+			return &dev->files[i];
+	}
+	return NULL;
+}
+
+const char*
+device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 length,
+		       const u16* values)
+{
+	device_file_t*		file = find_file(dev, file_no);
+	file_segment_t*		seg  = NULL;
+	u16*			copy = NULL;
+	u32			end  = (u32)record + length;
+
+	if (length == 0)
+		return "file record length must be at least 1";
+
+	if (end - 1 > 0x270F)
+		return "file record does not fit before record 9999";
+
+	if (!file)
+	{
+		if (dev->file_count >= DEVICE_MAX_FILES)
+			return "too many files on one device";
+		file = &dev->files[dev->file_count++];
+		file->file_no = file_no;
+	}
+
+	for (u32 i = 0; i < file->segment_count; i++)
+	{
+		u32	seg_end = (u32)file->segments[i].record + file->segments[i].length;
+
+		if ((u32)record < seg_end && end > file->segments[i].record)
+			return "file record range overlaps another record";
+	}
+
+	if (file->segment_count >= DEVICE_MAX_FILE_SEGMENTS)
+		return "too many records in one file";
+
+	copy = ARENA_PUSH_ARRAY(dev->arena, u16, length);
+	if (!copy)
+		return "out of memory while storing file records";
+
+	for (u32 i = 0; i < length; i++)
+		copy[i] = values[i];
+
+	seg = &file->segments[file->segment_count++];
+	seg->record = record;
+	seg->length = length;
+	seg->values = copy;
+	return NULL;
+}
+
+bool
+device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 length,
+			 u16* out)
+{
+	const device_file_t*	file = find_file(dev, file_no);
+
+	if (!file || length == 0)
+		return false;
+
+	for (u32 i = 0; i < length; i++)
+	{
+		u32	want  = (u32)record + i;
+		bool	found = false;
+
+		for (u32 s = 0; s < file->segment_count; s++)
+		{
+			const file_segment_t*	seg = &file->segments[s];
+
+			if (want < seg->record || want >= (u32)seg->record + seg->length)
+				continue;
+			out[i] = seg->values[want - seg->record];
+			found  = true;
+			break;
+		}
+		if (!found)
+			return false;
 	}
 	return true;
 }

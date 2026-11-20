@@ -199,3 +199,27 @@ TEST(ConfigBoolWords)
 	device_read(config.devices[0], SPACE_COIL, 2, 1, &out);
 	ASSERT_EQ(out == 1);
 }
+
+TEST(ConfigFileRecordsAreParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		out[3] = { 0, 0, 0 };
+
+	ASSERT_SUCCESS(load_text("(device"
+				 "  (file 1 (record 0 4660 22136))"
+				 "  (file 4 (record 10 1 2 3)))",
+				 &config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read_file_records(config.devices[0], 1, 0, 2, out));
+	ASSERT_EQ(out[0] == 0x1234 && out[1] == 0x5678);
+	ASSERT_SUCCESS(device_read_file_records(config.devices[0], 4, 10, 3, out));
+	ASSERT_EQ(out[0] == 1 && out[1] == 2 && out[2] == 3);
+}
+
+TEST(ConfigFileRecordErrors)
+{
+	EXPECT_ERROR("(device (file 1))", "at least one (record");
+	EXPECT_ERROR("(device (file 1 (record 0)))", "(record REC_NO VALUE");
+	EXPECT_ERROR("(device (file 1 (record 10000 1)))", "between 0 and 9999");
+	EXPECT_ERROR("(device (file 1 (record 0 1 2) (record 1 3)))", "overlaps another record");
+}

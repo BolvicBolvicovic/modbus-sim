@@ -1045,3 +1045,81 @@ TEST(NetReportServerIdUnknownUnitDoesNotCount)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetReadFileRecordSuccessAndErrors)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (file 1 (record 0 4660 22136) (record 10 7))"
+				    "  (file 4 (record 2 255)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		/* Single sub-request: file 1, record 0, length 2. */
+		u8 pdu[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
+
+		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) && len == 8 &&
+		     resp[0] == FC_READ_FILE_RECORD && resp[1] == 6 &&
+		     resp[2] == 5 && resp[3] == 0x06 &&
+		     get_be16(resp + 4) == 0x1234 && get_be16(resp + 6) == 0x5678;
+	}
+	if (ok)
+	{
+		/* Multiple sub-requests. */
+		u8 pdu[] = {
+			FC_READ_FILE_RECORD, 0x0E,
+			0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
+			0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01,
+		};
+
+		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) && len == 10 &&
+		     resp[0] == FC_READ_FILE_RECORD && resp[1] == 8 &&
+		     resp[2] == 3 && resp[3] == 0x06 && get_be16(resp + 4) == 0x5678 &&
+		     resp[6] == 3 && resp[7] == 0x06 && get_be16(resp + 8) == 0x00FF;
+	}
+	if (ok)
+	{
+		/* Malformed: bad byte count framing. */
+		u8 pdu[] = { FC_READ_FILE_RECORD, 0x06, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		/* Unavailable file. */
+		u8 pdu[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReadFileRecordUnknownUnit)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (file 1 (record 0 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_GATEWAY_TARGET_FAILED);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}

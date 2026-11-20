@@ -187,3 +187,34 @@ TEST(FaultDelayAlwaysAtHundredPercent)
 		ASSERT_EQ(!d.drop && d.delay_ms == 250);
 	}
 }
+
+TEST(FileRecordStoreAndRead)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u16		data[] = { 0x1234, 0x5678, 0x0009 };
+	u16		out[3] = { 0, 0, 0 };
+
+	ASSERT_EQ(device_add_file_record(dev, 1, 0, 2, data) == NULL);
+	ASSERT_EQ(device_add_file_record(dev, 1, 10, 1, data + 2) == NULL);
+	ASSERT_SUCCESS(device_read_file_records(dev, 1, 0, 2, out));
+	ASSERT_EQ(out[0] == 0x1234 && out[1] == 0x5678);
+	ASSERT_SUCCESS(device_read_file_records(dev, 1, 10, 1, out));
+	ASSERT_EQ(out[0] == 0x0009);
+	ASSERT_FAILURE(device_read_file_records(dev, 1, 2, 1, out));	/* undefined */
+	ASSERT_FAILURE(device_read_file_records(dev, 2, 0, 1, out));	/* unknown file */
+	arena_release(arena);
+}
+
+TEST(FileRecordRejectsOverlapAndBadRange)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u16		data[] = { 1, 2, 3 };
+
+	ASSERT_EQ(device_add_file_record(dev, 4, 5, 2, data) == NULL);
+	ASSERT_FAILURE(device_add_file_record(dev, 4, 6, 1, data) == NULL);	/* overlap */
+	ASSERT_FAILURE(device_add_file_record(dev, 4, 0x270F, 2, data) == NULL);/* past 9999 */
+	ASSERT_FAILURE(device_add_file_record(dev, 4, 0, 0, data) == NULL);
+	arena_release(arena);
+}

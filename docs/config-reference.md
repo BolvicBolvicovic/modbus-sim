@@ -48,6 +48,7 @@ The command-line options `--port` and `--bind` override these.
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
 | `(note "Text")` | A comment kept for humans. Can be repeated. Ignored by the program | - |
 | `(fault ...)` | One fault, see below | none |
+| `(file ...)` | File record data for Read File Record (FC 20), see below | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
 
 Unit ids must be different between devices.
@@ -177,6 +178,43 @@ the chance given by `percent`.
 - A dropped response means the client sees a timeout. The write or read itself **still
   happens** on the device, like a real device whose answer got lost.
 - Use `(seed N)` in `(server ...)` to repeat the exact same pattern of faults on every run.
+
+## `(file ...)` (Read File Record, FC 20)
+
+Defines 16-bit register records that a client can read with Modbus function code 20 (Read File
+Record, 0x14). File records are separate from the coil/discrete/input/holding tables and are
+read-only. If no file records are configured, any FC 20 read is unavailable (exception 02).
+
+Shape:
+
+```scheme
+(file FILE_NO
+  (record REC_NO VALUE ...)
+  (record REC_NO VALUE ...))
+```
+
+- `FILE_NO` is the file number, 0-65535. A device can have several `(file ...)` entries (and
+  several `(record ...)` entries inside a file).
+- `REC_NO` is the starting record number, 0-9999 (`0x270F`).
+- Each `VALUE` is a 16-bit register value, 0-65535. A record defines that many consecutive
+  registers starting at `REC_NO` (one register per value, in order).
+- Record ranges in the same file must not overlap. Record ranges must fit within record 9999.
+
+```scheme
+(file 1
+  (record 0 0x1234 0x5678)   ; file 1, records 0-1
+  (record 10 100 200 300))   ; file 1, records 10-12
+(file 4
+  (record 2 7))
+```
+
+A client request may read any contiguous range that is fully defined by configuration; requesting
+an undefined file or any undefined record in the range returns exception 02 (illegal data
+address), like undefined table addresses. Multiple sub-requests in one FC 20 request are
+supported and answered in order; the request is rejected as a whole if any sub-request is
+invalid or unavailable, or if the response would not fit in a Modbus PDU. See
+[modbus-support.md](modbus-support.md) for the exact request/response format and exception
+conditions. Config is limited to 16 files per device and 64 record ranges per file.
 
 ## Error messages
 

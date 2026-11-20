@@ -26,6 +26,7 @@ is disconnected.
 | 15 (0x0F) | Write Multiple Coils | coils | 1968 bits |
 | 16 (0x10) | Write Multiple Registers | holding registers | 123 registers |
 | 17 (0x11) | Report Server ID | - | byte count + server ID + run indicator |
+| 20 (0x14) | Read File Record | file records | 1..N sub-requests (by PDU size) |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -37,7 +38,13 @@ Get Com Event Log (FC 12 / 0x0C) is also a serial-diagnostics function carried a
 
 Report Server ID (FC 17 / 0x11) is a serial-diagnostics identification function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x11`, 1 byte). A normal response is `[FC 0x11][Byte Count][Server ID][Run Indicator Status]` (4 bytes). Byte Count is the number of following bytes and is always `2` in this simulator (Server ID + Run Indicator Status), with no device-specific Additional Data. `Server ID` and `Run Indicator Status` are configured per device (`server-id`, 0-255, default `0`; `run-indicator`, 0-255, default `0xFF`). By Modbus convention Run Indicator Status `0xFF` means ON/run and `0x00` means OFF; other values are accepted by config and reported as-is. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value).
 
-Any other function code gets exception 01. Not supported yet: 20-24, 43.
+Read File Record (FC 20 / 0x14) reads 16-bit register records from per-device configured file storage (separate from the coil/discrete/input/holding tables). The request PDU is `[0x14][Byte Count][Sub-Req...]*` where Byte Count is `0x07-0xF5`, equals the total length of all sub-requests, and is a multiple of 7. Each sub-request is 7 bytes: `[Reference Type (1)=0x06][File Number (2)][Record Number (2, 0x0000-0x270F)][Record Length (2, in registers)]`. The normal response PDU is `[0x14][Resp Data Length][Sub-Resp...]*` where Resp Data Length equals the total length of all sub-responses. Each sub-response is `[File Resp Length (1)=1 + 2*Record Length][Reference Type (1)=0x06][Record Data (2*Record Length bytes)]`. Multiple sub-requests are supported in one request and the response preserves their order.
+
+In this simulator file records are explicit config data (see [config-reference.md](config-reference.md)): only configured `(file/file, record)` ranges exist and are readable (defaults to none). A sub-request reads a contiguous range of `Record Length` registers starting at `Record Number` in `File Number`; every register in that range must be defined by configuration, otherwise the request is unavailable. Record contents are 16-bit register values as configured and are returned unchanged. File numbers 0-65535 may be configured; record numbers are limited to 0-9999 (`0x270F`) by the Modbus spec.
+
+A request is rejected with exception 03 (illegal data value) if its shape or values are invalid: wrong PDU/request byte count or non-multiple-of-7 sub-request framing, any reference type other than `0x06`, any record number above `0x270F`, any record length of 0, or if the computed response would not fit in a Modbus PDU. It is rejected with exception 02 (illegal data address) if any requested file number or any record in any requested range is not configured/available. Checks are performed before producing a normal response (shape/range/capacity, then availability), so an error for any sub-request produces an exception and no partial success data.
+
+Any other function code gets exception 01. Not supported yet: 21-24, 43.
 
 ## Exceptions
 
