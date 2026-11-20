@@ -179,11 +179,16 @@ the chance given by `percent`.
   happens** on the device, like a real device whose answer got lost.
 - Use `(seed N)` in `(server ...)` to repeat the exact same pattern of faults on every run.
 
-## `(file ...)` (Read File Record, FC 20)
+## `(file ...)` (File Records, FC 20/21)
 
 Defines 16-bit register records that a client can read with Modbus function code 20 (Read File
-Record, 0x14). File records are separate from the coil/discrete/input/holding tables and are
-read-only. If no file records are configured, any FC 20 read is unavailable (exception 02).
+Record, 0x14) and, in this simulator, write with Modbus function code 21 (Write File Record,
+0x15). File records are separate from the coil/discrete/input/holding tables. Only the ranges
+configured here exist and are writable/readable (defaults to none): FC 20/21 requests targeting an
+undefined file or any undefined record return exception 02. If no file records are configured, any
+FC 20 read or FC 21 write is unavailable (exception 02). FC 21 updates in-memory values (readable
+back via FC 20) until the simulator restarts; it does not modify the config file and does not
+create new files/records.
 
 Shape:
 
@@ -208,13 +213,15 @@ Shape:
   (record 2 7))
 ```
 
-A client request may read any contiguous range that is fully defined by configuration; requesting
-an undefined file or any undefined record in the range returns exception 02 (illegal data
-address), like undefined table addresses. Multiple sub-requests in one FC 20 request are
-supported and answered in order; the request is rejected as a whole if any sub-request is
-invalid or unavailable, or if the response would not fit in a Modbus PDU. See
-[modbus-support.md](modbus-support.md) for the exact request/response format and exception
-conditions. Config is limited to 16 files per device and 64 record ranges per file.
+A client request may read or write any contiguous range that is fully defined by configuration;
+requesting an undefined file or any undefined record in the range returns exception 02 (illegal data
+address), like undefined table addresses. Multiple sub-requests in one FC 20/21 request are
+supported and answered in order (FC 21 echoes the request on success); the request is rejected as a
+whole if any sub-request is invalid or unavailable/unwritable, or (for FC 20) if the response would
+not fit in a Modbus PDU. FC 21 is all-or-nothing: no records are modified if any sub-request fails
+validation. See [modbus-support.md](modbus-support.md) for the exact request/response format,
+semantics, and exception conditions. Config is limited to 16 files per device and 64 record ranges
+per file.
 
 ## Error messages
 

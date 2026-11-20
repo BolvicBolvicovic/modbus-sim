@@ -27,6 +27,7 @@ is disconnected.
 | 16 (0x10) | Write Multiple Registers | holding registers | 123 registers |
 | 17 (0x11) | Report Server ID | - | byte count + server ID + run indicator |
 | 20 (0x14) | Read File Record | file records | 1..N sub-requests (by PDU size) |
+| 21 (0x15) | Write File Record | file records | 1..N sub-requests (by PDU size) |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -40,11 +41,17 @@ Report Server ID (FC 17 / 0x11) is a serial-diagnostics identification function 
 
 Read File Record (FC 20 / 0x14) reads 16-bit register records from per-device configured file storage (separate from the coil/discrete/input/holding tables). The request PDU is `[0x14][Byte Count][Sub-Req...]*` where Byte Count is `0x07-0xF5`, equals the total length of all sub-requests, and is a multiple of 7. Each sub-request is 7 bytes: `[Reference Type (1)=0x06][File Number (2)][Record Number (2, 0x0000-0x270F)][Record Length (2, in registers)]`. The normal response PDU is `[0x14][Resp Data Length][Sub-Resp...]*` where Resp Data Length equals the total length of all sub-responses. Each sub-response is `[File Resp Length (1)=1 + 2*Record Length][Reference Type (1)=0x06][Record Data (2*Record Length bytes)]`. Multiple sub-requests are supported in one request and the response preserves their order.
 
-In this simulator file records are explicit config data (see [config-reference.md](config-reference.md)): only configured `(file/file, record)` ranges exist and are readable (defaults to none). A sub-request reads a contiguous range of `Record Length` registers starting at `Record Number` in `File Number`; every register in that range must be defined by configuration, otherwise the request is unavailable. Record contents are 16-bit register values as configured and are returned unchanged. File numbers 0-65535 may be configured; record numbers are limited to 0-9999 (`0x270F`) by the Modbus spec.
+In this simulator file records are explicit config data (see [config-reference.md](config-reference.md)): only configured `(file/file, record)` ranges exist and are readable (defaults to none). A sub-request reads a contiguous range of `Record Length` registers starting at `Record Number` in `File Number`; every register in that range must be defined by configuration, otherwise the request is unavailable. Record contents are 16-bit register values as configured (or later written by FC 21) and are returned unchanged. File numbers 0-65535 may be configured; record numbers are limited to 0-9999 (`0x270F`) by the Modbus spec.
 
 A request is rejected with exception 03 (illegal data value) if its shape or values are invalid: wrong PDU/request byte count or non-multiple-of-7 sub-request framing, any reference type other than `0x06`, any record number above `0x270F`, any record length of 0, or if the computed response would not fit in a Modbus PDU. It is rejected with exception 02 (illegal data address) if any requested file number or any record in any requested range is not configured/available. Checks are performed before producing a normal response (shape/range/capacity, then availability), so an error for any sub-request produces an exception and no partial success data.
 
-Any other function code gets exception 01. Not supported yet: 21-24, 43.
+Write File Record (FC 21 / 0x15) writes 16-bit register records in the same per-device configured file storage. The request PDU is `[0x15][Byte Count][Sub-Req...]*` where Byte Count is `0x09-0xFB` and equals the total length of all sub-requests. Each sub-request is `7 + 2*RecordLength` bytes: `[Reference Type (1)=0x06][File Number (2)][Record Number (2, 0x0000-0x270F)][Record Length (2, in registers, >= 1)][Record Data (2*RecordLength bytes)]` (1..N sub-requests). The normal response echoes the request PDU on success: `[0x15][Byte Count][Sub-Req...]*`.
+
+Writable scope is coherent with FC 20 and config-backed storage: a sub-request may write only a contiguous range that is fully defined by configuration (defaults to none). Writes update the in-memory record values for that device and are readable back via FC 20; the config file is not changed and values are lost on restart. File numbers 0-65535 and record numbers 0-9999 (`0x270F`) follow the same limits as FC 20. File/record creation is not supported: an undefined file or any undefined/unwritable record in the range is unavailable.
+
+All-or-nothing semantics apply across the whole request: all sub-requests are validated for shape/values/framing, record ranges, and availability/writability before any change is applied. A request is rejected with exception 03 (illegal data value) if Byte Count or request length/framing is invalid (`0x09-0xFB`, does not match the total encoded sub-request lengths, or a sub-request is truncated/misaligned), any reference type is not `0x06`, any record number is above `0x270F` or a range exceeds `0x270F`, or any record length is 0. It is rejected with exception 02 (illegal data address) if any requested file number or any record in any requested range is not configured/available. On any exception no file records are modified. FC 21 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
+
+Any other function code gets exception 01. Not supported yet: 22-24, 43.
 
 ## Exceptions
 
@@ -63,6 +70,9 @@ If any address of a write is undefined, nothing is written and the answer is exc
 Only coils (05, 15) and holding registers (06, 16) can be written: Modbus has no function code
 that writes input registers or discrete inputs. A write to an address that exists only as an
 input register or discrete input is exception 02, because the target table has no such point.
+Write File Record (FC 21, 0x15) is also all-or-nothing: every sub-request is validated (shape and
+configured availability/writability) before applying any change, so an unavailable or malformed
+request modifies no file records. FC 21 can update only configured file-record ranges (see above).
 
 ## Unit ids
 

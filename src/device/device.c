@@ -265,3 +265,48 @@ device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 lengt
 	}
 	return true;
 }
+
+bool
+device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
+			  const u16* in)
+{
+	device_file_t*	file = find_file(dev, file_no);
+
+	if (!file || length == 0)
+		return false;
+
+	/* Validate the whole range is defined before changing anything. */
+	for (u32 i = 0; i < length; i++)
+	{
+		u32	want  = (u32)record + i;
+		bool	found = false;
+
+		for (u32 s = 0; s < file->segment_count; s++)
+		{
+			const file_segment_t*	seg = &file->segments[s];
+
+			if (want < seg->record || want >= (u32)seg->record + seg->length)
+				continue;
+			found = true;
+			break;
+		}
+		if (!found)
+			return false;
+	}
+
+	for (u32 i = 0; i < length; i++)
+	{
+		u32	want = (u32)record + i;
+
+		for (u32 s = 0; s < file->segment_count; s++)
+		{
+			file_segment_t*	seg = &file->segments[s];
+
+			if (want < seg->record || want >= (u32)seg->record + seg->length)
+				continue;
+			seg->values[want - seg->record] = in[i];
+			break;
+		}
+	}
+	return true;
+}

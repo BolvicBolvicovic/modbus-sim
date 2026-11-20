@@ -1143,3 +1143,146 @@ TEST(NetReadFileRecordUnavailableWhenNoFileRecordsConfigured)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetWriteFileRecordSuccessAndReadBack)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (file 1 (record 0 4660 22136) (record 10 7)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		u8 req[] = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x99 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(req) &&
+		     memcmp(resp, req, sizeof(req)) == 0;
+	}
+	if (ok)
+	{
+		u8 read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
+
+		ok = exchange(&client, 1, read, sizeof(read), resp, &len) && len == 8 &&
+		     resp[0] == FC_READ_FILE_RECORD && resp[1] == 6 &&
+		     get_be16(resp + 4) == 0xABCD && get_be16(resp + 6) == 0x0099;
+	}
+	if (ok)
+	{
+		/* Multiple sub-requests. */
+		u8 req[] = {
+			FC_WRITE_FILE_RECORD, 0x12,
+			0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x55,
+			0x06, 0x00, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x66,
+		};
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(req) &&
+		     memcmp(resp, req, sizeof(req)) == 0;
+	}
+	if (ok)
+	{
+		u8 read[] = {
+			FC_READ_FILE_RECORD, 0x0E,
+			0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
+			0x06, 0x00, 0x01, 0x00, 0x0A, 0x00, 0x01,
+		};
+
+		ok = exchange(&client, 1, read, sizeof(read), resp, &len) && len == 10 &&
+		     get_be16(resp + 4) == 0x0055 && get_be16(resp + 8) == 0x0066;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetWriteFileRecordErrorsAndAllOrNothing)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (file 1 (record 0 4660 22136)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		/* Malformed: byte count/framing mismatch. */
+		u8 bad[] = { FC_WRITE_FILE_RECORD, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, bad, sizeof(bad), resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		u8 missing[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, missing, sizeof(missing), resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		/* All-or-nothing: first sub-request valid, second unavailable. */
+		u8 req[] = {
+			FC_WRITE_FILE_RECORD, 0x12,
+			0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x77,
+			0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x88,
+		};
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+
+		ok = exchange(&client, 1, read, sizeof(read), resp, &len) && len == 6 &&
+		     get_be16(resp + 4) == 0x1234;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetWriteFileRecordUnknownUnitAndUnconfigured)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (file 1 (record 0 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02 };
+
+		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_GATEWAY_TARGET_FAILED);
+	}
+	client_close(&client);
+	server_stop();
+
+	if (ok)
+	{
+		ok = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
+		client.fd = -1;
+		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}

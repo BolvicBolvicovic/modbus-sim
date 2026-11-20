@@ -136,6 +136,11 @@ const char*	device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 l
 bool		device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 length,
 					 u16* out);
 
+/* Writes `length` consecutive file-record registers starting at `record` in
+ * `file_no`. Fails if the file or any requested record is not defined. */
+bool		device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
+					  const u16* in);
+
 /* True for SPACE_COIL and SPACE_DISCRETE. */
 bool		space_is_bit(space_kind_t space);
 

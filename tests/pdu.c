@@ -576,3 +576,133 @@ TEST(ReadFileRecordUnavailableWhenNoFileRecordsConfigured)
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }
+
+TEST(WriteFileRecordSingleSubRequestEchoesAndUpdates)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_file_device(arena);
+	u8		req[]  = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xAA, 0xAA, 0xBB, 0xBB };
+	u8		read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		want[] = { FC_READ_FILE_RECORD, 0x06, 0x05, 0x06, 0xAA, 0xAA, 0xBB, 0xBB };
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}
+
+TEST(WriteFileRecordMultipleSubRequests)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_file_device(arena);
+	u8		req[]  = {
+		FC_WRITE_FILE_RECORD, 0x12,
+		0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x11,	/* file 1, rec 0 */
+		0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01, 0x00, 0x22,	/* file 4, rec 2 */
+	};
+	u8		read1[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
+	u8		read4[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+
+	run(dev, read1, sizeof(read1), resp);
+	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[4] == 0x00 && resp[5] == 0x11 && resp[6] == 0x56 && resp[7] == 0x78);
+	run(dev, read4, sizeof(read4), resp);
+	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[4] == 0x00 && resp[5] == 0x22);
+	arena_release(arena);
+}
+
+TEST(WriteFileRecordRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_file_device(arena);
+	u8		short_req[] = { FC_WRITE_FILE_RECORD };
+	u8		bad_count[] = { FC_WRITE_FILE_RECORD, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 }; /* byte count does not match PDU */
+	u8		bad_low[]   = { FC_WRITE_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 }; /* byte count below FC21 minimum */
+	u8		bad_high[]  = { FC_WRITE_FILE_RECORD, 0xFC, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 }; /* byte count above FC21 maximum */
+	u8		bad_len[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00 }; /* PDU longer than byte count */
+	u8		bad_ref[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
+	u8		bad_rlen[]  = { FC_WRITE_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
+	u8		bad_rec[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01, 0x00, 0x01 };
+	u8		bad_range[] = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 }; /* range exceeds 0x270F */
+	u8		trunc[]     = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01 }; /* claims 2 registers but only 1 provided */
+	u8		misaligned[]= { FC_WRITE_FILE_RECORD, 0x0A, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00 }; /* trailing byte after complete sub-request */
+	u8		resp[MODBUS_MAX_PDU];
+
+	run(dev, short_req, sizeof(short_req), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_count, sizeof(bad_count), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_low, sizeof(bad_low), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_high, sizeof(bad_high), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_len, sizeof(bad_len), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_ref, sizeof(bad_ref), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_rlen, sizeof(bad_rlen), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_rec, sizeof(bad_rec), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_range, sizeof(bad_range), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, trunc, sizeof(trunc), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, misaligned, sizeof(misaligned), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(WriteFileRecordUnavailableIsAddressError)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_file_device(arena);
+	u8		missing_file[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
+	u8		missing_rec[]  = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01 };
+	u8		gap[]          = { FC_WRITE_FILE_RECORD, 0x0D, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	run(dev, missing_file, sizeof(missing_file), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	run(dev, missing_rec, sizeof(missing_rec), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	run(dev, gap, sizeof(gap), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
+
+TEST(WriteFileRecordIsAllOrNothing)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_file_device(arena);
+	u8		req[]  = {
+		FC_WRITE_FILE_RECORD, 0x12,
+		0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x77,	/* valid */
+		0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x88,	/* unavailable file */
+	};
+	u8		read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	run(dev, read, sizeof(read), resp);
+	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[4] == 0x12 && resp[5] == 0x34);
+	arena_release(arena);
+}
+
+TEST(WriteFileRecordUnavailableWhenNoFileRecordsConfigured)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}

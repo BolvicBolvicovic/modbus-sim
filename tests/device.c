@@ -250,3 +250,52 @@ TEST(FileRecordStorageLimits)
 	ASSERT_FAILURE(device_add_file_record(dev, 1, 200, 1, &value) == NULL);
 	arena_release(arena);
 }
+
+TEST(FileRecordWriteAndReadBack)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u16		data[] = { 0x1111, 0x2222, 0x3333 };
+	u16		next[] = { 0xAAAA, 0xBBBB };
+	u16		out[3] = { 0, 0, 0 };
+
+	ASSERT_EQ(device_add_file_record(dev, 1, 0, 3, data) == NULL);
+	ASSERT_SUCCESS(device_write_file_records(dev, 1, 1, 2, next));
+	ASSERT_SUCCESS(device_read_file_records(dev, 1, 0, 3, out));
+	ASSERT_EQ(out[0] == 0x1111 && out[1] == 0xAAAA && out[2] == 0xBBBB);
+	arena_release(arena);
+}
+
+TEST(FileRecordWriteRejectsUndefinedAndLeavesUnchanged)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u16		data[] = { 0x0102, 0x0304 };
+	u16		next[] = { 0xAAAA, 0xBBBB };
+	u16		out[2] = { 0, 0 };
+
+	ASSERT_EQ(device_add_file_record(dev, 1, 0, 2, data) == NULL);
+	ASSERT_FAILURE(device_write_file_records(dev, 2, 0, 1, next));	/* unknown file */
+	ASSERT_FAILURE(device_write_file_records(dev, 1, 2, 1, next));	/* undefined record */
+	ASSERT_FAILURE(device_write_file_records(dev, 1, 1, 2, next));	/* spans undefined */
+	ASSERT_SUCCESS(device_read_file_records(dev, 1, 0, 2, out));
+	ASSERT_EQ(out[0] == 0x0102 && out[1] == 0x0304);
+	arena_release(arena);
+}
+
+TEST(FileRecordWriteSpansMultipleSegments)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u16		data1[] = { 0x1111, 0x2222 };
+	u16		data2[] = { 0x3333, 0x4444 };
+	u16		next[]  = { 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD };
+	u16		out[4]  = { 0, 0, 0, 0 };
+
+	ASSERT_EQ(device_add_file_record(dev, 1, 0, 2, data1) == NULL);
+	ASSERT_EQ(device_add_file_record(dev, 1, 2, 2, data2) == NULL);
+	ASSERT_SUCCESS(device_write_file_records(dev, 1, 0, 4, next));
+	ASSERT_SUCCESS(device_read_file_records(dev, 1, 0, 4, out));
+	ASSERT_EQ(out[0] == 0xAAAA && out[1] == 0xBBBB && out[2] == 0xCCCC && out[3] == 0xDDDD);
+	arena_release(arena);
+}
