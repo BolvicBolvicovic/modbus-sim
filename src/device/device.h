@@ -68,10 +68,11 @@ struct device_t
 {
 	char		name[DEVICE_NAME_MAX];
 	u8		unit_id;
-	u64		start_ms;	/* ramps count their time from here */
+	u8		exception_status;	/* FC 07 (Read Exception Status) response byte */
+	u64		start_ms;		/* ramps count their time from here */
 	fault_t		fault;
 	u32		point_count;
-	point_t*	points;		/* DEVICE_MAX_POINTS entries */
+	point_t*	points;			/* DEVICE_MAX_POINTS entries */
 	space_t		spaces[SPACE_COUNT];
 };
 

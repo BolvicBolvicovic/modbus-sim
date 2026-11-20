@@ -43,6 +43,7 @@ The command-line options `--port` and `--bind` override these.
 |---|---|---|
 | `(name "Text")` | Name shown in logs and `--check`, up to 63 characters | `"unnamed"` |
 | `(unit-id N)` | Modbus unit id (slave address), 0-255 | `1` |
+| `(exception-status N)` | Byte returned by Read Exception Status (FC 07), 0-255 | `0` |
 | `(note "Text")` | A comment kept for humans. Can be repeated. Ignored by the program | - |
 | `(fault ...)` | One fault, see below | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |

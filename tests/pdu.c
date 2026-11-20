@@ -194,6 +194,43 @@ TEST(UnknownFunctionIsIllegalFunction)
 	arena_release(arena);
 }
 
+TEST(ReadExceptionStatusReturnsConfiguredByte)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_READ_EXCEPTION_STATUS };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->exception_status = 0x5A;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == FC_READ_EXCEPTION_STATUS && resp[1] == 0x5A);
+	arena_release(arena);
+}
+
+TEST(ReadExceptionStatusDefaultsToZero)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { 0x07 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x07 && resp[1] == 0x00);
+	arena_release(arena);
+}
+
+TEST(ReadExceptionStatusRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		extra[] = { 0x07, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x87 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
 TEST(MbapHeaderRoundTripAndValidation)
 {
 	u8		buf[MBAP_HEADER_SIZE];

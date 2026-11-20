@@ -96,6 +96,28 @@ TEST(ConfigFaultIsParsed)
 	ASSERT_EQ(config.devices[0]->fault.delay_ms == 300 && config.devices[0]->fault.percent == 40);
 }
 
+TEST(ConfigExceptionStatusIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (exception-status 255) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->exception_status == 255);
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->exception_status == 0);
+}
+
+TEST(ConfigExceptionStatusRejectsOutOfRange)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(device (exception-status 256) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
+}
+
 #define EXPECT_ERROR(text, fragment)							\
 	do {										\
 		config_t	c = { 0 };						\

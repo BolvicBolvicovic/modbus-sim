@@ -19,10 +19,13 @@ is disconnected.
 | 04 | Read Input Registers | input registers | 125 registers |
 | 05 | Write Single Coil | coils | 1 |
 | 06 | Write Single Register | holding registers | 1 |
+| 07 | Read Exception Status | - | 1 byte (status) |
 | 15 (0x0F) | Write Multiple Coils | coils | 1968 bits |
 | 16 (0x10) | Write Multiple Registers | holding registers | 123 registers |
 
-Any other function code gets exception 01. Not supported yet: 07, 08, 11, 12, 17, 20-24, 43.
+Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
+
+Any other function code gets exception 01. Not supported yet: 08, 11, 12, 17, 20-24, 43.
 
 ## Exceptions
 

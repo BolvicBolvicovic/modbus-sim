@@ -191,6 +191,12 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return write_single_coil(dev, req, req_len, resp);
 	case FC_WRITE_SINGLE_REGISTER:
 		return write_single_register(dev, req, req_len, resp);
+	case FC_READ_EXCEPTION_STATUS:
+		if (req_len != 1)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+		resp[0] = req[0];
+		resp[1] = dev->exception_status;
+		return 2;
 	case FC_WRITE_MULTIPLE_COILS:
 		return write_multiple_coils(dev, req, req_len, resp);
 	case FC_WRITE_MULTIPLE_REGISTERS:

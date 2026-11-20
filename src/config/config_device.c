@@ -38,6 +38,18 @@ parse_unit_id(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+static bool
+parse_exception_status(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s64	status = 0;
+
+	if (!form_get_int(ctx, item, 0, 255, &status))
+		return false;
+
+	dev->exception_status = (u8)status;
+	return true;
+}
+
 /* (note "text") is documentation for humans. It is checked and ignored. */
 static bool
 parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
@@ -267,14 +279,15 @@ struct item_entry_t
 };
 
 static const item_entry_t DEVICE_ITEMS[] = {
-	{ "name",     parse_name     },
-	{ "unit-id",  parse_unit_id  },
-	{ "fault",    parse_fault    },
-	{ "note",     parse_note     },
-	{ "coil",     parse_coil     },
-	{ "discrete", parse_discrete },
-	{ "input",    parse_input    },
-	{ "holding",  parse_holding  },
+	{ "name",             parse_name             },
+	{ "unit-id",          parse_unit_id          },
+	{ "exception-status", parse_exception_status },
+	{ "fault",            parse_fault            },
+	{ "note",             parse_note             },
+	{ "coil",             parse_coil             },
+	{ "discrete",         parse_discrete         },
+	{ "input",            parse_input            },
+	{ "holding",          parse_holding          },
 };
 
 static const item_entry_t*
@@ -299,7 +312,7 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 				 form_text(ctx, item));
 
 	if (!entry)
-		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, fault, note, "
+		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, fault, note, "
 				 "coil, discrete, input or holding", head);
 
 	return entry->parse(ctx, item, dev);

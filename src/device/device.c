@@ -27,8 +27,9 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev->points)
 		return NULL;
 
-	dev->unit_id  = 1;
-	dev->start_ms = start_ms;
+	dev->unit_id         = 1;
+	dev->exception_status = 0;
+	dev->start_ms        = start_ms;
 	return dev;
 }
 
