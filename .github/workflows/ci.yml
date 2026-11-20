@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      - name: Unit tests
+        run: make tests
+
+      - name: Check all profiles
+        run: |
+          for profile in profiles/*.scm; do
+            ./modbus-sim --check "$profile"
+          done
+
+      - name: Sanitizers (ASan + UBSan, vendored s7 excluded)
+        run: make asan

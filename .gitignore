@@ -1,0 +1,9 @@
+*.o
+*.d
+*.asan.o
+modbus-sim
+modbus-sim-tests
+modbus-sim-asan
+modbus-sim-asan-tests
+compile_commands.json
+.worktrees/

@@ -1,0 +1,733 @@
+/* Network integration tests: run the real server binary and talk to it over loopback.
+ * Each test starts a server on a private port and stops it before asserting, so a failed
+ * assertion cannot leave a child behind. PRE_TEST/atexit clean up leftovers from failures. */
+#include "vtest.h"
+#include "modbus/bytes.h"
+#include "modbus/mbap.h"
+#include "modbus/pdu.h"
+#include "util/clock.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#define NET_RECV_TIMEOUT_MS	1000
+#define NET_SHORT_TIMEOUT_MS	100
+#define NET_START_ATTEMPTS	300
+#define NET_MAX_ATTEMPTS	24
+
+typedef struct client_t client_t;
+struct client_t
+{
+	int	fd;
+};
+
+typedef struct fixture_t fixture_t;
+struct fixture_t
+{
+	pid_t	pid;
+	u16	port;
+	char	config[80];
+};
+
+static fixture_t	g_server = { .pid = -1 };
+
+static void
+server_stop(void);
+
+/* --- socket helpers --- */
+
+static bool
+client_open(u16 port, int timeout_ms, client_t* out)
+{
+	struct sockaddr_in	addr = { 0 };
+	struct timeval		tv   = { .tv_sec = timeout_ms / 1000,
+					 .tv_usec = (timeout_ms % 1000) * 1000 };
+	int			fd   = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (fd < 0)
+		return false;
+
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+	addr.sin_family      = AF_INET;
+	addr.sin_port        = htons(port);
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+	{
+		close(fd);
+		return false;
+	}
+
+	out->fd = fd;
+	return true;
+}
+
+static void
+client_close(client_t* client)
+{
+	if (client->fd >= 0)
+	{
+		close(client->fd);
+		client->fd = -1;
+	}
+}
+
+static bool
+send_all(int fd, const u8* buf, u32 len)
+{
+	while (len > 0)
+	{
+		ssize_t sent = send(fd, buf, len, MSG_NOSIGNAL);
+
+		if (sent <= 0)
+			return false;
+		buf += sent;
+		len -= (u32)sent;
+	}
+	return true;
+}
+
+static bool
+recv_exact(int fd, u8* buf, u32 len)
+{
+	while (len > 0)
+	{
+		ssize_t got = recv(fd, buf, len, 0);
+
+		if (got <= 0)
+			return false;
+		buf += got;
+		len -= (u32)got;
+	}
+	return true;
+}
+
+static u16
+next_tid(void)
+{
+	static u16 tid = 0;
+
+	return ++tid;
+}
+
+static bool
+send_request(client_t* client, u8 unit, u16 tid, const u8* pdu, u32 pdu_len)
+{
+	u8		frame[MBAP_MAX_FRAME];
+	mbap_header_t	header = { .transaction = tid, .length = (u16)(pdu_len + 1), .unit = unit };
+
+	mbap_encode(frame, &header);
+	memcpy(frame + MBAP_HEADER_SIZE, pdu, pdu_len);
+	return send_all(client->fd, frame, MBAP_HEADER_SIZE + pdu_len);
+}
+
+static bool
+recv_reply(client_t* client, u8 unit, u16 tid, u8* pdu, u32* pdu_len)
+{
+	u8		raw[MBAP_HEADER_SIZE];
+	mbap_header_t	header = { 0 };
+
+	if (!recv_exact(client->fd, raw, sizeof(raw)))
+		return false;
+
+	mbap_decode(raw, &header);
+	if (!mbap_is_valid(&header) || header.transaction != tid || header.unit != unit)
+		return false;
+
+	*pdu_len = header.length - 1;
+	return recv_exact(client->fd, pdu, *pdu_len);
+}
+
+static bool
+exchange(client_t* client, u8 unit, const u8* req, u32 req_len, u8* resp, u32* resp_len)
+{
+	u16 tid = next_tid();
+
+	return send_request(client, unit, tid, req, req_len) &&
+	       recv_reply(client, unit, tid, resp, resp_len);
+}
+
+static u32
+read_pdu(u8* pdu, u8 function, u16 address, u16 quantity)
+{
+	pdu[0] = function;
+	put_be16(pdu + 1, address);
+	put_be16(pdu + 3, quantity);
+	return 5;
+}
+
+static u32
+write_pdu(u8* pdu, u16 address, u16 value)
+{
+	pdu[0] = FC_WRITE_SINGLE_REGISTER;
+	put_be16(pdu + 1, address);
+	put_be16(pdu + 3, value);
+	return 5;
+}
+
+static bool
+exception_is(const u8* pdu, u32 len, u8 function, u8 code)
+{
+	return len == 2 && pdu[0] == (u8)(function | 0x80) && pdu[1] == code;
+}
+
+static u16
+register_value(const u8* pdu, u32 len, u32 index)
+{
+	return len >= 2 + (index + 1) * 2 ? get_be16(pdu + 2 + index * 2) : 0;
+}
+
+/* --- server fixture --- */
+
+/* Asks the kernel for an unused loopback port. There is a small race before the child
+ * binds it, but it keeps tests independent of a hard-coded port number. */
+static u16
+find_free_port(void)
+{
+	struct sockaddr_in	addr = { 0 };
+	socklen_t		len  = sizeof(addr);
+	int			fd   = socket(AF_INET, SOCK_STREAM, 0);
+	u16			port = 0;
+
+	if (fd < 0)
+		return 0;
+
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 &&
+	    getsockname(fd, (struct sockaddr*)&addr, &len) == 0)
+		port = ntohs(addr.sin_port);
+
+	close(fd);
+	return port;
+}
+
+static void
+server_stop(void)
+{
+	fixture_t* fx    = &g_server;
+	pid_t	   pid   = fx->pid;
+	bool	   reaped = false;
+
+	fx->pid = -1;
+	if (pid > 0)
+	{
+		kill(pid, SIGTERM);
+		for (u32 i = 0; i < 200; i++)
+		{
+			int status = 0;
+			pid_t done  = waitpid(pid, &status, WNOHANG);
+
+			if (done == pid || (done < 0 && errno == ECHILD))
+			{
+				reaped = true;
+				break;
+			}
+			usleep(10000);
+		}
+		if (!reaped)
+		{
+			kill(pid, SIGKILL);
+			waitpid(pid, NULL, 0);
+		}
+	}
+	if (fx->config[0])
+	{
+		unlink(fx->config);
+		fx->config[0] = '\0';
+	}
+}
+
+/* `server_options` is appended inside (server ...); pass "" for defaults. */
+static bool
+server_start(const char* server_options, const char* devices)
+{
+	fixture_t*	fx       = &g_server;
+	char		config[2048];
+	const char*	bin      = NULL;
+	FILE*		file     = NULL;
+	int		fd       = -1;
+
+	fx->port = find_free_port();
+	if (!fx->port)
+	{
+		fprintf(stderr, "net test: no free port\n");
+		return false;
+	}
+
+	snprintf(config, sizeof(config), "(server (port %u) (bind \"127.0.0.1\") %s)\n%s\n",
+		 fx->port, server_options ? server_options : "", devices);
+
+	strcpy(fx->config, "/tmp/modbus-sim-net-XXXXXX");
+	fd = mkstemp(fx->config);
+	if (fd < 0)
+	{
+		fprintf(stderr, "net test: mkstemp failed: %s\n", strerror(errno));
+		return false;
+	}
+
+	file = fdopen(fd, "w");
+	if (!file)
+	{
+		close(fd);
+		unlink(fx->config);
+		fx->config[0] = '\0';
+		return false;
+	}
+	fputs(config, file);
+	fclose(file);
+
+	bin = getenv("MODBUS_SIM_BIN");
+	if (!bin)
+		bin = "./modbus-sim";
+
+	fx->pid = fork();
+	if (fx->pid == 0)
+	{
+		freopen("/dev/null", "w", stdout);
+		freopen("/dev/null", "w", stderr);
+		execl(bin, bin, fx->config, (char*)NULL);
+		_exit(127);
+	}
+	if (fx->pid < 0)
+	{
+		fprintf(stderr, "net test: fork failed: %s\n", strerror(errno));
+		unlink(fx->config);
+		fx->config[0] = '\0';
+		return false;
+	}
+
+	for (u32 i = 0; i < NET_START_ATTEMPTS; i++)
+	{
+		client_t probe = { .fd = -1 };
+
+		if (client_open(fx->port, 50, &probe))
+		{
+			client_close(&probe);
+			usleep(50000);	/* let the server reap the probe connection */
+			return true;
+		}
+		usleep(10000);
+	}
+
+	{
+		int status = 0;
+
+		fprintf(stderr, "net test: server %u never accepted on %s\n", fx->port, fx->config);
+		pid_t done = waitpid(fx->pid, &status, WNOHANG);
+		fprintf(stderr, "net test: child waitpid=%d exited=%d status=%d\n", (int)done,
+			WIFEXITED(status), WEXITSTATUS(status));
+	}
+	server_stop();
+	return false;
+}
+
+SETUP_SUITE()
+{
+	(void)_ss_arena;
+	atexit(server_stop);
+}
+
+PRE_TEST()
+{
+	server_stop();
+}
+
+/* --- tests --- */
+
+TEST(NetPersistentConnectionServesRequestsInOrder)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len  = 0;
+	bool	 ok   = server_start("",
+				     "(device (name \"basic\") (unit-id 1)\n"
+				     "  (holding 0 (static 4660))\n"
+				     "  (input 0 (static 7))\n"
+				     "  (coil 0 (static on)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     resp[0] == FC_READ_HOLDING_REGISTERS && register_value(resp, len, 0) == 0x1234;
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_INPUT_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     resp[0] == FC_READ_INPUT_REGISTERS && register_value(resp, len, 0) == 7;
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_COILS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 3 &&
+		     resp[0] == FC_READ_COILS && resp[2] == 1;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetPipelinedRequestsGetAnswersInOrder)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len    = 0;
+	u16	 first  = next_tid();
+	u16	 second = next_tid();
+	bool	 ok     = server_start("",
+				      "(device (unit-id 1) (holding 0 (static 11)) (holding 1 (static 22)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = send_request(&client, 1, first, req, 5);
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 1, 1);
+		ok = ok && send_request(&client, 1, second, req, 5);
+	}
+	if (ok)
+		ok = recv_reply(&client, 1, first, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 11;
+	if (ok)
+		ok = recv_reply(&client, 1, second, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 22;
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetUnitIdRoutingAndGatewayException)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1) (holding 0 (static 4369)))\n"
+				    "(device (unit-id 2) (holding 0 (static 8738)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x1111;
+	}
+	if (ok)
+		ok = exchange(&client, 2, req, 5, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x2222;
+	if (ok)
+		ok = exchange(&client, 3, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_GATEWAY_TARGET_FAILED);
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetExceptionsOverWire)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (holding 1) (input 0))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		req[0] = 0x2B;
+		ok = exchange(&client, 1, req, 4, resp, &len) &&
+		     exception_is(resp, len, 0x2B, EXC_ILLEGAL_FUNCTION);
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 0);
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 7, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		write_pdu(req, 0, 1);	/* input 0 exists, holding 0 does not */
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_SINGLE_REGISTER, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetBadMbapHeaderClosesConnection)
+{
+	u8		bad[MBAP_HEADER_SIZE];
+	mbap_header_t	header = { .transaction = 1, .length = 2, .unit = 1 };
+	bool		ok     = server_start("", "(device (unit-id 1) (holding 0))");
+
+	for (u32 i = 0; i < 3 && ok; i++)
+	{
+		client_t client = { .fd = -1 };
+		char	 byte = 0;
+		ssize_t got  = 0;
+
+		header.protocol = (i == 0) ? 1 : 0;
+		header.length   = (u16)((i == 1) ? 0 : (i == 2) ? 255 : 2);
+		mbap_encode(bad, &header);
+
+		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+		if (!ok)
+			break;
+
+		ok = send_all(client.fd, bad, sizeof(bad));
+		if (ok)
+			got = recv(client.fd, &byte, 1, 0);
+		ok = ok && got == 0;	/* server closed, no exception response */
+
+		client_close(&client);
+	}
+
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetDelayFaultDoesNotBlockOtherClients)
+{
+	client_t	delayed   = { .fd = -1 };
+	client_t	fast      = { .fd = -1 };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len       = 0;
+	u16		delayed_tid = 0;
+	u16		fast_tid  = 0;
+	u64		start     = 0;
+	u64		fast_ms   = 0;
+	u64		delayed_ms = 0;
+	bool		ok        = server_start("",
+						"(device (unit-id 1) (holding 0 (static 11))\n"
+						"  (fault (kind delay) (delay-ms 600) (percent 100)))\n"
+						"(device (unit-id 2) (holding 0 (static 22)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &delayed);
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &fast);
+
+	if (ok)
+	{
+		delayed_tid = next_tid();
+		fast_tid    = next_tid();
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		start = clock_now_ms();
+		ok = send_request(&delayed, 1, delayed_tid, req, 5);
+		ok = ok && send_request(&fast, 2, fast_tid, req, 5);
+	}
+	if (ok)
+	{
+		ok = recv_reply(&fast, 2, fast_tid, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 22;
+		fast_ms = clock_now_ms() - start;
+	}
+	if (ok)
+	{
+		ok = recv_reply(&delayed, 1, delayed_tid, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 11;
+		delayed_ms = clock_now_ms() - start;
+	}
+	ok = ok && fast_ms < 300 && delayed_ms >= 500;
+
+	client_close(&delayed);
+	client_close(&fast);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetDropFaultStillAppliesWrites)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len     = 0;
+	bool	 dropped = false;
+	bool	 ok      = server_start("(seed 1)",
+					"(device (unit-id 1) (holding 0 (static 0))\n"
+					"  (fault (kind drop) (percent 50)))");
+
+	ok = ok && client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &client);
+
+	/* A dropped request makes exchange() time out. Repeat until one is dropped. */
+	for (u32 i = 0; ok && i < NET_MAX_ATTEMPTS && !dropped; i++)
+	{
+		write_pdu(req, 0, 1234);
+		dropped = !exchange(&client, 1, req, 5, resp, &len);
+	}
+
+	/* Read until a response gets through, then check the write took effect. */
+	for (u32 i = 0; ok && dropped && i < NET_MAX_ATTEMPTS; i++)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		if (exchange(&client, 1, req, 5, resp, &len) && len == 4)
+		{
+			ok = register_value(resp, len, 0) == 1234;
+			break;
+		}
+	}
+	ok = ok && dropped;
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetConnectionLimit)
+{
+	client_t clients[32];
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len   = 0;
+	bool	 ok    = server_start("", "(device (unit-id 1) (holding 0 (static 5)))");
+	u32	 opened = 0;
+
+	for (u32 i = 0; i < 32; i++)
+	{
+		clients[i].fd = -1;
+		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
+		if (!ok)
+			break;
+		opened++;
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&clients[0], 1, req, 5, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 5;
+	}
+
+	/* The 33rd connection is either refused outright or closed by the server. */
+	if (ok)
+	{
+		client_t extra = { .fd = -1 };
+		char	 byte  = 0;
+		bool	 open  = client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &extra);
+
+		if (open)
+		{
+			ssize_t got = recv(extra.fd, &byte, 1, 0);
+
+			ok = got == 0;
+			client_close(&extra);
+		}
+	}
+
+	for (u32 i = 0; i < opened; i++)
+		client_close(&clients[i]);
+	server_stop();
+	ASSERT_EQ(ok && opened == 32);
+}
+
+TEST(NetWritesAreAllOrNothing)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[16];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)\n"
+				    "  (holding 0 (static 1)) (holding 1 (static 2)) (holding 2 (static 3))\n"
+				    "  (coil 0 (static off)) (coil 1 (static off)) (coil 2 (static off))\n"
+				    "  (input 0 (static 9)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	/* Write multiple registers, then read them back. */
+	if (ok)
+	{
+		req[0] = FC_WRITE_MULTIPLE_REGISTERS;
+		put_be16(req + 1, 0);
+		put_be16(req + 3, 3);
+		req[5] = 6;
+		put_be16(req + 6, 100);
+		put_be16(req + 8, 200);
+		put_be16(req + 10, 300);
+		ok = exchange(&client, 1, req, 12, resp, &len) && len == 5 && resp[0] == req[0];
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 3);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 8 &&
+		     register_value(resp, len, 0) == 100 && register_value(resp, len, 1) == 200 &&
+		     register_value(resp, len, 2) == 300;
+	}
+
+	/* One undefined address makes the whole write fail, leaving the others untouched. */
+	if (ok)
+	{
+		req[0] = FC_WRITE_MULTIPLE_REGISTERS;
+		put_be16(req + 1, 1);
+		put_be16(req + 3, 3);
+		req[5] = 6;
+		put_be16(req + 6, 400);
+		put_be16(req + 8, 500);
+		put_be16(req + 10, 600);
+		ok = exchange(&client, 1, req, 12, resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 1, 2);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 6 &&
+		     register_value(resp, len, 0) == 200 && register_value(resp, len, 1) == 300;
+	}
+
+	/* Same rule for coils: a single-coil write succeeds, a multi-coil write with an
+	 * undefined address changes nothing. */
+	if (ok)
+	{
+		req[0] = FC_WRITE_SINGLE_COIL;
+		put_be16(req + 1, 0);
+		req[3] = 0xFF;
+		req[4] = 0x00;
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 5 && resp[0] == req[0];
+	}
+	if (ok)
+	{
+		req[0] = FC_WRITE_MULTIPLE_COILS;
+		put_be16(req + 1, 0);
+		put_be16(req + 3, 4);
+		req[5] = 1;
+		req[6] = 0x0F;
+		ok = exchange(&client, 1, req, 7, resp, &len) &&
+		     exception_is(resp, len, FC_WRITE_MULTIPLE_COILS, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_COILS, 0, 3);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 3 && resp[2] == 1;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
