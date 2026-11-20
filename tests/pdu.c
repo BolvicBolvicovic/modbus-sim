@@ -1,6 +1,8 @@
 #include "vtest.h"
 #include "modbus/pdu.h"
 #include "modbus/mbap.h"
+#include "modbus/bytes.h"
+#include "vlib/macros.h"
 #include <string.h>
 
 /* Builds a device with: holding 0 = 0x1234, holding 1 = 0x5678, input 0 = 7,
@@ -918,5 +920,97 @@ TEST(ReadWriteMultipleRegistersRejectsNonHoldingTarget)
 
 	run(dev, req, sizeof(req), resp);
 	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
+
+TEST(ReadFifoQueueReturnsConfiguredValues)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = device_new(arena, 0);
+	u16		data[] = { 0x1234, 0x5678, 0x0003 };
+	u8		req[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03 };
+
+	ASSERT_EQ(device_add_fifo(dev, 10, 3, data) == NULL);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}
+
+TEST(ReadFifoQueueEmptyAndNonDestructive)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u16		data[] = { 0x0001, 0x0002 };
+	u8		req1[] = { FC_READ_FIFO_QUEUE, 0x00, 0x01 };
+	u8		req2[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		empty[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02, 0x00, 0x00 };
+	u8		want[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x06, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 };
+
+	ASSERT_EQ(device_add_fifo(dev, 1, 0, data) == NULL);
+	ASSERT_EQ(device_add_fifo(dev, 2, 2, data) == NULL);
+
+	ASSERT_EQ(run(dev, req1, sizeof(req1), resp) == sizeof(empty));
+	ASSERT_EQ(memcmp(resp, empty, sizeof(empty)) == 0);
+
+	ASSERT_EQ(run(dev, req2, sizeof(req2), resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	ASSERT_EQ(run(dev, req2, sizeof(req2), resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}
+
+TEST(ReadFifoQueueMaxCount)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u16		data[DEVICE_MAX_FIFO_VALUES];
+	u8		req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x05 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	for (u32 i = 0; i < ARRAY_COUNT(data); i++)
+		data[i] = (u16)(i + 1);
+	ASSERT_EQ(device_add_fifo(dev, 5, DEVICE_MAX_FIFO_VALUES, data) == NULL);
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5 + 2 * DEVICE_MAX_FIFO_VALUES);
+	ASSERT_EQ(resp[0] == FC_READ_FIFO_QUEUE);
+	ASSERT_EQ(get_be16(resp + 1) == 2 + 2 * DEVICE_MAX_FIFO_VALUES);
+	ASSERT_EQ(get_be16(resp + 3) == DEVICE_MAX_FIFO_VALUES);
+	ASSERT_EQ(get_be16(resp + 5) == 1);
+	ASSERT_EQ(get_be16(resp + 5 + 2 * (DEVICE_MAX_FIFO_VALUES - 1)) == DEVICE_MAX_FIFO_VALUES);
+	arena_release(arena);
+}
+
+TEST(ReadFifoQueueRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u16		data[] = { 1 };
+	u8		short_req[] = { FC_READ_FIFO_QUEUE, 0x00 };
+	u8		long_req[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x01, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(device_add_fifo(dev, 1, 1, data) == NULL);
+
+	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x98 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(run(dev, long_req, sizeof(long_req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x98 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(ReadFifoQueueUnconfiguredPointerIsAddressError)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u16		data[] = { 1 };
+	u8		req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(device_add_fifo(dev, 1, 1, data) == NULL);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x98 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }

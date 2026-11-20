@@ -3,6 +3,7 @@
 #include "device/fault.h"
 #include "util/rng.h"
 #include <string.h>
+#include "vlib/macros.h"
 
 static device_t*
 fresh_device(arena_t* arena)
@@ -297,5 +298,64 @@ TEST(FileRecordWriteSpansMultipleSegments)
 	ASSERT_SUCCESS(device_write_file_records(dev, 1, 0, 4, next));
 	ASSERT_SUCCESS(device_read_file_records(dev, 1, 0, 4, out));
 	ASSERT_EQ(out[0] == 0xAAAA && out[1] == 0xBBBB && out[2] == 0xCCCC && out[3] == 0xDDDD);
+	arena_release(arena);
+}
+
+TEST(FifoQueueStoreAndRead)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = fresh_device(arena);
+	u16		data[] = { 0x1234, 0x5678, 0x0003 };
+	u16		none[] = { 0 };
+	u16		out[3] = { 0, 0, 0 };
+	u16		count  = 0xFFFF;
+
+	ASSERT_EQ(device_add_fifo(dev, 10, 3, data) == NULL);
+	ASSERT_EQ(device_add_fifo(dev, 20, 0, none) == NULL);
+	ASSERT_SUCCESS(device_read_fifo(dev, 10, &count, out));
+	ASSERT_EQ(count == 3);
+	ASSERT_EQ(out[0] == 0x1234 && out[1] == 0x5678 && out[2] == 0x0003);
+	ASSERT_SUCCESS(device_read_fifo(dev, 20, &count, out));
+	ASSERT_EQ(count == 0);
+	ASSERT_FAILURE(device_read_fifo(dev, 11, &count, out));
+	arena_release(arena);
+}
+
+TEST(FifoQueueReadIsNonDestructive)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = fresh_device(arena);
+	u16		data[] = { 0x0001, 0x0002 };
+	u16		out[2] = { 0, 0 };
+	u16		count  = 0;
+
+	ASSERT_EQ(device_add_fifo(dev, 1, 2, data) == NULL);
+	ASSERT_SUCCESS(device_read_fifo(dev, 1, &count, out));
+	ASSERT_EQ(count == 2 && out[0] == 1 && out[1] == 2);
+	out[0] = out[1] = 0;
+	count = 0;
+	ASSERT_SUCCESS(device_read_fifo(dev, 1, &count, out));
+	ASSERT_EQ(count == 2 && out[0] == 1 && out[1] == 2);
+	arena_release(arena);
+}
+
+TEST(FifoQueueRejectsDuplicateTooManyAndTooLarge)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = fresh_device(arena);
+	u16		data[DEVICE_MAX_FIFO_VALUES + 1];
+	u16		one    = 1;
+
+	for (u32 i = 0; i < ARRAY_COUNT(data); i++)
+		data[i] = (u16)i;
+
+	ASSERT_FAILURE(device_add_fifo(dev, 1, DEVICE_MAX_FIFO_VALUES + 1, data) == NULL);
+	ASSERT_EQ(device_add_fifo(dev, 1, DEVICE_MAX_FIFO_VALUES, data) == NULL);
+	ASSERT_FAILURE(device_add_fifo(dev, 1, 0, &one) == NULL);
+
+	dev = fresh_device(arena);
+	for (u32 i = 0; i < DEVICE_MAX_FIFOS; i++)
+		ASSERT_EQ(device_add_fifo(dev, (u16)i, 1, &one) == NULL);
+	ASSERT_FAILURE(device_add_fifo(dev, 99, 1, &one) == NULL);
 	arena_release(arena);
 }

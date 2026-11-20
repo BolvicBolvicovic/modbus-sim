@@ -372,6 +372,62 @@ parse_file(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+static bool
+parse_fifo(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s64		address  = 0;
+	s7_pointer	values_f = NULL;
+	const char*	vhead    = NULL;
+	u16		values[DEVICE_MAX_FIFO_VALUES];
+	u32		count    = 0;
+
+	if (s7_list_length(ctx->sc, item) != 3 || !s7_is_integer(s7_cadr(item)))
+		return form_fail(ctx, "%s: expected (fifo ADDRESS (values ...))", form_text(ctx, item));
+
+	address = (s64)s7_integer(s7_cadr(item));
+	if (address < 0 || address > 65535)
+		return form_fail(ctx, "%s: FIFO address must be between 0 and 65535", form_text(ctx, item));
+
+	values_f = s7_caddr(item);
+	vhead    = form_head_name(values_f);
+	if (!vhead || strcmp(vhead, "values") != 0)
+		return form_fail(ctx, "%s: expected (values ...), got %s", form_text(ctx, item),
+				 form_text(ctx, values_f));
+
+	for (s7_pointer v = s7_cdr(values_f); s7_is_pair(v); v = s7_cdr(v))
+	{
+		s7_pointer	val = s7_car(v);
+
+		if (!s7_is_integer(val))
+			return form_fail(ctx, "%s: FIFO values must be whole numbers", form_text(ctx, values_f));
+		if ((s64)s7_integer(val) < 0 || (s64)s7_integer(val) > 65535)
+			return form_fail(ctx, "%s: FIFO values must be between 0 and 65535", form_text(ctx, values_f));
+		if (count >= DEVICE_MAX_FIFO_VALUES)
+			return form_fail(ctx, "%s: FIFO queue can have at most %d values",
+					 form_text(ctx, values_f), DEVICE_MAX_FIFO_VALUES);
+		values[count++] = (u16)s7_integer(val);
+	}
+	if (!s7_is_null(ctx->sc, s7_cdr(values_f)) && !s7_is_pair(s7_cdr(values_f)))
+		return form_fail(ctx, "%s: malformed values list", form_text(ctx, values_f));
+	/* guard against improper list tail */
+	{
+		s7_pointer	v = s7_cdr(values_f);
+
+		while (s7_is_pair(v))
+			v = s7_cdr(v);
+		if (!s7_is_null(ctx->sc, v))
+			return form_fail(ctx, "%s: malformed values list", form_text(ctx, values_f));
+	}
+
+	{
+		const char*	error = device_add_fifo(dev, (u16)address, (u16)count, values);
+
+		if (error)
+			return form_fail(ctx, "%s: %s", form_text(ctx, item), error);
+	}
+	return true;
+}
+
 /* --- device --- */
 
 typedef bool (*item_parser_t)(form_ctx_t*, s7_pointer, device_t*);
@@ -396,6 +452,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "input",            parse_input            },
 	{ "holding",          parse_holding          },
 	{ "file",             parse_file             },
+	{ "fifo",             parse_fifo             },
 };
 
 static const item_entry_t*
@@ -421,7 +478,7 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 	if (!entry)
 		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
-				 "run-indicator, fault, note, coil, discrete, input, holding or file", head);
+				 "run-indicator, fault, note, coil, discrete, input, holding, file or fifo", head);
 
 	return entry->parse(ctx, item, dev);
 }

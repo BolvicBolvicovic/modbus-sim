@@ -48,7 +48,8 @@ The command-line options `--port` and `--bind` override these.
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
 | `(note "Text")` | A comment kept for humans. Can be repeated. Ignored by the program | - |
 | `(fault ...)` | One fault, see below | none |
-| `(file ...)` | File record data for Read File Record (FC 20), see below | none |
+| `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |
+| `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
 
 Unit ids must be different between devices.
@@ -222,6 +223,36 @@ not fit in a Modbus PDU. FC 21 is all-or-nothing: no records are modified if any
 validation. See [modbus-support.md](modbus-support.md) for the exact request/response format,
 semantics, and exception conditions. Config is limited to 16 files per device and 64 record ranges
 per file.
+
+## `(fifo ...)` (Read FIFO Queue, FC 24)
+
+Defines a FIFO/queue that a client can read with Modbus function code 24 (Read FIFO Queue, 0x18).
+FIFO queues are separate from the coil/discrete/input/holding tables and file records. Only the
+FIFO pointer addresses configured here exist (defaults to none): an FC 24 request for an undefined
+FIFO pointer returns exception 02. If no FIFO queues are configured, FC 24 is unavailable
+(exception 02).
+
+Shape:
+
+```scheme
+(fifo ADDRESS (values VALUE ...))
+```
+
+- `ADDRESS` is the FIFO pointer address, 0-65535. Each `(fifo ...)` must use a different address.
+- `VALUE` is a 16-bit register value, 0-65535. Values are returned by FC 24 in the order listed.
+  A FIFO may contain 0 to 31 values (an empty queue is `(fifo ADDRESS (values))`).
+
+```scheme
+(fifo 100 (values 0x1234 0x5678 42))
+(fifo 200 (values))                      ; empty queue: FIFO Count 0
+```
+
+FC 24 reads are **non-destructive**: reading a FIFO does not change its contents or count, so
+repeated reads return the same values. FIFO contents are config data (fixed for the run; not
+writable via Modbus and not modified by the simulator). The response `FIFO Count` is the number of
+configured values and is always at most 31. Config is limited to 16 FIFO queues per device. See
+[modbus-support.md](modbus-support.md) for the exact request/response format and exception
+conditions.
 
 ## Error messages
 

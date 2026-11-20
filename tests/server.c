@@ -1508,3 +1508,99 @@ TEST(NetReadWriteMultipleRegistersUnknownUnitAndNonHoldingTarget)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetReadFifoQueueSuccessMalformedUnknownUnitAndUnavailable)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1)"
+				    "  (fifo 10 (values 4660 22136 3))"
+				    "  (fifo 20 (values)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
+		u8 want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(want) &&
+		     memcmp(resp, want, sizeof(want)) == 0;
+	}
+	if (ok)
+	{
+		/* non-destructive read */
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
+		u8 want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(want) &&
+		     memcmp(resp, want, sizeof(want)) == 0;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x14 };
+		u8 want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02, 0x00, 0x00 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(want) &&
+		     memcmp(resp, want, sizeof(want)) == 0;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x63 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 short_req[] = { FC_READ_FIFO_QUEUE, 0x00 };
+		u8 long_req[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x0A, 0x00 };
+
+		ok = exchange(&client, 1, short_req, sizeof(short_req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_VALUE);
+		if (ok)
+			ok = exchange(&client, 1, long_req, sizeof(long_req), resp, &len) &&
+			     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
+
+		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_GATEWAY_TARGET_FAILED);
+	}
+	if (ok)
+	{
+		/* 6 handled requests above (2 success, 1 empty, 1 addr error, 2 value errors); unknown unit not counted */
+		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
+
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
+		     resp[3] == 0x00 && resp[4] == 0x07;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x00 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}

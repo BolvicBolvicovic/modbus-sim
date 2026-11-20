@@ -225,3 +225,32 @@ TEST(ConfigFileRecordErrors)
 	EXPECT_ERROR("(device (file 1 (record 0 65536)))", "between 0 and 65535");
 	EXPECT_ERROR("(device (file 1 (record 0 1 2) (record 1 3)))", "overlaps another record");
 }
+
+TEST(ConfigFifoQueuesAreParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		out[3] = { 0, 0, 0 };
+	u16		count  = 0;
+
+	ASSERT_SUCCESS(load_text("(device"
+				 "  (fifo 0 (values 4660 22136))"
+				 "  (fifo 1000 (values)))",
+				 &config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read_fifo(config.devices[0], 0, &count, out));
+	ASSERT_EQ(count == 2);
+	ASSERT_EQ(out[0] == 0x1234 && out[1] == 0x5678);
+	ASSERT_SUCCESS(device_read_fifo(config.devices[0], 1000, &count, out));
+	ASSERT_EQ(count == 0);
+}
+
+TEST(ConfigFifoQueueErrors)
+{
+	EXPECT_ERROR("(device (fifo))", "expected (fifo ADDRESS (values");
+	EXPECT_ERROR("(device (fifo 0 1))", "expected (values");
+	EXPECT_ERROR("(device (fifo 65536 (values)))", "between 0 and 65535");
+	EXPECT_ERROR("(device (fifo 0 (vals)))", "expected (values");
+	EXPECT_ERROR("(device (fifo 0 (values 65536)))", "between 0 and 65535");
+	EXPECT_ERROR("(device (fifo 0 (values \"x\")))", "whole numbers");
+	EXPECT_ERROR("(device (fifo 0 (values 1)) (fifo 0 (values 2)))", "already defined");
+}

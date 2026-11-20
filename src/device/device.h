@@ -62,6 +62,8 @@ struct space_t
 
 #define DEVICE_MAX_FILES		16
 #define DEVICE_MAX_FILE_SEGMENTS	64
+#define DEVICE_MAX_FIFOS		16
+#define DEVICE_MAX_FIFO_VALUES		31
 
 /* Name: file_segment_t
  * Description: one contiguous block of 16-bit register values in a file,
@@ -86,6 +88,18 @@ struct device_file_t
 	file_segment_t	segments[DEVICE_MAX_FILE_SEGMENTS];
 };
 
+/* Name: device_fifo_t
+ * Description: configured FC 24 (Read FIFO Queue) storage for one FIFO pointer.
+ * Values are returned in configured order, non-destructively.
+ * */
+typedef struct device_fifo_t device_fifo_t;
+struct device_fifo_t
+{
+	u16	address;	/* FIFO pointer address */
+	u16	count;		/* 0..DEVICE_MAX_FIFO_VALUES */
+	u16*	values;		/* count entries, arena-backed */
+};
+
 /* Name: device_t
  * Description: one simulated Modbus device (one unit id).
  * */
@@ -106,6 +120,8 @@ struct device_t
 	point_t*	points;			/* DEVICE_MAX_POINTS entries */
 	u32		file_count;
 	device_file_t*	files;			/* DEVICE_MAX_FILES entries */
+	u32		fifo_count;
+	device_fifo_t*	fifos;			/* DEVICE_MAX_FIFOS entries */
 	space_t		spaces[SPACE_COUNT];
 };
 
@@ -140,6 +156,16 @@ bool		device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16
  * `file_no`. Fails if the file or any requested record is not defined. */
 bool		device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
 					  const u16* in);
+
+/* Adds a FIFO queue identified by `address` with `count` register values.
+ * Values are copied into the device arena and returned in order by FC 24.
+ * Returns NULL on success, or a static error message. */
+const char*	device_add_fifo(device_t* dev, u16 address, u16 count, const u16* values);
+
+/* Reads a configured FIFO queue identified by `address`. On success sets
+ * `*count` (0..DEVICE_MAX_FIFO_VALUES) and copies values into `out`.
+ * Fails if the FIFO is not defined. */
+bool		device_read_fifo(const device_t* dev, u16 address, u16* count, u16* out);
 
 /* True for SPACE_COIL and SPACE_DISCRETE. */
 bool		space_is_bit(space_kind_t space);

@@ -30,6 +30,7 @@ is disconnected.
 | 21 (0x15) | Write File Record | file records | 1..N sub-requests (by PDU size) |
 | 22 (0x16) | Mask Write Register | holding registers | 1 register |
 | 23 (0x17) | Read/Write Multiple Registers | holding registers | read 1-125, write 1-121 |
+| 24 (0x18) | Read FIFO Queue | FIFO queues | 0-31 register values |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -63,7 +64,13 @@ Both the read range and the write range target holding registers only and must b
 
 The request is all-or-nothing: shape/values/lengths and availability of both ranges are validated before applying any write. A request is rejected with exception 03 (illegal data value) if the request is too short or has the wrong length for the declared byte count, Quantity to Read or Quantity to Write is out of range, or Write Byte Count is not `2 * Quantity to Write`. It is rejected with exception 02 (illegal data address) if any address in the read range or the write range is undefined/unavailable per existing semantics. On any exception no holding registers are modified. FC 23 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
 
-Any other function code gets exception 01. Not supported yet: 24, 43.
+Read FIFO Queue (FC 24 / 0x18) reads a per-device configured FIFO/queue identified by a FIFO pointer address. The request PDU is `[0x18][FIFO Pointer Address Hi][FIFO Pointer Address Lo]` (3 bytes). The normal response PDU is `[0x18][Byte Count Hi][Byte Count Lo][FIFO Count Hi][FIFO Count Lo][FIFO Value Register...]*` where Byte Count is `2 + 2*FIFO Count` (the FIFO Count field plus the FIFO values), FIFO Count is `0-31`, and each FIFO value is a 16-bit register value.
+
+FIFO queues are explicit, config-backed device storage (see [config-reference.md](config-reference.md)), separate from the coil/discrete/input/holding tables and file records. Only configured FIFO pointer addresses exist (defaults to none), so availability is deterministic and consistent with "only configured things exist": a request for an unconfigured/unavailable FIFO pointer address is rejected with exception 02 (illegal data address). A configured FIFO returns its `FIFO Count` register values in configured order (0..31 values). Reads are non-destructive: the queue contents and count are not modified by FC 24, so repeated reads of the same FIFO pointer return the same response (a simple, deterministic readback model for this simulator).
+
+The request must be exactly 3 bytes; any other length or shape (short, extra data) is rejected with exception 03 (illegal data value). Config enforces at most 31 values per FIFO, so a configured FIFO response always fits within a Modbus PDU. FC 24 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs; requests for an unknown unit are handled at the server level and do not increment any device counter.
+
+Any other function code gets exception 01. Not supported yet: 43.
 
 ## Exceptions
 

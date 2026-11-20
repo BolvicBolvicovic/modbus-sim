@@ -31,6 +31,10 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev->files)
 		return NULL;
 
+	dev->fifos = ARENA_PUSH_ARRAY(arena, device_fifo_t, DEVICE_MAX_FIFOS);
+	if (!dev->fifos)
+		return NULL;
+
 	dev->arena            = arena;
 	dev->unit_id          = 1;
 	dev->exception_status = 0;
@@ -308,5 +312,61 @@ device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
 			break;
 		}
 	}
+	return true;
+}
+
+static device_fifo_t*
+find_fifo(const device_t* dev, u16 address)
+{
+	for (u32 i = 0; i < dev->fifo_count; i++)
+	{
+		if (dev->fifos[i].address == address)
+			return &dev->fifos[i];
+	}
+	return NULL;
+}
+
+const char*
+device_add_fifo(device_t* dev, u16 address, u16 count, const u16* values)
+{
+	device_fifo_t*	fifo = NULL;
+	u16*		copy = NULL;
+
+	if (count > DEVICE_MAX_FIFO_VALUES)
+		return "FIFO queue can have at most 31 values";
+
+	if (find_fifo(dev, address))
+		return "FIFO address is already defined";
+
+	if (dev->fifo_count >= DEVICE_MAX_FIFOS)
+		return "too many FIFO queues on one device";
+
+	if (count > 0)
+	{
+		copy = ARENA_PUSH_ARRAY(dev->arena, u16, count);
+		if (!copy)
+			return "out of memory while storing FIFO queue values";
+		for (u32 i = 0; i < count; i++)
+			copy[i] = values[i];
+	}
+
+	fifo = &dev->fifos[dev->fifo_count++];
+	fifo->address = address;
+	fifo->count   = count;
+	fifo->values  = copy;
+	return NULL;
+}
+
+bool
+device_read_fifo(const device_t* dev, u16 address, u16* count, u16* out)
+{
+	const device_fifo_t*	fifo = find_fifo(dev, address);
+
+	if (!fifo)
+		return false;
+
+	*count = fifo->count;
+	for (u32 i = 0; i < fifo->count; i++)
+		out[i] = fifo->values[i];
 	return true;
 }

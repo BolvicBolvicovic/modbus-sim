@@ -218,6 +218,29 @@ read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* res
 }
 
 static u32
+read_fifo_queue(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	u16	values[DEVICE_MAX_FIFO_VALUES];
+	u16	count   = 0;
+	u16	address = 0;
+
+	if (req_len != 3)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	address = get_be16(req + 1);
+	if (!device_read_fifo(dev, address, &count, values))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	resp[0] = req[0];
+	put_be16(resp + 1, (u16)(2 + 2 * (u32)count));
+	put_be16(resp + 3, count);
+	for (u32 i = 0; i < count; i++)
+		put_be16(resp + 5 + i * 2, values[i]);
+
+	return 5 + 2 * (u32)count;
+}
+
+static u32
 read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
 	u32	byte_count    = 0;
@@ -483,6 +506,8 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return write_file_record(dev, req, req_len, resp);
 	case FC_MASK_WRITE_REGISTER:
 		return mask_write_register(dev, req, req_len, resp);
+	case FC_READ_FIFO_QUEUE:
+		return read_fifo_queue(dev, req, req_len, resp);
 	default:
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 	}
