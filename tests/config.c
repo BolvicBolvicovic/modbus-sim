@@ -221,5 +221,7 @@ TEST(ConfigFileRecordErrors)
 	EXPECT_ERROR("(device (file 1))", "at least one (record");
 	EXPECT_ERROR("(device (file 1 (record 0)))", "(record REC_NO VALUE");
 	EXPECT_ERROR("(device (file 1 (record 10000 1)))", "between 0 and 9999");
+	EXPECT_ERROR("(device (file 65536 (record 0 1)))", "between 0 and 65535");
+	EXPECT_ERROR("(device (file 1 (record 0 65536)))", "between 0 and 65535");
 	EXPECT_ERROR("(device (file 1 (record 0 1 2) (record 1 3)))", "overlaps another record");
 }

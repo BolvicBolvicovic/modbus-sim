@@ -514,14 +514,24 @@ TEST(ReadFileRecordRejectsMalformedRequest)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_file_device(arena);
+	u8		short_req[] = { FC_READ_FILE_RECORD };
 	u8		bad_count[] = { FC_READ_FILE_RECORD, 0x06, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8		bad_mod7[]  = { FC_READ_FILE_RECORD, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00 };
+	u8		bad_high[]  = { FC_READ_FILE_RECORD, 0xF6, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
 	u8		bad_len[]   = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00 };
 	u8		bad_ref[]   = { FC_READ_FILE_RECORD, 0x07, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
 	u8		bad_rlen[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
 	u8		bad_rec[]   = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01 };
+	u8		big_resp[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7E };
 	u8		resp[MODBUS_MAX_PDU];
 
+	run(dev, short_req, sizeof(short_req), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_count, sizeof(bad_count), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_mod7, sizeof(bad_mod7), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_high, sizeof(bad_high), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_len, sizeof(bad_len), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
@@ -530,6 +540,8 @@ TEST(ReadFileRecordRejectsMalformedRequest)
 	run(dev, bad_rlen, sizeof(bad_rlen), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_rec, sizeof(bad_rec), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, big_resp, sizeof(big_resp), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	arena_release(arena);
 }
@@ -540,11 +552,27 @@ TEST(ReadFileRecordUnavailableIsAddressError)
 	device_t*	dev   = make_file_device(arena);
 	u8		missing_file[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01 };
 	u8		missing_rec[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01 };
+	u8		gap[]          = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03 };
 	u8		resp[MODBUS_MAX_PDU];
 
 	run(dev, missing_file, sizeof(missing_file), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	run(dev, missing_rec, sizeof(missing_rec), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	/* Range 0-2 spans undefined record 2 between configured segments. */
+	run(dev, gap, sizeof(gap), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
+
+TEST(ReadFileRecordUnavailableWhenNoFileRecordsConfigured)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	run(dev, req, sizeof(req), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }

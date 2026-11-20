@@ -1123,3 +1123,23 @@ TEST(NetReadFileRecordUnknownUnit)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetReadFileRecordUnavailableWhenNoFileRecordsConfigured)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
