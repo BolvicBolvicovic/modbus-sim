@@ -176,6 +176,7 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return modbus_exception(resp, 0, EXC_ILLEGAL_FUNCTION);
 
 	dev->com_event_count = (u16)(dev->com_event_count + 1);
+	dev->message_count   = (u16)(dev->message_count + 1);
 	device_tick(dev, now_ms);
 
 	switch (req[0])
@@ -212,6 +213,15 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		put_be16(resp + 1, 0x0000);
 		put_be16(resp + 3, dev->com_event_count);
 		return 5;
+	case FC_GET_COM_EVENT_LOG:
+		if (req_len != 1)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+		resp[0] = req[0];
+		resp[1] = 6; /* status + event count + message count, no events */
+		put_be16(resp + 2, 0x0000);
+		put_be16(resp + 4, dev->com_event_count);
+		put_be16(resp + 6, dev->message_count);
+		return 8;
 	case FC_WRITE_MULTIPLE_COILS:
 		return write_multiple_coils(dev, req, req_len, resp);
 	case FC_WRITE_MULTIPLE_REGISTERS:
