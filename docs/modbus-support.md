@@ -25,6 +25,7 @@ is disconnected.
 | 12 (0x0C) | Get Com Event Log | - | status + event/message counts + 0-64 events |
 | 15 (0x0F) | Write Multiple Coils | coils | 1968 bits |
 | 16 (0x10) | Write Multiple Registers | holding registers | 123 registers |
+| 17 (0x11) | Report Server ID | - | byte count + server ID + run indicator |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -34,7 +35,9 @@ Get Com Event Counter (FC 11 / 0x0B) is a serial-diagnostics function carried as
 
 Get Com Event Log (FC 12 / 0x0C) is also a serial-diagnostics function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x0C`, 1 byte). A normal response is `[FC 0x0C][Byte Count][Status Hi][Status Lo][Event Count Hi][Event Count Lo][Message Count Hi][Message Count Lo][Events...]` where Byte Count is the number of following bytes (`6 + number of event bytes`) and Status/Event Count/Message Count are 16-bit fields. In this simulator the status is always `0x0000` (device ready); the Event Count is the same per-device communication event counter returned by FC 11; the Message Count is a per-device 16-bit counter of Modbus request PDUs processed for the device. Both counters are incremented once for every handled request PDU (including exception-producing requests and the FC 12 request itself), the response returns their values after that increment, and each wraps to 0 after 65535. No serial-line events are modeled, so the Events field is always empty (0 bytes) and Byte Count is always `6`, producing an 8-byte PDU. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value).
 
-Any other function code gets exception 01. Not supported yet: 17, 20-24, 43.
+Report Server ID (FC 17 / 0x11) is a serial-diagnostics identification function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x11`, 1 byte). A normal response is `[FC 0x11][Byte Count][Server ID][Run Indicator Status]` (4 bytes). Byte Count is the number of following bytes and is always `2` in this simulator (Server ID + Run Indicator Status), with no device-specific Additional Data. `Server ID` and `Run Indicator Status` are configured per device (`server-id`, 0-255, default `0`; `run-indicator`, 0-255, default `0xFF`). By Modbus convention Run Indicator Status `0xFF` means ON/run and `0x00` means OFF; other values are accepted by config and reported as-is. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value).
+
+Any other function code gets exception 01. Not supported yet: 20-24, 43.
 
 ## Exceptions
 

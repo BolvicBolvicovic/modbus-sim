@@ -69,6 +69,8 @@ struct device_t
 	char		name[DEVICE_NAME_MAX];
 	u8		unit_id;
 	u8		exception_status;	/* FC 07 (Read Exception Status) response byte */
+	u8		server_id;		/* FC 17 (Report Server ID) server ID byte */
+	u8		run_indicator;		/* FC 17 Run Indicator Status (0xFF run, 0x00 off) */
 	u16		com_event_count;	/* FC 11/12 event counter, wraps modulo 65536 */
 	u16		message_count;		/* FC 12 message counter, wraps modulo 65536 */
 	u64		start_ms;		/* ramps count their time from here */

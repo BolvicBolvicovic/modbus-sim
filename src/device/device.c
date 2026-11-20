@@ -27,11 +27,13 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev->points)
 		return NULL;
 
-	dev->unit_id         = 1;
+	dev->unit_id          = 1;
 	dev->exception_status = 0;
+	dev->server_id        = 0;
+	dev->run_indicator    = 0xFF;
 	dev->com_event_count  = 0;
 	dev->message_count    = 0;
-	dev->start_ms        = start_ms;
+	dev->start_ms         = start_ms;
 	return dev;
 }
 

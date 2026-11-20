@@ -945,3 +945,103 @@ TEST(NetGetComEventLogUnknownUnitDoesNotCount)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+TEST(NetReportServerIdReturnsConfiguredValues)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (server-id 42) (run-indicator 0) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		req[0] = FC_REPORT_SERVER_ID;
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
+		     resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2 &&
+		     resp[2] == 42 && resp[3] == 0x00;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReportServerIdDefaults)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8] = { FC_REPORT_SERVER_ID };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
+		     resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2 &&
+		     resp[2] == 0x00 && resp[3] == 0xFF;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReportServerIdMalformedRequest)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8] = { FC_REPORT_SERVER_ID, 0x00 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, 2, resp, &len) &&
+		     exception_is(resp, len, FC_REPORT_SERVER_ID, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		req[0] = FC_REPORT_SERVER_ID;
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
+		     resp[1] == 2 && resp[2] == 0x00 && resp[3] == 0xFF;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReportServerIdUnknownUnitDoesNotCount)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8] = { FC_REPORT_SERVER_ID };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 3, req, 1, resp, &len) &&
+		     exception_is(resp, len, FC_REPORT_SERVER_ID, EXC_GATEWAY_TARGET_FAILED);
+	}
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
+		     resp[1] == 2 && resp[2] == 0x00 && resp[3] == 0xFF;
+	}
+	if (ok)
+	{
+		req[0] = FC_GET_COM_EVENT_COUNTER;
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
+		     resp[3] == 0x00 && resp[4] == 0x02;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}

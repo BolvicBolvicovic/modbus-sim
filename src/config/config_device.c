@@ -50,6 +50,30 @@ parse_exception_status(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+static bool
+parse_server_id(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s64	id = 0;
+
+	if (!form_get_int(ctx, item, 0, 255, &id))
+		return false;
+
+	dev->server_id = (u8)id;
+	return true;
+}
+
+static bool
+parse_run_indicator(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s64	status = 0;
+
+	if (!form_get_int(ctx, item, 0, 255, &status))
+		return false;
+
+	dev->run_indicator = (u8)status;
+	return true;
+}
+
 /* (note "text") is documentation for humans. It is checked and ignored. */
 static bool
 parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
@@ -282,6 +306,8 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "name",             parse_name             },
 	{ "unit-id",          parse_unit_id          },
 	{ "exception-status", parse_exception_status },
+	{ "server-id",        parse_server_id        },
+	{ "run-indicator",    parse_run_indicator    },
 	{ "fault",            parse_fault            },
 	{ "note",             parse_note             },
 	{ "coil",             parse_coil             },
@@ -312,8 +338,8 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 				 form_text(ctx, item));
 
 	if (!entry)
-		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, fault, note, "
-				 "coil, discrete, input or holding", head);
+		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
+				 "run-indicator, fault, note, coil, discrete, input or holding", head);
 
 	return entry->parse(ctx, item, dev);
 }

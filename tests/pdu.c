@@ -231,6 +231,48 @@ TEST(ReadExceptionStatusRejectsMalformedRequest)
 	arena_release(arena);
 }
 
+TEST(ReportServerIdReturnsConfiguredValues)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_REPORT_SERVER_ID };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->server_id     = 0x2A;
+	dev->run_indicator = 0x00;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 4);
+	ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID);
+	ASSERT_EQ(resp[1] == 2);
+	ASSERT_EQ(resp[2] == 0x2A && resp[3] == 0x00);
+	arena_release(arena);
+}
+
+TEST(ReportServerIdDefaults)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { 0x11 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 4);
+	ASSERT_EQ(resp[0] == 0x11 && resp[1] == 2);
+	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0xFF);
+	arena_release(arena);
+}
+
+TEST(ReportServerIdRejectsMalformedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		extra[] = { FC_REPORT_SERVER_ID, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_REPORT_SERVER_ID | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
 TEST(GetComEventCounterReturnsStatusAndCount)
 {
 	arena_t*	arena = ARENA_ALLOC();

@@ -118,6 +118,33 @@ TEST(ConfigExceptionStatusRejectsOutOfRange)
 	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
 }
 
+TEST(ConfigReportServerIdIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (server-id 42) (run-indicator 0) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->server_id == 42);
+	ASSERT_EQ(config.devices[0]->run_indicator == 0);
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->server_id == 0);
+	ASSERT_EQ(config.devices[0]->run_indicator == 0xFF);
+}
+
+TEST(ConfigReportServerIdRejectsOutOfRange)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(device (server-id 256) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
+
+	ASSERT_FAILURE(load_text("(device (run-indicator 256) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
+}
+
 #define EXPECT_ERROR(text, fragment)							\
 	do {										\
 		config_t	c = { 0 };						\

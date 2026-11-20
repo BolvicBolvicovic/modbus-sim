@@ -16,7 +16,7 @@
 ## Architecture & behavior (non-obvious)
 - Main flow: `src/config/*` reads the Scheme config as data (via s7 `read`, not evaluation) and builds devices; `src/net/server.c` (single-thread `poll` loop, max 32 clients) dispatches requests through `src/modbus/*` to `src/device/*`. Dependency direction: `net -> modbus -> device -> util`, `config -> device -> util`. Headers live next to `.c` files. See `docs/architecture.md`.
 - Device model: 4 Modbus tables of 65536 addresses each (coil/discrete/input/holding). Only configured points exist; an address with no owner is intentionally undefined and reads/writes to undefined/out-of-table targets return Modbus exception `0x02` (not a missing implementation). `device_tick` is computed at request time (no background thread).
-- Modbus support is intentionally limited to TCP FC `01,02,03,04,05,06,07,08,0B,0C,0F,10` with exceptions `01,02,03,0B`; other FCs are unsupported by design. Writes are all-or-nothing and only valid for coils/holding registers. See `docs/modbus-support.md` and `docs/config-reference.md` before changing protocol/config semantics.
+- Modbus support is intentionally limited to TCP FC `01,02,03,04,05,06,07,08,0B,0C,0F,10,11` with exceptions `01,02,03,0B`; other FCs are unsupported by design. Writes are all-or-nothing and only valid for coils/holding registers. See `docs/modbus-support.md` and `docs/config-reference.md` before changing protocol/config semantics.
 
 ## Repo constraints
 - Plain C (gnu11), Linux-only (`poll`, `accept4`, vlib mmap arenas), compiled with `-Wall -Wextra -Werror`.

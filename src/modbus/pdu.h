@@ -17,6 +17,7 @@
 #define FC_GET_COM_EVENT_LOG		0x0C
 #define FC_WRITE_MULTIPLE_COILS		0x0F
 #define FC_WRITE_MULTIPLE_REGISTERS	0x10
+#define FC_REPORT_SERVER_ID		0x11
 
 /* Exception codes. */
 #define EXC_ILLEGAL_FUNCTION		0x01
