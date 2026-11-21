@@ -306,6 +306,7 @@ server_start(const char* server_options, const char* devices)
 			unlink(fx->config);
 			fx->config[0] = '\0';
 			g_server_stderr[0] = '\0';
+			g_server_nofile = 0;
 			return false;
 		}
 		close(fd);
