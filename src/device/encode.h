@@ -33,7 +33,9 @@ enum word_order_t
 u32	value_width(value_type_t type);
 
 /* Writes the encoded value into out[0..width-1] and returns the width.
- * Out-of-range numbers are clamped, fractions are rounded, NaN becomes 0. */
+ * Integer/bool types clamp to range, round fractions, and treat NaN as 0.
+ * float32 preserves NaN and infinity; finite values outside float range map to
+ * +/-infinity. Non-finite static values are only accepted for float32 in config. */
 u32	encode_value(value_type_t type, word_order_t order, f64 value, u16 out[2]);
 
 #endif

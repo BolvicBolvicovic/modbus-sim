@@ -94,7 +94,11 @@ manual says "40001", that is address `0` of the holding table; "40101" is `100`.
 | `float32` | 2 | IEEE 754 single precision |
 
 Coils and discrete inputs are always on/off; do not give them a `type`.
-Values are rounded to the nearest whole number and limited to the range of the type.
+Integer register values are rounded to the nearest whole number and limited to the range of the type.
+`float32` can represent `NaN`, `+inf.0`, and `-inf.0` (useful as invalid-sensor sentinels). Finite
+`float32` values outside the representable float range become `+inf.0`/`-inf.0` instead of causing
+undefined behavior. Non-finite static values are accepted only for `float32`; integer and on/off
+static values must be finite.
 
 A 32-bit point occupies two addresses: `(input 4 (type u32) ...)` uses addresses 4 and 5.
 

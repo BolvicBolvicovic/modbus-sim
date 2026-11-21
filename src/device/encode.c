@@ -1,5 +1,6 @@
 #include "device/encode.h"
 #include "vlib/macros.h"
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -39,28 +40,42 @@ encode_value(value_type_t type, word_order_t order, f64 value, u16 out[2])
 	u32	raw  = 0;
 	f32	real = 0;
 
-	if (value != value)
-		value = 0;
-
 	switch (type)
 	{
 	case VT_BOOL:
-		out[0] = (value != 0.0);
+		out[0] = (value != 0.0 && value == value);
 		return 1;
 	case VT_U16:
+		if (value != value)
+			value = 0;
 		out[0] = (u16)clamp_round(value, 0, 65535);
 		return 1;
 	case VT_S16:
+		if (value != value)
+			value = 0;
 		out[0] = (u16)(s16)clamp_round(value, -32768, 32767);
 		return 1;
 	case VT_U32:
+		if (value != value)
+			value = 0;
 		split_u32(order, (u32)clamp_round(value, 0, 4294967295.0), out);
 		return 2;
 	case VT_S32:
+		if (value != value)
+			value = 0;
 		split_u32(order, (u32)(s32)clamp_round(value, -2147483648.0, 2147483647.0), out);
 		return 2;
 	case VT_F32:
-		real = (f32)value;
+		if (value != value)
+			real = NAN;
+		else if (isinf(value))
+			real = value < 0 ? -INFINITY : INFINITY;
+		else if (value > (f64)FLT_MAX)
+			real = INFINITY;
+		else if (value < -(f64)FLT_MAX)
+			real = -INFINITY;
+		else
+			real = (f32)value;
 		memcpy(&raw, &real, sizeof(raw));
 		split_u32(order, raw, out);
 		return 2;

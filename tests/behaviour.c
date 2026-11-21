@@ -1,7 +1,9 @@
 #include "vtest.h"
 #include "device/behaviour.h"
 #include "device/encode.h"
+#include <float.h>
 #include <math.h>
+#include <string.h>
 
 #define NEAR(a, b)	(fabs((a) - (b)) < 1e-9)
 
@@ -107,6 +109,10 @@ TEST(EncodeIntegers)
 	ASSERT_EQ(w[0] == 13);
 	encode_value(VT_U16, WORDS_HIGH_FIRST, NAN, w);
 	ASSERT_EQ(w[0] == 0);
+	encode_value(VT_S32, WORDS_HIGH_FIRST, INFINITY, w);
+	ASSERT_EQ(w[0] == 0x7FFF && w[1] == 0xFFFF);
+	encode_value(VT_U32, WORDS_HIGH_FIRST, -INFINITY, w);
+	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x0000);
 }
 
 TEST(EncodeThirtyTwoBitWordOrder)
@@ -124,11 +130,28 @@ TEST(EncodeThirtyTwoBitWordOrder)
 TEST(EncodeFloat32)
 {
 	u16	w[2] = { 0, 0 };
+	u32	raw  = 0;
+	f32	real = 0;
 
 	encode_value(VT_F32, WORDS_HIGH_FIRST, 1.0, w);	/* 0x3F800000 */
 	ASSERT_EQ(w[0] == 0x3F80 && w[1] == 0x0000);
 	encode_value(VT_F32, WORDS_LOW_FIRST, 1.0, w);
 	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x3F80);
+
+	encode_value(VT_F32, WORDS_HIGH_FIRST, NAN, w);
+	raw = ((u32)w[0] << 16) | w[1];
+	memcpy(&real, &raw, sizeof(real));
+	ASSERT_EQ(isnan(real));
+
+	encode_value(VT_F32, WORDS_HIGH_FIRST, INFINITY, w);
+	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, -INFINITY, w);
+	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
+
+	encode_value(VT_F32, WORDS_HIGH_FIRST, (f64)FLT_MAX * 2.0, w);
+	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, -((f64)FLT_MAX * 2.0), w);
+	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 }
 
 TEST(EncodeBool)

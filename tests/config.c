@@ -1,5 +1,6 @@
 #include "vtest.h"
 #include "config/config.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -350,4 +351,33 @@ TEST(ConfigIdleTimeoutRejectsInvalidValues)
 	EXPECT_ERROR("(server (idle-timeout-ms -1)) (device (holding 0))", "between 0 and 86400000");
 	EXPECT_ERROR("(server (idle-timeout-ms 86400001)) (device (holding 0))", "between 0 and 86400000");
 	EXPECT_ERROR("(server (idle-timeout-ms nope)) (device (holding 0))", "whole number");
+}
+
+TEST(ConfigFloat32StaticAcceptsNonFinite)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		out[2] = { 0, 0 };
+	u32		raw = 0;
+	f32		real = 0;
+
+	ASSERT_SUCCESS(load_text("(device (holding 0 (type float32) (static +nan.0))\n"
+				 "        (holding 2 (type float32) (static +inf.0))\n"
+				 "        (holding 4 (type float32) (static -inf.0)))",
+				 &config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 2, out));
+	raw = ((u32)out[0] << 16) | out[1];
+	memcpy(&real, &raw, sizeof(real));
+	ASSERT_EQ(isnan(real));
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 2, 2, out));
+	ASSERT_EQ(out[0] == 0x7F80 && out[1] == 0x0000);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 4, 2, out));
+	ASSERT_EQ(out[0] == 0xFF80 && out[1] == 0x0000);
+}
+
+TEST(ConfigNonFloatStaticRejectsNonFinite)
+{
+	EXPECT_ERROR("(device (holding 0 (type u16) (static +nan.0)))", "only float32");
+	EXPECT_ERROR("(device (holding 0 (type u16) (static +inf.0)))", "only float32");
+	EXPECT_ERROR("(device (holding 0 (type s32) (static -inf.0)))", "only float32");
 }

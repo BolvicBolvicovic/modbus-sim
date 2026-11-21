@@ -1,7 +1,9 @@
 #include "vtest.h"
 #include "device/device.h"
+#include "device/encode.h"
 #include "device/fault.h"
 #include "util/rng.h"
+#include <math.h>
 #include <string.h>
 #include "vlib/macros.h"
 
@@ -374,4 +376,26 @@ TEST(FifoQueueRejectsDuplicateTooManyAndTooLarge)
 		ASSERT_EQ(device_add_fifo(dev, (u16)i, 1, &one) == NULL);
 	ASSERT_FAILURE(device_add_fifo(dev, 99, 1, &one) == NULL);
 	arena_release(arena);
+}
+
+TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
+{
+	u16	w[2] = { 0, 0 };
+	u32	raw  = 0;
+	f32	real = 0;
+
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, NAN, w) == 2);
+	raw = ((u32)w[0] << 16) | w[1];
+	memcpy(&real, &raw, sizeof(real));
+	ASSERT_EQ(isnan(real));
+
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, INFINITY, w) == 2);
+	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, -INFINITY, w) == 2);
+	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
+
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, 1e39, w) == 2);
+	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, -1e39, w) == 2);
+	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 }

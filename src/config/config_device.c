@@ -1,5 +1,6 @@
 #include "config/config_device.h"
 #include "vlib/macros.h"
+#include <math.h>
 #include <string.h>
 
 /* Names the user writes, in the same order as the matching enums. */
@@ -166,7 +167,14 @@ parse_static(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
 
 	point->kind = POINT_STATIC;
 	if (!is_bit)
-		return form_get_number(ctx, item, &point->static_value);
+	{
+		if (!form_get_number(ctx, item, &point->static_value))
+			return false;
+		if (!isfinite(point->static_value) && point->type != VT_F32)
+			return form_fail(ctx, "%s: only float32 static values can be NaN or infinity",
+					 form_text(ctx, item));
+		return true;
+	}
 
 	if (!form_get_bool(ctx, item, &on))
 		return false;
