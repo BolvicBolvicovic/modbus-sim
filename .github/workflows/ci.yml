@@ -28,5 +28,8 @@ jobs:
             ./modbus-sim --check "$profile"
           done
 
+      - name: Check doc examples
+        run: ./tools/check_doc_examples.sh ./modbus-sim
+
       - name: Sanitizers (ASan + UBSan, vendored s7 excluded)
         run: make asan

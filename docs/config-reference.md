@@ -153,7 +153,8 @@ static value until the simulator is restarted.
 ### `(count N)`
 
 Repeats the point `N` times at consecutive addresses (the step is the point's width: 1 for
-16-bit types, 2 for 32-bit types). All copies get the same value or ramp.
+16-bit types, 2 for 32-bit types). All copies get the same value or ramp. A device can have at
+most 8192 points total (`DEVICE_MAX_POINTS`); a count that would exceed this is rejected.
 
 ```scheme
 (coil 0 (count 16))                         ; coils 0..15, all off
@@ -209,7 +210,7 @@ Shape:
 
 ```scheme
 (file 1
-  (record 0 0x1234 0x5678)   ; file 1, records 0-1
+  (record 0 #x1234 #x5678)   ; file 1, records 0-1
   (record 10 100 200 300))   ; file 1, records 10-12
 (file 4
   (record 2 7))
@@ -244,7 +245,7 @@ Shape:
   A FIFO may contain 0 to 31 values (an empty queue is `(fifo ADDRESS (values))`).
 
 ```scheme
-(fifo 100 (values 0x1234 0x5678 42))
+(fifo 100 (values #x1234 #x5678 42))
 (fifo 200 (values))                      ; empty queue: FIFO Count 0
 ```
 

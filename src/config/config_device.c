@@ -255,6 +255,13 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 		return false;
 
 	width = value_width(point.type);
+	if ((u64)count > (u64)DEVICE_MAX_POINTS - dev->point_count)
+		return form_fail(ctx, "%s: count %lld would exceed the %d-point limit for one device (%u already used)",
+				 form_text(ctx, item), (long long)count, DEVICE_MAX_POINTS, dev->point_count);
+	if ((u64)address + (u64)count * width > ADDRESS_SPACE_SIZE)
+		return form_fail(ctx, "%s: count %lld does not fit before address 65535",
+				 form_text(ctx, item), (long long)count);
+
 	for (s64 i = 0; i < count; i++)
 	{
 		const char*	error = NULL;

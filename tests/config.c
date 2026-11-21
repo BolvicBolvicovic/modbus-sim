@@ -75,6 +75,19 @@ TEST(ConfigCountExpandsConsecutiveAddresses)
 	ASSERT_FAILURE(device_read(config.devices[0], SPACE_HOLDING, 14, 1, out));
 }
 
+TEST(ConfigRejectsCountExceedingDevicePointLimit)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (coil 0 (count 8193)))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "8192-point limit") != NULL);
+
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (coil 0 (count 8192)) (coil 8192 (static on)))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "8192-point limit") != NULL);
+}
+
 TEST(ConfigDefaults)
 {
 	config_t	config = { 0 };

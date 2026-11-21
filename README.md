@@ -41,7 +41,7 @@ different binary.
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP, function codes 01, 02, 03, 04, 05, 06, 15, 16. Exceptions 01, 02, 03, 0B. |
+| Protocol | Modbus TCP, function codes 01, 02, 03, 04, 05, 06, 07, 08, 11, 12, 15, 16, 17, 20, 21, 22, 23, 24. Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
 | Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |

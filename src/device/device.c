@@ -76,7 +76,7 @@ validate_point(const device_t* dev, const point_t* point)
 		return "point does not fit before address 65535";
 
 	if (dev->point_count >= DEVICE_MAX_POINTS)
-		return "too many points on one device";
+		return "too many points on one device (max 8192)";
 
 	for (u32 i = 0; i < width; i++)
 	{
