@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,8 +45,39 @@ static fixture_t	g_server = { .pid = -1 };
 static u32		g_server_nofile = 0;
 static char		g_server_stderr[80];
 
+static bool
+server_verbose(void)
+{
+	const char* v = getenv("MODBUS_SIM_TEST_VERBOSE");
+
+	return v && v[0] && strcmp(v, "0") != 0;
+}
+
+static void
+server_dump_stderr(void)
+{
+	FILE*	file;
+	char	line[512];
+
+	if (!g_server_stderr[0])
+		return;
+
+	file = fopen(g_server_stderr, "r");
+	if (!file)
+		return;
+
+	fprintf(stderr, "--- server stderr (%s) ---\n", g_server_stderr);
+	while (fgets(line, sizeof(line), file))
+		fputs(line, stderr);
+	fprintf(stderr, "--- end server stderr ---\n");
+	fclose(file);
+}
+
 static void
 server_stop(void);
+
+static void
+server_cleanup(void);
 
 /* --- socket helpers --- */
 
@@ -218,9 +250,11 @@ find_free_port(void)
 static void
 server_stop(void)
 {
-	fixture_t* fx    = &g_server;
-	pid_t	   pid   = fx->pid;
+	fixture_t* fx     = &g_server;
+	pid_t	   pid    = fx->pid;
+	int	   status = 0;
 	bool	   reaped = false;
+	bool	   ok     = true;
 
 	fx->pid = -1;
 	if (pid > 0)
@@ -228,22 +262,72 @@ server_stop(void)
 		kill(pid, SIGTERM);
 		for (u32 i = 0; i < 200; i++)
 		{
-			int status = 0;
-			pid_t done  = waitpid(pid, &status, WNOHANG);
+			pid_t done = waitpid(pid, &status, WNOHANG);
 
-			if (done == pid || (done < 0 && errno == ECHILD))
+			if (done == pid)
 			{
 				reaped = true;
 				break;
 			}
+			if (done < 0 && errno == ECHILD)
+				break;
 			usleep(10000);
 		}
-		if (!reaped)
+		if (!reaped && waitpid(pid, &status, WNOHANG) != pid)
 		{
 			kill(pid, SIGKILL);
-			waitpid(pid, NULL, 0);
+			reaped = waitpid(pid, &status, 0) == pid;
 		}
+		if (reaped)
+			ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
 	}
+
+	if (!ok)
+	{
+		server_dump_stderr();
+		fprintf(stderr, "net test: server pid %d exited=%d status=%d signal=%d\n",
+			(int)pid, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+			WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+	}
+
+	if (fx->config[0])
+	{
+		unlink(fx->config);
+		fx->config[0] = '\0';
+	}
+	if (g_server_stderr[0])
+	{
+		unlink(g_server_stderr);
+		g_server_stderr[0] = '\0';
+	}
+	g_server_nofile = 0;
+	ASSERT_EQ(ok);
+}
+
+static void
+server_cleanup(void)
+{
+	/* atexit cleanup: best-effort stop without asserting test context. */
+	fixture_t* fx = &g_server;
+	pid_t	   pid = fx->pid;
+
+	fx->pid = -1;
+	if (pid > 0)
+	{
+		kill(pid, SIGTERM);
+		for (u32 i = 0; i < 200; i++)
+		{
+			int   st   = 0;
+			pid_t done = waitpid(pid, &st, WNOHANG);
+
+			if (done == pid || (done < 0 && errno == ECHILD))
+				goto done;
+			usleep(10000);
+		}
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+	}
+done:
 	if (fx->config[0])
 	{
 		unlink(fx->config);
@@ -296,7 +380,7 @@ server_start(const char* server_options, const char* devices)
 	fputs(config, file);
 	fclose(file);
 
-	if (g_server_nofile > 0)
+	if (!server_verbose())
 	{
 		strcpy(g_server_stderr, "/tmp/modbus-sim-neterr-XXXXXX");
 		fd = mkstemp(g_server_stderr);
@@ -321,14 +405,12 @@ server_start(const char* server_options, const char* devices)
 	{
 		if (!freopen("/dev/null", "w", stdout))
 			_exit(127);
-		if (g_server_stderr[0])
+		if (g_server_stderr[0] && !server_verbose())
 		{
 			if (!freopen(g_server_stderr, "w", stderr))
 				_exit(127);
 			setvbuf(stderr, NULL, _IONBF, 0);
 		}
-		else if (!freopen("/dev/null", "w", stderr))
-			_exit(127);
 		if (g_server_nofile > 0)
 		{
 			struct rlimit lim = { .rlim_cur = g_server_nofile, .rlim_max = g_server_nofile };
@@ -367,6 +449,7 @@ server_start(const char* server_options, const char* devices)
 		pid_t done = waitpid(fx->pid, &status, WNOHANG);
 		fprintf(stderr, "net test: child waitpid=%d exited=%d status=%d\n", (int)done,
 			WIFEXITED(status), WEXITSTATUS(status));
+		server_dump_stderr();
 	}
 	server_stop();
 	return false;
@@ -375,7 +458,7 @@ server_start(const char* server_options, const char* devices)
 SETUP_SUITE()
 {
 	(void)_ss_arena;
-	atexit(server_stop);
+	atexit(server_cleanup);
 }
 
 PRE_TEST()

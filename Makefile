@@ -73,8 +73,8 @@ vlib/vtest$(OBJEXT): vlib/vtest.c
 # Leak detection is off: the config tests intentionally keep arenas alive because
 # the parsed config points into them. UBSan failures abort (-fno-sanitize-recover).
 asan:
-	$(MAKE) SAN=1 $(ASAN_TESTS)
-	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 ./tools/run_tests.sh ./$(ASAN_TESTS)
+	$(MAKE) SAN=1 $(ASAN_BIN) $(ASAN_TESTS)
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MODBUS_SIM_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
 
 clean:
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS)
