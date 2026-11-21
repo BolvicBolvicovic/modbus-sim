@@ -270,7 +270,7 @@ is wrong and show the entry. Common ones:
 | `coils and discrete inputs can only be (static on/off)` | No ramps and no `type` for bit tables |
 | `a point cannot have both (static ...) and (ramp ...)` | Choose one |
 | `ramp step must be greater than 0` | `step` is always positive; use `from` and `to` for the direction |
-| `ramp range is too large for the step` | The ramp would need more than 2^63 steps; increase `step` or narrow `from`/`to` |
+| `ramp range is too large for the step` | The ramp would need 2^63 steps or more; increase `step` or narrow `from`/`to` |
 | `the file has more than one (server ...)` | Keep a single `(server ...)` block |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
 | `device has more than one (fault ...)` | Only one fault per device |

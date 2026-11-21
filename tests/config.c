@@ -85,6 +85,24 @@ TEST(ConfigDefaults)
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 }
 
+TEST(ConfigRampBounceStepLimitBoundaries)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(device (holding 0 (ramp (from 0) (to 4611686018427387904.0) (step 1) (mode bounce))))",
+		&config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text(
+		"(device (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "ramp range is too large for the step") != NULL);
+	ASSERT_FAILURE(load_text(
+		"(device (holding 0 (ramp (from 0) (to 9223372036854777856.0) (step 1) (mode bounce))))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "ramp range is too large for the step") != NULL);
+}
+
 TEST(ConfigFaultIsParsed)
 {
 	config_t	config = { 0 };
@@ -166,6 +184,8 @@ TEST(ConfigErrorsAreReadable)
 	EXPECT_ERROR("(device (holding 0) (frobnicate 1))", "unknown item 'frobnicate'");
 	EXPECT_ERROR("(server (port 1)) (server (port 2)) (device (holding 0))", "more than one (server");
 	EXPECT_ERROR("(device (holding 0 (ramp (from 0) (to 1e30))))", "too large for the step");
+	EXPECT_ERROR("(device (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))", "too large for the step");
+	EXPECT_ERROR("(device (holding 0 (ramp (from 0) (to 9223372036854777856.0) (step 1) (mode bounce))))", "too large for the step");
 	EXPECT_ERROR("(server (port 1))", "no (device");
 	EXPECT_ERROR("(device (unit-id 1)) (device (unit-id 1))", "both use unit-id 1");
 	EXPECT_ERROR("(oops)", "unknown top-level form 'oops'");

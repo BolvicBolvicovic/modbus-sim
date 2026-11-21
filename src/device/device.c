@@ -98,7 +98,7 @@ validate_point(const device_t* dev, const point_t* point)
 
 	/* ramp_value() stores the step count in u64 and bounce doubles it. Leave room for both. */
 	steps = fabs(point->ramp.to - point->ramp.from) / point->ramp.step + 1e-9;
-	if (!isfinite(steps) || steps > (f64)(UINT64_MAX / 2))
+	if (!isfinite(steps) || steps >= 0x1p63)
 		return "ramp range is too large for the step";
 
 	return NULL;

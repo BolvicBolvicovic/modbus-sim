@@ -69,6 +69,32 @@ TEST(RampFromEqualsToIsConstant)
 	ASSERT_EQ(NEAR(ramp_value(&r, 0, 12345), 7));
 }
 
+TEST(RampBounceJustBelowLimit)
+{
+	ramp_params_t	r = make_ramp(0, 0x1p62, 1, RAMP_BOUNCE);
+
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 1));
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 2000), 2));
+}
+
+TEST(RampBounceLargeStepCountIsRobust)
+{
+	ramp_params_t	r = make_ramp(0, 0x1p63, 1, RAMP_BOUNCE);
+
+	/* last == 2^63: validation must reject this, but the runtime guard must not crash. */
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 0));
+}
+
+TEST(RampBounceAboveU64LimitIsRobust)
+{
+	ramp_params_t	r = make_ramp(0, 0x1p64, 1, RAMP_BOUNCE);
+
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
+	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 0));
+}
+
 TEST(EncodeIntegers)
 {
 	u16	w[2] = { 0, 0 };

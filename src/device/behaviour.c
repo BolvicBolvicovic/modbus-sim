@@ -7,13 +7,15 @@
 static u64
 bounce_index(u64 ticks, u64 last)
 {
-	u64	phase = 0;
+	u64	phase  = 0;
+	u64	period = 0;
 
-	if (last == 0)
+	if (last == 0 || last > (UINT64_MAX / 2))
 		return 0;
 
-	phase = ticks % (2 * last);
-	return phase <= last ? phase : 2 * last - phase;
+	period = 2 * last;
+	phase  = ticks % period;
+	return phase <= last ? phase : period - phase;
 }
 
 f64
