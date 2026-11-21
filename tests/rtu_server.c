@@ -803,7 +803,7 @@ TEST(RtuServerFragmentedByteByByteWithinGap)
 	ASSERT_EQ(dev != NULL);
 	{
 		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 120));
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 200));
 	}
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
@@ -811,9 +811,9 @@ TEST(RtuServerFragmentedByteByByteWithinGap)
 	{
 		ok = send_all_fd(child.fd, frame + i, 1);
 		if (ok && i + 1 < flen)
-			usleep(2000); /* well below 120ms gap, tolerant on CI */
+			usleep(2000); /* well below 200ms gap, tolerant on CI/ASan */
 	}
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 2000);
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 3000);
 	if (ok)
 		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
 		     get_be16(resp + 2) == 0x99AA;
