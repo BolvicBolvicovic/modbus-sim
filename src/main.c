@@ -6,7 +6,7 @@
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
 #include "net/rtu_server.h"
-#include "net/server.h"
+#include "net/tcp_server.h"
 #include "util/ip.h"
 #include "util/log.h"
 #include <errno.h>
@@ -342,7 +342,7 @@ main(int argc, char** argv)
 	}
 
 	{
-		server_options_t options = {
+		tcp_server_options_t options = {
 			.bind_address    = config.bind_address,
 			.port            = config.port,
 			.seed            = config.seed,
@@ -350,7 +350,7 @@ main(int argc, char** argv)
 			.devices         = config.devices,
 			.device_count    = config.device_count,
 		};
-		s32 status = server_run(&options);
+		s32 status = tcp_server_run(&options);
 
 		arena_release(app);
 		return status;

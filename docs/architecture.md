@@ -3,7 +3,7 @@
 ## Data flow
 
 ```
- TCP client ──MBAP+PDU──► net/server ──┐
+ TCP client ──MBAP+PDU──► net/tcp_server ──┐
                                        ├─► modbus/pdu ──► device/device ──► data tables
  RTU client ──addr+PDU+CRC──► net/rtu_server ──┘                 ▲
                      │                               device_tick()│ ramps → registers
@@ -17,7 +17,7 @@
 
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
-2. `net/server` (TCP, MBAP) or `net/rtu_server` (RTU, CRC-framed byte stream) finds the device by
+2. `net/tcp_server` (TCP, MBAP) or `net/rtu_server` (RTU, CRC-framed byte stream) finds the device by
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
@@ -30,7 +30,7 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `server`, `rtu_server` | TCP sockets / RTU byte stream, `poll` loop, delayed sending |
+| `src/net` | `tcp_server`, `rtu_server` | TCP sockets / RTU byte stream, `poll` loop, delayed sending |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU PTY/device open |
 
@@ -70,7 +70,7 @@ models arrive (below), expressions can be evaluated with `s7_eval` in a controll
 
 ## The network loops
 
-### TCP (`net/server.c`)
+### TCP (`net/tcp_server.c`)
 
 One thread, one `poll()` call. Per connection there is one receive buffer and one send buffer:
 
@@ -102,7 +102,7 @@ as TCP.
 
 `make` builds `modbus-sim`. `make tests` builds `modbus-sim-tests` and runs it through
 `tools/run_tests.sh`: vtest always exits 0 for whole suites, so the script runs each test by
-name and fails if any one fails. `tests/server.c` starts the real binary on a private loopback
+name and fails if any one fails. `tests/tcp_server.c` starts the real binary on a private loopback
 port and exercises the documented protocol behaviour (routing, exceptions, faults, connection
 limit); override the binary with `MODBUS_SIM_BIN`.
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
@@ -126,7 +126,7 @@ them with s7 while the config is read, or keep an s7 environment alive and call 
 
 **More fault injection.** `fault_t` holds one fault today. Make it a small array and let
 `fault_decide` return the combined decision (delay, drop, corrupt, wrong exception code,
-disconnect). `net/server.c` and `net/rtu_server.c` already act on a `fault_decision_t`, so new
+disconnect). `net/tcp_server.c` and `net/rtu_server.c` already act on a `fault_decision_t`, so new
 fields are applied in their response paths.
 
 **RTU timing / RTU-over-TCP.** RTU currently uses a fixed inter-frame silence gap. A true serial

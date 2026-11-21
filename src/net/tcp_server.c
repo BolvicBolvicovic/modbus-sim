@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "net/server.h"
+#include "net/tcp_server.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
 #include "util/clock.h"
@@ -18,9 +18,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define SERVER_MAX_CONNECTIONS	32
-#define SERVER_IDLE_POLL_MS	1000
-#define SERVER_ACCEPT_BACKOFF_MS 1000
+#define TCP_SERVER_MAX_CONNECTIONS	32
+#define TCP_SERVER_IDLE_POLL_MS	1000
+#define TCP_SERVER_ACCEPT_BACKOFF_MS 1000
 
 /* Name: conn_t
  * Description: one client connection. A connection handles one request at a time:
@@ -40,15 +40,15 @@ struct conn_t
 	char	peer[INET_ADDRSTRLEN + 8];
 };
 
-typedef struct server_t server_t;
-struct server_t
+typedef struct tcp_server_t tcp_server_t;
+struct tcp_server_t
 {
-	server_options_t	options;
+	tcp_server_options_t	options;
 	int			listen_fd;
 	u64			accept_backoff_until_ms;
 	bool			accept_backoff_logged;
 	rng_t			rng;
-	conn_t			conns[SERVER_MAX_CONNECTIONS];
+	conn_t			conns[TCP_SERVER_MAX_CONNECTIONS];
 };
 
 static volatile sig_atomic_t	g_stop = 0;
@@ -74,7 +74,7 @@ install_signal_handlers(void)
 /* --- listening socket --- */
 
 static s32
-listen_open(server_t* server)
+listen_open(tcp_server_t* server)
 {
 	struct sockaddr_in	addr = { 0 };
 	int			yes  = 1;
@@ -118,7 +118,7 @@ conn_close(conn_t* conn)
 }
 
 static conn_t*
-conn_find_free(server_t* server)
+conn_find_free(tcp_server_t* server)
 {
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
@@ -129,7 +129,7 @@ conn_find_free(server_t* server)
 }
 
 static void
-accept_clients(server_t* server)
+accept_clients(tcp_server_t* server)
 {
 	struct sockaddr_in	addr = { 0 };
 	socklen_t		len  = sizeof(addr);
@@ -153,10 +153,10 @@ accept_clients(server_t* server)
 				if (!server->accept_backoff_logged)
 				{
 					LOG_WARN("accept failed: %s; backing off for %u ms",
-						 strerror(errno), SERVER_ACCEPT_BACKOFF_MS);
+						 strerror(errno), TCP_SERVER_ACCEPT_BACKOFF_MS);
 					server->accept_backoff_logged = true;
 				}
-				server->accept_backoff_until_ms = clock_now_ms() + SERVER_ACCEPT_BACKOFF_MS;
+				server->accept_backoff_until_ms = clock_now_ms() + TCP_SERVER_ACCEPT_BACKOFF_MS;
 				return;
 			}
 
@@ -187,7 +187,7 @@ accept_clients(server_t* server)
 }
 
 static device_t*
-find_device(const server_t* server, u8 unit)
+find_device(const tcp_server_t* server, u8 unit)
 {
 	for (u32 i = 0; i < server->options.device_count; i++)
 	{
@@ -207,7 +207,7 @@ conn_consume(conn_t* conn, u32 size)
 
 /* Runs the request found at the start of conn->rx and queues the response (if any). */
 static void
-handle_frame(server_t* server, conn_t* conn, const mbap_header_t* header, u64 now_ms)
+handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u64 now_ms)
 {
 	u8			pdu[MODBUS_MAX_PDU];
 	device_t*		dev      = find_device(server, header->unit);
@@ -246,7 +246,7 @@ handle_frame(server_t* server, conn_t* conn, const mbap_header_t* header, u64 no
 
 /* Handles every complete request waiting in the receive buffer, one at a time. */
 static void
-conn_process(server_t* server, conn_t* conn)
+conn_process(tcp_server_t* server, conn_t* conn)
 {
 	mbap_header_t	header = { 0 };
 	u32		frame  = 0;
@@ -271,7 +271,7 @@ conn_process(server_t* server, conn_t* conn)
 }
 
 static void
-conn_read(server_t* server, conn_t* conn)
+conn_read(tcp_server_t* server, conn_t* conn)
 {
 	ssize_t	got = recv(conn->fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len, 0);
 
@@ -290,7 +290,7 @@ conn_read(server_t* server, conn_t* conn)
 }
 
 static void
-conn_write(server_t* server, conn_t* conn)
+conn_write(tcp_server_t* server, conn_t* conn)
 {
 	ssize_t	sent = send(conn->fd, conn->tx + conn->tx_sent, conn->tx_len - conn->tx_sent,
 			    MSG_NOSIGNAL);
@@ -317,7 +317,7 @@ conn_write(server_t* server, conn_t* conn)
 /* --- main loop --- */
 
 static void
-close_idle_connections(server_t* server, u64 now_ms)
+close_idle_connections(tcp_server_t* server, u64 now_ms)
 {
 	u32	idle_ms = server->options.idle_timeout_ms;
 
@@ -343,13 +343,13 @@ close_idle_connections(server_t* server, u64 now_ms)
 
 /* Fills the poll table. Returns the number of entries; entry 0 is the listening socket. */
 static u32
-build_poll_table(server_t* server, struct pollfd* fds, conn_t** owners, u64 now_ms, int* timeout)
+build_poll_table(tcp_server_t* server, struct pollfd* fds, conn_t** owners, u64 now_ms, int* timeout)
 {
 	u32	count   = 0;
 	u32	idle_ms = server->options.idle_timeout_ms;
 	bool	backoff = server->accept_backoff_until_ms > now_ms;
 
-	*timeout = SERVER_IDLE_POLL_MS;
+	*timeout = TCP_SERVER_IDLE_POLL_MS;
 	fds[count] = (struct pollfd){ .fd = server->listen_fd, .events = backoff ? 0 : POLLIN };
 	owners[count++] = NULL;
 	if (backoff)
@@ -387,7 +387,7 @@ build_poll_table(server_t* server, struct pollfd* fds, conn_t** owners, u64 now_
 }
 
 static void
-serve_ready(server_t* server, const struct pollfd* fd, conn_t* conn)
+serve_ready(tcp_server_t* server, const struct pollfd* fd, conn_t* conn)
 {
 	if (fd->revents == 0)
 		return;
@@ -414,10 +414,10 @@ serve_ready(server_t* server, const struct pollfd* fd, conn_t* conn)
 }
 
 static void
-serve_loop(server_t* server)
+serve_loop(tcp_server_t* server)
 {
-	struct pollfd	fds[SERVER_MAX_CONNECTIONS + 1];
-	conn_t*		owners[SERVER_MAX_CONNECTIONS + 1];
+	struct pollfd	fds[TCP_SERVER_MAX_CONNECTIONS + 1];
+	conn_t*		owners[TCP_SERVER_MAX_CONNECTIONS + 1];
 	u32		count   = 0;
 	int		timeout = 0;
 	u64		now_ms  = 0;
@@ -438,9 +438,9 @@ serve_loop(server_t* server)
 }
 
 s32
-server_run(const server_options_t* options)
+tcp_server_run(const tcp_server_options_t* options)
 {
-	server_t server = { 0 };
+	tcp_server_t server = { 0 };
 
 	server.options = *options;
 	rng_seed(&server.rng, options->seed);
