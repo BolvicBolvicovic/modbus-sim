@@ -1161,20 +1161,21 @@ TEST(NetConnectionLimit)
 	}
 
 	/* The 33rd connection is either refused outright, closed by the server,
-	 * or left unserviced in the TCP backlog under load/ASan. A response would
-	 * mean the server exceeded its connection limit. */
+	 * or left unserviced in the TCP backlog under load. A served Modbus response
+	 * would mean the server exceeded its connection limit. */
 	if (ok)
 	{
 		client_t extra = { .fd = -1 };
-		char	 byte  = 0;
 		bool	 open  = client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &extra);
 
 		if (open)
 		{
-			ssize_t got = recv(extra.fd, &byte, 1, 0);
+			u8  extra_req[8];
+			u8  extra_resp[MODBUS_MAX_PDU];
+			u32 extra_len = 0;
 
-			ok = got == 0 ||
-			     (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+			read_pdu(extra_req, FC_READ_HOLDING_REGISTERS, 0, 1);
+			ok = !exchange(&extra, 1, extra_req, 5, extra_resp, &extra_len);
 			client_close(&extra);
 		}
 	}
