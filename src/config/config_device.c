@@ -368,8 +368,8 @@ parse_file(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 		return form_fail(ctx, "%s: expected (file FILE_NO (record ...) ...)", form_text(ctx, item));
 
 	file_no = (s64)s7_integer(s7_cadr(item));
-	if (file_no < 0 || file_no > 65535)
-		return form_fail(ctx, "%s: file number must be between 0 and 65535", form_text(ctx, item));
+	if (file_no < 0x0001 || file_no > 0xFFFF)
+		return form_fail(ctx, "%s: file number must be between 1 and 65535", form_text(ctx, item));
 
 	if (s7_list_length(ctx->sc, item) < 3)
 		return form_fail(ctx, "%s: file needs at least one (record ...)", form_text(ctx, item));

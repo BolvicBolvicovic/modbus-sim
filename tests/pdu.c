@@ -287,24 +287,26 @@ TEST(GetComEventCounterReturnsStatusAndCount)
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
 	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
 	ASSERT_EQ(resp[1] == 0x00 && resp[2] == 0x00);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x02);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
 	arena_release(arena);
 }
 
-TEST(GetComEventCounterCountsHandledRequests)
+TEST(GetComEventCounterCountsSuccessfulCompletions)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
+	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
 	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
 	u8		bad[]  = { 0x03, 0x00, 0x00, 0x00, 0x00 };	/* illegal quantity -> exception */
 	u8		resp[MODBUS_MAX_PDU];
 
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00);
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
 	run(dev, bad, sizeof(bad), resp);
 	ASSERT_EQ(resp[0] == 0x83 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x03);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
 	arena_release(arena);
 }
 
@@ -312,10 +314,12 @@ TEST(GetComEventCounterWrapsAt16Bits)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
+	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
 	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
 	u8		resp[MODBUS_MAX_PDU];
 
 	dev->com_event_count = 0xFFFF;
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
 	ASSERT_EQ(resp[1] == 0x00 && resp[2] == 0x00);
 	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00);
@@ -348,7 +352,7 @@ TEST(GetComEventLogReturnsCountsAndEmptyLog)
 	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG);
 	ASSERT_EQ(resp[1] == 6);
 	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x00);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x02);
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x01);
 	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x02);
 	arena_release(arena);
 }
@@ -357,21 +361,23 @@ TEST(GetComEventLogMatchesComEventCounter)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
+	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
 	u8		fc11[] = { FC_GET_COM_EVENT_COUNTER };
 	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
 	u8		bad[]  = { 0x03, 0x00, 0x00, 0x00, 0x00 };	/* illegal quantity -> exception */
 	u8		resp[MODBUS_MAX_PDU];
 
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
 	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
 	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
 	run(dev, bad, sizeof(bad), resp);
 	ASSERT_EQ(resp[0] == 0x83 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8);
 	ASSERT_EQ(resp[1] == 6);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x03);
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x03);
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x01);
+	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x04);
 	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x04);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
 	arena_release(arena);
 }
 
@@ -387,7 +393,7 @@ TEST(GetComEventLogWrapsAt16Bits)
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 8);
 	ASSERT_EQ(resp[1] == 6);
 	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x00);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00);
+	ASSERT_EQ(resp[4] == 0xFF && resp[5] == 0xFF);
 	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x00);
 	arena_release(arena);
 }
@@ -417,17 +423,29 @@ TEST(DiagnosticsReturnQueryDataEchoesRequest)
 	arena_release(arena);
 }
 
+TEST(DiagnosticsReturnQueryDataEchoesArbitraryDataField)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	arena_release(arena);
+}
+
 TEST(DiagnosticsRejectsMalformedRequest)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
 	u8		short_req[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12 };
-	u8		extra[]     = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x00 };
+	u8		odd_data[]  = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x00 };
 	u8		resp[MODBUS_MAX_PDU];
 
 	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
 	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
+	ASSERT_EQ(run(dev, odd_data, sizeof(odd_data), resp) == 2);
 	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	arena_release(arena);
 }
@@ -524,6 +542,8 @@ TEST(ReadFileRecordRejectsMalformedRequest)
 	u8		bad_ref[]   = { FC_READ_FILE_RECORD, 0x07, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
 	u8		bad_rlen[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
 	u8		bad_rec[]   = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01 };
+	u8		bad_range[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02 };
+	u8		bad_file[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 	u8		big_resp[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7E };
 	u8		resp[MODBUS_MAX_PDU];
 
@@ -542,6 +562,10 @@ TEST(ReadFileRecordRejectsMalformedRequest)
 	run(dev, bad_rlen, sizeof(bad_rlen), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_rec, sizeof(bad_rec), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_range, sizeof(bad_range), resp);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_file, sizeof(bad_file), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, big_resp, sizeof(big_resp), resp);
 	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
@@ -631,6 +655,7 @@ TEST(WriteFileRecordRejectsMalformedRequest)
 	u8		bad_rlen[]  = { FC_WRITE_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
 	u8		bad_rec[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01, 0x00, 0x01 };
 	u8		bad_range[] = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 }; /* range exceeds 0x270F */
+	u8		bad_file[]  = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
 	u8		trunc[]     = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01 }; /* claims 2 registers but only 1 provided */
 	u8		misaligned[]= { FC_WRITE_FILE_RECORD, 0x0A, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00 }; /* trailing byte after complete sub-request */
 	u8		resp[MODBUS_MAX_PDU];
@@ -652,6 +677,8 @@ TEST(WriteFileRecordRejectsMalformedRequest)
 	run(dev, bad_rec, sizeof(bad_rec), resp);
 	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_range, sizeof(bad_range), resp);
+	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_file, sizeof(bad_file), resp);
 	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, trunc, sizeof(trunc), resp);
 	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);

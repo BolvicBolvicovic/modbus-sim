@@ -896,7 +896,7 @@ TEST(NetGetComEventCounterReturnsStatusAndCount)
 		req[0] = FC_GET_COM_EVENT_COUNTER;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
 		     resp[0] == FC_GET_COM_EVENT_COUNTER && resp[1] == 0x00 && resp[2] == 0x00 &&
-		     resp[3] == 0x00 && resp[4] == 0x02;
+		     resp[3] == 0x00 && resp[4] == 0x01;
 	}
 
 	client_close(&client);
@@ -922,7 +922,7 @@ TEST(NetGetComEventCounterMalformedRequest)
 	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x02;
+		     resp[3] == 0x00 && resp[4] == 0x00;
 	}
 
 	client_close(&client);
@@ -948,7 +948,7 @@ TEST(NetGetComEventCounterUnknownUnitDoesNotCount)
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x01;
+		     resp[3] == 0x00 && resp[4] == 0x00;
 	}
 
 	client_close(&client);
@@ -977,7 +977,7 @@ TEST(NetGetComEventLogReturnsCountsAndEmptyLog)
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
 		     resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 6 &&
 		     resp[2] == 0x00 && resp[3] == 0x00 &&
-		     resp[4] == 0x00 && resp[5] == 0x02 &&
+		     resp[4] == 0x00 && resp[5] == 0x01 &&
 		     resp[6] == 0x00 && resp[7] == 0x02;
 	}
 
@@ -998,22 +998,33 @@ TEST(NetGetComEventLogMatchesComEventCounter)
 
 	if (ok)
 	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4;
+	}
+	if (ok)
+	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
 		     resp[3] == 0x00 && resp[4] == 0x01;
 	}
 	if (ok)
 	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 0); /* exception response */
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
 		req[0] = FC_GET_COM_EVENT_LOG;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x02 &&
-		     resp[6] == 0x00 && resp[7] == 0x02;
+		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x01 &&
+		     resp[6] == 0x00 && resp[7] == 0x04;
 	}
 	if (ok)
 	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x03;
+		     resp[3] == 0x00 && resp[4] == 0x01;
 	}
 
 	client_close(&client);
@@ -1039,7 +1050,7 @@ TEST(NetGetComEventLogMalformedRequest)
 	{
 		req[0] = FC_GET_COM_EVENT_LOG;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x02 &&
+		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x00 &&
 		     resp[6] == 0x00 && resp[7] == 0x02;
 	}
 
@@ -1066,7 +1077,7 @@ TEST(NetGetComEventLogUnknownUnitDoesNotCount)
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x01 &&
+		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x00 &&
 		     resp[6] == 0x00 && resp[7] == 0x01;
 	}
 
@@ -1167,7 +1178,7 @@ TEST(NetReportServerIdUnknownUnitDoesNotCount)
 	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x02;
+		     resp[3] == 0x00 && resp[4] == 0x01;
 	}
 
 	client_close(&client);
@@ -1470,7 +1481,7 @@ TEST(NetMaskWriteRegisterSuccessMalformedAndUnknownUnit)
 		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
 
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x05;
+		     resp[3] == 0x00 && resp[4] == 0x02;
 	}
 
 	client_close(&client);
@@ -1630,7 +1641,7 @@ TEST(NetReadWriteMultipleRegistersUnknownUnitAndNonHoldingTarget)
 		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
 
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x02;
+		     resp[3] == 0x00 && resp[4] == 0x00;
 	}
 
 	client_close(&client);
@@ -1702,11 +1713,11 @@ TEST(NetReadFifoQueueSuccessMalformedUnknownUnitAndUnavailable)
 	}
 	if (ok)
 	{
-		/* 6 handled requests above (2 success, 1 empty, 1 addr error, 2 value errors); unknown unit not counted */
+		/* 6 handled requests above (3 successful completions, 3 exceptions); unknown unit not counted */
 		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
 
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x07;
+		     resp[3] == 0x00 && resp[4] == 0x03;
 	}
 
 	client_close(&client);

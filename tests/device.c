@@ -242,7 +242,7 @@ TEST(FileRecordStorageLimits)
 	u16		value = 1;
 
 	for (u32 i = 0; i < DEVICE_MAX_FILES; i++)
-		ASSERT_EQ(device_add_file_record(dev, (u16)i, 0, 1, &value) == NULL);
+		ASSERT_EQ(device_add_file_record(dev, (u16)(i + 1), 0, 1, &value) == NULL);
 	ASSERT_FAILURE(device_add_file_record(dev, 99, 0, 1, &value) == NULL);
 
 	dev = fresh_device(arena);

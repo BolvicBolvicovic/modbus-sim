@@ -201,6 +201,9 @@ device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 length,
 	u16*			copy = NULL;
 	u32			end  = (u32)record + length;
 
+	if (file_no < 0x0001)
+		return "file number must be between 1 and 65535";
+
 	if (length == 0)
 		return "file record length must be at least 1";
 

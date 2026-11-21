@@ -201,8 +201,8 @@ Shape:
   (record REC_NO VALUE ...))
 ```
 
-- `FILE_NO` is the file number, 0-65535. A device can have several `(file ...)` entries (and
-  several `(record ...)` entries inside a file).
+- `FILE_NO` is the file number, 1-65535 (`0x0001-0xFFFF`). A device can have several `(file ...)`
+  entries (and several `(record ...)` entries inside a file).
 - `REC_NO` is the starting record number, 0-9999 (`0x270F`).
 - Each `VALUE` is a 16-bit register value, 0-65535. A record defines that many consecutive
   registers starting at `REC_NO` (one register per value, in order).
