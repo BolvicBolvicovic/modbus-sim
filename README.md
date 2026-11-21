@@ -109,3 +109,13 @@ vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 - All memory in this program comes from vlib arenas. The embedded s7 interpreter manages its own
   memory internally (it is only alive while the config is read).
 - Linux only for now (uses `poll`, `accept4`, and vlib's `mmap` arenas).
+
+## Contributing and security
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) - how to propose changes
+- [SECURITY.md](SECURITY.md) - how to report security issues
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). Third-party components are documented in
+[NOTICE.md](NOTICE.md).
