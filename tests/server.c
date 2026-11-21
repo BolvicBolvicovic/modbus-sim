@@ -222,6 +222,31 @@ register_value(const u8* pdu, u32 len, u32 index)
 	return len >= 2 + (index + 1) * 2 ? get_be16(pdu + 2 + index * 2) : 0;
 }
 
+static bool
+set_small_send_buffer(int fd, int size)
+{
+	return setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size)) == 0;
+}
+
+static bool
+wait_for_server_close(client_t* client, u32 timeout_ms)
+{
+	u64	start = clock_now_ms();
+
+	while (clock_now_ms() - start < timeout_ms)
+	{
+		char	byte = 0;
+		ssize_t	got  = recv(client->fd, &byte, 1, MSG_DONTWAIT);
+
+		if (got == 0)
+			return true;
+		if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+			return true;
+		usleep(10000);
+	}
+	return false;
+}
+
 /* --- server fixture --- */
 
 /* Asks the kernel for an unused loopback port. There is a small race before the child
@@ -629,18 +654,24 @@ TEST(NetExceptionsOverWire)
 
 TEST(NetBadMbapHeaderClosesConnection)
 {
-	u8		bad[MBAP_HEADER_SIZE];
-	mbap_header_t	header = { .transaction = 1, .length = 2, .unit = 1 };
-	bool		ok     = server_start("", "(device (unit-id 1) (holding 0))");
+	bool ok = server_start("", "(device (unit-id 1) (holding 0))");
 
-	for (u32 i = 0; i < 3 && ok; i++)
+	for (u32 i = 0; i < 4 && ok; i++)
 	{
-		client_t client = { .fd = -1 };
-		char	 byte = 0;
-		ssize_t got  = 0;
+		client_t	client = { .fd = -1 };
+		u8		bad[MBAP_HEADER_SIZE];
+		mbap_header_t	header = { .transaction = 1, .protocol = 0, .length = 2, .unit = 1 };
+		char		byte = 0;
+		ssize_t		got  = 0;
 
-		header.protocol = (i == 0) ? 1 : 0;
-		header.length   = (u16)((i == 1) ? 0 : (i == 2) ? 255 : 2);
+		if (i == 0)
+			header.protocol = 1;
+		else if (i == 1)
+			header.length = 0;
+		else if (i == 2)
+			header.length = 1;
+		else
+			header.length = 255;
 		mbap_encode(bad, &header);
 
 		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
@@ -655,6 +686,366 @@ TEST(NetBadMbapHeaderClosesConnection)
 		client_close(&client);
 	}
 
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetMbapLengthBoundariesOverWire)
+{
+	bool ok = server_start("", "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	for (u32 i = 0; i < 2 && ok; i++)
+	{
+		client_t	client = { .fd = -1 };
+		u8		frame[MBAP_HEADER_SIZE + MODBUS_MAX_PDU];
+		u8		resp[MODBUS_MAX_PDU];
+		mbap_header_t	header = { .transaction = (u16)(10 + i), .protocol = 0, .unit = 1 };
+		u32		pdu_len = 0;
+		u32		frame_len = 0;
+
+		if (i == 0)
+		{
+			/* length=2 means PDU is one byte: FC 07 is the smallest valid request. */
+			header.length = 2;
+			mbap_encode(frame, &header);
+			frame[MBAP_HEADER_SIZE] = FC_READ_EXCEPTION_STATUS;
+			pdu_len = 1;
+			frame_len = MBAP_HEADER_SIZE + pdu_len;
+		}
+		else
+		{
+			/* length=254 means PDU is 253 bytes: max-size FC 03 read request. */
+			header.length = MODBUS_MAX_PDU + 1;
+			mbap_encode(frame, &header);
+			frame[MBAP_HEADER_SIZE + 0] = FC_READ_HOLDING_REGISTERS;
+			put_be16(frame + MBAP_HEADER_SIZE + 1, 0);
+			put_be16(frame + MBAP_HEADER_SIZE + 3, 125);
+			memset(frame + MBAP_HEADER_SIZE + 5, 0, MODBUS_MAX_PDU - 5);
+			pdu_len = MODBUS_MAX_PDU;
+			frame_len = MBAP_HEADER_SIZE + pdu_len;
+		}
+
+		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+		if (ok)
+			ok = send_all(client.fd, frame, frame_len);
+		if (ok)
+		{
+			u32 got = 0;
+
+			ok = recv_reply(&client, 1, header.transaction, resp, &got);
+			if (ok && i == 0)
+				ok = got == 2 && resp[0] == FC_READ_EXCEPTION_STATUS && resp[1] == 0;
+			if (ok && i == 1)
+				ok = got == 2 && resp[0] == (u8)(FC_READ_HOLDING_REGISTERS | 0x80) &&
+				     resp[1] == EXC_ILLEGAL_DATA_VALUE;
+		}
+		client_close(&client);
+	}
+
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetFragmentedAndCoalescedRequests)
+{
+	client_t	client = { .fd = -1 };
+	u8		req1[MBAP_HEADER_SIZE + 5];
+	u8		req2[MBAP_HEADER_SIZE + 5];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	u16		tid1 = next_tid();
+	u16		tid2 = next_tid();
+	bool		ok = server_start("",
+					 "(device (unit-id 1) (holding 0 (static 4369)) (holding 1 (static 8738)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = tid1, .length = 6, .unit = 1 };
+
+		mbap_encode(req1, &h);
+		read_pdu(req1 + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		for (u32 i = 0; i < sizeof(req1) && ok; i++)
+		{
+			ok = send_all(client.fd, req1 + i, 1);
+			if (ok && i == 2)
+				usleep(2000);	/* split inside MBAP header */
+		}
+	}
+	if (ok)
+		ok = recv_reply(&client, 1, tid1, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x1111;
+
+	if (ok)
+	{
+		mbap_header_t	h1 = { .transaction = tid1, .length = 6, .unit = 1 };
+		mbap_header_t	h2 = { .transaction = tid2, .length = 6, .unit = 1 };
+		mbap_header_t	h3 = { .transaction = (u16)(tid2 + 1), .length = 6, .unit = 1 };
+		u8		buf[(MBAP_HEADER_SIZE + 5) * 2 + 3];
+		u8		req3[MBAP_HEADER_SIZE + 5];
+
+		mbap_encode(req1, &h1);
+		read_pdu(req1 + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		mbap_encode(req2, &h2);
+		read_pdu(req2 + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 1, 1);
+		mbap_encode(req3, &h3);
+		read_pdu(req3 + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		memcpy(buf, req1, sizeof(req1));
+		memcpy(buf + sizeof(req1), req2, sizeof(req2));
+		memcpy(buf + sizeof(req1) + sizeof(req2), req3, 3);
+		/* Two full requests plus the first 3 bytes of a third request in one segment. */
+		ok = send_all(client.fd, buf, sizeof(buf));
+	}
+	if (ok)
+		ok = recv_reply(&client, 1, tid1, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x1111;
+	if (ok)
+		ok = recv_reply(&client, 1, tid2, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x2222;
+	if (ok)
+	{
+		/* Complete the third request whose header was already sent. */
+		u8		tail[MBAP_HEADER_SIZE + 5 - 3];
+		mbap_header_t	h3 = { .transaction = (u16)(tid2 + 1), .length = 6, .unit = 1 };
+		u8		req3[MBAP_HEADER_SIZE + 5];
+
+		mbap_encode(req3, &h3);
+		read_pdu(req3 + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		memcpy(tail, req3 + 3, sizeof(tail));
+		ok = send_all(client.fd, tail, sizeof(tail));
+		if (ok)
+			ok = recv_reply(&client, 1, h3.transaction, resp, &len) && len == 4 &&
+			     register_value(resp, len, 0) == 0x1111;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetMaxSizePduBothDirections)
+{
+	client_t	client = { .fd = -1 };
+	u8		req[MBAP_HEADER_SIZE + MODBUS_MAX_PDU];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	bool		ok = server_start("",
+					 "(device (unit-id 1)"
+					 "  (coil 0 (count 2000) (static on))"
+					 "  (holding 0 (count 125) (static 4660)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+
+	/* FC 01: 2000 bits -> response PDU is 252 bytes (max read bits). */
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_COILS, 0, 2000);
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 5) &&
+		     recv_reply(&client, 1, h.transaction, resp, &len);
+		ok = ok && len == 252 && resp[0] == FC_READ_COILS && resp[1] == 250;
+		for (u32 i = 0; ok && i < 250; i++)
+			ok = resp[2 + i] == 0xFF;
+	}
+
+	/* FC 03: 125 registers -> response PDU is 252 bytes (max read registers). */
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 125);
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 5) &&
+		     recv_reply(&client, 1, h.transaction, resp, &len);
+		ok = ok && len == 252 && resp[0] == FC_READ_HOLDING_REGISTERS &&
+		     resp[1] == 250;
+		for (u32 i = 0; ok && i < 125; i++)
+			ok = get_be16(resp + 2 + i * 2) == 4660;
+	}
+
+	/* FC 16: 123 registers -> request PDU is 252 bytes (max write registers). */
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = next_tid(), .length = 253, .unit = 1 };
+
+		mbap_encode(req, &h);
+		req[MBAP_HEADER_SIZE + 0] = FC_WRITE_MULTIPLE_REGISTERS;
+		put_be16(req + MBAP_HEADER_SIZE + 1, 0);
+		put_be16(req + MBAP_HEADER_SIZE + 3, 123);
+		req[MBAP_HEADER_SIZE + 5] = 246;
+		for (u32 i = 0; i < 123; i++)
+			put_be16(req + MBAP_HEADER_SIZE + 6 + i * 2, (u16)(0x2000 + i));
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 252) &&
+		     recv_reply(&client, 1, h.transaction, resp, &len);
+		ok = ok && len == 5 && resp[0] == FC_WRITE_MULTIPLE_REGISTERS &&
+		     get_be16(resp + 3) == 123;
+	}
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 122, 1);
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 5) &&
+		     recv_reply(&client, 1, h.transaction, resp, &len);
+		ok = ok && len == 4 && register_value(resp, len, 0) == 0x2000 + 122;
+	}
+
+	/* FC 15: 1968 bits -> request PDU is 252 bytes (max write bits). */
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = next_tid(), .length = 253, .unit = 1 };
+
+		mbap_encode(req, &h);
+		req[MBAP_HEADER_SIZE + 0] = FC_WRITE_MULTIPLE_COILS;
+		put_be16(req + MBAP_HEADER_SIZE + 1, 0);
+		put_be16(req + MBAP_HEADER_SIZE + 3, 1968);
+		req[MBAP_HEADER_SIZE + 5] = 246;
+		memset(req + MBAP_HEADER_SIZE + 6, 0xAA, 246);
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 252) &&
+		     recv_reply(&client, 1, h.transaction, resp, &len);
+		ok = ok && len == 5 && resp[0] == FC_WRITE_MULTIPLE_COILS &&
+		     get_be16(resp + 3) == 1968;
+	}
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_COILS, 0, 8);
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 5) &&
+		     recv_reply(&client, 1, h.transaction, resp, &len);
+		ok = ok && len == 3 && resp[2] == 0xAA;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetPartialSendLargeResponse)
+{
+	client_t	client = { .fd = -1 };
+	u8		req[MBAP_HEADER_SIZE + 5];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	u16		tid = next_tid();
+	bool		ok = server_start("",
+					 "(device (unit-id 1) (holding 0 (count 125) (static 13124)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+		ok = set_small_send_buffer(client.fd, 1024);
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = tid, .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 125);
+		ok = send_all(client.fd, req, MBAP_HEADER_SIZE + 5);
+	}
+	if (ok)
+		ok = recv_reply(&client, 1, tid, resp, &len);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(len == 252);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == 250);
+	for (u32 i = 0; i < 125; i++)
+		ASSERT_EQ(get_be16(resp + 2 + i * 2) == 13124);
+
+	client_close(&client);
+	server_stop();
+}
+
+TEST(NetClientDisconnectDuringDelayedResponse)
+{
+	client_t	client = { .fd = -1 };
+	client_t	probe = { .fd = -1 };
+	u8		req[MBAP_HEADER_SIZE + 5];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	u16		tid = next_tid();
+	bool		ok = server_start("",
+					 "(device (unit-id 1) (holding 0 (static 9))"
+					 "  (fault (kind delay) (delay-ms 300) (percent 100)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = tid, .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = send_all(client.fd, req, sizeof(req));
+	}
+	if (ok)
+	{
+		usleep(50000);
+		client_close(&client);	/* disconnect while response is delayed/pending */
+		usleep(400000);
+	}
+
+	/* Server should remain healthy and serve other clients. */
+	if (ok)
+		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &probe);
+	if (ok)
+	{
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&probe, 1, req + MBAP_HEADER_SIZE, 5, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 9;
+	}
+
+	client_close(&probe);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetClientHalfCloseDuringDelayedResponse)
+{
+	client_t	client = { .fd = -1 };
+	client_t	probe = { .fd = -1 };
+	u8		req[MBAP_HEADER_SIZE + 5];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	u16		tid = next_tid();
+	bool		ok = server_start("",
+					 "(device (unit-id 1) (holding 0 (static 9))"
+					 "  (fault (kind delay) (delay-ms 300) (percent 100)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		mbap_header_t	h = { .transaction = tid, .length = 6, .unit = 1 };
+
+		mbap_encode(req, &h);
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = send_all(client.fd, req, sizeof(req));
+	}
+	if (ok)
+	{
+		usleep(50000);
+		ok = shutdown(client.fd, SHUT_WR) == 0;	/* half-close: client done sending */
+	}
+	if (ok)
+		ok = recv_reply(&client, 1, tid, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 9;
+
+	/* After response delivery, server should close and remain healthy. */
+	if (ok)
+		ok = wait_for_server_close(&client, 1500);
+	if (ok)
+		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &probe);
+	if (ok)
+	{
+		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&probe, 1, req + MBAP_HEADER_SIZE, 5, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 9;
+	}
+
+	client_close(&probe);
+	client_close(&client);
 	server_stop();
 	ASSERT_EQ(ok);
 }
@@ -1895,24 +2286,7 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 	ASSERT_EQ(ok);
 }
 
-static bool
-wait_for_server_close(client_t* client, u32 timeout_ms)
-{
-	u64	start = clock_now_ms();
 
-	while (clock_now_ms() - start < timeout_ms)
-	{
-		char	byte = 0;
-		ssize_t	got  = recv(client->fd, &byte, 1, MSG_DONTWAIT);
-
-		if (got == 0)
-			return true;
-		if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
-			return true;
-		usleep(10000);
-	}
-	return false;
-}
 
 
 TEST(NetIdleTimeoutClosesIdleClient)

@@ -603,6 +603,37 @@ TEST(ReadFileRecordUnavailableWhenNoFileRecordsConfigured)
 	arena_release(arena);
 }
 
+TEST(ReadFileRecordMultipleSubRequestsExceedPduSize)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u16		data[126];
+	u8		req[2 + 7 * 35];
+	u8		resp[MODBUS_MAX_PDU];
+
+	for (u32 i = 0; i < 126; i++)
+		data[i] = (u16)i;
+	ASSERT_EQ(device_add_file_record(dev, 1, 0, 126, data) == NULL);
+
+	/* 35 sub-requests * (2-byte sub-resp header + 2*3 data bytes) = 280 bytes,
+	 * plus FC + resp-data-length = 282, which exceeds MODBUS_MAX_PDU. */
+	req[0] = FC_READ_FILE_RECORD;
+	req[1] = 7 * 35;
+	for (u32 i = 0; i < 35; i++)
+	{
+		u8* sub = req + 2 + i * 7;
+
+		sub[0] = 0x06;
+		put_be16(sub + 1, 1);
+		put_be16(sub + 3, 0);
+		put_be16(sub + 5, 3);
+	}
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
 TEST(WriteFileRecordSingleSubRequestEchoesAndUpdates)
 {
 	arena_t*	arena = ARENA_ALLOC();
