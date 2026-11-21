@@ -188,11 +188,11 @@ TEST(UnknownFunctionIsIllegalFunction)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
-	u8		req[]  = { 0x2B, 0x0E, 0x01, 0x00 };
+	u8		req[]  = { 0x44, 0x00, 0x01, 0x00 };
 	u8		resp[MODBUS_MAX_PDU];
 
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(resp[0] == 0xC4 && resp[1] == EXC_ILLEGAL_FUNCTION);
 	arena_release(arena);
 }
 
@@ -1070,5 +1070,179 @@ TEST(ReadFifoQueueUnconfiguredPointerIsAddressError)
 	ASSERT_EQ(device_add_fifo(dev, 1, 1, data) == NULL);
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
 	ASSERT_EQ(resp[0] == 0x98 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
+
+static void
+assert_mei_object(const u8* resp, u32* offset, u8 id, const char* value)
+{
+	u32 len = (u32)strlen(value);
+
+	ASSERT_EQ(resp[(*offset)++] == id);
+	ASSERT_EQ(resp[(*offset)++] == (u8)len);
+	ASSERT_EQ(memcmp(resp + *offset, value, len) == 0);
+	*offset += len;
+}
+
+TEST(ReadDeviceIdentificationBasicStream)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	u32		off = 7;
+
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
+	ASSERT_EQ(resp[1] == 0x0E);
+	ASSERT_EQ(resp[2] == 0x01);
+	ASSERT_EQ(resp[3] == 0x81);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[5] == 0x00);
+	ASSERT_EQ(resp[6] == 0x03);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	ASSERT_EQ(len == off);
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationRegularAndExtended)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x02, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	u32		off = 7;
+
+	strcpy(dev->device_id[DEVICE_ID_VENDOR_URL], "https://example.invalid");
+	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
+	strcpy(dev->device_id[DEVICE_ID_MODEL_NAME], "M1");
+	strcpy(dev->device_id[DEVICE_ID_USER_APPLICATION_NAME], "TestApp");
+
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[2] == 0x02);
+	ASSERT_EQ(resp[3] == 0x83);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[6] == 0x07);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x03, "https://example.invalid");
+	assert_mei_object(resp, &off, 0x04, "Simulator");
+	assert_mei_object(resp, &off, 0x05, "M1");
+	assert_mei_object(resp, &off, 0x06, "TestApp");
+	ASSERT_EQ(len == off);
+
+	req[2] = 0x03;
+	req[3] = 0x03;
+	len = run(dev, req, sizeof(req), resp);
+	off = 7;
+	ASSERT_EQ(resp[2] == 0x03);
+	ASSERT_EQ(resp[3] == 0x83);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[6] == 0x04);
+	assert_mei_object(resp, &off, 0x03, "https://example.invalid");
+	assert_mei_object(resp, &off, 0x04, "Simulator");
+	assert_mei_object(resp, &off, 0x05, "M1");
+	assert_mei_object(resp, &off, 0x06, "TestApp");
+	ASSERT_EQ(len == off);
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationSpecific)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		off = 7;
+
+	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 10);
+	ASSERT_EQ(resp[2] == 0x04);
+	ASSERT_EQ(resp[3] == 0x83);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[6] == 0x01);
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+
+	req[3] = 0x04;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 9);
+	off = 7;
+	assert_mei_object(resp, &off, 0x04, "Simulator");
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationMoreFollows)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+
+	/* 7-byte header + 2-byte object header + 244-byte value = 253 (MODBUS_MAX_PDU). */
+	memset(dev->device_id[DEVICE_ID_VENDOR_NAME], 'V', 244);
+	dev->device_id[DEVICE_ID_VENDOR_NAME][244] = '\0';
+	memset(dev->device_id[DEVICE_ID_PRODUCT_CODE], 'P', 244);
+	dev->device_id[DEVICE_ID_PRODUCT_CODE][244] = '\0';
+	memset(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], 'R', 244);
+	dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION][244] = '\0';
+
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
+	ASSERT_EQ(resp[4] == 0xFF);
+	ASSERT_EQ(resp[5] == 0x01);
+	ASSERT_EQ(resp[6] == 0x01);
+	ASSERT_EQ(resp[7] == 0x00);
+	ASSERT_EQ(resp[8] == 244);
+	ASSERT_EQ(len == 7 + 2 + 244);
+
+	req[3] = resp[5];
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[4] == 0xFF);
+	ASSERT_EQ(resp[5] == 0x02);
+	ASSERT_EQ(resp[6] == 0x01);
+	ASSERT_EQ(resp[7] == 0x01);
+	ASSERT_EQ(resp[8] == 244);
+	ASSERT_EQ(len == 7 + 2 + 244);
+
+	req[3] = resp[5];
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[5] == 0x00);
+	ASSERT_EQ(resp[6] == 0x01);
+	ASSERT_EQ(resp[7] == 0x02);
+	ASSERT_EQ(resp[8] == 244);
+	ASSERT_EQ(len == 7 + 2 + 244);
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationErrors)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		bad_mei[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x05, 0x00 };
+	u8		bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01 };
+	u8		bad_obj[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x03 };
+	u8		bad_spec[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
+	u8		bad_ext[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x07 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	run(dev, bad_mei, sizeof(bad_mei), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	run(dev, bad_code, sizeof(bad_code), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_len, sizeof(bad_len), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, bad_obj, sizeof(bad_obj), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	run(dev, bad_spec, sizeof(bad_spec), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	run(dev, bad_ext, sizeof(bad_ext), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }

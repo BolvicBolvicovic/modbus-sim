@@ -10,6 +10,7 @@
 #include <stddef.h>
 
 #define DEVICE_NAME_MAX		64
+#define DEVICE_ID_OBJECT_MAX	245
 #define DEVICE_MAX_POINTS	8192
 #define ADDRESS_SPACE_SIZE	65536
 
@@ -101,6 +102,19 @@ struct device_fifo_t
 	u16*	values;		/* count entries, arena-backed */
 };
 
+/* MEI 14 (Read Device Identification) object ids. */
+enum device_id_object
+{
+	DEVICE_ID_VENDOR_NAME          = 0x00,
+	DEVICE_ID_PRODUCT_CODE         = 0x01,
+	DEVICE_ID_MAJOR_MINOR_REVISION = 0x02,
+	DEVICE_ID_VENDOR_URL           = 0x03,
+	DEVICE_ID_PRODUCT_NAME         = 0x04,
+	DEVICE_ID_MODEL_NAME           = 0x05,
+	DEVICE_ID_USER_APPLICATION_NAME = 0x06,
+	DEVICE_ID_OBJECT_COUNT         = 0x07,
+};
+
 /* Name: device_t
  * Description: one simulated Modbus device (one unit id).
  * */
@@ -123,6 +137,7 @@ struct device_t
 	device_file_t*	files;			/* DEVICE_MAX_FILES entries */
 	u32		fifo_count;
 	device_fifo_t*	fifos;			/* DEVICE_MAX_FIFOS entries */
+	char		device_id[DEVICE_ID_OBJECT_COUNT][DEVICE_ID_OBJECT_MAX + 1];
 	space_t		spaces[SPACE_COUNT];
 };
 

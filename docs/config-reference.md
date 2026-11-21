@@ -47,6 +47,13 @@ The command-line options `--port` and `--bind` override these.
 | `(exception-status N)` | Byte returned by Read Exception Status (FC 07), 0-255 | `0` |
 | `(server-id N)` | Server ID byte returned by Report Server ID (FC 17), 0-255 | `0` |
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
+| `(vendor-name "Text")` | MEI 14 Read Device Identification object 0x00, 0-245 bytes | `"modbus-sim"` |
+| `(product-code "Text")` | MEI 14 object 0x01, 0-245 bytes | `"modbus-sim"` |
+| `(major-minor-revision "Text")` | MEI 14 object 0x02, 0-245 bytes | `"1.0"` |
+| `(vendor-url "Text")` | MEI 14 object 0x03, 0-245 bytes; setting any regular/extended object reports extended conformity | absent |
+| `(product-name "Text")` | MEI 14 object 0x04, 0-245 bytes | absent |
+| `(model-name "Text")` | MEI 14 object 0x05, 0-245 bytes | absent |
+| `(user-application-name "Text")` | MEI 14 object 0x06, 0-245 bytes | absent |
 | `(note "Text")` | A comment kept for humans. Can be repeated. Ignored by the program | - |
 | `(fault ...)` | One fault, see below | none |
 | `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |

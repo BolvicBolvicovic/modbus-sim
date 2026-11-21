@@ -609,9 +609,9 @@ TEST(NetExceptionsOverWire)
 
 	if (ok)
 	{
-		req[0] = 0x2B;
-		ok = exchange(&client, 1, req, 4, resp, &len) &&
-		     exception_is(resp, len, 0x2B, EXC_ILLEGAL_FUNCTION);
+		req[0] = 0x2B; /* MEI, but missing payload */
+		ok = exchange(&client, 1, req, 1, resp, &len) &&
+		     exception_is(resp, len, 0x2B, EXC_ILLEGAL_DATA_VALUE);
 	}
 	if (ok)
 	{
@@ -2129,6 +2129,53 @@ TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
 	{
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
 		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReadDeviceIdentificationMei14)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1) (vendor-name \"Acme\") (product-code \"P\") "
+				    "(major-minor-revision \"1.2\") (product-name \"Sim\"))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     len > 7 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
+		     resp[1] == 0x0E && resp[2] == 0x01 && resp[3] == 0x83 &&
+		     resp[4] == 0x00 && resp[6] == 0x03;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     len == 7 + 2 + 3 && resp[6] == 0x01 && resp[7] == 0x04 &&
+		     resp[8] == 0x03 && memcmp(resp + 9, "Sim", 3) == 0;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x03 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT, EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT, EXC_ILLEGAL_FUNCTION);
 	}
 
 	client_close(&client);

@@ -178,6 +178,45 @@ TEST(ConfigReportServerIdRejectsOutOfRange)
 	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
 }
 
+TEST(ConfigDeviceIdentificationDefaultsAndOverrides)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME], "modbus-sim") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_PRODUCT_CODE], "modbus-sim") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "1.0") == 0);
+	ASSERT_EQ(config.devices[0]->device_id[DEVICE_ID_VENDOR_URL][0] == '\0');
+
+	ASSERT_SUCCESS(load_text(
+		"(device (vendor-name \"Acme\") (product-code \"P1\") (major-minor-revision \"2.3\")"
+		"        (vendor-url \"https://acme.invalid\") (product-name \"Sim\")"
+		"        (model-name \"M\") (user-application-name \"App\") (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME], "Acme") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_PRODUCT_CODE], "P1") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "2.3") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_VENDOR_URL], "https://acme.invalid") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_PRODUCT_NAME], "Sim") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_MODEL_NAME], "M") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_USER_APPLICATION_NAME], "App") == 0);
+}
+
+TEST(ConfigDeviceIdentificationRejectsTooLong)
+{
+	config_t	config = { 0 };
+	char		err[512] = "";
+	char		text[512];
+	char		longv[247];
+
+	memset(longv, 'x', 246);
+	longv[246] = '\0';
+	snprintf(text, sizeof(text), "(device (vendor-name \"%s\") (holding 0))", longv);
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "vendor-name is too long") != NULL);
+}
+
 #define EXPECT_ERROR(text, fragment)							\
 	do {										\
 		config_t	c = { 0 };						\

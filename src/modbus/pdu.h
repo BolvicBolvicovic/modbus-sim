@@ -25,6 +25,7 @@ enum modbus_function_code
 	FC_MASK_WRITE_REGISTER            = 0x16,
 	FC_READ_WRITE_MULTIPLE_REGISTERS  = 0x17,
 	FC_READ_FIFO_QUEUE                = 0x18,
+	FC_ENCAPSULATED_INTERFACE_TRANSPORT = 0x2B,
 };
 
 /* Exception codes. */

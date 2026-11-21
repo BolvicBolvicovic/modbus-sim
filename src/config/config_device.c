@@ -28,6 +28,34 @@ parse_name(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 }
 
 static bool
+parse_device_id_string(form_ctx_t* ctx, s7_pointer item, device_t* dev, u32 id)
+{
+	static const char* const names[DEVICE_ID_OBJECT_COUNT] = {
+		"vendor-name", "product-code", "major-minor-revision",
+		"vendor-url", "product-name", "model-name", "user-application-name",
+	};
+	const char*	value = NULL;
+
+	if (!form_get_string(ctx, item, &value))
+		return false;
+
+	if (strlen(value) > DEVICE_ID_OBJECT_MAX)
+		return form_fail(ctx, "%s: %s is too long (max %d bytes)",
+				 form_text(ctx, item), names[id], DEVICE_ID_OBJECT_MAX);
+
+	strcpy(dev->device_id[id], value);
+	return true;
+}
+
+static bool parse_vendor_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_VENDOR_NAME); }
+static bool parse_product_code(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_PRODUCT_CODE); }
+static bool parse_major_minor_revision(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_MAJOR_MINOR_REVISION); }
+static bool parse_vendor_url(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_VENDOR_URL); }
+static bool parse_product_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_PRODUCT_NAME); }
+static bool parse_model_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_MODEL_NAME); }
+static bool parse_user_application_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_USER_APPLICATION_NAME); }
+
+static bool
 parse_unit_id(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
 	s64	unit = 0;
@@ -466,6 +494,13 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "exception-status", parse_exception_status },
 	{ "server-id",        parse_server_id        },
 	{ "run-indicator",    parse_run_indicator    },
+	{ "vendor-name",      parse_vendor_name      },
+	{ "product-code",     parse_product_code     },
+	{ "major-minor-revision", parse_major_minor_revision },
+	{ "vendor-url",       parse_vendor_url       },
+	{ "product-name",     parse_product_name     },
+	{ "model-name",       parse_model_name       },
+	{ "user-application-name", parse_user_application_name },
 	{ "fault",            parse_fault            },
 	{ "note",             parse_note             },
 	{ "coil",             parse_coil             },
@@ -499,7 +534,8 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 	if (!entry)
 		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
-				 "run-indicator, fault, note, coil, discrete, input, holding, file or fifo", head);
+				 "run-indicator, vendor-name, product-code, major-minor-revision, vendor-url, product-name, "
+				 "model-name, user-application-name, fault, note, coil, discrete, input, holding, file or fifo", head);
 
 	return entry->parse(ctx, item, dev);
 }

@@ -543,6 +543,118 @@ report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return 4;
 }
 
+enum mei_type
+{
+	MEI_TYPE_READ_DEVICE_ID = 0x0E,
+};
+
+enum read_device_id_code
+{
+	READ_DEVICE_ID_BASIC    = 0x01,
+	READ_DEVICE_ID_REGULAR  = 0x02,
+	READ_DEVICE_ID_EXTENDED = 0x03,
+	READ_DEVICE_ID_SPECIFIC = 0x04,
+};
+
+static u32
+read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	u8	read_code = 0;
+	u8	object_id = 0;
+	u8	conformity = 0x81;
+	u32	first = 0;
+	u32	last = 0;
+	u32	count = 0;
+	u32	offset = 0;
+	bool	more = false;
+	u8	next = 0;
+
+	if (req_len != 4)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+	if (req[1] != MEI_TYPE_READ_DEVICE_ID)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+
+	read_code = req[2];
+	object_id = req[3];
+	if (read_code < READ_DEVICE_ID_BASIC || read_code > READ_DEVICE_ID_SPECIFIC)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	for (u32 i = DEVICE_ID_VENDOR_URL; i < DEVICE_ID_OBJECT_COUNT; i++)
+	{
+		if (dev->device_id[i][0] != '\0')
+		{
+			conformity = 0x83;
+			break;
+		}
+	}
+
+	if (read_code == READ_DEVICE_ID_SPECIFIC)
+	{
+		if (object_id >= DEVICE_ID_OBJECT_COUNT || dev->device_id[object_id][0] == '\0')
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+		first = object_id;
+		last = object_id + 1;
+	}
+	else
+	{
+		if (read_code == READ_DEVICE_ID_BASIC)
+		{
+			if (object_id > DEVICE_ID_MAJOR_MINOR_REVISION)
+				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+			last = DEVICE_ID_MAJOR_MINOR_REVISION + 1;
+		}
+		else
+		{
+			if (object_id >= DEVICE_ID_OBJECT_COUNT)
+				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+			last = DEVICE_ID_OBJECT_COUNT;
+		}
+		first = object_id;
+	}
+
+	resp[0] = req[0];
+	resp[1] = MEI_TYPE_READ_DEVICE_ID;
+	resp[2] = read_code;
+	resp[3] = conformity;
+	resp[4] = 0x00; /* More Follows */
+	resp[5] = 0x00; /* Next Object Id */
+	resp[6] = 0x00; /* Number Of Objects */
+	offset = 7;
+
+	for (u32 i = first; i < last; i++)
+	{
+		const char*	value = dev->device_id[i];
+		u32		len = 0;
+
+		if (value[0] == '\0')
+			continue;
+
+		len = (u32)strlen(value);
+		if (len > DEVICE_ID_OBJECT_MAX)
+			len = DEVICE_ID_OBJECT_MAX;
+		if (offset + 2 + len > MODBUS_MAX_PDU)
+		{
+			more = true;
+			next = (u8)i;
+			break;
+		}
+
+		resp[offset++] = (u8)i;
+		resp[offset++] = (u8)len;
+		memcpy(resp + offset, value, len);
+		offset += len;
+		count++;
+	}
+
+	if (count == 0)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	resp[4] = more ? 0xFF : 0x00;
+	resp[5] = next;
+	resp[6] = (u8)count;
+	return offset;
+}
+
 /* --- dispatch --- */
 
 static u32
@@ -597,6 +709,7 @@ static const pdu_entry_t PDU_HANDLERS[] = {
 	{ FC_WRITE_FILE_RECORD,              write_file_record              },
 	{ FC_MASK_WRITE_REGISTER,            mask_write_register            },
 	{ FC_READ_FIFO_QUEUE,                read_fifo_queue                },
+	{ FC_ENCAPSULATED_INTERFACE_TRANSPORT, read_device_identification   },
 };
 
 static pdu_handler_t

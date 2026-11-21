@@ -31,6 +31,7 @@ is disconnected.
 | 22 (0x16) | Mask Write Register | holding registers | 1 register |
 | 23 (0x17) | Read/Write Multiple Registers | holding registers | read 1-125, write 1-121 |
 | 24 (0x18) | Read FIFO Queue | FIFO queues | 0-31 register values |
+| 43 (0x2B) | Read Device Identification (MEI 14) | device identification | 1-253 bytes total response |
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
@@ -70,7 +71,13 @@ FIFO queues are explicit, config-backed device storage (see [config-reference.md
 
 The request must be exactly 3 bytes; any other length or shape (short, extra data) is rejected with exception 03 (illegal data value). Config enforces at most 31 values per FIFO, so a configured FIFO response always fits within a Modbus PDU. FC 24 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs; requests for an unknown unit are handled at the server level and do not increment any device counter.
 
-Any other function code gets exception 01. Not supported yet: 43.
+Read Device Identification (FC 43 / 0x2B), MEI type 14 (`0x0E`), reads device identification objects. The request PDU is `[0x2B][0x0E][ReadDevId code][Object Id]` (4 bytes). The normal response PDU is `[0x2B][0x0E][ReadDevId code][Conformity Level][More Follows][Next Object Id][Number Of Objects][Object list...]`. Each object in the list is `[Object Id][Object Length][Object Value...]`, where `Object Value` is ASCII bytes and `Object Length` is 1..245.
+
+Supported ReadDevId codes are `01` basic, `02` regular, `03` extended, and `04` specific. Object ids `0x00` VendorName, `0x01` ProductCode, and `0x02` MajorMinorRevision are basic/mandatory and default to `modbus-sim`, `modbus-sim`, and `1.0`. Optional regular/extended objects `0x03` VendorUrl, `0x04` ProductName, `0x05` ModelName, and `0x06` UserApplicationName are returned only when configured. When no regular/extended objects are configured, Conformity Level is `0x81` (basic identification, stream supported and individual access supported). When any regular/extended object is configured, Conformity Level is `0x83` (extended identification, stream supported and individual access supported).
+
+Basic reads start at object `0x00..0x02`. Regular/extended reads stream from the requested object id through the supported object range, skipping unconfigured optional objects. Specific reads return one configured object. If the full stream does not fit in a Modbus PDU, the response sets `More Follows=0xFF` and `Next Object Id` to the first object not included; the client continues by issuing another stream request with that object id. If the requested object id is not available for the selected read code/category, or a specific object is not present/configured, the request returns exception 02. Invalid MEI type is exception 01; invalid ReadDevId code, invalid request length, or other malformed request data is exception 03. FC 43 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
+
+Any other function code gets exception 01.
 
 ## Exceptions
 

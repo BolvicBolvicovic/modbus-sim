@@ -1,5 +1,6 @@
 #include "device/device.h"
 #include <math.h>
+#include <string.h>
 
 bool
 space_is_bit(space_kind_t space)
@@ -43,6 +44,9 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->com_event_count  = 0;
 	dev->message_count    = 0;
 	dev->start_ms         = start_ms;
+	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "modbus-sim");
+	strcpy(dev->device_id[DEVICE_ID_PRODUCT_CODE], "modbus-sim");
+	strcpy(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "1.0");
 	return dev;
 }
 
