@@ -2,6 +2,7 @@
 #include "net/rtu_server.h"
 #include "modbus/rtu.h"
 #include "modbus/pdu.h"
+#include "net/net_common.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
@@ -40,35 +41,6 @@ struct rtu_server_t
 };
 
 static volatile sig_atomic_t	g_rtu_stop = 0;
-
-static void
-on_rtu_stop_signal(int signo)
-{
-	(void)signo;
-	g_rtu_stop = 1;
-}
-
-static void
-install_rtu_signal_handlers(void)
-{
-	struct sigaction	sa = { 0 };
-
-	sa.sa_handler = on_rtu_stop_signal;
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
-	signal(SIGPIPE, SIG_IGN);
-}
-
-static device_t*
-find_device(const rtu_server_t* server, u8 unit)
-{
-	for (u32 i = 0; i < server->options.device_count; i++)
-	{
-		if (server->options.devices[i]->unit_id == unit)
-			return server->options.devices[i];
-	}
-	return NULL;
-}
 
 static void
 pending_clear(rtu_pending_t* pending)
@@ -112,12 +84,11 @@ handle_frame(rtu_server_t* server, const u8* frame, u32 len, u64 now_ms)
 	if (addr == 0)
 		return;
 
-	dev = find_device(server, addr);
+	dev = net_find_device(server->options.devices, server->options.device_count, addr);
 	if (!dev)
 		return; /* Unknown RTU unit: no response. */
 
-	resp_len = modbus_handle_pdu(dev, now_ms, pdu, pdu_len, resp);
-	decision = fault_decide(&dev->fault, &server->rng);
+	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
 
 	LOG_DEBUG("rtu unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
 		  (resp[0] & 0x80) ? "exception" : "ok",
@@ -327,6 +298,80 @@ write_pending(rtu_server_t* server)
 	return true;
 }
 
+static bool
+rtu_gap_due(rtu_server_t* server, u64 now_ms, u32 gap_ms)
+{
+	return !server->pending.active && server->have_rx && server->rx_len > 0 &&
+	       now_ms - server->last_rx_ms >= gap_ms;
+}
+
+static void
+rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
+	       u64 now_ms, u32 gap_ms)
+{
+	u64	due = 0;
+
+	*timeout = 1000;
+	*pfd = (struct pollfd){ .fd = server->options.fd, .events = 0 };
+	if (server->pending.active)
+	{
+		if (server->pending.due_ms <= now_ms)
+		{
+			pfd->events |= POLLOUT;
+			*timeout = 0;
+		}
+		else
+			*timeout = (int)(server->pending.due_ms - now_ms);
+		return;
+	}
+
+	pfd->events |= POLLIN;
+	if (!server->have_rx || server->rx_len == 0)
+		return;
+
+	due = server->last_rx_ms + gap_ms;
+	if (due > now_ms)
+		*timeout = MIN(*timeout, (int)(due - now_ms));
+}
+
+static bool
+rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
+{
+	if (revents & (POLLERR | POLLNVAL))
+		return false;
+
+	if ((revents & POLLOUT) && !write_pending(server))
+		return false;
+
+	if (revents & POLLIN)
+	{
+		if (!read_available(server))
+		{
+			if (server->have_rx && server->rx_len > 0 && !server->pending.active)
+				process_rx_frames(server, now_ms);
+			return false;
+		}
+		return true;
+	}
+
+	if (revents & POLLHUP)
+	{
+		/* If a delayed response is pending, the peer is gone and the
+		 * response cannot be delivered. Drop it and stop instead of
+		 * polling a hung-up fd until the delay expires (issue #19). */
+		if (server->pending.active)
+		{
+			pending_clear(&server->pending);
+			return false;
+		}
+		if (server->have_rx && server->rx_len > 0)
+			process_rx_frames(server, now_ms);
+		return false;
+	}
+
+	return true;
+}
+
 s32
 rtu_server_run(const rtu_server_options_t* options)
 {
@@ -338,44 +383,25 @@ rtu_server_run(const rtu_server_options_t* options)
 	rng_seed(&server.rng, options->seed);
 	pending_clear(&server.pending);
 	g_rtu_stop = 0;
-	install_rtu_signal_handlers();
+	net_install_stop_handlers(&g_rtu_stop);
 
 	LOG_INFO("RTU listening on fd %d (%u device%s), frame gap %u ms. Ctrl-C to stop.",
 		 options->fd, options->device_count, options->device_count == 1 ? "" : "s", gap_ms);
 
 	while (!g_rtu_stop)
 	{
-		struct pollfd	pfd = { .fd = options->fd, .events = 0 };
-		int		timeout = 1000;
+		struct pollfd	pfd = { 0 };
+		int		timeout = 0;
 		u64		now_ms = clock_now_ms();
 
-		if (server.pending.active)
+		if (rtu_gap_due(&server, now_ms, gap_ms))
 		{
-			if (server.pending.due_ms <= now_ms)
-			{
-				pfd.events |= POLLOUT;
-				timeout = 0;
-			}
-			else
-				timeout = (int)(server.pending.due_ms - now_ms);
-		}
-		else
-		{
-			pfd.events |= POLLIN;
-			if (server.have_rx && server.rx_len > 0)
-			{
-				u64 due = server.last_rx_ms + gap_ms;
-
-				if (due <= now_ms)
-				{
-					process_rx_frames(&server, now_ms);
-					server.have_rx = server.rx_len > 0;
-					continue;
-				}
-				timeout = MIN(timeout, (int)(due - now_ms));
-			}
+			process_rx_frames(&server, now_ms);
+			server.have_rx = server.rx_len > 0;
+			continue;
 		}
 
+		rtu_build_poll(&server, &pfd, &timeout, now_ms, gap_ms);
 		if (poll(&pfd, 1, timeout) < 0)
 		{
 			if (errno == EINTR)
@@ -385,38 +411,10 @@ rtu_server_run(const rtu_server_options_t* options)
 		}
 
 		now_ms = clock_now_ms();
-		if (pfd.revents & (POLLERR | POLLNVAL))
+		if (!rtu_handle_revents(&server, pfd.revents, now_ms))
 			break;
 
-		if ((pfd.revents & POLLOUT) && !write_pending(&server))
-			break;
-
-		if (pfd.revents & POLLIN)
-		{
-			if (!read_available(&server))
-			{
-				if (server.have_rx && server.rx_len > 0 && !server.pending.active)
-					process_rx_frames(&server, now_ms);
-				break;
-			}
-		}
-		else if (pfd.revents & POLLHUP)
-		{
-			/* If a delayed response is pending, the peer is gone and the
-			 * response cannot be delivered. Drop it and stop instead of
-			 * polling a hung-up fd until the delay expires (issue #19). */
-			if (server.pending.active)
-			{
-				pending_clear(&server.pending);
-				break;
-			}
-			if (server.have_rx && server.rx_len > 0)
-				process_rx_frames(&server, now_ms);
-			break;
-		}
-
-		if (!server.pending.active && server.have_rx && server.rx_len > 0 &&
-		    now_ms - server.last_rx_ms >= gap_ms)
+		if (rtu_gap_due(&server, now_ms, gap_ms))
 		{
 			process_rx_frames(&server, now_ms);
 			server.have_rx = server.rx_len > 0;

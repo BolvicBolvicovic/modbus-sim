@@ -429,6 +429,7 @@ parse_fifo(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	const char*	vhead    = NULL;
 	u16		values[DEVICE_MAX_FIFO_VALUES];
 	u32		count    = 0;
+	s7_pointer	v        = NULL;
 
 	if (s7_list_length(ctx->sc, item) != 3 || !s7_is_integer(s7_cadr(item)))
 		return form_fail(ctx, "%s: expected (fifo ADDRESS (values ...))", form_text(ctx, item));
@@ -443,7 +444,7 @@ parse_fifo(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 		return form_fail(ctx, "%s: expected (values ...), got %s", form_text(ctx, item),
 				 form_text(ctx, values_f));
 
-	for (s7_pointer v = s7_cdr(values_f); s7_is_pair(v); v = s7_cdr(v))
+	for (v = s7_cdr(values_f); s7_is_pair(v); v = s7_cdr(v))
 	{
 		s7_pointer	val = s7_car(v);
 
@@ -456,17 +457,8 @@ parse_fifo(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 					 form_text(ctx, values_f), DEVICE_MAX_FIFO_VALUES);
 		values[count++] = (u16)s7_integer(val);
 	}
-	if (!s7_is_null(ctx->sc, s7_cdr(values_f)) && !s7_is_pair(s7_cdr(values_f)))
+	if (!s7_is_null(ctx->sc, v))
 		return form_fail(ctx, "%s: malformed values list", form_text(ctx, values_f));
-	/* guard against improper list tail */
-	{
-		s7_pointer	v = s7_cdr(values_f);
-
-		while (s7_is_pair(v))
-			v = s7_cdr(v);
-		if (!s7_is_null(ctx->sc, v))
-			return form_fail(ctx, "%s: malformed values list", form_text(ctx, values_f));
-	}
 
 	{
 		const char*	error = device_add_fifo(dev, (u16)address, (u16)count, values);

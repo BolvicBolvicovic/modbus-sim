@@ -30,7 +30,7 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `rtu_server` | TCP sockets / RTU byte stream, `poll` loop, delayed sending |
+| `src/net` | `tcp_server`, `rtu_server`, `net_common` | TCP sockets / RTU byte stream, `poll` loop, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU PTY/device open |
 
