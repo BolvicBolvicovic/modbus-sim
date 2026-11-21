@@ -27,6 +27,9 @@
 ## Style & scope
 - Prefer the smallest change that solves the task; less is more. Avoid unnecessary abstraction, not optimization.
 - Prefer fat structs over many small structs that are only used once inside a bigger struct. If a small struct belongs only to a bigger one, define it inside that bigger struct, e.g. `struct big { struct small { int a; }; /* other fields */ };`.
-- Functions don't have to be short; they should do the job they need to do. If a small helper is only used once, prefer inlining it in the larger function. For complex behavior, add a short comment.
-- Add comments only where logic is non-obvious or a constraint is easy to miss; do not comment routine changes.
+- Functions don't have to be short; they should do the job they need to do. If a small helper is only used once, prefer inlining it in the larger function. Inline tiny reused helpers when practical and clear.
+- For enum-like groups of related constants, prefer enums over `#define` macros.
+- Booleans don't need an `is_` prefix when the name is already clear (e.g. `log_verbose()`).
+- Add comments only where logic is non-obvious or a constraint is easy to miss; do not comment routine changes. For complex behavior, add a short comment.
 - When behavior changes or a new user-facing/config/protocol behavior is added, update the relevant docs (`docs/`, `README.md`, `AGENTS.md` as applicable) instead of adding explanatory comments everywhere.
+- In reviews, inspect tests against intended behavior/spec; do not accept tests weakened or adapted to fit an incorrect implementation.
