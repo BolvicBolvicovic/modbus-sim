@@ -1,6 +1,6 @@
 # modbus-sim
 
-A Modbus TCP device simulator. You describe a device in a small text file; `modbus-sim`
+A Modbus TCP/RTU device simulator. You describe a device in a small text file; `modbus-sim`
 pretends to be that device on the network. Point your SCADA, PLC, gateway or test script at it.
 
 You do **not** need to know Scheme. The config file is a list of `(name value)` entries, and
@@ -41,7 +41,7 @@ different binary.
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP, function codes 01, 02, 03, 04, 05, 06, 07, 08, 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
+| Protocol | Modbus TCP and Modbus RTU (PTY/device byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08, 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
 | Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |
@@ -82,9 +82,13 @@ modbus-sim [options] CONFIG.scm
 ```
 
 Port 502 is the Modbus standard but needs root on Linux. The default here is **1502**.
-In RTU mode, `--rtu-pty` creates a PTY and prints `RTU PTY slave: /dev/pts/N`; connect your RTU
-client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
-Frame boundaries use a fixed silence gap approximation (`frame-gap-ms`, default 20 ms).
+
+In RTU mode, `--rtu-pty` creates a Linux PTY and prints `RTU PTY slave: /dev/pts/N`; connect your
+RTU client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
+RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC, unknown unit, and broadcast (unit 0) produce no
+response. Frame boundaries use a fixed silence-gap approximation (`frame-gap-ms`, default 20 ms)
+because PTY/pipe streams have no baud-rate timing. `--port`/`--bind` are TCP-only;
+`--frame-gap-ms` is RTU-only. RTU-over-TCP is not implemented.
 
 ## Documentation
 
@@ -99,12 +103,12 @@ Frame boundaries use a fixed silence gap approximation (`frame-gap-ms`, default 
 src/            the program, one folder per module (headers next to their .c files)
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
-  modbus/       Modbus TCP framing and function codes
-  net/          the network loop
+  modbus/       Modbus TCP MBAP, RTU CRC/framing, and PDU handlers
+  net/          TCP and RTU network loops
   util/         clock, random numbers, logging
 profiles/       ready-made device profiles
-tests/          unit tests (vtest)
-tools/          modbus_probe.py, a tiny test client
+tests/          unit tests and integration tests (vtest)
+tools/          modbus_probe.py, check_doc_examples.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 ```
