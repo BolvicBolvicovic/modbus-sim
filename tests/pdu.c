@@ -880,6 +880,36 @@ TEST(ReadWriteMultipleRegistersWriteBeforeReadWithOverlap)
 	arena_release(arena);
 }
 
+TEST(ReadWriteMultipleRegistersWriteBeforeReadNonOverlapping)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	point_t		p     = { 0 };
+	u8		req[]  = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x02, 0x00, 0x02,	/* read addr 2, qty 2 */
+		0x00, 0x00, 0x00, 0x02,	/* write addr 0, qty 2 */
+		0x04,
+		0x00, 0x0A, 0x00, 0x14,	/* 10,20 */
+	};
+	u8		resp[MODBUS_MAX_PDU];
+	u16		out[4] = { 0, 0, 0, 0 };
+
+	p.kind = POINT_STATIC;
+	p.space = SPACE_HOLDING;
+	p.type = VT_U16;
+	for (u32 i = 0; i < 4; i++) { p.address = i; p.static_value = (f64)(i + 1); device_add_point(dev, &p); }
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 6);
+	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04);
+	/* Read returns post-write state for non-overlapping ranges. */
+	ASSERT_EQ(get_be16(resp + 2) == 3 && get_be16(resp + 4) == 4);
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, out));
+	ASSERT_EQ(out[0] == 10 && out[1] == 20 && out[2] == 3 && out[3] == 4);
+	arena_release(arena);
+}
+
 TEST(ReadWriteMultipleRegistersRejectsMalformedRequest)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1041,6 +1071,21 @@ TEST(ReadFifoQueueMaxCount)
 	arena_release(arena);
 }
 
+TEST(ReadFifoQueueZeroValues)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	u8		req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x07 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(device_add_fifo(dev, 7, 0, NULL) == NULL);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[0] == FC_READ_FIFO_QUEUE);
+	ASSERT_EQ(get_be16(resp + 1) == 2);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+	arena_release(arena);
+}
+
 TEST(ReadFifoQueueRejectsMalformedRequest)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1097,7 +1142,7 @@ TEST(ReadDeviceIdentificationBasicStream)
 	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
 	ASSERT_EQ(resp[1] == 0x0E);
 	ASSERT_EQ(resp[2] == 0x01);
-	ASSERT_EQ(resp[3] == 0x81);
+	ASSERT_EQ(resp[3] == 0x81); /* basic only: no regular objects configured */
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[5] == 0x00);
 	ASSERT_EQ(resp[6] == 0x03);
@@ -1165,6 +1210,7 @@ TEST(ReadDeviceIdentificationSpecific)
 	ASSERT_EQ(resp[2] == 0x04);
 	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[5] == 0x00);
 	ASSERT_EQ(resp[6] == 0x01);
 	assert_mei_object(resp, &off, 0x01, "modbus-sim");
 
@@ -1172,6 +1218,19 @@ TEST(ReadDeviceIdentificationSpecific)
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 9);
 	off = 7;
 	assert_mei_object(resp, &off, 0x04, "Simulator");
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationSpecificUnknownObjectIsAddressError)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x03 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	/* 0x03 is a known regular id but not configured on this basic-only device. */
+	run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }
 
@@ -1230,6 +1289,7 @@ TEST(ReadDeviceIdentificationErrors)
 	u8		bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01 };
 	u8		bad_spec[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
 	u8		bad_spec_range[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x07 };
+	u8		bad_obj[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x80 };
 	u8		resp[MODBUS_MAX_PDU];
 
 	run(dev, bad_mei, sizeof(bad_mei), resp);
@@ -1244,6 +1304,8 @@ TEST(ReadDeviceIdentificationErrors)
 	run(dev, bad_spec, sizeof(bad_spec), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	run(dev, bad_spec_range, sizeof(bad_spec_range), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	run(dev, bad_obj, sizeof(bad_obj), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	arena_release(arena);
 }
