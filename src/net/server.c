@@ -440,7 +440,7 @@ serve_loop(server_t* server)
 s32
 server_run(const server_options_t* options)
 {
-	server_t server;
+	server_t server = { 0 };
 
 	server.options = *options;
 	rng_seed(&server.rng, options->seed);
