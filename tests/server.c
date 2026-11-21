@@ -8,11 +8,14 @@
 #include "util/clock.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -38,6 +41,8 @@ struct fixture_t
 };
 
 static fixture_t	g_server = { .pid = -1 };
+static u32		g_server_nofile = 0;
+static char		g_server_stderr[80];
 
 static void
 server_stop(void);
@@ -244,6 +249,12 @@ server_stop(void)
 		unlink(fx->config);
 		fx->config[0] = '\0';
 	}
+	if (g_server_stderr[0])
+	{
+		unlink(g_server_stderr);
+		g_server_stderr[0] = '\0';
+	}
+	g_server_nofile = 0;
 }
 
 /* `server_options` is appended inside (server ...); pass "" for defaults. */
@@ -285,6 +296,21 @@ server_start(const char* server_options, const char* devices)
 	fputs(config, file);
 	fclose(file);
 
+	if (g_server_nofile > 0)
+	{
+		strcpy(g_server_stderr, "/tmp/modbus-sim-neterr-XXXXXX");
+		fd = mkstemp(g_server_stderr);
+		if (fd < 0)
+		{
+			fprintf(stderr, "net test: mkstemp stderr failed: %s\n", strerror(errno));
+			unlink(fx->config);
+			fx->config[0] = '\0';
+			g_server_stderr[0] = '\0';
+			return false;
+		}
+		close(fd);
+	}
+
 	bin = getenv("MODBUS_SIM_BIN");
 	if (!bin)
 		bin = "./modbus-sim";
@@ -294,8 +320,20 @@ server_start(const char* server_options, const char* devices)
 	{
 		if (!freopen("/dev/null", "w", stdout))
 			_exit(127);
-		if (!freopen("/dev/null", "w", stderr))
+		if (g_server_stderr[0])
+		{
+			if (!freopen(g_server_stderr, "w", stderr))
+				_exit(127);
+		}
+		else if (!freopen("/dev/null", "w", stderr))
 			_exit(127);
+		if (g_server_nofile > 0)
+		{
+			struct rlimit lim = { .rlim_cur = g_server_nofile, .rlim_max = g_server_nofile };
+
+			if (setrlimit(RLIMIT_NOFILE, &lim) < 0)
+				_exit(126);
+		}
 		execl(bin, bin, fx->config, (char*)NULL);
 		_exit(127);
 	}
@@ -1608,6 +1646,156 @@ TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
 }
 
 static bool
+file_contains(const char* path, const char* needle)
+{
+	FILE*	file = fopen(path, "r");
+	char	line[512];
+
+	if (!file)
+		return false;
+	while (fgets(line, sizeof(line), file))
+	{
+		if (strstr(line, needle))
+		{
+			fclose(file);
+			return true;
+		}
+	}
+	fclose(file);
+	return false;
+}
+
+static bool
+proc_utime_ticks(pid_t pid, unsigned long long* out)
+{
+	char	path[64];
+	FILE*	file;
+	char	buf[1024];
+	char*	rparen;
+	unsigned long long utime = 0;
+	unsigned long long stime = 0;
+
+	snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+	file = fopen(path, "r");
+	if (!file)
+		return false;
+	if (!fgets(buf, sizeof(buf), file))
+	{
+		fclose(file);
+		return false;
+	}
+	fclose(file);
+	rparen = strrchr(buf, ')');
+	if (!rparen)
+		return false;
+	if (sscanf(rparen + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu",
+		   &utime, &stime) != 2)
+		return false;
+	*out = utime + stime;
+	return true;
+}
+
+TEST(NetPipelinedRequestsAreAnsweredPromptly)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len      = 0;
+	u16	 first    = next_tid();
+	u16	 second   = next_tid();
+	u64	 start_ms = 0;
+	u64	 elapsed  = 0;
+	bool	 ok       = server_start("",
+					"(device (unit-id 1) (holding 0 (static 11)) (holding 1 (static 22)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		int yes = 1;
+
+		setsockopt(client.fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = send_request(&client, 1, first, req, 5);
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 1, 1);
+		ok = ok && send_request(&client, 1, second, req, 5);
+		start_ms = clock_now_ms();
+	}
+	if (ok)
+		ok = recv_reply(&client, 1, first, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 11;
+	if (ok)
+		ok = recv_reply(&client, 1, second, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 22;
+	if (ok)
+		elapsed = clock_now_ms() - start_ms;
+	ok = ok && elapsed < 250;
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
+{
+	client_t	held[64];
+	client_t	client = { .fd = -1 };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len     = 0;
+	u32		opened  = 0;
+	unsigned long long utime0 = 0;
+	unsigned long long utime1 = 0;
+	bool		ok      = false;
+
+	for (u32 i = 0; i < (u32)(sizeof(held) / sizeof(held[0])); i++)
+		held[i].fd = -1;
+
+	/* Low RLIMIT_NOFILE: server can start, but accept() will eventually hit EMFILE.
+	 * The limit must leave room for startup fds while being small enough that
+	 * accepted connections exhaust the table before SERVER_MAX_CONNECTIONS. */
+	g_server_nofile = 20;
+	ok = server_start("", "(device (unit-id 1) (holding 0 (static 5)))");
+
+	for (u32 i = 0; ok && i < (u32)(sizeof(held) / sizeof(held[0])); i++)
+	{
+		if (!client_open(g_server.port, 200, &held[i]))
+		{
+			held[i].fd = -1;
+			break;
+		}
+		opened++;
+	}
+
+	if (ok)
+	{
+		ok = proc_utime_ticks(g_server.pid, &utime0);
+		usleep(300000);
+		ok = ok && proc_utime_ticks(g_server.pid, &utime1);
+		/* 300ms window: a real busy loop burns far more than a few ticks.
+		 * Allow generous headroom for slow CI/schedulers. */
+		ok = ok && (utime1 - utime0) < 150;
+	}
+	ok = ok && file_contains(g_server_stderr, "accept failed");
+
+	/* Release pressure and verify the server recovers after backoff. */
+	for (u32 i = 0; i < opened; i++)
+		client_close(&held[i]);
+	usleep(1500000);
+	if (ok)
+		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 5;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+static bool
 wait_for_server_close(client_t* client, u32 timeout_ms)
 {
 	u64	start = clock_now_ms();
@@ -1625,6 +1813,7 @@ wait_for_server_close(client_t* client, u32 timeout_ms)
 	}
 	return false;
 }
+
 
 TEST(NetIdleTimeoutClosesIdleClient)
 {

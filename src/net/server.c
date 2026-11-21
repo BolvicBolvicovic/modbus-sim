@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -19,6 +20,7 @@
 
 #define SERVER_MAX_CONNECTIONS	32
 #define SERVER_IDLE_POLL_MS	1000
+#define SERVER_ACCEPT_BACKOFF_MS 1000
 
 /* Name: conn_t
  * Description: one client connection. A connection handles one request at a time:
@@ -43,6 +45,8 @@ struct server_t
 {
 	server_options_t	options;
 	int			listen_fd;
+	u64			accept_backoff_until_ms;
+	bool			accept_backoff_logged;
 	rng_t			rng;
 	conn_t			conns[SERVER_MAX_CONNECTIONS];
 };
@@ -131,6 +135,7 @@ accept_clients(server_t* server)
 	socklen_t		len  = sizeof(addr);
 	char			ip[INET_ADDRSTRLEN];
 	int			fd   = 0;
+	int			yes  = 1;
 	conn_t*			conn = NULL;
 
 	for (;;)
@@ -138,7 +143,28 @@ accept_clients(server_t* server)
 		len = sizeof(addr);
 		fd  = accept4(server->listen_fd, (struct sockaddr*)&addr, &len, SOCK_NONBLOCK);
 		if (fd < 0)
+		{
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				return;
+			if (errno == EINTR || errno == ECONNABORTED)
+				continue;
+			if (errno == EMFILE || errno == ENFILE)
+			{
+				if (!server->accept_backoff_logged)
+				{
+					LOG_WARN("accept failed: %s; backing off for %u ms",
+						 strerror(errno), SERVER_ACCEPT_BACKOFF_MS);
+					server->accept_backoff_logged = true;
+				}
+				server->accept_backoff_until_ms = clock_now_ms() + SERVER_ACCEPT_BACKOFF_MS;
+				return;
+			}
+
+			LOG_WARN("accept failed: %s", strerror(errno));
 			return;
+		}
+
+		server->accept_backoff_logged = false;
 
 		conn = conn_find_free(server);
 		if (!conn)
@@ -147,6 +173,9 @@ accept_clients(server_t* server)
 			close(fd);
 			continue;
 		}
+
+		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) < 0)
+			LOG_WARN("cannot set TCP_NODELAY on accepted socket: %s", strerror(errno));
 
 		inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
 		memset(conn, 0, sizeof(*conn));
@@ -318,10 +347,13 @@ build_poll_table(server_t* server, struct pollfd* fds, conn_t** owners, u64 now_
 {
 	u32	count   = 0;
 	u32	idle_ms = server->options.idle_timeout_ms;
+	bool	backoff = server->accept_backoff_until_ms > now_ms;
 
 	*timeout = SERVER_IDLE_POLL_MS;
-	fds[count] = (struct pollfd){ .fd = server->listen_fd, .events = POLLIN };
+	fds[count] = (struct pollfd){ .fd = server->listen_fd, .events = backoff ? 0 : POLLIN };
 	owners[count++] = NULL;
+	if (backoff)
+		*timeout = MIN(*timeout, (int)(server->accept_backoff_until_ms - now_ms));
 
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
