@@ -97,6 +97,7 @@ TEST(ConfigDefaults)
 	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
 	ASSERT_EQ(config.idle_timeout_ms == CONFIG_DEFAULT_IDLE_TIMEOUT_MS);
+	ASSERT_EQ(config.frame_gap_ms == CONFIG_DEFAULT_FRAME_GAP_MS);
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 }
 
@@ -390,6 +391,23 @@ TEST(ConfigIdleTimeoutRejectsInvalidValues)
 	EXPECT_ERROR("(server (idle-timeout-ms -1)) (device (holding 0))", "between 0 and 86400000");
 	EXPECT_ERROR("(server (idle-timeout-ms 86400001)) (device (holding 0))", "between 0 and 86400000");
 	EXPECT_ERROR("(server (idle-timeout-ms nope)) (device (holding 0))", "whole number");
+}
+
+TEST(ConfigFrameGapIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (frame-gap-ms 5)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.frame_gap_ms == 5);
+}
+
+TEST(ConfigFrameGapRejectsInvalidValues)
+{
+	EXPECT_ERROR("(server (frame-gap-ms 0)) (device (holding 0))", "between 1 and 60000");
+	EXPECT_ERROR("(server (frame-gap-ms 60001)) (device (holding 0))", "between 1 and 60000");
+	EXPECT_ERROR("(server (frame-gap-ms nope)) (device (holding 0))", "whole number");
 }
 
 TEST(ConfigFloat32StaticAcceptsNonFinite)

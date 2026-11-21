@@ -9,6 +9,12 @@ after another in order.
 A client that sends a header with a protocol id other than 0, or an impossible length,
 is disconnected.
 
+Modbus RTU is also supported over a bidirectional byte stream (PTY or existing device path) via
+CLI `--rtu-pty` / `--rtu-device`. RTU frames are `[addr][PDU][CRC16 lo][CRC16 hi]`; CRC uses
+Modbus CRC-16. Because PTY/pipe streams have no baud rate, frame boundaries use a fixed
+inter-frame silence gap approximation (`frame-gap-ms`, config/CLI, default 20 ms). Bad CRC,
+unknown unit, and broadcast (unit 0) requests produce no response. RTU-over-TCP is not implemented.
+
 ## Function codes
 
 | Code | Name | Table | Max per request |

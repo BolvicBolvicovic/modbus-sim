@@ -71,14 +71,20 @@ See [docs/profiles.md](docs/profiles.md).
 ```
 modbus-sim [options] CONFIG.scm
 
-  -p, --port N     listen on port N (overrides the config)
-  -b, --bind ADDR  listen on IPv4 address ADDR (overrides the config)
-  -c, --check      check the config, print a summary and exit
-  -v, --verbose    log every request
-  -h, --help       show help
+  -p, --port N         TCP: listen on port N (overrides the config)
+  -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)
+      --rtu-pty        RTU: create a PTY and print its slave path
+      --rtu-device PATH RTU: serve RTU over an existing serial-like device
+      --frame-gap-ms N RTU: inter-frame silence in ms (overrides config, default 20)
+  -c, --check          check the config, print a summary and exit
+  -v, --verbose        log every request
+  -h, --help           show help
 ```
 
 Port 502 is the Modbus standard but needs root on Linux. The default here is **1502**.
+In RTU mode, `--rtu-pty` creates a PTY and prints `RTU PTY slave: /dev/pts/N`; connect your RTU
+client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
+Frame boundaries use a fixed silence gap approximation (`frame-gap-ms`, default 20 ms).
 
 ## Documentation
 

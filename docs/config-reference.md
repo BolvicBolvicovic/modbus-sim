@@ -35,8 +35,9 @@ produce an error message.
 | `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) |
+| `(frame-gap-ms N)` | RTU mode: fixed inter-frame silence gap in milliseconds, 1-60000. Used as a practical frame boundary approximation for byte streams without baud-rate timing | `20` |
 
-The command-line options `--port` and `--bind` override these.
+The command-line options `--port`, `--bind`, and `--frame-gap-ms` override these.
 
 ## `(device ...)`
 
