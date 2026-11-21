@@ -6,8 +6,9 @@ TESTS       = $(BIN)-tests
 ASAN_BIN    = modbus-sim-asan
 ASAN_TESTS  = modbus-sim-asan-tests
 
-CC          = gcc
-CFLAGS      = -std=gnu11 -O2 -g -Werror -Wextra -Wall
+CC          ?= cc
+CFLAGS      ?= -std=gnu11 -O2 -g -Werror -Wextra -Wall -Wformat=2 -Wshadow -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
+LDFLAGS     ?= -pie -Wl,-z,relro,-z,now
 DEPFLAGS    = -MMD -MP
 INC         = -I. -Isrc
 LIBS        = -lm
@@ -19,7 +20,7 @@ ifeq ($(SAN),1)
 OBJEXT      = .asan.o
 BIN         = $(ASAN_BIN)
 TESTS       = $(ASAN_TESTS)
-SAN_FLAGS   = -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+SAN_FLAGS   = -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=undefined,float-cast-overflow -fno-omit-frame-pointer
 else
 OBJEXT      = .o
 SAN_FLAGS   =
@@ -49,13 +50,13 @@ ALL_DEPS    = $(ALL_SRCS:.c=.d) $(ALL_SRCS:.c=.asan.d)
 all: $(BIN)
 
 $(BIN): $(OBJS) $(S7_OBJ)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $^ -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 tests: $(TESTS)
 	./tools/run_tests.sh ./$(TESTS)
 
 $(TESTS): $(TEST_OBJS) $(S7_OBJ)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $^ -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@

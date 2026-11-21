@@ -23,7 +23,8 @@ ramp_value(const ramp_params_t* ramp, u64 start_ms, u64 now_ms)
 {
 	f64	span      = ramp->to - ramp->from;
 	f64	direction = span < 0 ? -1.0 : 1.0;
-	u64	last      = (u64)(fabs(span) / ramp->step + 1e-9);
+	f64	steps     = fabs(span) / ramp->step + 1e-9;
+	u64	last      = (!isfinite(steps) || steps >= 0x1p64) ? UINT64_MAX : (u64)steps;
 	u64	elapsed   = now_ms > start_ms ? now_ms - start_ms : 0;
 	u64	ticks     = elapsed / ramp->every_ms;
 	u64	index     = 0;
@@ -31,7 +32,7 @@ ramp_value(const ramp_params_t* ramp, u64 start_ms, u64 now_ms)
 	switch (ramp->mode)
 	{
 	case RAMP_WRAP:
-		index = ticks % (last + 1);
+		index = last == UINT64_MAX ? 0 : ticks % (last + 1);
 		break;
 	case RAMP_BOUNCE:
 		index = bounce_index(ticks, last);

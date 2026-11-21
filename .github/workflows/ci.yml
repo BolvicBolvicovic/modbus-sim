@@ -11,7 +11,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Build
         run: make
@@ -33,3 +33,30 @@ jobs:
 
       - name: Sanitizers (ASan + UBSan, vendored s7 excluded)
         run: make asan
+
+  clang:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Build (clang)
+        run: make CC=clang
+
+      - name: Unit tests (clang)
+        run: make CC=clang tests
+
+      - name: Check all profiles (clang)
+        run: |
+          for profile in profiles/*.scm; do
+            ./modbus-sim --check "$profile"
+          done
+
+  analyzer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Static analysis (gcc -fanalyzer)
+        run: |
+          make clean
+          make CC=gcc CFLAGS='-std=gnu11 -O2 -g -Werror -Wextra -Wall -Wformat=2 -Wshadow -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -fanalyzer -Wno-analyzer-null-dereference -Wno-analyzer-possible-null-dereference' LDFLAGS='-pie -Wl,-z,relro,-z,now'
