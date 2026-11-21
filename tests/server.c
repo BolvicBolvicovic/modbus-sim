@@ -2156,7 +2156,7 @@ TEST(NetReadDeviceIdentificationMei14)
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
 		     len > 7 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
-		     resp[1] == 0x0E && resp[2] == 0x01 && resp[3] == 0x83 &&
+		     resp[1] == 0x0E && resp[2] == 0x01 && resp[3] == 0x82 &&
 		     resp[4] == 0x00 && resp[6] == 0x03;
 	}
 	if (ok)

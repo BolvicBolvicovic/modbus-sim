@@ -1124,7 +1124,7 @@ TEST(ReadDeviceIdentificationRegularAndExtended)
 
 	len = run(dev, req, sizeof(req), resp);
 	ASSERT_EQ(resp[2] == 0x02);
-	ASSERT_EQ(resp[3] == 0x83);
+	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x07);
 	assert_mei_object(resp, &off, 0x00, "modbus-sim");
@@ -1141,7 +1141,7 @@ TEST(ReadDeviceIdentificationRegularAndExtended)
 	len = run(dev, req, sizeof(req), resp);
 	off = 7;
 	ASSERT_EQ(resp[2] == 0x03);
-	ASSERT_EQ(resp[3] == 0x83);
+	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x04);
 	assert_mei_object(resp, &off, 0x03, "https://example.invalid");
@@ -1163,7 +1163,7 @@ TEST(ReadDeviceIdentificationSpecific)
 	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 10);
 	ASSERT_EQ(resp[2] == 0x04);
-	ASSERT_EQ(resp[3] == 0x83);
+	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x01);
 	assert_mei_object(resp, &off, 0x01, "modbus-sim");
@@ -1225,24 +1225,71 @@ TEST(ReadDeviceIdentificationErrors)
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
 	u8		bad_mei[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		bad_mei_short[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01 };
 	u8		bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x05, 0x00 };
 	u8		bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01 };
-	u8		bad_obj[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x03 };
 	u8		bad_spec[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
-	u8		bad_ext[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x07 };
+	u8		bad_spec_range[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x07 };
 	u8		resp[MODBUS_MAX_PDU];
 
 	run(dev, bad_mei, sizeof(bad_mei), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	/* MEI type is checked before request length so unsupported MEI always gets 01. */
+	run(dev, bad_mei_short, sizeof(bad_mei_short), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
 	run(dev, bad_code, sizeof(bad_code), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_len, sizeof(bad_len), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_obj, sizeof(bad_obj), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	run(dev, bad_spec, sizeof(bad_spec), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	run(dev, bad_ext, sizeof(bad_ext), resp);
+	run(dev, bad_spec_range, sizeof(bad_spec_range), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationStreamRestartsAtObject0)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		basic[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x03 };
+	u8		regular[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x02, 0x07 };
+	u8		extended[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0xFF };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		off = 7;
+
+	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
+
+	run(dev, basic, sizeof(basic), resp);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
+	ASSERT_EQ(resp[2] == 0x01);
+	ASSERT_EQ(resp[3] == 0x82);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[6] == 0x03);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+
+	off = 7;
+	run(dev, regular, sizeof(regular), resp);
+	ASSERT_EQ(resp[2] == 0x02);
+	ASSERT_EQ(resp[3] == 0x82);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[6] == 0x04);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x04, "Simulator");
+
+	off = 7;
+	run(dev, extended, sizeof(extended), resp);
+	ASSERT_EQ(resp[2] == 0x03);
+	ASSERT_EQ(resp[3] == 0x82);
+	ASSERT_EQ(resp[4] == 0x00);
+	ASSERT_EQ(resp[6] == 0x04);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x04, "Simulator");
 	arena_release(arena);
 }

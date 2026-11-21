@@ -569,10 +569,12 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	bool	more = false;
 	u8	next = 0;
 
-	if (req_len != 4)
+	if (req_len < 2)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 	if (req[1] != MEI_TYPE_READ_DEVICE_ID)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+	if (req_len != 4)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	read_code = req[2];
 	object_id = req[3];
@@ -583,7 +585,7 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	{
 		if (dev->device_id[i][0] != '\0')
 		{
-			conformity = 0x83;
+			conformity = 0x82;
 			break;
 		}
 	}
@@ -597,16 +599,17 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	else
 	{
+		/* Stream access: unknown object id restarts at object 0 (Modbus spec 6.21). */
 		if (read_code == READ_DEVICE_ID_BASIC)
 		{
 			if (object_id > DEVICE_ID_MAJOR_MINOR_REVISION)
-				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+				object_id = 0;
 			last = DEVICE_ID_MAJOR_MINOR_REVISION + 1;
 		}
 		else
 		{
 			if (object_id >= DEVICE_ID_OBJECT_COUNT)
-				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+				object_id = 0;
 			last = DEVICE_ID_OBJECT_COUNT;
 		}
 		first = object_id;

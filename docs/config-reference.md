@@ -51,7 +51,7 @@ The command-line options `--port`, `--bind`, and `--frame-gap-ms` override these
 | `(vendor-name "Text")` | MEI 14 Read Device Identification object 0x00, 0-245 bytes | `"modbus-sim"` |
 | `(product-code "Text")` | MEI 14 object 0x01, 0-245 bytes | `"modbus-sim"` |
 | `(major-minor-revision "Text")` | MEI 14 object 0x02, 0-245 bytes | `"1.0"` |
-| `(vendor-url "Text")` | MEI 14 object 0x03, 0-245 bytes; setting any regular/extended object reports extended conformity | absent |
+| `(vendor-url "Text")` | MEI 14 object 0x03, 0-245 bytes; setting any regular object reports regular conformity (0x82) | absent |
 | `(product-name "Text")` | MEI 14 object 0x04, 0-245 bytes | absent |
 | `(model-name "Text")` | MEI 14 object 0x05, 0-245 bytes | absent |
 | `(user-application-name "Text")` | MEI 14 object 0x06, 0-245 bytes | absent |
