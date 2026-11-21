@@ -301,6 +301,22 @@ TEST(FileRecordWriteSpansMultipleSegments)
 	arena_release(arena);
 }
 
+TEST(FileRecordCanWriteChecksDefinedRange)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u16		data1[] = { 0x1111, 0x2222 };
+	u16		data2[] = { 0x3333, 0x4444 };
+
+	ASSERT_EQ(device_add_file_record(dev, 1, 0, 2, data1) == NULL);
+	ASSERT_EQ(device_add_file_record(dev, 1, 2, 2, data2) == NULL);
+	ASSERT_SUCCESS(device_can_write_file_records(dev, 1, 0, 4));
+	ASSERT_FAILURE(device_can_write_file_records(dev, 1, 1, 4));
+	ASSERT_FAILURE(device_can_write_file_records(dev, 2, 0, 1));
+	ASSERT_FAILURE(device_can_write_file_records(dev, 1, 0, 0));
+	arena_release(arena);
+}
+
 TEST(FifoQueueStoreAndRead)
 {
 	arena_t*	arena  = ARENA_ALLOC();

@@ -292,10 +292,70 @@ parse_holding(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 }
 
 static bool
+parse_record_values(form_ctx_t* ctx, s7_pointer rec, u16* values, u32* count)
+{
+	s7_pointer	v = s7_cddr(rec);
+
+	for (; s7_is_pair(v); v = s7_cdr(v))
+	{
+		s7_pointer	val = s7_car(v);
+
+		if (!s7_is_integer(val))
+			return form_fail(ctx, "%s: record values must be whole numbers",
+					 form_text(ctx, rec));
+		if ((s64)s7_integer(val) < 0 || (s64)s7_integer(val) > 65535)
+			return form_fail(ctx, "%s: record values must be between 0 and 65535",
+					 form_text(ctx, rec));
+		if (*count >= DEVICE_MAX_RECORD_VALUES)
+			return form_fail(ctx, "%s: too many record values (max %d)",
+					 form_text(ctx, rec), DEVICE_MAX_RECORD_VALUES);
+		values[(*count)++] = (u16)s7_integer(val);
+	}
+	if (!s7_is_null(ctx->sc, v))
+		return form_fail(ctx, "%s: malformed record", form_text(ctx, rec));
+
+	if (*count == 0)
+		return form_fail(ctx, "%s: record needs at least one value", form_text(ctx, rec));
+
+	return true;
+}
+
+static bool
+parse_file_record(form_ctx_t* ctx, s7_pointer item, u16 file_no, s7_pointer rec, device_t* dev)
+{
+	const char*	rhead  = form_head_name(rec);
+	s64		record = 0;
+	u32		count  = 0;
+	u16		values[DEVICE_MAX_RECORD_VALUES];
+	const char*	error  = NULL;
+
+	if (!rhead || strcmp(rhead, "record") != 0)
+		return form_fail(ctx, "%s: expected (record REC_NO VALUE ...), got %s",
+				 form_text(ctx, item), form_text(ctx, rec));
+
+	if (s7_list_length(ctx->sc, rec) < 3 || !s7_is_integer(s7_cadr(rec)))
+		return form_fail(ctx, "%s: expected (record REC_NO VALUE ...)", form_text(ctx, rec));
+
+	record = (s64)s7_integer(s7_cadr(rec));
+	if (record < 0 || record > 0x270F)
+		return form_fail(ctx, "%s: record number must be between 0 and 9999",
+				 form_text(ctx, rec));
+
+	if (!parse_record_values(ctx, rec, values, &count))
+		return false;
+
+	error = device_add_file_record(dev, file_no, (u16)record, (u16)count, values);
+	if (error)
+		return form_fail(ctx, "%s: %s", form_text(ctx, rec), error);
+
+	return true;
+}
+
+static bool
 parse_file(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
-	const char*	head    = form_head_name(item);
 	s64		file_no = 0;
+	s7_pointer	p       = NULL;
 
 	if (s7_list_length(ctx->sc, item) < 2 || !s7_is_integer(s7_cadr(item)))
 		return form_fail(ctx, "%s: expected (file FILE_NO (record ...) ...)", form_text(ctx, item));
@@ -307,66 +367,13 @@ parse_file(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	if (s7_list_length(ctx->sc, item) < 3)
 		return form_fail(ctx, "%s: file needs at least one (record ...)", form_text(ctx, item));
 
+	for (p = s7_cddr(item); s7_is_pair(p); p = s7_cdr(p))
 	{
-		s7_pointer	p = s7_cddr(item);
-
-		for (; s7_is_pair(p); p = s7_cdr(p))
-		{
-			s7_pointer	rec      = s7_car(p);
-			const char*	rhead    = form_head_name(rec);
-			s64		record   = 0;
-			u32		count    = 0;
-			u16		values[DEVICE_MAX_RECORD_VALUES];
-
-			if (!rhead || strcmp(rhead, "record") != 0)
-				return form_fail(ctx, "%s: expected (record REC_NO VALUE ...), got %s",
-						 form_text(ctx, item), form_text(ctx, rec));
-
-			if (s7_list_length(ctx->sc, rec) < 3 || !s7_is_integer(s7_cadr(rec)))
-				return form_fail(ctx, "%s: expected (record REC_NO VALUE ...)", form_text(ctx, rec));
-
-			record = (s64)s7_integer(s7_cadr(rec));
-			if (record < 0 || record > 0x270F)
-				return form_fail(ctx, "%s: record number must be between 0 and 9999",
-						 form_text(ctx, rec));
-
-			{
-				s7_pointer	v = s7_cddr(rec);
-
-				for (; s7_is_pair(v); v = s7_cdr(v))
-				{
-					s7_pointer	val = s7_car(v);
-
-					if (!s7_is_integer(val))
-						return form_fail(ctx, "%s: record values must be whole numbers",
-								 form_text(ctx, rec));
-					if ((s64)s7_integer(val) < 0 || (s64)s7_integer(val) > 65535)
-						return form_fail(ctx, "%s: record values must be between 0 and 65535",
-								 form_text(ctx, rec));
-					if (count >= ARRAY_COUNT(values))
-						return form_fail(ctx, "%s: too many record values (max %d)",
-								 form_text(ctx, rec), DEVICE_MAX_RECORD_VALUES);
-					values[count++] = (u16)s7_integer(val);
-				}
-				if (!s7_is_null(ctx->sc, v))
-					return form_fail(ctx, "%s: malformed record", form_text(ctx, rec));
-			}
-
-			if (count == 0)
-				return form_fail(ctx, "%s: record needs at least one value", form_text(ctx, rec));
-
-			{
-				const char*	error = device_add_file_record(dev, (u16)file_no, (u16)record,
-									    (u16)count, values);
-
-				if (error)
-					return form_fail(ctx, "%s: %s", form_text(ctx, rec), error);
-			}
-			(void)head;
-		}
-		if (!s7_is_null(ctx->sc, p))
-			return form_fail(ctx, "%s: malformed file form", form_text(ctx, item));
+		if (!parse_file_record(ctx, item, (u16)file_no, s7_car(p), dev))
+			return false;
 	}
+	if (!s7_is_null(ctx->sc, p))
+		return form_fail(ctx, "%s: malformed file form", form_text(ctx, item));
 
 	return true;
 }

@@ -1,6 +1,7 @@
 #include "modbus/pdu.h"
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
+#include "vlib/macros.h"
 #include <string.h>
 
 _Static_assert(MODBUS_MAX_PDU / 2 == DEVICE_MAX_RECORD_VALUES,
@@ -243,49 +244,42 @@ read_fifo_queue(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return 5 + 2 * (u32)count;
 }
 
-static u32
-read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
+static bool
+read_file_record_shape_ok(const u8* req, u32 req_len, u32* subreq_count, u32* resp_data_len)
 {
-	u32	byte_count    = 0;
-	u32	subreq_count  = 0;
-	u32	resp_data_len = 0;
-	u32	offset        = 0;
+	u32	byte_count = 0;
 
 	if (req_len < 2)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+		return false;
 
 	byte_count = req[1];
 	if (byte_count < 0x07 || byte_count > 0xF5 || (byte_count % 7) != 0)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
+		return false;
 	if (req_len != 2 + byte_count)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+		return false;
 
-	subreq_count = byte_count / 7;
-
-	/* Shape/value checks (03): framing, reference type, ranges, response capacity. */
-	for (u32 i = 0; i < subreq_count; i++)
+	*subreq_count  = byte_count / 7;
+	*resp_data_len = 0;
+	for (u32 i = 0; i < *subreq_count; i++)
 	{
 		const u8*	sr      = req + 2 + i * 7;
 		u32		rec_no  = get_be16(sr + 3);
 		u32		rec_len = get_be16(sr + 5);
 
-		if (sr[0] != 0x06)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
-		if (rec_no > 0x270F)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
-		if (rec_len < 1)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
-		resp_data_len += 2 + rec_len * 2;
+		if (sr[0] != 0x06 || rec_no > 0x270F || rec_len < 1)
+			return false;
+		*resp_data_len += 2 + rec_len * 2;
 	}
 
-	if (2 + resp_data_len > MODBUS_MAX_PDU)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+	if (2 + *resp_data_len > MODBUS_MAX_PDU)
+		return false;
 
-	/* Availability checks before building the response (all-or-nothing). */
+	return true;
+}
+
+static bool
+read_file_record_available(device_t* dev, const u8* req, u32 subreq_count)
+{
 	for (u32 i = 0; i < subreq_count; i++)
 	{
 		u16		words[MODBUS_MAX_PDU / 2];
@@ -295,13 +289,18 @@ read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		u16		rec_len = get_be16(sr + 5);
 
 		if (!device_read_file_records(dev, file_no, rec_no, rec_len, words))
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+			return false;
 	}
+	return true;
+}
+
+static u32
+read_file_record_build(device_t* dev, const u8* req, u32 subreq_count, u32 resp_data_len, u8* resp)
+{
+	u32	offset = 2;
 
 	resp[0] = req[0];
 	resp[1] = (u8)resp_data_len;
-	offset  = 2;
-
 	for (u32 i = 0; i < subreq_count; i++)
 	{
 		u16		words[MODBUS_MAX_PDU / 2];
@@ -321,73 +320,91 @@ read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 			offset += 2;
 		}
 	}
-
 	return 2 + resp_data_len;
 }
 
 static u32
-write_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
+read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
-	u32	byte_count = 0;
-	u32	offset     = 0;
+	u32	subreq_count  = 0;
+	u32	resp_data_len = 0;
+
+	if (!read_file_record_shape_ok(req, req_len, &subreq_count, &resp_data_len))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	if (!read_file_record_available(dev, req, subreq_count))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	return read_file_record_build(dev, req, subreq_count, resp_data_len, resp);
+}
+
+static bool
+write_file_record_shape_ok(const u8* req, u32 req_len, u32* byte_count)
+{
+	u32	offset = 0;
 
 	if (req_len < 2)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+		return false;
 
-	byte_count = req[1];
-	if (byte_count < 0x09 || byte_count > 0xFB)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+	*byte_count = req[1];
+	if (*byte_count < 0x09 || *byte_count > 0xFB)
+		return false;
+	if (req_len != 2 + *byte_count)
+		return false;
 
-	if (req_len != 2 + byte_count)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
-	/* Shape/value checks and framing across variable-length sub-requests. */
 	offset = 2;
-	while (offset < 2 + byte_count)
+	while (offset < 2 + *byte_count)
 	{
 		const u8*	sr      = req + offset;
-		u32		remain  = 2 + byte_count - offset;
+		u32		remain  = 2 + *byte_count - offset;
 		u32		rec_no  = 0;
 		u32		rec_len = 0;
 		u32		sr_len  = 0;
 
 		if (remain < 7)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+			return false;
 
 		rec_no  = get_be16(sr + 3);
 		rec_len = get_be16(sr + 5);
 		sr_len  = 7 + rec_len * 2;
 
 		if (sr[0] != 0x06)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
+			return false;
 		if (rec_no > 0x270F || rec_no + rec_len - 1 > 0x270F)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
+			return false;
 		if (rec_len < 1 || sr_len > remain)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+			return false;
 
 		offset += sr_len;
 	}
+	return true;
+}
 
-	/* Availability/writability checks before applying any change. */
-	offset = 2;
+static bool
+write_file_record_can_write(device_t* dev, const u8* req, u32 byte_count)
+{
+	u32	offset = 2;
+
 	while (offset < 2 + byte_count)
 	{
-		u16		words[MODBUS_MAX_PDU / 2];
 		const u8*	sr      = req + offset;
 		u16		file_no = get_be16(sr + 1);
 		u16		rec_no  = get_be16(sr + 3);
 		u16		rec_len = get_be16(sr + 5);
 
-		if (!device_read_file_records(dev, file_no, rec_no, rec_len, words))
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+		if (!device_can_write_file_records(dev, file_no, rec_no, rec_len))
+			return false;
 
 		offset += 7 + (u32)rec_len * 2;
 	}
+	return true;
+}
 
-	/* Apply all writes (all-or-nothing validated above). */
-	offset = 2;
+static bool
+write_file_record_apply(device_t* dev, const u8* req, u32 byte_count)
+{
+	u32	offset = 2;
+
 	while (offset < 2 + byte_count)
 	{
 		const u8*	sr      = req + offset;
@@ -399,9 +416,27 @@ write_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		for (u32 i = 0; i < rec_len; i++)
 			values[i] = get_be16(sr + 7 + i * 2);
 
-		device_write_file_records(dev, file_no, rec_no, rec_len, values);
+		if (!device_write_file_records(dev, file_no, rec_no, rec_len, values))
+			return false;
 		offset += 7 + (u32)rec_len * 2;
 	}
+	return true;
+}
+
+static u32
+write_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	u32	byte_count = 0;
+
+	if (!write_file_record_shape_ok(req, req_len, &byte_count))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	if (!write_file_record_can_write(dev, req, byte_count))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	/* All-or-nothing validated above; return value guards future read-only records. */
+	if (!write_file_record_apply(dev, req, byte_count))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	memcpy(resp, req, req_len);
 	return req_len;
@@ -434,11 +469,142 @@ mask_write_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return 7;
 }
 
+static u32
+read_exception_status(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	if (req_len != 1)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	resp[0] = req[0];
+	resp[1] = dev->exception_status;
+	return 2;
+}
+
+static u32
+diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	(void)dev;
+	if (req_len != 5)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	if (get_be16(req + 1) != 0x0000)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+
+	memcpy(resp, req, 5);
+	return 5;
+}
+
+static u32
+get_com_event_counter(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	if (req_len != 1)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	resp[0] = req[0];
+	put_be16(resp + 1, 0x0000);
+	put_be16(resp + 3, dev->com_event_count);
+	return 5;
+}
+
+static u32
+get_com_event_log(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	if (req_len != 1)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	resp[0] = req[0];
+	resp[1] = 6; /* status + event count + message count, no events */
+	put_be16(resp + 2, 0x0000);
+	put_be16(resp + 4, dev->com_event_count);
+	put_be16(resp + 6, dev->message_count);
+	return 8;
+}
+
+static u32
+report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	if (req_len != 1)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	resp[0] = req[0];
+	resp[1] = 2; /* server ID + run indicator, no additional data */
+	resp[2] = dev->server_id;
+	resp[3] = dev->run_indicator;
+	return 4;
+}
+
 /* --- dispatch --- */
+
+static u32
+read_coils(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	return read_bits(dev, SPACE_COIL, req, req_len, resp);
+}
+
+static u32
+read_discrete_inputs(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	return read_bits(dev, SPACE_DISCRETE, req, req_len, resp);
+}
+
+static u32
+read_holding_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	return read_registers(dev, SPACE_HOLDING, req, req_len, resp);
+}
+
+static u32
+read_input_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	return read_registers(dev, SPACE_INPUT, req, req_len, resp);
+}
+
+typedef u32 (*pdu_handler_t)(device_t*, const u8*, u32, u8*);
+
+typedef struct pdu_entry_t pdu_entry_t;
+struct pdu_entry_t
+{
+	u8		fc;
+	pdu_handler_t	handle;
+};
+
+static const pdu_entry_t PDU_HANDLERS[] = {
+	{ FC_READ_COILS,                     read_coils                     },
+	{ FC_READ_DISCRETE_INPUTS,           read_discrete_inputs           },
+	{ FC_READ_HOLDING_REGISTERS,         read_holding_registers         },
+	{ FC_READ_INPUT_REGISTERS,           read_input_registers           },
+	{ FC_WRITE_SINGLE_COIL,              write_single_coil              },
+	{ FC_WRITE_SINGLE_REGISTER,          write_single_register          },
+	{ FC_READ_EXCEPTION_STATUS,          read_exception_status          },
+	{ FC_DIAGNOSTICS,                    diagnostics                    },
+	{ FC_GET_COM_EVENT_COUNTER,          get_com_event_counter          },
+	{ FC_GET_COM_EVENT_LOG,              get_com_event_log              },
+	{ FC_REPORT_SERVER_ID,               report_server_id               },
+	{ FC_WRITE_MULTIPLE_COILS,           write_multiple_coils           },
+	{ FC_WRITE_MULTIPLE_REGISTERS,       write_multiple_registers       },
+	{ FC_READ_WRITE_MULTIPLE_REGISTERS,  read_write_multiple_registers  },
+	{ FC_READ_FILE_RECORD,               read_file_record               },
+	{ FC_WRITE_FILE_RECORD,              write_file_record              },
+	{ FC_MASK_WRITE_REGISTER,            mask_write_register            },
+	{ FC_READ_FIFO_QUEUE,                read_fifo_queue                },
+};
+
+static pdu_handler_t
+find_pdu_handler(u8 fc)
+{
+	for (u32 i = 0; i < ARRAY_COUNT(PDU_HANDLERS); i++)
+	{
+		if (PDU_HANDLERS[i].fc == fc)
+			return PDU_HANDLERS[i].handle;
+	}
+	return NULL;
+}
 
 u32
 modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp)
 {
+	pdu_handler_t	handler = NULL;
+
 	if (req_len == 0)
 		return modbus_exception(resp, 0, EXC_ILLEGAL_FUNCTION);
 
@@ -446,72 +612,9 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 	dev->message_count   = (u16)(dev->message_count + 1);
 	device_tick(dev, now_ms);
 
-	switch (req[0])
-	{
-	case FC_READ_COILS:
-		return read_bits(dev, SPACE_COIL, req, req_len, resp);
-	case FC_READ_DISCRETE_INPUTS:
-		return read_bits(dev, SPACE_DISCRETE, req, req_len, resp);
-	case FC_READ_HOLDING_REGISTERS:
-		return read_registers(dev, SPACE_HOLDING, req, req_len, resp);
-	case FC_READ_INPUT_REGISTERS:
-		return read_registers(dev, SPACE_INPUT, req, req_len, resp);
-	case FC_WRITE_SINGLE_COIL:
-		return write_single_coil(dev, req, req_len, resp);
-	case FC_WRITE_SINGLE_REGISTER:
-		return write_single_register(dev, req, req_len, resp);
-	case FC_READ_EXCEPTION_STATUS:
-		if (req_len != 1)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-		resp[0] = req[0];
-		resp[1] = dev->exception_status;
-		return 2;
-	case FC_DIAGNOSTICS:
-		if (req_len != 5)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-		if (get_be16(req + 1) != 0x0000)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
-		memcpy(resp, req, 5);
-		return 5;
-	case FC_GET_COM_EVENT_COUNTER:
-		if (req_len != 1)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-		resp[0] = req[0];
-		put_be16(resp + 1, 0x0000);
-		put_be16(resp + 3, dev->com_event_count);
-		return 5;
-	case FC_GET_COM_EVENT_LOG:
-		if (req_len != 1)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-		resp[0] = req[0];
-		resp[1] = 6; /* status + event count + message count, no events */
-		put_be16(resp + 2, 0x0000);
-		put_be16(resp + 4, dev->com_event_count);
-		put_be16(resp + 6, dev->message_count);
-		return 8;
-	case FC_REPORT_SERVER_ID:
-		if (req_len != 1)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-		resp[0] = req[0];
-		resp[1] = 2; /* server ID + run indicator, no additional data */
-		resp[2] = dev->server_id;
-		resp[3] = dev->run_indicator;
-		return 4;
-	case FC_WRITE_MULTIPLE_COILS:
-		return write_multiple_coils(dev, req, req_len, resp);
-	case FC_WRITE_MULTIPLE_REGISTERS:
-		return write_multiple_registers(dev, req, req_len, resp);
-	case FC_READ_WRITE_MULTIPLE_REGISTERS:
-		return read_write_multiple_registers(dev, req, req_len, resp);
-	case FC_READ_FILE_RECORD:
-		return read_file_record(dev, req, req_len, resp);
-	case FC_WRITE_FILE_RECORD:
-		return write_file_record(dev, req, req_len, resp);
-	case FC_MASK_WRITE_REGISTER:
-		return mask_write_register(dev, req, req_len, resp);
-	case FC_READ_FIFO_QUEUE:
-		return read_fifo_queue(dev, req, req_len, resp);
-	default:
+	handler = find_pdu_handler(req[0]);
+	if (!handler)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
-	}
+
+	return handler(dev, req, req_len, resp);
 }

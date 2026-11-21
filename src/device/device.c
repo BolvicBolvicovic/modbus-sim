@@ -243,46 +243,12 @@ device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 length,
 	return NULL;
 }
 
-bool
-device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 length,
-			 u16* out)
+static bool
+file_records_defined(const device_file_t* file, u16 record, u16 length)
 {
-	const device_file_t*	file = find_file(dev, file_no);
-
 	if (!file || length == 0)
 		return false;
 
-	for (u32 i = 0; i < length; i++)
-	{
-		u32	want  = (u32)record + i;
-		bool	found = false;
-
-		for (u32 s = 0; s < file->segment_count; s++)
-		{
-			const file_segment_t*	seg = &file->segments[s];
-
-			if (want < seg->record || want >= (u32)seg->record + seg->length)
-				continue;
-			out[i] = seg->values[want - seg->record];
-			found  = true;
-			break;
-		}
-		if (!found)
-			return false;
-	}
-	return true;
-}
-
-bool
-device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
-			  const u16* in)
-{
-	device_file_t*	file = find_file(dev, file_no);
-
-	if (!file || length == 0)
-		return false;
-
-	/* Validate the whole range is defined before changing anything. */
 	for (u32 i = 0; i < length; i++)
 	{
 		u32	want  = (u32)record + i;
@@ -300,6 +266,49 @@ device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
 		if (!found)
 			return false;
 	}
+	return true;
+}
+
+bool
+device_can_write_file_records(const device_t* dev, u16 file_no, u16 record, u16 length)
+{
+	return file_records_defined(find_file(dev, file_no), record, length);
+}
+
+bool
+device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 length,
+			 u16* out)
+{
+	const device_file_t*	file = find_file(dev, file_no);
+
+	if (!file_records_defined(file, record, length))
+		return false;
+
+	for (u32 i = 0; i < length; i++)
+	{
+		u32	want = (u32)record + i;
+
+		for (u32 s = 0; s < file->segment_count; s++)
+		{
+			const file_segment_t*	seg = &file->segments[s];
+
+			if (want < seg->record || want >= (u32)seg->record + seg->length)
+				continue;
+			out[i] = seg->values[want - seg->record];
+			break;
+		}
+	}
+	return true;
+}
+
+bool
+device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
+			  const u16* in)
+{
+	device_file_t*	file = find_file(dev, file_no);
+
+	if (!file_records_defined(file, record, length))
+		return false;
 
 	for (u32 i = 0; i < length; i++)
 	{
