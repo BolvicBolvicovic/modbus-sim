@@ -23,3 +23,9 @@
 - No `malloc/free/new/delete` in project code; use vlib arenas (`ARENA_*`). `src/main.c` creates `app` (persistent) and `scratch` (released after config load); request handling must not allocate per request. `ARENA_IMPL` is defined only in `src/main.c` and `vlib/vtest.c`.
 - `third_party/s7` and `vlib/` are vendored dependencies: do not “fix” style/warnings there; s7 is built with relaxed flags and excluded from sanitizers (known UBSan issue upstream in vendored version). `make commands` regenerates `compile_commands.json` via `bear` if needed.
 - `src/*.c` are discovered recursively and `tests/*.c` by wildcard in the Makefile; adding files in those locations is picked up automatically.
+
+## Style & scope
+- Prefer the smallest change that solves the task; less is more. Avoid unnecessary abstraction, not optimization.
+- Prefer fat structs over many small structs that are only used once inside a bigger struct. If a small struct belongs only to a bigger one, define it inside that bigger struct, e.g. `struct big { struct small { int a; }; /* other fields */ };`.
+- Add comments only where logic is non-obvious or a constraint is easy to miss; do not comment routine changes. For complex behavior, a short comment is fine.
+- When behavior changes or a new user-facing/config/protocol behavior is added, update the relevant docs (`docs/`, `README.md`, `AGENTS.md` as applicable) instead of adding explanatory comments everywhere.
