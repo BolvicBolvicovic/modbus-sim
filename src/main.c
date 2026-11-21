@@ -160,6 +160,36 @@ count_points(const device_t* dev, space_kind_t space)
 	return count;
 }
 
+static bool
+validate_rtu_unit_ids(const config_t* config, char* err, u32 err_size)
+{
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		u8 id = config->devices[i]->unit_id;
+
+		if (id == 0 || id > 247)
+		{
+			snprintf(err, err_size,
+				 "device '%s': unit-id %u is not valid for RTU (allowed: 1-247; 0 is broadcast, 248-255 reserved)",
+				 config->devices[i]->name, id);
+			return false;
+		}
+	}
+	return true;
+}
+
+static void
+warn_rtu_unit_ids(const config_t* config)
+{
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		u8 id = config->devices[i]->unit_id;
+		if (id == 0 || id > 247)
+			fprintf(stderr, "warning: device '%s': unit-id %u is not valid for RTU (allowed: 1-247; 0 is broadcast, 248-255 reserved)\n",
+				config->devices[i]->name, id);
+	}
+}
+
 static const char*
 fault_text(const fault_t* fault, char* buf, u32 size)
 {
@@ -231,6 +261,21 @@ main(int argc, char** argv)
 
 	if (cli.frame_gap_override != -1)
 		config.frame_gap_ms = (u32)cli.frame_gap_override;
+
+	{
+		bool rtu_mode = cli.rtu_pty || cli.rtu_device;
+		if (rtu_mode)
+		{
+			if (!validate_rtu_unit_ids(&config, error, sizeof(error)))
+			{
+				fprintf(stderr, "%s: %s\n", cli.config_path, error);
+				arena_release(app);
+				return 1;
+			}
+		}
+		else if (cli.check_only)
+			warn_rtu_unit_ids(&config);
+	}
 
 	if (cli.port_override != -1)
 		config.port = (u16)cli.port_override;
@@ -322,6 +367,19 @@ main(int argc, char** argv)
 				{
 					cfmakeraw(&tio);
 					(void)tcsetattr(fd, TCSANOW, &tio);
+				}
+			}
+
+			{
+				int flags = fcntl(fd, F_GETFL, 0);
+				if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+				{
+					fprintf(stderr, "cannot set RTU fd non-blocking: %s\n", strerror(errno));
+					if (slave_fd >= 0)
+						close(slave_fd);
+					close(fd);
+					arena_release(app);
+					return 1;
 				}
 			}
 

@@ -384,6 +384,99 @@ TEST(RtuCliRejectsTcpOnlyFlagsInRtuMode)
 	rtu_cli_stop();
 }
 
+static bool
+rtu_cli_file_contains(const char* path, const char* needle)
+{
+	FILE* file = fopen(path, "r");
+	char line[512];
+	bool found = false;
+
+	if (!file)
+		return false;
+	while (fgets(line, sizeof(line), file))
+	{
+		if (strstr(line, needle))
+		{
+			found = true;
+			break;
+		}
+	}
+	fclose(file);
+	return found;
+}
+
+TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv0[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-pty", g_rtu_cli.config, NULL };
+	char* argv248[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-device", "/dev/null", g_rtu_cli.config, NULL };
+	char* argv255[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-pty", g_rtu_cli.config, NULL };
+	int status = 0;
+	bool ok;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 0) (holding 0))\n"));
+	ok = rtu_cli_start_with_args(argv0, true);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 248) (holding 0))\n"));
+	ok = rtu_cli_start_with_args(argv248, true);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 255) (holding 0))\n"));
+	ok = rtu_cli_start_with_args(argv255, true);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliCheckWarnsOnReservedUnitIdsWithoutRtuMode)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
+	int status = 0;
+	bool ok;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 0) (holding 0))\n"));
+	ok = rtu_cli_start_with_args(argv, true);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "warning:"));
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliCheckRejectsReservedUnitIdsInRtuMode)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-pty", g_rtu_cli.config, NULL };
+	int status = 0;
+	bool ok;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 248) (holding 0))\n"));
+	ok = rtu_cli_start_with_args(argv, true);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
 TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
