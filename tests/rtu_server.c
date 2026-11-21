@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <stdio.h>
 #include <unistd.h>
 
 typedef struct rtu_child_t rtu_child_t;
@@ -380,6 +381,137 @@ TEST(RtuServerExceptionResponseHasRtuCrc)
 	ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 500);
 	ok = ok && addr == 1 && len == 2 && resp[0] == (u8)(FC_READ_HOLDING_REGISTERS | 0x80) &&
 	     resp[1] == EXC_ILLEGAL_DATA_ADDRESS;
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+static bool
+rtu_child_cpu_ms(pid_t pid, u64* out_ms)
+{
+	char		path[64];
+	FILE*		f;
+	long		utime = 0;
+	long		stime = 0;
+	long		ticks;
+
+	if (!out_ms || pid <= 0)
+		return false;
+	snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+	f = fopen(path, "r");
+	if (!f)
+		return false;
+	/* comm may contain spaces; scan after last ')' */
+	{
+		int	c;
+		int	depth = 0;
+
+		while ((c = fgetc(f)) != EOF)
+		{
+			if (c == '(') depth++;
+			if (c == ')')
+			{
+				depth--;
+				if (depth <= 0) break;
+			}
+		}
+		if (c == EOF)
+		{
+			fclose(f);
+			return false;
+		}
+	}
+	if (fscanf(f,
+		   " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %ld %ld",
+		   &utime, &stime) != 2)
+	{
+		fclose(f);
+		return false;
+	}
+	fclose(f);
+	ticks = sysconf(_SC_CLK_TCK);
+	if (ticks <= 0)
+		return false;
+	*out_ms = (u64)(utime + stime) * 1000ULL / (u64)ticks;
+	return true;
+}
+
+TEST(RtuServerShortJunkThenValidRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0xBEEF);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	bool		ok = true;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	for (u32 junk_len = 1; junk_len <= 3 && ok; junk_len++)
+	{
+		u8	junk[3] = { 0xAA, 0xBB, 0xCC };
+		u64	cpu_before = 0;
+		u64	cpu_after = 0;
+
+		ok = send_all_fd(child.fd, junk, junk_len);
+		ok = ok && recv_none_fd(child.fd, 60);
+		/* After gap elapses, server must drop short junk and return to poll(). */
+		if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
+		if (ok) usleep(200000);
+		if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_after);
+		if (ok) ok = (cpu_after - cpu_before) < 150;
+
+		if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 500);
+		if (ok)
+			ok = addr == 1 && len == 4 &&
+			     resp[0] == FC_READ_HOLDING_REGISTERS &&
+			     resp[1] == 2 && get_be16(resp + 2) == 0xBEEF;
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuServerValidFramePlusTrailingByteThenValidRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1122);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME + 1];
+	u32		frame_len;
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	frame_len = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT(frame_len > 0 && frame_len < sizeof(frame));
+	frame[frame_len] = 0x00; /* stray trailing byte in same write */
+	ok = send_all_fd(child.fd, frame, frame_len + 1);
+	ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 500);
+	ok = ok && addr == 1 && len == 4 && get_be16(resp + 2) == 0x1122;
+
+	/* Stray byte must be discarded after gap; next request gets one response. */
+	if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 500);
+	if (ok) ok = addr == 1 && len == 4 && get_be16(resp + 2) == 0x1122;
+	if (ok) ok = recv_none_fd(child.fd, 80);
 
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);

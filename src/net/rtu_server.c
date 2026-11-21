@@ -180,6 +180,12 @@ process_rx_frames(rtu_server_t* server, u64 now_ms)
 		return;
 	}
 
+	/* 1-3 bytes cannot form a valid RTU frame (addr+FC+CRC). After the gap
+	 * they are stray noise/truncated fragments; drop them so the main loop
+	 * can return to poll() instead of spinning. */
+	if (server->rx_len > 0 && server->rx_len < 4 && !server->pending.active)
+		server->rx_len = 0;
+
 	if (server->rx_len > MODBUS_RTU_MAX_FRAME)
 		consume_rx(server, server->rx_len - MODBUS_RTU_MAX_FRAME);
 }
