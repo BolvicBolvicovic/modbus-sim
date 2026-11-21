@@ -1,6 +1,7 @@
 #include "config/config.h"
 #include "config/config_device.h"
 #include "util/clock.h"
+#include "util/ip.h"
 #include "vlib/macros.h"
 #include "vlib/readfile.h"
 #include <string.h>
@@ -51,7 +52,10 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return false;
 
 	if (bind && strlen(bind) >= CONFIG_BIND_MAX)
-		return form_fail(ctx, "server: bind address is too long");
+		return form_fail(ctx, "server: bind address is too long (max %d characters)", CONFIG_BIND_MAX - 1);
+
+	if (bind && !ip_is_ipv4_literal(bind))
+		return form_fail(ctx, "server: bind address '%s' is not an IPv4 address like 127.0.0.1", bind);
 
 	if (bind)
 		strcpy(config->bind_address, bind);

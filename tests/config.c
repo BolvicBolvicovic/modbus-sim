@@ -274,3 +274,44 @@ TEST(ConfigFifoQueueErrors)
 	EXPECT_ERROR("(device (fifo 0 (values \"x\")))", "whole numbers");
 	EXPECT_ERROR("(device (fifo 0 (values 1)) (fifo 0 (values 2)))", "already defined");
 }
+
+TEST(ConfigBindAcceptsValidIpv4)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (bind \"127.0.0.1\")) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+}
+
+TEST(ConfigBindRejectsHostname)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(server (bind \"localhost\")) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "not an IPv4 address") != NULL);
+}
+
+TEST(ConfigBindRejectsIpv6)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(server (bind \"::1\")) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "not an IPv4 address") != NULL);
+}
+
+TEST(ConfigBindRejectsOverlongString)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[256];
+
+	/* CONFIG_BIND_MAX is 64; 63 chars is max content, 64+ is overlong. */
+	snprintf(text, sizeof(text),
+		 "(server (bind \"%.*s\")) (device (holding 0))",
+		 64, "111.111.111.111111.111.111.111111.111.111.111111.111.111.1111111");
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "too long") != NULL);
+}

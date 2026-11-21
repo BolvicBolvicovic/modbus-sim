@@ -6,6 +6,7 @@
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
 #include "net/server.h"
+#include "util/ip.h"
 #include "util/log.h"
 #include <errno.h>
 #include <stdio.h>
@@ -180,7 +181,23 @@ main(int argc, char** argv)
 		config.port = (u16)cli.port_override;
 
 	if (cli.bind_override)
-		snprintf(config.bind_address, sizeof(config.bind_address), "%s", cli.bind_override);
+	{
+		if (strlen(cli.bind_override) >= sizeof(config.bind_address))
+		{
+			fprintf(stderr, "bind address is too long (max %zu characters)\n",
+				sizeof(config.bind_address) - 1);
+			arena_release(app);
+			return 2;
+		}
+		if (!ip_is_ipv4_literal(cli.bind_override))
+		{
+			fprintf(stderr, "bind address '%s' is not an IPv4 address like 127.0.0.1\n",
+				cli.bind_override);
+			arena_release(app);
+			return 2;
+		}
+		strcpy(config.bind_address, cli.bind_override);
+	}
 
 	print_summary(&config);
 	if (cli.check_only)
