@@ -8,17 +8,29 @@ list=$(mktemp)
 out=$(mktemp)
 trap 'rm -f "$list" "$out"' EXIT HUP INT TERM
 
-"$bin" --list >"$list" || exit 1
+if ! "$bin" --list >"$list"; then
+	printf 'run_tests.sh: failed to list tests from %s\n' "$bin" >&2
+	exit 1
+fi
 
 suite=''
+suites=0
 total=0
 failed=0
 
 while IFS= read -r line; do
 	case "$line" in
-		'For '*) suite=${line#For }; suite=${suite% suite:} ;;
+		'For '*)
+			suite=${line#For }
+			suite=${suite% suite:}
+			suites=$((suites + 1))
+			;;
 		'setup-suite='*|'pre-test='*|'') : ;;
 		*)
+			if [ -z "$suite" ]; then
+				printf 'run_tests.sh: test line before any suite header: %s\n' "$line" >&2
+				exit 1
+			fi
 			total=$((total + 1))
 			if ! "$bin" -s "$suite" -t "$line" >"$out" 2>&1; then
 				failed=$((failed + 1))
@@ -29,5 +41,10 @@ while IFS= read -r line; do
 	esac
 done <"$list"
 
-printf 'Tests: %u, failed: %u\n' "$total" "$failed"
+if [ "$total" -eq 0 ]; then
+	printf 'run_tests.sh: no tests discovered in --list output from %s\n' "$bin" >&2
+	exit 1
+fi
+
+printf 'Suites: %u, tests: %u, failed: %u\n' "$suites" "$total" "$failed"
 [ "$failed" -eq 0 ]
