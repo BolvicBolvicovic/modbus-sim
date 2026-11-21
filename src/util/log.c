@@ -25,8 +25,8 @@ log_write(const char* level, const char* fmt, ...)
 	struct tm	tm;
 
 	if (clock_gettime(CLOCK_REALTIME, &ts) == 0 &&
-	    localtime_r(&ts.tv_sec, &tm))
-		fprintf(stderr, "%04d-%02d-%02dT%02d:%02d:%02d.%03ld [%s] ",
+	    gmtime_r(&ts.tv_sec, &tm))
+		fprintf(stderr, "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ [%s] ",
 		    tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 		    tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000L, level);
 	else
