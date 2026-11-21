@@ -5,13 +5,13 @@
 #include <stdbool.h>
 
 /* Name: rng_t
- * Description: tiny deterministic xorshift64* generator.
+ * Description: deterministic xoshiro256** generator seeded via splitmix64.
  * Same seed, same sequence: fault injection is reproducible.
  * */
 typedef struct rng_t rng_t;
 struct rng_t
 {
-	u64	state;
+	u64	s[4];
 };
 
 void	rng_seed(rng_t* rng, u64 seed);
