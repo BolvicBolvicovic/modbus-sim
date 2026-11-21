@@ -149,12 +149,14 @@ and produce no response.
 
 ## Deviations from the spec
 
-The items tracked by issue #10 were reviewed and resolved as follows:
+The previously tracked Modbus spec deviations have been resolved:
 
-- **FC 11/12 event counter (conformed):** the communication event counter now counts successful message completions only. It is not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11/12). The FC 12 message count still counts handled request PDUs, including exceptions.
-- **FC 08 Diagnostics subfunction 0x0000 (conformed):** Return Query Data now accepts and echoes an N x 2-byte data field, matching the Modbus diagnostics data-field shape. Malformed requests with odd-length data are rejected as illegal data value.
-- **File number 0 (conformed):** file number 0 is rejected. Config and PDU validation accept file numbers `0x0001-0xFFFF`, matching the Modbus file-number range.
-- **FC 20/21 record range exceeding 0x270F (conformed):** a sub-request whose record range extends beyond `0x270F` is rejected as illegal data value (03) for both FC 20 and FC 21, because the record number/range is not an allowable request value.
+- **FC 11/12 event counter:** counts successful message completions only; not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11/12). FC 12 message count still counts handled request PDUs, including exceptions.
+- **FC 08 Diagnostics subfunction 0x0000:** Return Query Data accepts and echoes an N x 2-byte data field, matching the Modbus diagnostics data-field shape. Malformed requests with odd-length data are rejected as illegal data value (03).
+- **File number 0:** rejected; config and PDU validation accept file numbers `0x0001-0xFFFF`.
+- **FC 20/21 record range exceeding 0x270F:** rejected as illegal data value (03) for both FC 20 and FC 21.
+
+Current intentional transport/behavior limits (not spec deviations in supported FC semantics) are documented in [Not supported (yet)](#not-supported-yet) and the RTU/TCP transport sections above.
 
 ## Not supported (yet)
 
