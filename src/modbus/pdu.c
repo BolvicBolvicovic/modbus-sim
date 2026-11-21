@@ -3,6 +3,9 @@
 #include "modbus/mbap.h"
 #include <string.h>
 
+_Static_assert(MODBUS_MAX_PDU / 2 == DEVICE_MAX_RECORD_VALUES,
+	       "file record value limit must match Modbus PDU capacity");
+
 u32
 modbus_exception(u8* resp, u8 function, u8 code)
 {

@@ -16,6 +16,9 @@ jobs:
       - name: Build
         run: make
 
+      - name: Dependency direction check
+        run: ./tools/check_deps.sh
+
       - name: Unit tests
         run: make tests
 

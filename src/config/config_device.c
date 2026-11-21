@@ -1,5 +1,4 @@
 #include "config/config_device.h"
-#include "modbus/mbap.h"
 #include "vlib/macros.h"
 #include <string.h>
 
@@ -317,7 +316,7 @@ parse_file(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 			const char*	rhead    = form_head_name(rec);
 			s64		record   = 0;
 			u32		count    = 0;
-			u16		values[MODBUS_MAX_PDU / 2];
+			u16		values[DEVICE_MAX_RECORD_VALUES];
 
 			if (!rhead || strcmp(rhead, "record") != 0)
 				return form_fail(ctx, "%s: expected (record REC_NO VALUE ...), got %s",
@@ -345,8 +344,8 @@ parse_file(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 						return form_fail(ctx, "%s: record values must be between 0 and 65535",
 								 form_text(ctx, rec));
 					if (count >= ARRAY_COUNT(values))
-						return form_fail(ctx, "%s: too many record values",
-								 form_text(ctx, rec));
+						return form_fail(ctx, "%s: too many record values (max %d)",
+								 form_text(ctx, rec), DEVICE_MAX_RECORD_VALUES);
 					values[count++] = (u16)s7_integer(val);
 				}
 				if (!s7_is_null(ctx->sc, v))

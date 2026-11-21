@@ -204,6 +204,9 @@ device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 length,
 	if (length == 0)
 		return "file record length must be at least 1";
 
+	if (length > DEVICE_MAX_RECORD_VALUES)
+		return "too many record values";
+
 	if (end - 1 > 0x270F)
 		return "file record does not fit before record 9999";
 
