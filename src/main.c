@@ -6,10 +6,14 @@
  * without checking arena_alloc()'s NULL return. main.c checks its own
  * ARENA_ALLOC() results; suppress this analyzer diagnostic only around the
  * vendored implementation included here. */
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wanalyzer-null-dereference"
+#endif
 #include "vlib/arena.h"
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
 #include "net/rtu_server.h"
