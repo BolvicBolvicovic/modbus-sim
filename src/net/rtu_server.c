@@ -400,8 +400,16 @@ rtu_server_run(const rtu_server_options_t* options)
 				break;
 			}
 		}
-		else if ((pfd.revents & POLLHUP) && !server.pending.active)
+		else if (pfd.revents & POLLHUP)
 		{
+			/* If a delayed response is pending, the peer is gone and the
+			 * response cannot be delivered. Drop it and stop instead of
+			 * polling a hung-up fd until the delay expires (issue #19). */
+			if (server.pending.active)
+			{
+				pending_clear(&server.pending);
+				break;
+			}
 			if (server.have_rx && server.rx_len > 0)
 				process_rx_frames(&server, now_ms);
 			break;

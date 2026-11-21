@@ -518,6 +518,47 @@ TEST(RtuServerValidFramePlusTrailingByteThenValidRequest)
 	ASSERT_EQ(ok);
 }
 
+TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u64		cpu_before = 0;
+	u64		cpu_after = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	dev->fault.kind     = FAULT_DELAY;
+	dev->fault.delay_ms = 500;
+	dev->fault.percent  = 100;
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 5));
+	}
+
+	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	/* Let the server observe frame gap and queue the delayed response. */
+	if (ok) usleep(40000);
+	if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
+	if (ok)
+	{
+		close(child.fd);
+		child.fd = -1;
+	}
+	/* Before issue #19 fix, poll() on a hung-up fd with pending response
+	 * returned immediately and burned CPU until the delay elapsed. */
+	if (ok) usleep(350000);
+	if (ok && !rtu_child_cpu_ms(child.pid, &cpu_after))
+		cpu_after = cpu_before; /* process already exited; no spin */
+	/* Tolerant for ASan/CI scheduling noise. */
+	if (ok) ok = (cpu_after - cpu_before) < 200;
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
 TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 {
 	arena_t*	arena = ARENA_ALLOC();
