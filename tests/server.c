@@ -270,10 +270,14 @@ server_stop(void)
 				break;
 			}
 			if (done < 0 && errno == ECHILD)
+			{
+				ok = false;
+				fprintf(stderr, "net test: server pid %d already reaped\n", (int)pid);
 				break;
+			}
 			usleep(10000);
 		}
-		if (!reaped && waitpid(pid, &status, WNOHANG) != pid)
+		if (!reaped && ok && waitpid(pid, &status, WNOHANG) != pid)
 		{
 			kill(pid, SIGKILL);
 			reaped = waitpid(pid, &status, 0) == pid;
