@@ -324,6 +324,7 @@ server_start(const char* server_options, const char* devices)
 		{
 			if (!freopen(g_server_stderr, "w", stderr))
 				_exit(127);
+			setvbuf(stderr, NULL, _IONBF, 0);
 		}
 		else if (!freopen("/dev/null", "w", stderr))
 			_exit(127);
