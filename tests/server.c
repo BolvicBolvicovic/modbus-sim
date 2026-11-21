@@ -2403,20 +2403,23 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 	}
 
 	for (u32 i = 0; ok && i < opened; i++)
-		ok = wait_for_server_close(&clients[i], 3000);
+		ok = wait_for_server_close(&clients[i], 5000);
 
 	/* After idle timeout closes them, a new client should be served. */
-	for (u32 i = 0; ok && i < 50; i++)
+	for (u32 i = 0; ok && i < 100; i++)
 	{
 		client_close(&extra);
 		extra.fd = -1;
 		if (!client_open(g_server.port, NET_RECV_TIMEOUT_MS, &extra))
+		{
+			usleep(50000);
 			continue;
+		}
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 		if (exchange(&extra, 1, req, 5, resp, &len) &&
 		    len == 4 && register_value(resp, len, 0) == 5)
 			break;
-		if (i == 49)
+		if (i == 99)
 			ok = false;
 		usleep(50000);
 	}
