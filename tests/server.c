@@ -292,8 +292,10 @@ server_start(const char* server_options, const char* devices)
 	fx->pid = fork();
 	if (fx->pid == 0)
 	{
-		freopen("/dev/null", "w", stdout);
-		freopen("/dev/null", "w", stderr);
+		if (!freopen("/dev/null", "w", stdout))
+			_exit(127);
+		if (!freopen("/dev/null", "w", stderr))
+			_exit(127);
 		execl(bin, bin, fx->config, (char*)NULL);
 		_exit(127);
 	}
