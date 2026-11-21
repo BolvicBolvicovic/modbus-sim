@@ -2,7 +2,14 @@
  * The vlib arena implementation lives in this file only. */
 #include "device/fault.h"
 #define ARENA_IMPL
+/* Vendored vlib/arena.h: arena_push() dereferences a freshly allocated block
+ * without checking arena_alloc()'s NULL return. main.c checks its own
+ * ARENA_ALLOC() results; suppress this analyzer diagnostic only around the
+ * vendored implementation included here. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-null-dereference"
 #include "vlib/arena.h"
+#pragma GCC diagnostic pop
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
 #include "net/rtu_server.h"
@@ -247,8 +254,19 @@ main(int argc, char** argv)
 	}
 
 	log_set_verbose(cli.verbose);
-	app     = ARENA_ALLOC();
+	app = ARENA_ALLOC();
+	if (!app)
+	{
+		fprintf(stderr, "out of memory allocating app arena\n");
+		return 1;
+	}
 	scratch = ARENA_ALLOC();
+	if (!scratch)
+	{
+		fprintf(stderr, "out of memory allocating scratch arena\n");
+		arena_release(app);
+		return 1;
+	}
 
 	loaded = config_load(app, scratch, cli.config_path, &config, error, sizeof(error));
 	arena_release(scratch);

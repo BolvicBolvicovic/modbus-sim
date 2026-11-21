@@ -49,4 +49,8 @@ while IFS= read -r example; do
 done < "$status.list"
 
 echo "checked $checked doc examples, $failed failed"
+if [ "$checked" -eq 0 ]; then
+	echo "FAIL: no doc examples were checked" >&2
+	exit 1
+fi
 [ "$failed" -eq 0 ]

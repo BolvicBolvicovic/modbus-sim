@@ -4,9 +4,16 @@
 set -u
 
 bin=${1:-./modbus-sim-tests}
+timeout_cmd=${TEST_TIMEOUT_CMD:-timeout}
+test_timeout=${TEST_TIMEOUT:-120s}
 list=$(mktemp)
 out=$(mktemp)
 trap 'rm -f "$list" "$out"' EXIT HUP INT TERM
+
+if ! command -v "$timeout_cmd" >/dev/null 2>&1; then
+	printf 'run_tests.sh: timeout command not found: %s\n' "$timeout_cmd" >&2
+	exit 1
+fi
 
 if ! "$bin" --list >"$list"; then
 	printf 'run_tests.sh: failed to list tests from %s\n' "$bin" >&2
@@ -32,9 +39,14 @@ while IFS= read -r line; do
 				exit 1
 			fi
 			total=$((total + 1))
-			if ! "$bin" -s "$suite" -t "$line" >"$out" 2>&1; then
+			if ! "$timeout_cmd" --foreground -k 5s "$test_timeout" "$bin" -s "$suite" -t "$line" >"$out" 2>&1; then
+				rc=$?
 				failed=$((failed + 1))
-				printf 'FAIL %s :: %s\n' "$suite" "$line"
+				if [ "$rc" -eq 124 ]; then
+					printf 'FAIL %s :: %s (timeout after %s)\n' "$suite" "$line" "$test_timeout"
+				else
+					printf 'FAIL %s :: %s\n' "$suite" "$line"
+				fi
 				cat "$out"
 			fi
 			;;
