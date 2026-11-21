@@ -3,9 +3,11 @@
 ## Data flow
 
 ```
- client ──TCP──► net/server ──(unit id, PDU)──► modbus/pdu ──► device/device ──► data tables
-                     │                                              ▲
-                     │ fault_decide()                  device_tick()│ ramps → registers
+ TCP client ──MBAP+PDU──► net/server ──┐
+                                       ├─► modbus/pdu ──► device/device ──► data tables
+ RTU client ──addr+PDU+CRC──► net/rtu_server ──┘                 ▲
+                     │                               device_tick()│ ramps → registers
+                     │ fault_decide()
                      ▼
               device/fault (drop / delay)
 
@@ -15,10 +17,11 @@
 
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
-2. For every request, `net/server` finds the device by unit id and calls `modbus_handle_pdu`.
+2. `net/server` (TCP, MBAP) or `net/rtu_server` (RTU, CRC-framed byte stream) finds the device by
+   unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
-4. `net/server` asks `fault_decide` whether to drop or delay the response.
+4. The transport asks `fault_decide` whether to drop or delay the response.
 
 ## Modules
 
@@ -26,10 +29,10 @@
 |---|---|---|
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
-| `src/modbus` | `mbap`, `pdu`, `bytes.h` | frame header, function codes, exceptions; knows nothing about TCP or Scheme |
-| `src/net` | `server` | sockets, `poll` loop, connections, delayed sending |
+| `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, function codes, exceptions; knows nothing about sockets or Scheme |
+| `src/net` | `server`, `rtu_server` | TCP sockets / RTU byte stream, `poll` loop, delayed sending |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
-| `src/main.c` | | command line, wiring |
+| `src/main.c` | | command line, wiring, RTU PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
 `device` and `modbus` can be tested alone, and are (see `tests/`).
@@ -65,7 +68,9 @@ The config is read with `(read ...)` and walked as data. This keeps the user-fac
 simple, gives precise error messages, and means a config file cannot run code. When dynamic
 models arrive (below), expressions can be evaluated with `s7_eval` in a controlled way.
 
-## The network loop
+## The network loops
+
+### TCP (`net/server.c`)
 
 One thread, one `poll()` call. Per connection there is one receive buffer and one send buffer:
 
@@ -73,6 +78,15 @@ One thread, one `poll()` call. Per connection there is one receive buffer and on
   is the nearest due time, so nothing sleeps.
 - While a response is pending, the connection reads no further requests (they wait in the
   kernel), so responses stay in order.
+
+### RTU (`net/rtu_server.c`)
+
+Also single-threaded `poll()` on one bidirectional fd (PTY master, existing device, or similar byte
+stream). RTU has no MBAP length field, so frame boundaries are detected by a fixed inter-frame
+silence gap (`frame-gap-ms`, default 20 ms) as a practical approximation for baud-rate-agnostic
+streams. After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown unit, and
+broadcast (unit 0) produce no response. Delayed fault responses use the same due-time poll pattern
+as TCP.
 
 ## Coding rules used here
 
@@ -112,14 +126,10 @@ them with s7 while the config is read, or keep an s7 environment alive and call 
 
 **More fault injection.** `fault_t` holds one fault today. Make it a small array and let
 `fault_decide` return the combined decision (delay, drop, corrupt, wrong exception code,
-disconnect). `net/server.c` already acts on a `fault_decision_t`, so new fields are
-applied in one place (`handle_frame`).
+disconnect). `net/server.c` and `net/rtu_server.c` already act on a `fault_decision_t`, so new
+fields are applied in their response paths.
 
-**Many devices on one RTU bus through a virtual port.** The device table and unit-id routing
-exist already (`find_device`). What is missing is a second transport:
-1. `src/net/pty.c` (or `rtu.c`): open a pseudo-terminal (`posix_openpt`), print its path
-   (for example `/dev/pts/7`) so a client can open it as a serial port.
-2. `src/modbus/rtu.c`: RTU framing (unit id, PDU, CRC-16) and the silent-interval rules.
-3. Feed `(unit, pdu)` into the same `modbus_handle_pdu` and the same `fault_decide`.
-Bus-level behaviour (turnaround time, baud-rate delays, collisions) belongs in the transport,
-not in the device model.
+**RTU timing / RTU-over-TCP.** RTU currently uses a fixed inter-frame silence gap. A true serial
+model would derive t1.5/t3.5 from baud rate and could model turnaround/collisions in the transport.
+RTU-over-TCP, if added, should be a separate transport/framing choice, not a silent change to
+existing TCP or RTU byte-stream behavior.

@@ -2,18 +2,34 @@
 
 ## Transport
 
-Modbus TCP: a 7-byte MBAP header (transaction id, protocol id 0, length, unit id) followed by
-the PDU. Clients may keep a connection open and send several requests; they are answered one
-after another in order.
+### Modbus TCP
 
-A client that sends a header with a protocol id other than 0, or an impossible length,
+A 7-byte MBAP header (transaction id, protocol id 0, length, unit id) followed by the PDU.
+Clients may keep a connection open and send several requests; they are answered one after another
+in order. A client that sends a header with a protocol id other than 0, or an impossible length,
 is disconnected.
 
-Modbus RTU is also supported over a bidirectional byte stream (PTY or existing device path) via
-CLI `--rtu-pty` / `--rtu-device`. RTU frames are `[addr][PDU][CRC16 lo][CRC16 hi]`; CRC uses
-Modbus CRC-16. Because PTY/pipe streams have no baud rate, frame boundaries use a fixed
-inter-frame silence gap approximation (`frame-gap-ms`, config/CLI, default 20 ms). Bad CRC,
-unknown unit, and broadcast (unit 0) requests produce no response. RTU-over-TCP is not implemented.
+### Modbus RTU
+
+Modbus RTU is served over a bidirectional byte stream (Linux PTY or an existing serial-like device
+path) via CLI `--rtu-pty` or `--rtu-device PATH`. The same PDU handlers and device model are used
+as for TCP; only framing/transport differ.
+
+Frame format: `[addr][PDU...][CRC lo][CRC hi]` (2-byte Modbus CRC-16, low byte first). A valid
+frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes.
+
+Frame boundaries use a fixed inter-frame silence gap approximation (`frame-gap-ms`, config or CLI,
+default 20 ms). This is a practical approximation for PTY/pipe byte streams that have no baud rate
+or UART character timing; it is not a true t3.5 serial-line measurement.
+
+No response is produced for:
+
+- **Bad CRC**: frames whose CRC does not match are silently ignored.
+- **Unknown unit**: a valid frame addressed to a unit id with no configured device is ignored.
+- **Broadcast (unit 0)**: intentionally ignored; broadcast semantics are not modeled in this
+  simulator.
+
+RTU-over-TCP is not implemented.
 
 ## Function codes
 
@@ -136,6 +152,7 @@ The items tracked by issue #10 were reviewed and resolved as follows:
 
 ## Not supported (yet)
 
-- Modbus RTU / serial and RTU-over-TCP (see the roadmap in [architecture.md](architecture.md))
+- True serial-line Modbus RTU timing (t3.5/t1.5 derived from baud rate); RTU uses a fixed silence gap approximation
+- RTU-over-TCP
 - IPv6
 - TLS (Modbus/TCP Security)
