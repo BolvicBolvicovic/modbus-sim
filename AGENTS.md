@@ -27,5 +27,6 @@
 ## Style & scope
 - Prefer the smallest change that solves the task; less is more. Avoid unnecessary abstraction, not optimization.
 - Prefer fat structs over many small structs that are only used once inside a bigger struct. If a small struct belongs only to a bigger one, define it inside that bigger struct, e.g. `struct big { struct small { int a; }; /* other fields */ };`.
-- Add comments only where logic is non-obvious or a constraint is easy to miss; do not comment routine changes. For complex behavior, a short comment is fine.
+- Functions don't have to be short; they should do the job they need to do. If a small helper is only used once, prefer inlining it in the larger function. For complex behavior, add a short comment.
+- Add comments only where logic is non-obvious or a constraint is easy to miss; do not comment routine changes.
 - When behavior changes or a new user-facing/config/protocol behavior is added, update the relevant docs (`docs/`, `README.md`, `AGENTS.md` as applicable) instead of adding explanatory comments everywhere.
