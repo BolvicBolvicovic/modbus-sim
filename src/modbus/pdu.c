@@ -266,8 +266,13 @@ read_file_record_shape_ok(const u8* req, u32 req_len, u32* subreq_count, u32* re
 		u32		rec_no  = get_be16(sr + 3);
 		u32		rec_len = get_be16(sr + 5);
 
-		if (sr[0] != 0x06 || rec_no > 0x270F || rec_len < 1)
-			return false;
+		{
+			u32	file_no = get_be16(sr + 1);
+
+			if (sr[0] != 0x06 || file_no < 0x0001 || rec_no > 0x270F
+			    || rec_len < 1 || rec_no + rec_len - 1 > 0x270F)
+				return false;
+		}
 		*resp_data_len += 2 + rec_len * 2;
 	}
 
@@ -368,12 +373,16 @@ write_file_record_shape_ok(const u8* req, u32 req_len, u32* byte_count)
 		rec_len = get_be16(sr + 5);
 		sr_len  = 7 + rec_len * 2;
 
-		if (sr[0] != 0x06)
-			return false;
-		if (rec_no > 0x270F || rec_no + rec_len - 1 > 0x270F)
-			return false;
-		if (rec_len < 1 || sr_len > remain)
-			return false;
+		{
+			u32	file_no = get_be16(sr + 1);
+
+			if (sr[0] != 0x06 || file_no < 0x0001)
+				return false;
+			if (rec_no > 0x270F || rec_no + rec_len - 1 > 0x270F)
+				return false;
+			if (rec_len < 1 || sr_len > remain)
+				return false;
+		}
 
 		offset += sr_len;
 	}
@@ -484,14 +493,15 @@ static u32
 diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
 	(void)dev;
-	if (req_len != 5)
+	/* Subfunction 0x0000 (Return Query Data) echoes N x 2-byte data field. */
+	if (req_len < 5 || (req_len % 2) == 0)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	if (get_be16(req + 1) != 0x0000)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 
-	memcpy(resp, req, 5);
-	return 5;
+	memcpy(resp, req, req_len);
+	return req_len;
 }
 
 static u32
@@ -604,17 +614,23 @@ u32
 modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp)
 {
 	pdu_handler_t	handler = NULL;
+	u32		resp_len = 0;
+	u8		fc       = 0;
 
 	if (req_len == 0)
 		return modbus_exception(resp, 0, EXC_ILLEGAL_FUNCTION);
 
-	dev->com_event_count = (u16)(dev->com_event_count + 1);
-	dev->message_count   = (u16)(dev->message_count + 1);
+	fc = req[0];
+	dev->message_count = (u16)(dev->message_count + 1);
 	device_tick(dev, now_ms);
 
-	handler = find_pdu_handler(req[0]);
+	handler = find_pdu_handler(fc);
 	if (!handler)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+		return modbus_exception(resp, fc, EXC_ILLEGAL_FUNCTION);
 
-	return handler(dev, req, req_len, resp);
+	resp_len = handler(dev, req, req_len, resp);
+	if ((resp[0] & 0x80) == 0 && fc != FC_GET_COM_EVENT_COUNTER
+	    && fc != FC_GET_COM_EVENT_LOG)
+		dev->com_event_count = (u16)(dev->com_event_count + 1);
+	return resp_len;
 }
