@@ -6,9 +6,10 @@
 #include "device/device.h"
 #include <stdbool.h>
 
-#define CONFIG_MAX_DEVICES	16
-#define CONFIG_DEFAULT_PORT	1502
-#define CONFIG_BIND_MAX		64
+#define CONFIG_MAX_DEVICES		16
+#define CONFIG_DEFAULT_PORT		1502
+#define CONFIG_DEFAULT_IDLE_TIMEOUT_MS	0
+#define CONFIG_BIND_MAX			64
 
 /* Name: config_t
  * Description: everything read from a config file.
@@ -19,7 +20,8 @@ struct config_t
 {
 	char		bind_address[CONFIG_BIND_MAX];
 	u16		port;
-	u32		seed;		/* seed for fault dice; 0 = fixed default */
+	u32		seed;			/* seed for fault dice; 0 = fixed default */
+	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
 	u32		device_count;
 	device_t*	devices[CONFIG_MAX_DEVICES];
 };

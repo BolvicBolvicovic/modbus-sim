@@ -27,16 +27,18 @@ config_set_defaults(config_t* config)
 {
 	memset(config, 0, sizeof(*config));
 	strcpy(config->bind_address, "0.0.0.0");
-	config->port = CONFIG_DEFAULT_PORT;
+	config->port            = CONFIG_DEFAULT_PORT;
+	config->idle_timeout_ms = CONFIG_DEFAULT_IDLE_TIMEOUT_MS;
 }
 
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind", "seed" };
+	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms" };
 	s7_pointer	options = s7_cdr(form);
 	s64		port    = config->port;
 	s64		seed    = config->seed;
+	s64		idle    = config->idle_timeout_ms;
 	const char*	bind    = NULL;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "server"))
@@ -46,6 +48,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return false;
 
 	if (!form_opt_int(ctx, options, "seed", 0, 4294967295LL, &seed))
+		return false;
+
+	if (!form_opt_int(ctx, options, "idle-timeout-ms", 0, 86400000, &idle))
 		return false;
 
 	if (!form_opt_string(ctx, options, "bind", &bind))
@@ -60,8 +65,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (bind)
 		strcpy(config->bind_address, bind);
 
-	config->port = (u16)port;
-	config->seed = (u32)seed;
+	config->port            = (u16)port;
+	config->seed            = (u32)seed;
+	config->idle_timeout_ms = (u32)idle;
 	return true;
 }
 

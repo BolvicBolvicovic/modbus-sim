@@ -108,6 +108,9 @@ using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set
 - Responses are sent as soon as they are ready, unless a delay fault holds them.
 - One connection handles one request at a time; many connections are served concurrently
   (up to 32). More connections are refused.
+- Optional `(server (idle-timeout-ms N))` closes a connection after `N` ms with no I/O
+  progress (`0` disables it, the default). Connections waiting to send a delayed fault
+  response are not considered idle. Idle closes are logged at `INFO`.
 
 ## Not supported (yet)
 

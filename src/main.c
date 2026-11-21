@@ -208,11 +208,12 @@ main(int argc, char** argv)
 	}
 
 	server_options_t	options = {
-		.bind_address = config.bind_address,
-		.port         = config.port,
-		.seed         = config.seed,
-		.devices      = config.devices,
-		.device_count = config.device_count,
+		.bind_address    = config.bind_address,
+		.port            = config.port,
+		.seed            = config.seed,
+		.idle_timeout_ms = config.idle_timeout_ms,
+		.devices         = config.devices,
+		.device_count    = config.device_count,
 	};
 	s32			status = server_run(&options);
 

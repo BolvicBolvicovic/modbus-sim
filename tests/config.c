@@ -82,6 +82,7 @@ TEST(ConfigDefaults)
 
 	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
+	ASSERT_EQ(config.idle_timeout_ms == CONFIG_DEFAULT_IDLE_TIMEOUT_MS);
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 }
 
@@ -314,4 +315,25 @@ TEST(ConfigBindRejectsOverlongString)
 		 64, "111.111.111.111111.111.111.111111.111.111.111111.111.111.1111111");
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too long") != NULL);
+}
+
+TEST(ConfigIdleTimeoutIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (idle-timeout-ms 5000)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.idle_timeout_ms == 5000);
+
+	ASSERT_SUCCESS(load_text("(server (idle-timeout-ms 0)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.idle_timeout_ms == 0);
+}
+
+TEST(ConfigIdleTimeoutRejectsInvalidValues)
+{
+	EXPECT_ERROR("(server (idle-timeout-ms -1)) (device (holding 0))", "between 0 and 86400000");
+	EXPECT_ERROR("(server (idle-timeout-ms 86400001)) (device (holding 0))", "between 0 and 86400000");
+	EXPECT_ERROR("(server (idle-timeout-ms nope)) (device (holding 0))", "whole number");
 }

@@ -13,6 +13,7 @@ struct server_options_t
 	const char*	bind_address;
 	u16		port;
 	u32		seed;
+	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
 	device_t**	devices;
 	u32		device_count;
 };

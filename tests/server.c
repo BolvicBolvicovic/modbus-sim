@@ -1606,3 +1606,104 @@ TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
 	server_stop();
 	ASSERT_EQ(ok);
 }
+
+static bool
+wait_for_server_close(client_t* client, u32 timeout_ms)
+{
+	u64	start = clock_now_ms();
+
+	while (clock_now_ms() - start < timeout_ms)
+	{
+		char	byte = 0;
+		ssize_t	got  = recv(client->fd, &byte, 1, MSG_DONTWAIT);
+
+		if (got == 0)
+			return true;
+		if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+			return true;
+		usleep(10000);
+	}
+	return false;
+}
+
+TEST(NetIdleTimeoutClosesIdleClient)
+{
+	client_t client = { .fd = -1 };
+	bool	 ok     = server_start("(idle-timeout-ms 100)",
+				      "(device (unit-id 1) (holding 0 (static 7)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && wait_for_server_close(&client, 1500);
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetIdleTimeoutDoesNotCloseDelayedResponseClient)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len    = 0;
+	u64	 start  = 0;
+	u64	 elapsed = 0;
+	bool	 ok     = server_start("(idle-timeout-ms 100)",
+				      "(device (unit-id 1) (holding 0 (static 11))"
+				      "  (fault (kind delay) (delay-ms 500) (percent 100)))");
+
+	ok = ok && client_open(g_server.port, 2000, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		start = clock_now_ms();
+		ok = exchange(&client, 1, req, 5, resp, &len);
+		elapsed = clock_now_ms() - start;
+	}
+	ok = ok && len == 4 && register_value(resp, len, 0) == 11;
+	ok = ok && elapsed >= 400;
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetIdleTimeoutFreesSlotsForNewClients)
+{
+	client_t clients[32];
+	client_t extra = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len    = 0;
+	bool	 ok     = server_start("(idle-timeout-ms 100)",
+				      "(device (unit-id 1) (holding 0 (static 5)))");
+	u32	 opened = 0;
+
+	for (u32 i = 0; i < 32; i++)
+	{
+		clients[i].fd = -1;
+		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
+		if (!ok)
+			break;
+		opened++;
+	}
+
+	for (u32 i = 0; ok && i < opened; i++)
+		ok = wait_for_server_close(&clients[i], 2000);
+
+	/* After idle timeout closes them, a new client should be served. */
+	if (ok)
+		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &extra);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&extra, 1, req, 5, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 5;
+	}
+
+	client_close(&extra);
+	for (u32 i = 0; i < opened; i++)
+		client_close(&clients[i]);
+	server_stop();
+	ASSERT_EQ(ok && opened == 32);
+}

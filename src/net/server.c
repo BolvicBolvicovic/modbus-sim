@@ -34,6 +34,7 @@ struct conn_t
 	u32	tx_len;
 	u32	tx_sent;
 	u64	tx_due_ms;		/* do not send before this time (delay fault) */
+	u64	last_activity_ms;	/* updated on I/O progress; used for idle timeout */
 	char	peer[INET_ADDRSTRLEN + 8];
 };
 
@@ -149,7 +150,8 @@ accept_clients(server_t* server)
 
 		inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
 		memset(conn, 0, sizeof(*conn));
-		conn->fd = fd;
+		conn->fd               = fd;
+		conn->last_activity_ms = clock_now_ms();
 		snprintf(conn->peer, sizeof(conn->peer), "%s:%u", ip, ntohs(addr.sin_port));
 		LOG_DEBUG("client %s connected", conn->peer);
 	}
@@ -199,14 +201,18 @@ handle_frame(server_t* server, conn_t* conn, const mbap_header_t* header, u64 no
 		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
 
 	if (decision.drop)
+	{
+		conn->last_activity_ms = now_ms;
 		return;
+	}
 
 	reply.length = (u16)(pdu_len + 1);
 	mbap_encode(conn->tx, &reply);
 	memcpy(conn->tx + MBAP_HEADER_SIZE, pdu, pdu_len);
-	conn->tx_len    = MBAP_HEADER_SIZE + pdu_len;
-	conn->tx_sent   = 0;
-	conn->tx_due_ms = now_ms + decision.delay_ms;
+	conn->tx_len           = MBAP_HEADER_SIZE + pdu_len;
+	conn->tx_sent          = 0;
+	conn->tx_due_ms        = now_ms + decision.delay_ms;
+	conn->last_activity_ms = now_ms;
 }
 
 /* Handles every complete request waiting in the receive buffer, one at a time. */
@@ -249,7 +255,8 @@ conn_read(server_t* server, conn_t* conn)
 	if (got < 0)
 		return;
 
-	conn->rx_len += (u32)got;
+	conn->rx_len          += (u32)got;
+	conn->last_activity_ms = clock_now_ms();
 	conn_process(server, conn);
 }
 
@@ -268,7 +275,8 @@ conn_write(server_t* server, conn_t* conn)
 	if (sent < 0)
 		return;
 
-	conn->tx_sent += (u32)sent;
+	conn->tx_sent         += (u32)sent;
+	conn->last_activity_ms = clock_now_ms();
 	if (conn->tx_sent < conn->tx_len)
 		return;
 
@@ -279,11 +287,37 @@ conn_write(server_t* server, conn_t* conn)
 
 /* --- main loop --- */
 
+static void
+close_idle_connections(server_t* server, u64 now_ms)
+{
+	u32	idle_ms = server->options.idle_timeout_ms;
+
+	if (idle_ms == 0)
+		return;
+
+	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
+	{
+		conn_t*	conn = &server->conns[i];
+		u64	deadline;
+
+		if (conn->fd < 0 || conn->tx_len > 0)
+			continue;
+
+		deadline = conn->last_activity_ms + idle_ms;
+		if (now_ms < deadline)
+			continue;
+
+		LOG_INFO("client %s idle for %u ms, closing", conn->peer, idle_ms);
+		conn_close(conn);
+	}
+}
+
 /* Fills the poll table. Returns the number of entries; entry 0 is the listening socket. */
 static u32
 build_poll_table(server_t* server, struct pollfd* fds, conn_t** owners, u64 now_ms, int* timeout)
 {
-	u32	count = 0;
+	u32	count   = 0;
+	u32	idle_ms = server->options.idle_timeout_ms;
 
 	*timeout = SERVER_IDLE_POLL_MS;
 	fds[count] = (struct pollfd){ .fd = server->listen_fd, .events = POLLIN };
@@ -292,6 +326,7 @@ build_poll_table(server_t* server, struct pollfd* fds, conn_t** owners, u64 now_
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
 		conn_t*	conn = &server->conns[i];
+		u64	idle_deadline;
 
 		if (conn->fd < 0)
 			continue;
@@ -299,7 +334,17 @@ build_poll_table(server_t* server, struct pollfd* fds, conn_t** owners, u64 now_
 		fds[count] = (struct pollfd){ .fd = conn->fd, .events = POLLIN };
 		owners[count++] = conn;
 		if (conn->tx_len == 0)
+		{
+			if (idle_ms > 0)
+			{
+				idle_deadline = conn->last_activity_ms + idle_ms;
+				if (idle_deadline <= now_ms)
+					*timeout = 0;
+				else
+					*timeout = MIN(*timeout, (int)(idle_deadline - now_ms));
+			}
 			continue;
+		}
 
 		/* A response is pending: wait for its due time, then for the socket to be writable. */
 		fds[count - 1].events = (conn->tx_due_ms <= now_ms) ? POLLOUT : 0;
@@ -321,6 +366,9 @@ serve_ready(server_t* server, const struct pollfd* fd, conn_t* conn)
 		return;
 	}
 
+	if (conn->fd < 0 || fd->fd != conn->fd)
+		return;
+
 	if (fd->revents & (POLLERR | POLLNVAL))
 	{
 		conn_close(conn);
@@ -340,13 +388,18 @@ serve_loop(server_t* server)
 	conn_t*		owners[SERVER_MAX_CONNECTIONS + 1];
 	u32		count   = 0;
 	int		timeout = 0;
+	u64		now_ms  = 0;
 
 	while (!g_stop)
 	{
-		count = build_poll_table(server, fds, owners, clock_now_ms(), &timeout);
+		now_ms = clock_now_ms();
+		close_idle_connections(server, now_ms);
+		count = build_poll_table(server, fds, owners, now_ms, &timeout);
 		if (poll(fds, count, timeout) < 0)
 			continue;
 
+		now_ms = clock_now_ms();
+		close_idle_connections(server, now_ms);
 		for (u32 i = 0; i < count; i++)
 			serve_ready(server, &fds[i], owners[i]);
 	}
