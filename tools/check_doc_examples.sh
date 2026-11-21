@@ -4,7 +4,7 @@
 set -eu
 
 bin=${1:-./modbus-sim}
-tmpdir=$(mktemp -d /tmp/opencode/modbus-sim-doccheck.XXXXXX)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/modbus-sim-doccheck.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 status="$tmpdir/status"
