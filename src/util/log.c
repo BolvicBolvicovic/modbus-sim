@@ -11,7 +11,7 @@ log_set_verbose(bool verbose)
 }
 
 bool
-log_is_verbose(void)
+log_verbose(void)
 {
 	return g_verbose;
 }

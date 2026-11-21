@@ -5,30 +5,36 @@
 #include "device/device.h"
 
 /* Supported function codes. */
-#define FC_READ_COILS			0x01
-#define FC_READ_DISCRETE_INPUTS		0x02
-#define FC_READ_HOLDING_REGISTERS	0x03
-#define FC_READ_INPUT_REGISTERS		0x04
-#define FC_WRITE_SINGLE_COIL		0x05
-#define FC_WRITE_SINGLE_REGISTER	0x06
-#define FC_READ_EXCEPTION_STATUS	0x07
-#define FC_DIAGNOSTICS			0x08
-#define FC_GET_COM_EVENT_COUNTER	0x0B
-#define FC_GET_COM_EVENT_LOG		0x0C
-#define FC_WRITE_MULTIPLE_COILS		0x0F
-#define FC_WRITE_MULTIPLE_REGISTERS	0x10
-#define FC_REPORT_SERVER_ID		0x11
-#define FC_READ_FILE_RECORD		0x14
-#define FC_WRITE_FILE_RECORD		0x15
-#define FC_MASK_WRITE_REGISTER		0x16
-#define FC_READ_WRITE_MULTIPLE_REGISTERS 0x17
-#define FC_READ_FIFO_QUEUE		0x18
+enum modbus_function_code
+{
+	FC_READ_COILS                     = 0x01,
+	FC_READ_DISCRETE_INPUTS           = 0x02,
+	FC_READ_HOLDING_REGISTERS         = 0x03,
+	FC_READ_INPUT_REGISTERS           = 0x04,
+	FC_WRITE_SINGLE_COIL              = 0x05,
+	FC_WRITE_SINGLE_REGISTER          = 0x06,
+	FC_READ_EXCEPTION_STATUS          = 0x07,
+	FC_DIAGNOSTICS                    = 0x08,
+	FC_GET_COM_EVENT_COUNTER          = 0x0B,
+	FC_GET_COM_EVENT_LOG              = 0x0C,
+	FC_WRITE_MULTIPLE_COILS           = 0x0F,
+	FC_WRITE_MULTIPLE_REGISTERS       = 0x10,
+	FC_REPORT_SERVER_ID               = 0x11,
+	FC_READ_FILE_RECORD               = 0x14,
+	FC_WRITE_FILE_RECORD              = 0x15,
+	FC_MASK_WRITE_REGISTER            = 0x16,
+	FC_READ_WRITE_MULTIPLE_REGISTERS  = 0x17,
+	FC_READ_FIFO_QUEUE                = 0x18,
+};
 
 /* Exception codes. */
-#define EXC_ILLEGAL_FUNCTION		0x01
-#define EXC_ILLEGAL_DATA_ADDRESS	0x02
-#define EXC_ILLEGAL_DATA_VALUE		0x03
-#define EXC_GATEWAY_TARGET_FAILED	0x0B
+enum modbus_exception_code
+{
+	EXC_ILLEGAL_FUNCTION      = 0x01,
+	EXC_ILLEGAL_DATA_ADDRESS  = 0x02,
+	EXC_ILLEGAL_DATA_VALUE    = 0x03,
+	EXC_GATEWAY_TARGET_FAILED = 0x0B,
+};
 
 /* Protocol limits from the Modbus specification. */
 #define MB_MAX_READ_BITS		2000
