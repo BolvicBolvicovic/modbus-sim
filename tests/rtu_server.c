@@ -517,3 +517,129 @@ TEST(RtuServerValidFramePlusTrailingByteThenValidRequest)
 	arena_release(arena);
 	ASSERT_EQ(ok);
 }
+
+TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	rtu_child_t	child = { 0 };
+	u8		pdu[6 + 123 * 2];
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		req[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		frame_len = 0;
+	u32		prefix_len = 0;
+	bool		found = false;
+
+	ASSERT_EQ(dev != NULL);
+	dev->unit_id = 1;
+	strcpy(dev->name, "rtu-fc16");
+
+	for (u32 i = 0; i < 123; i++)
+	{
+		point_t p = { 0 };
+
+		p.space = SPACE_HOLDING;
+		p.address = i;
+		p.type = VT_U16;
+		p.kind = POINT_STATIC;
+		p.static_value = (f64)(0x2000 + i);
+		ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	}
+
+	pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+	put_be16(pdu + 1, 0);   /* start address */
+	put_be16(pdu + 3, 123); /* quantity */
+	pdu[5] = 123 * 2;
+	for (u32 i = 0; i < 123; i++)
+		put_be16(pdu + 6 + i * 2, (u16)(0x3000 + i));
+
+	frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT_EQ(frame_len == 1 + sizeof(pdu) + 2);
+
+	/* Construct a request whose full frame is valid, but some shorter prefix also
+	 * has a valid CRC. The bug accepted the shortest prefix. Brute-force a data
+	 * byte so the full FC16 request remains valid (do not touch FC/addr/qty/byte
+	 * count/CRC fields). */
+	memcpy(req, frame, frame_len);
+	for (u32 data_idx = 8; data_idx < frame_len - 2 && !found; data_idx++)
+	{
+		u8 saved = req[data_idx];
+
+		for (u32 v = 0; v <= 0xFF; v++)
+		{
+			u16 crc;
+
+			req[data_idx] = (u8)v;
+			crc = modbus_crc16(req, frame_len - 2);
+			req[frame_len - 2] = (u8)(crc & 0xFF);
+			req[frame_len - 1] = (u8)(crc >> 8);
+
+			for (u32 prefix = 4; prefix < frame_len; prefix++)
+			{
+				u8		paddr = 0;
+				const u8*	ppdu = NULL;
+				u32		plen = 0;
+
+				if (modbus_rtu_decode(req, prefix, &paddr, &ppdu, &plen))
+				{
+					prefix_len = prefix;
+					found = true;
+					break;
+				}
+			}
+			if (found)
+				break;
+		}
+		if (!found)
+			req[data_idx] = saved;
+	}
+	if (!found)
+	{
+		u16 crc = modbus_crc16(frame, frame_len - 2);
+
+		frame[frame_len - 2] = (u8)(crc & 0xFF);
+		frame[frame_len - 1] = (u8)(crc >> 8);
+		memcpy(req, frame, frame_len);
+	}
+	ASSERT_EQ(found);
+
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	(void)prefix_len;
+	ASSERT_EQ(send_all_fd(child.fd, req, frame_len));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == 5);
+	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 1) == 0);
+	ASSERT_EQ(get_be16(resp + 3) == 123);
+
+	{
+		u8 read_req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 123 };
+
+		ASSERT_EQ(send_rtu_req(child.fd, 1, read_req, sizeof(read_req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
+		ASSERT_EQ(addr == 1);
+		ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+		ASSERT_EQ(resp[1] == 123 * 2);
+		for (u32 i = 0; i < 123; i++)
+		{
+			u16 expected = get_be16(req + 7 + i * 2); /* frame: addr+fc+start+qty+bc + data */
+			u16 got = get_be16(resp + 2 + i * 2);
+
+			ASSERT_EQ(got == expected);
+		}
+	}
+
+	/* Sanity: the prefix itself would be a malformed/short request if processed. */
+	ASSERT(prefix_len < frame_len);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
