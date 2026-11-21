@@ -1160,7 +1160,9 @@ TEST(NetConnectionLimit)
 		     len == 4 && register_value(resp, len, 0) == 5;
 	}
 
-	/* The 33rd connection is either refused outright or closed by the server. */
+	/* The 33rd connection is either refused outright, closed by the server,
+	 * or left unserviced in the TCP backlog under load/ASan. A response would
+	 * mean the server exceeded its connection limit. */
 	if (ok)
 	{
 		client_t extra = { .fd = -1 };
@@ -1171,7 +1173,8 @@ TEST(NetConnectionLimit)
 		{
 			ssize_t got = recv(extra.fd, &byte, 1, 0);
 
-			ok = got == 0;
+			ok = got == 0 ||
+			     (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
 			client_close(&extra);
 		}
 	}
