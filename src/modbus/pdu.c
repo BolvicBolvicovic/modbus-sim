@@ -263,16 +263,13 @@ read_file_record_shape_ok(const u8* req, u32 req_len, u32* subreq_count, u32* re
 	for (u32 i = 0; i < *subreq_count; i++)
 	{
 		const u8*	sr      = req + 2 + i * 7;
+		u32		file_no = get_be16(sr + 1);
 		u32		rec_no  = get_be16(sr + 3);
 		u32		rec_len = get_be16(sr + 5);
 
-		{
-			u32	file_no = get_be16(sr + 1);
-
-			if (sr[0] != 0x06 || file_no < 0x0001 || rec_no > 0x270F
-			    || rec_len < 1 || rec_no + rec_len - 1 > 0x270F)
-				return false;
-		}
+		if (sr[0] != 0x06 || file_no < 0x0001 || rec_no > 0x270F
+		    || rec_len < 1 || rec_no + rec_len - 1 > 0x270F)
+			return false;
 		*resp_data_len += 2 + rec_len * 2;
 	}
 
@@ -362,6 +359,7 @@ write_file_record_shape_ok(const u8* req, u32 req_len, u32* byte_count)
 	{
 		const u8*	sr      = req + offset;
 		u32		remain  = 2 + *byte_count - offset;
+		u32		file_no = 0;
 		u32		rec_no  = 0;
 		u32		rec_len = 0;
 		u32		sr_len  = 0;
@@ -369,20 +367,17 @@ write_file_record_shape_ok(const u8* req, u32 req_len, u32* byte_count)
 		if (remain < 7)
 			return false;
 
+		file_no = get_be16(sr + 1);
 		rec_no  = get_be16(sr + 3);
 		rec_len = get_be16(sr + 5);
 		sr_len  = 7 + rec_len * 2;
 
-		{
-			u32	file_no = get_be16(sr + 1);
-
-			if (sr[0] != 0x06 || file_no < 0x0001)
-				return false;
-			if (rec_no > 0x270F || rec_no + rec_len - 1 > 0x270F)
-				return false;
-			if (rec_len < 1 || sr_len > remain)
-				return false;
-		}
+		if (sr[0] != 0x06 || file_no < 0x0001)
+			return false;
+		if (rec_no > 0x270F || rec_no + rec_len - 1 > 0x270F)
+			return false;
+		if (rec_len < 1 || sr_len > remain)
+			return false;
 
 		offset += sr_len;
 	}

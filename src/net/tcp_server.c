@@ -2,6 +2,7 @@
 #include "net/tcp_server.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
+#include "net/net_common.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
@@ -52,24 +53,6 @@ struct tcp_server_t
 };
 
 static volatile sig_atomic_t	g_stop = 0;
-
-static void
-on_stop_signal(int signo)
-{
-	(void)signo;
-	g_stop = 1;
-}
-
-static void
-install_signal_handlers(void)
-{
-	struct sigaction	sa = { 0 };
-
-	sa.sa_handler = on_stop_signal;	/* no SA_RESTART: poll() must wake up */
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
-	signal(SIGPIPE, SIG_IGN);
-}
 
 /* --- listening socket --- */
 
@@ -186,16 +169,7 @@ accept_clients(tcp_server_t* server)
 	}
 }
 
-static device_t*
-find_device(const tcp_server_t* server, u8 unit)
-{
-	for (u32 i = 0; i < server->options.device_count; i++)
-	{
-		if (server->options.devices[i]->unit_id == unit)
-			return server->options.devices[i];
-	}
-	return NULL;
-}
+
 
 /* Removes the first `size` bytes of the receive buffer. */
 static void
@@ -210,7 +184,9 @@ static void
 handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u64 now_ms)
 {
 	u8			pdu[MODBUS_MAX_PDU];
-	device_t*		dev      = find_device(server, header->unit);
+	device_t*		dev      = net_find_device(server->options.devices,
+							   server->options.device_count,
+							   header->unit);
 	const u8*		request  = conn->rx + MBAP_HEADER_SIZE;
 	u32			req_len  = (u32)header->length - 1;
 	u32			pdu_len  = 0;
@@ -220,10 +196,7 @@ handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u6
 	if (!dev)
 		pdu_len = modbus_exception(pdu, request[0], EXC_GATEWAY_TARGET_FAILED);
 	else
-		pdu_len = modbus_handle_pdu(dev, now_ms, request, req_len, pdu);
-
-	if (dev)
-		decision = fault_decide(&dev->fault, &server->rng);
+		pdu_len = net_handle_pdu(dev, &server->rng, now_ms, request, req_len, pdu, &decision);
 
 	LOG_DEBUG("%s tid=%u unit=%u fc=0x%02X -> %s%s", conn->peer, header->transaction,
 		  header->unit, request[0], (pdu[0] & 0x80) ? "exception" : "ok",
@@ -447,7 +420,7 @@ tcp_server_run(const tcp_server_options_t* options)
 	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
 		server.conns[i].fd = -1;
 
-	install_signal_handlers();
+	net_install_stop_handlers(&g_stop);
 	if (listen_open(&server) < 0)
 		return 2;
 

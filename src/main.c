@@ -238,6 +238,143 @@ print_summary(const config_t* config, bool rtu_mode, const char* rtu_path)
 	}
 }
 
+static s32
+apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
+{
+	bool	rtu_mode = cli->rtu_pty || cli->rtu_device;
+	char	error[512];
+
+	if (cli->frame_gap_override != -1)
+		config->frame_gap_ms = (u32)cli->frame_gap_override;
+
+	if (rtu_mode)
+	{
+		if (!validate_rtu_unit_ids(config, error, sizeof(error)))
+		{
+			fprintf(stderr, "%s: %s\n", config_path, error);
+			return 1;
+		}
+	}
+	else if (cli->check_only)
+		warn_rtu_unit_ids(config);
+
+	if (cli->port_override != -1)
+		config->port = (u16)cli->port_override;
+
+	if (!cli->bind_override)
+		return 0;
+
+	if (strlen(cli->bind_override) >= sizeof(config->bind_address))
+	{
+		fprintf(stderr, "bind address is too long (max %zu characters)\n",
+			sizeof(config->bind_address) - 1);
+		return 2;
+	}
+	if (!ip_is_ipv4_literal(cli->bind_override))
+	{
+		fprintf(stderr, "bind address '%s' is not an IPv4 address like 127.0.0.1\n",
+			cli->bind_override);
+		return 2;
+	}
+	strcpy(config->bind_address, cli->bind_override);
+	return 0;
+}
+
+static void
+set_tty_raw(int fd)
+{
+	struct termios	tio;
+
+	if (!isatty(fd) || tcgetattr(fd, &tio) != 0)
+		return;
+
+	cfmakeraw(&tio);
+	(void)tcsetattr(fd, TCSANOW, &tio);
+}
+
+static s32
+run_rtu(const cli_t* cli, config_t* config)
+{
+	int	fd       = -1;
+	int	slave_fd = -1;
+	s32	status   = 1;
+
+	if (cli->rtu_pty)
+	{
+#if defined(__linux__)
+		char	name[128];
+
+		if (openpty(&fd, &slave_fd, name, NULL, NULL) < 0)
+		{
+			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
+			return 1;
+		}
+		set_tty_raw(fd);
+		set_tty_raw(slave_fd);
+		printf("RTU PTY slave: %s\n", name);
+		fflush(stdout);
+#else
+		fprintf(stderr, "--rtu-pty is not supported on this platform\n");
+		return 2;
+#endif
+	}
+	else
+	{
+		fd = open(cli->rtu_device, O_RDWR | O_NOCTTY);
+		if (fd < 0)
+		{
+			fprintf(stderr, "cannot open RTU device '%s': %s\n",
+				cli->rtu_device, strerror(errno));
+			return 1;
+		}
+	}
+
+	set_tty_raw(fd);
+	{
+		int	flags = fcntl(fd, F_GETFL, 0);
+
+		if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+		{
+			fprintf(stderr, "cannot set RTU fd non-blocking: %s\n", strerror(errno));
+			goto cleanup;
+		}
+	}
+
+	{
+		rtu_server_options_t	options = {
+			.fd           = fd,
+			.seed         = config->seed,
+			.frame_gap_ms = config->frame_gap_ms,
+			.devices      = config->devices,
+			.device_count = config->device_count,
+		};
+
+		status = rtu_server_run(&options);
+	}
+
+cleanup:
+	if (slave_fd >= 0)
+		close(slave_fd);
+	if (fd >= 0)
+		close(fd);
+	return status;
+}
+
+static s32
+run_tcp(config_t* config)
+{
+	tcp_server_options_t	options = {
+		.bind_address    = config->bind_address,
+		.port            = config->port,
+		.seed            = config->seed,
+		.idle_timeout_ms = config->idle_timeout_ms,
+		.devices         = config->devices,
+		.device_count    = config->device_count,
+	};
+
+	return tcp_server_run(&options);
+}
+
 int
 main(int argc, char** argv)
 {
@@ -246,7 +383,9 @@ main(int argc, char** argv)
 	char		error[512];
 	arena_t*	app      = NULL;
 	arena_t*	scratch  = NULL;
-	bool		loaded   = false;
+	bool		rtu_mode = false;
+	const char*	rtu_path = NULL;
+	s32		status   = 1;
 
 	if (!parse_args(argc, argv, &cli))
 		return 2;
@@ -268,171 +407,37 @@ main(int argc, char** argv)
 	if (!scratch)
 	{
 		fprintf(stderr, "out of memory allocating scratch arena\n");
-		arena_release(app);
-		return 1;
+		goto cleanup;
 	}
 
-	loaded = config_load(app, scratch, cli.config_path, &config, error, sizeof(error));
-	arena_release(scratch);
-	if (!loaded)
+	if (!config_load(app, scratch, cli.config_path, &config, error, sizeof(error)))
 	{
 		fprintf(stderr, "%s: %s\n", cli.config_path, error);
+		goto cleanup;
+	}
+	arena_release(scratch);
+	scratch = NULL;
+
+	status = apply_overrides(&cli, &config, cli.config_path);
+	if (status != 0)
+		goto cleanup;
+
+	rtu_mode = cli.rtu_pty || cli.rtu_device;
+	rtu_path = cli.rtu_device ? cli.rtu_device : (cli.rtu_pty ? "pty" : NULL);
+	print_summary(&config, rtu_mode, rtu_path);
+	if (cli.check_only)
+	{
+		puts("config OK");
+		status = 0;
+		goto cleanup;
+	}
+
+	status = rtu_mode ? run_rtu(&cli, &config) : run_tcp(&config);
+
+cleanup:
+	if (scratch)
+		arena_release(scratch);
+	if (app)
 		arena_release(app);
-		return 1;
-	}
-
-	if (cli.frame_gap_override != -1)
-		config.frame_gap_ms = (u32)cli.frame_gap_override;
-
-	{
-		bool rtu_mode = cli.rtu_pty || cli.rtu_device;
-		if (rtu_mode)
-		{
-			if (!validate_rtu_unit_ids(&config, error, sizeof(error)))
-			{
-				fprintf(stderr, "%s: %s\n", cli.config_path, error);
-				arena_release(app);
-				return 1;
-			}
-		}
-		else if (cli.check_only)
-			warn_rtu_unit_ids(&config);
-	}
-
-	if (cli.port_override != -1)
-		config.port = (u16)cli.port_override;
-
-	if (cli.bind_override)
-	{
-		if (strlen(cli.bind_override) >= sizeof(config.bind_address))
-		{
-			fprintf(stderr, "bind address is too long (max %zu characters)\n",
-				sizeof(config.bind_address) - 1);
-			arena_release(app);
-			return 2;
-		}
-		if (!ip_is_ipv4_literal(cli.bind_override))
-		{
-			fprintf(stderr, "bind address '%s' is not an IPv4 address like 127.0.0.1\n",
-				cli.bind_override);
-			arena_release(app);
-			return 2;
-		}
-		strcpy(config.bind_address, cli.bind_override);
-	}
-
-	{
-		bool		rtu_mode  = cli.rtu_pty || cli.rtu_device;
-		const char*	rtu_path  = cli.rtu_device ? cli.rtu_device : (cli.rtu_pty ? "pty" : NULL);
-
-		print_summary(&config, rtu_mode, rtu_path);
-		if (cli.check_only)
-		{
-			puts("config OK");
-			arena_release(app);
-			return 0;
-		}
-
-		if (rtu_mode)
-		{
-			int	fd       = -1;
-			int	slave_fd = -1;
-			s32	status;
-
-			if (cli.rtu_pty)
-			{
-#if defined(__linux__)
-				char		name[128];
-				struct termios	tio;
-
-				if (openpty(&fd, &slave_fd, name, NULL, NULL) < 0)
-				{
-					fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
-					arena_release(app);
-					return 1;
-				}
-				if (tcgetattr(fd, &tio) == 0)
-				{
-					cfmakeraw(&tio);
-					(void)tcsetattr(fd, TCSANOW, &tio);
-				}
-				if (tcgetattr(slave_fd, &tio) == 0)
-				{
-					cfmakeraw(&tio);
-					(void)tcsetattr(slave_fd, TCSANOW, &tio);
-				}
-				printf("RTU PTY slave: %s\n", name);
-				fflush(stdout);
-#else
-				fprintf(stderr, "--rtu-pty is not supported on this platform\n");
-				arena_release(app);
-				return 2;
-#endif
-			}
-			else
-			{
-				fd = open(cli.rtu_device, O_RDWR | O_NOCTTY);
-				if (fd < 0)
-				{
-					fprintf(stderr, "cannot open RTU device '%s': %s\n",
-						cli.rtu_device, strerror(errno));
-					arena_release(app);
-					return 1;
-				}
-			}
-
-			if (isatty(fd))
-			{
-				struct termios tio;
-
-				if (tcgetattr(fd, &tio) == 0)
-				{
-					cfmakeraw(&tio);
-					(void)tcsetattr(fd, TCSANOW, &tio);
-				}
-			}
-
-			{
-				int flags = fcntl(fd, F_GETFL, 0);
-				if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-				{
-					fprintf(stderr, "cannot set RTU fd non-blocking: %s\n", strerror(errno));
-					if (slave_fd >= 0)
-						close(slave_fd);
-					close(fd);
-					arena_release(app);
-					return 1;
-				}
-			}
-
-			rtu_server_options_t rtu_options = {
-				.fd           = fd,
-				.seed         = config.seed,
-				.frame_gap_ms = config.frame_gap_ms,
-				.devices      = config.devices,
-				.device_count = config.device_count,
-			};
-			status = rtu_server_run(&rtu_options);
-			if (slave_fd >= 0)
-				close(slave_fd);
-			close(fd);
-			arena_release(app);
-			return status;
-		}
-	}
-
-	{
-		tcp_server_options_t options = {
-			.bind_address    = config.bind_address,
-			.port            = config.port,
-			.seed            = config.seed,
-			.idle_timeout_ms = config.idle_timeout_ms,
-			.devices         = config.devices,
-			.device_count    = config.device_count,
-		};
-		s32 status = tcp_server_run(&options);
-
-		arena_release(app);
-		return status;
-	}
+	return status;
 }
