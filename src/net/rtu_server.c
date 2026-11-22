@@ -36,6 +36,7 @@ struct rtu_server_t
 	u32			rx_len;
 	u64			last_rx_ms;
 	bool			have_rx;
+	bool			read_closed;
 	rtu_pending_t		pending;
 };
 
@@ -184,17 +185,23 @@ read_available(rtu_server_t* server, u64 now_ms)
 {
 	ssize_t	got;
 
+	if (server->read_closed)
+		return false;
 	if (server->rx_len >= sizeof(server->rx))
 		consume_rx(server, server->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
 
 	got = read(server->options.fd, server->rx + server->rx_len,
 		   sizeof(server->rx) - server->rx_len);
 	if (got == 0)
+	{
+		server->read_closed = true;
 		return false;
+	}
 	if (got < 0)
 	{
 		if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
 			return true;
+		server->read_closed = true;
 		return false;
 	}
 
@@ -241,7 +248,7 @@ static bool
 rtu_gap_due(rtu_server_t* server, u64 now_ms, u32 gap_ms)
 {
 	return !server->pending.active && server->have_rx && server->rx_len > 0 &&
-	       rtu_gap_elapsed(now_ms, server->last_rx_ms, gap_ms);
+	       (server->read_closed || rtu_gap_elapsed(now_ms, server->last_rx_ms, gap_ms));
 }
 
 static void
@@ -261,6 +268,12 @@ rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
 		}
 		else
 			*timeout = (int)(server->pending.due_ms - now_ms);
+		return;
+	}
+
+	if (server->read_closed)
+	{
+		*timeout = 0;
 		return;
 	}
 
@@ -284,27 +297,35 @@ rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
 
 	if (revents & POLLIN)
 	{
-		if (!read_available(server, now_ms))
-		{
-			if (server->have_rx && server->rx_len > 0 && !server->pending.active)
-				process_rx_frames(server, now_ms);
-			return false;
-		}
-		return true;
+		/* EOF is reported as POLLIN; read_available() records read_closed and
+		 * returns false. Fall through so pending responses can be delivered
+		 * before the server exits (issue #32). */
+		(void)read_available(server, now_ms);
 	}
 
-	if (revents & POLLHUP)
+	if ((revents & POLLHUP) && !server->read_closed)
 	{
-		/* If a delayed response is pending, the peer is gone and the
-		 * response cannot be delivered. Drop it and stop instead of
-		 * polling a hung-up fd until the delay expires (issue #19). */
+		/* Peer hangup before EOF read. Mirror EOF handling: process buffered
+		 * frames and let a queued response drain. If a delayed response is
+		 * already pending, the peer cannot receive it. */
 		if (server->pending.active)
 		{
 			pending_clear(&server->pending);
 			return false;
 		}
+		server->read_closed = true;
+	}
+
+	if (server->read_closed)
+	{
+		if (server->pending.active)
+			return true;
 		if (server->have_rx && server->rx_len > 0)
+		{
 			process_rx_frames(server, now_ms);
+			if (server->pending.active)
+				return true;
+		}
 		return false;
 	}
 

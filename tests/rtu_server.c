@@ -173,9 +173,9 @@ recv_rtu_resp_buf(int fd, u8* buf, u32* got, u8* addr, u8* pdu, u32* pdu_len, u3
 		wait_ms = (int)(deadline - now);
 		if (poll(&pfd, 1, wait_ms) <= 0)
 			continue;
-		if (!(pfd.revents & POLLIN))
+		if (!(pfd.revents & (POLLIN | POLLHUP)))
 		{
-			if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL))
+			if (pfd.revents & (POLLERR | POLLNVAL))
 				return false;
 			continue;
 		}
@@ -1290,4 +1290,68 @@ TEST(RtuServerReadWriteMultipleRegistersSingleAndCoalesced)
 
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
+}
+
+TEST(RtuServerEofAfterRequestSendsResponse)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
+	if (ok)
+		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
+		     resp[1] == 2 && get_be16(resp + 2) == 0x1234;
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuServerEofAfterDelayedRequestSendsResponse)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x5678);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u64		start = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	dev->fault.kind = FAULT_DELAY;
+	dev->fault.delay_ms = 200;
+	dev->fault.percent = 100;
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	start = clock_now_ms();
+	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1500);
+	if (ok) ok = (clock_now_ms() - start) >= 180;
+	if (ok)
+		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
+		     resp[1] == 2 && get_be16(resp + 2) == 0x5678;
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
 }
