@@ -100,39 +100,41 @@ TEST(RtuDecodeExceptionFrame)
 	ASSERT_EQ(out[0] == 0x83 && out[1] == 0x02);
 }
 
-TEST(RtuRequestLenMatchesFunctionCode)
+TEST(RtuRequestLenSupportedFunctionCodes)
 {
 	static const struct {
 		const char*	name;
 		u8		pdu[16];
 		u32		pdu_len;
+		bool		has_length; /* false for FCs framed by gap, e.g. FC 08 */
 	} cases[] = {
-		{ "fc01", { FC_READ_COILS, 0x00, 0x00, 0x00, 0x01 }, 5 },
-		{ "fc02", { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 }, 5 },
-		{ "fc03", { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 }, 5 },
-		{ "fc04", { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x01 }, 5 },
-		{ "fc05", { FC_WRITE_SINGLE_COIL, 0x00, 0x00, 0xFF, 0x00 }, 5 },
-		{ "fc06", { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A }, 5 },
-		{ "fc07", { FC_READ_EXCEPTION_STATUS }, 1 },
-		{ "fc0b", { FC_GET_COM_EVENT_COUNTER }, 1 },
-		{ "fc0c", { FC_GET_COM_EVENT_LOG }, 1 },
+		{ "fc01", { FC_READ_COILS, 0x00, 0x00, 0x00, 0x01 }, 5, true },
+		{ "fc02", { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 }, 5, true },
+		{ "fc03", { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 }, 5, true },
+		{ "fc04", { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x01 }, 5, true },
+		{ "fc05", { FC_WRITE_SINGLE_COIL, 0x00, 0x00, 0xFF, 0x00 }, 5, true },
+		{ "fc06", { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A }, 5, true },
+		{ "fc07", { FC_READ_EXCEPTION_STATUS }, 1, true },
+		{ "fc08", { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 }, 5, false },
+		{ "fc0b", { FC_GET_COM_EVENT_COUNTER }, 1, true },
+		{ "fc0c", { FC_GET_COM_EVENT_LOG }, 1, true },
 		{ "fc0f", { FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x08,
-			    0x01, 0xFF }, 7 },
+			    0x01, 0xFF }, 7, true },
 		{ "fc10", { FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x02,
-			    0x04, 0x00, 0x01, 0x00, 0x02 }, 10 },
-		{ "fc11", { FC_REPORT_SERVER_ID }, 1 },
+			    0x04, 0x00, 0x01, 0x00, 0x02 }, 10, true },
+		{ "fc11", { FC_REPORT_SERVER_ID }, 1, true },
 		{ "fc14", { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01,
-			    0x00, 0x00, 0x00, 0x01 }, 9 },
+			    0x00, 0x00, 0x00, 0x01 }, 9, true },
 		{ "fc15", { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01,
-			    0x00, 0x00, 0x00, 0x01, 0x00, 0x02 }, 11 },
+			    0x00, 0x00, 0x00, 0x01, 0x00, 0x02 }, 11, true },
 		{ "fc16", { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0x00, 0xFF,
-			    0x00, 0x00 }, 7 },
+			    0x00, 0x00 }, 7, true },
 		{ "fc17", { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00,
 			    0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x02,
-			    0x00, 0x2A }, 12 },
-		{ "fc18", { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, 3 },
+			    0x00, 0x2A }, 12, true },
+		{ "fc18", { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, 3, true },
 		{ "fc2b", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01,
-			    0x00 }, 4 },
+			    0x00 }, 4, true },
 	};
 	u8	frame[MODBUS_RTU_MAX_FRAME];
 	u32	i;
@@ -144,40 +146,123 @@ TEST(RtuRequestLenMatchesFunctionCode)
 		u32	got = 0;
 
 		ASSERT_EQ(frame_len == 1 + cases[i].pdu_len + 2);
-		ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len, &got));
-		ASSERT_EQ(got == frame_len);
+		if (cases[i].has_length)
+		{
+			ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len, &got));
+			ASSERT_EQ(got == frame_len);
 
-		/* Trailing bytes from a coalesced write must not change the answer. */
-		got = 0;
-		ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len + 3, &got));
-		ASSERT_EQ(got == frame_len);
+			/* Trailing bytes from a coalesced write must not change the answer. */
+			got = 0;
+			ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len + 3, &got));
+			ASSERT_EQ(got == frame_len);
+		}
+		else
+		{
+			/* FC 08 Diagnostics has no length field; framed by inter-frame gap. */
+			ASSERT_FAILURE(modbus_rtu_request_len(frame, frame_len, &got));
+		}
 	}
 }
 
-TEST(RtuRequestLenRejectsVariableUnsupportedAndTruncated)
+TEST(RtuRequestLenRejectsUnsupportedAndTruncated)
 {
-	u8	fc08[] = { 1, FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x00, 0x00 };
 	u8	unknown[] = { 1, 0x2A, 0x00, 0x00, 0x00, 0x00 };
 	u8	one_byte[] = { 1 };
 	u8	fc0f_short[] = { 1, FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x01 };
-	u8	fc17_short[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00,
-				 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8	fc10_short[] = { 1, FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8	fc14_short[] = { 1, FC_READ_FILE_RECORD };
+	u8	fc15_short[] = { 1, FC_WRITE_FILE_RECORD };
 	u8	mei_short[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT };
 	u8	mei_wrong[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00 };
 	u8	fc0f_oversized[] = { 1, FC_WRITE_MULTIPLE_COILS, 0x00, 0x00,
 				     0x00, 0x01, 0xFF };
 	u32	len = 0;
 
-	/* Diagnostics has no length field; it is framed by the inter-frame gap. */
-	ASSERT_FAILURE(modbus_rtu_request_len(fc08, sizeof(fc08), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(unknown, sizeof(unknown), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(one_byte, sizeof(one_byte), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(fc0f_short, sizeof(fc0f_short), &len));
-	ASSERT_FAILURE(modbus_rtu_request_len(fc17_short, sizeof(fc17_short), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(fc10_short, sizeof(fc10_short), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(fc14_short, sizeof(fc14_short), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(fc15_short, sizeof(fc15_short), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(mei_short, sizeof(mei_short), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(mei_wrong, sizeof(mei_wrong), &len));
 	ASSERT_FAILURE(modbus_rtu_request_len(fc0f_oversized, sizeof(fc0f_oversized),
 					      &len));
+}
+
+TEST(RtuRequestLenFc23ValidAndMalformed)
+{
+	/* Valid FC 23: read 1 register, write 1 register, byte count 2. */
+	u8	valid[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS,
+			    0x00, 0x00, 0x00, 0x01,
+			    0x00, 0x00, 0x00, 0x01,
+			    0x02, 0x00, 0x2A, 0x00, 0x00 };
+	u32	len = 0;
+
+	ASSERT_SUCCESS(modbus_rtu_request_len(valid, sizeof(valid), &len));
+	ASSERT_EQ(len == 1 + 12 + 2); /* addr + pdu + crc */
+
+	/* Boundary: max read qty 0x007D, max write qty 0x0079 with byte count 0xF2. */
+	{
+		u8	boundary[1 + 10 + 0xF2 + 2];
+		u32	i;
+		u32	got = 0;
+
+		memset(boundary, 0, sizeof(boundary));
+		boundary[0] = 1;
+		boundary[1] = FC_READ_WRITE_MULTIPLE_REGISTERS;
+		boundary[4] = 0x7D; /* read qty */
+		boundary[8] = 0x79; /* write qty */
+		boundary[10] = 0xF2; /* byte count */
+		for (i = 0; i < sizeof(boundary); i++)
+			(void)boundary[i];
+		ASSERT_SUCCESS(modbus_rtu_request_len(boundary, sizeof(boundary), &got));
+		ASSERT_EQ(got == sizeof(boundary));
+	}
+
+	/* Malformed: missing byte count / truncated before byte count field. */
+	{
+		u8	short_hdr[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS,
+					0x00, 0x00, 0x00, 0x01,
+					0x00, 0x00, 0x00, 0x01 };
+		len = 0;
+		ASSERT_FAILURE(modbus_rtu_request_len(short_hdr, sizeof(short_hdr), &len));
+	}
+
+	/* Malformed: byte count present but payload truncated for declared count. */
+	{
+		u8	trunc_payload[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS,
+					    0x00, 0x00, 0x00, 0x01,
+					    0x00, 0x00, 0x00, 0x01,
+					    0x04, 0x00, 0x01 }; /* needs 4 bytes */
+		len = 0;
+		/* request_len only computes expected length from byte count; it should
+		 * return expected length even if buffer is short? Check behavior: it
+		 * does not read beyond byte count field except header; returns computed
+		 * frame length. The caller compares to buffer. Here buf_len is short. */
+		ASSERT_SUCCESS(modbus_rtu_request_len(trunc_payload, sizeof(trunc_payload), &len));
+		ASSERT_EQ(len == 1 + 10 + 4 + 2);
+	}
+
+	/* Malformed: byte count makes PDU exceed MODBUS_MAX_PDU. */
+	{
+		u8	oversized[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS,
+					0x00, 0x00, 0x00, 0x01,
+					0x00, 0x00, 0x00, 0x01,
+					0xF5 };
+		len = 0;
+		ASSERT_FAILURE(modbus_rtu_request_len(oversized, sizeof(oversized), &len));
+	}
+
+	/* Malformed: zero/odd-shaped counts in PDU are shape problems for PDU handler;
+	 * request_len must still compute length from byte count field when structurally possible. */
+	{
+		u8	zero_write[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS,
+					 0x00, 0x00, 0x00, 0x01,
+					 0x00, 0x00, 0x00, 0x00,
+					 0x00, 0x00, 0x00 };
+		len = 0;
+		ASSERT_SUCCESS(modbus_rtu_request_len(zero_write, sizeof(zero_write), &len));
+		ASSERT_EQ(len == 1 + 10 + 2);
+	}
 }

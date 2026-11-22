@@ -1042,117 +1042,187 @@ TEST(RtuServerSupportedFunctionCodesFraming)
 	}
 
 	{
-		u8 req[] = { FC_READ_COILS, 0x00, 0x00, 0x00, 0x02 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_COILS, 0x00, 0x00, 0x00, 0x02 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==FC_READ_COILS && resp[1]==1 && resp[2]==0x01);
+		ASSERT_EQ(addr == 1 && len == 3);
+		ASSERT_EQ(resp[0] == FC_READ_COILS && resp[1] == 1 && resp[2] == 0x01);
 	}
 	{
-		u8 req[] = { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==FC_READ_DISCRETE_INPUTS && resp[2]==0x01);
+		ASSERT_EQ(addr == 1 && len == 3);
+		ASSERT_EQ(resp[0] == FC_READ_DISCRETE_INPUTS && resp[1] == 1 && resp[2] == 0x01);
 	}
 	ASSERT_EQ(rtu_expect_fc03(&child, 1, 0, 0x0001));
 	{
-		u8 req[] = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x02 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x02 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==6 && resp[0]==FC_READ_INPUT_REGISTERS && get_be16(resp+2)==0x1122 && get_be16(resp+4)==0x3344);
+		ASSERT_EQ(addr == 1 && len == 6);
+		ASSERT_EQ(resp[0] == FC_READ_INPUT_REGISTERS && resp[1] == 4);
+		ASSERT_EQ(get_be16(resp + 2) == 0x1122 && get_be16(resp + 4) == 0x3344);
 	}
 	{
-		u8 req[] = { FC_WRITE_SINGLE_COIL, 0x00, 0x01, 0xFF, 0x00 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_WRITE_SINGLE_COIL, 0x00, 0x01, 0xFF, 0x00 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_SINGLE_COIL);
+		ASSERT_EQ(addr == 1 && len == 5);
+		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
 	}
 	{
-		u8 req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x02, 0x00, 0x2A }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x02, 0x00, 0x2A };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_SINGLE_REGISTER);
+		ASSERT_EQ(addr == 1 && len == 5);
+		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
 		ASSERT_EQ(rtu_expect_fc03(&child, 1, 2, 0x002A));
 	}
 	{
-		u8 req[] = { FC_READ_EXCEPTION_STATUS }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_EXCEPTION_STATUS };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==2 && resp[0]==FC_READ_EXCEPTION_STATUS);
+		ASSERT_EQ(addr == 1 && len == 2);
+		ASSERT_EQ(resp[0] == FC_READ_EXCEPTION_STATUS && resp[1] == 0);
 	}
 	{
-		u8 req[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_DIAGNOSTICS && resp[3]==0x12 && resp[4]==0x34);
+		ASSERT_EQ(addr == 1 && len == sizeof(req));
+		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
 	}
 	{
-		u8 req[] = { FC_GET_COM_EVENT_COUNTER }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_GET_COM_EVENT_COUNTER);
+		ASSERT_EQ(addr == 1 && len == 5);
+		ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
+		ASSERT_EQ(get_be16(resp + 1) == 0x0000);
 	}
 	{
-		u8 req[] = { FC_GET_COM_EVENT_LOG }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_GET_COM_EVENT_LOG };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==8 && resp[0]==FC_GET_COM_EVENT_LOG);
+		ASSERT_EQ(addr == 1 && len == 8);
+		ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 6);
+		ASSERT_EQ(get_be16(resp + 2) == 0x0000);
 	}
 	{
-		u8 req[] = { FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x02, 0x01, 0x02 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x02, 0x01, 0x02 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_MULTIPLE_COILS);
+		ASSERT_EQ(addr == 1 && len == 5);
+		ASSERT_EQ(memcmp(resp, req, 5) == 0);
 	}
 	{
-		u8 req[] = { FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x03, 0x00, 0x01, 0x02, 0x00, 0x99 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x03, 0x00, 0x01, 0x02, 0x00, 0x99 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_MULTIPLE_REGISTERS);
+		ASSERT_EQ(addr == 1 && len == 5);
+		ASSERT_EQ(memcmp(resp, req, 5) == 0);
 		ASSERT_EQ(rtu_expect_fc03(&child, 1, 3, 0x0099));
 	}
 	{
-		u8 req[] = { FC_REPORT_SERVER_ID }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_REPORT_SERVER_ID };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==FC_REPORT_SERVER_ID && resp[1]==2 && resp[2]==0x2A && resp[3]==0xFF);
+		ASSERT_EQ(addr == 1 && len == 4);
+		ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2);
+		ASSERT_EQ(resp[2] == 0x2A && resp[3] == 0xFF);
 	}
 	{
-		u8 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==FC_READ_FILE_RECORD && len>=6 && get_be16(resp+4)==0xBEEF);
+		ASSERT_EQ(addr == 1 && len == 6);
+		ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[1] == 4);
+		ASSERT_EQ(resp[2] == 3 && resp[3] == 0x06);
+		ASSERT_EQ(get_be16(resp + 4) == 0xBEEF);
 	}
 	{
-		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x12, 0x34 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x12, 0x34 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==FC_WRITE_FILE_RECORD);
+		ASSERT_EQ(addr == 1 && len == sizeof(req));
+		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
 	}
 	{
-		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x08, 0x00, 0x0F, 0x00, 0xF0 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x08, 0x00, 0x0F, 0x00, 0xF0 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==7 && resp[0]==FC_MASK_WRITE_REGISTER);
+		ASSERT_EQ(addr == 1 && len == 7);
+		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
 		ASSERT_EQ(rtu_expect_fc03(&child, 1, 8, 0x00FF));
 	}
 	{
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x77 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x77 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && len==4 && resp[0]==FC_READ_WRITE_MULTIPLE_REGISTERS && get_be16(resp+2)==0x0001);
+		ASSERT_EQ(addr == 1 && len == 4);
+		ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 2);
+		ASSERT_EQ(get_be16(resp + 2) == 0x0001);
 		ASSERT_EQ(rtu_expect_fc03(&child, 1, 1, 0x0077));
 	}
 	{
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x00 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==(u8)(FC_READ_FIFO_QUEUE|0x80) && resp[1]==EXC_ILLEGAL_DATA_ADDRESS);
+		ASSERT_EQ(addr == 1 && len == 2);
+		ASSERT_EQ(resp[0] == (u8)(FC_READ_FIFO_QUEUE | 0x80));
+		ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
 	}
 	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+		u8 resp[MODBUS_MAX_PDU], addr = 0;
+		u32 len = 0;
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr==1 && resp[0]==FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1]==0x0E);
+		ASSERT_EQ(addr == 1 && len > 3);
+		ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0E);
+		ASSERT_EQ(resp[2] == 0x01 && resp[3] == 0x81);
+		ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x03);
+		ASSERT_EQ(resp[7] == 0x00 && resp[8] == 10);
+		ASSERT_EQ(memcmp(resp + 9, "modbus-sim", 10) == 0);
+		ASSERT_EQ(resp[19] == 0x01 && resp[20] == 10);
+		ASSERT_EQ(memcmp(resp + 21, "modbus-sim", 10) == 0);
+		ASSERT_EQ(resp[31] == 0x02 && resp[32] == 3);
+		ASSERT_EQ(memcmp(resp + 33, "1.0", 3) == 0);
 	}
 
 	ASSERT_EQ(rtu_child_stop(&child));
@@ -1213,6 +1283,64 @@ TEST(RtuServerUnitIdEdges)
 	ASSERT_EQ(ok);
 }
 
+TEST(RtuServerReadWriteMultipleRegistersResponseMatchesPduShape)
+{
+	/* Same request/response shape as PDU test ReadWriteMultipleRegistersSuccessAndReadback. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	rtu_child_t	child = { 0 };
+	u8		req[] = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x00, 0x00, 0x00, 0x02,	/* read addr 0, qty 2 */
+		0x00, 0x00, 0x00, 0x02,	/* write addr 0, qty 2 */
+		0x04,			/* byte count */
+		0xAA, 0xAA, 0xBB, 0xBB,	/* write values */
+	};
+	u8		expected[] = {
+		FC_READ_WRITE_MULTIPLE_REGISTERS,
+		0x04,
+		0xAA, 0xAA, 0xBB, 0xBB,
+	};
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		point_t		p = { 0 };
+		device_t*	devices[] = { dev };
+
+		p.space = SPACE_HOLDING;
+		p.address = 1;
+		p.type = VT_U16;
+		p.kind = POINT_STATIC;
+		p.static_value = 0x5678;
+		ASSERT_EQ(device_add_point(dev, &p) == NULL);
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == sizeof(expected));
+	ASSERT_EQ(memcmp(resp, expected, sizeof(expected)) == 0);
+
+	/* Verify write took effect via FC 03, same as PDU readback. */
+	{
+		u8	read_req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x02 };
+		u8	read_expected[] = { FC_READ_HOLDING_REGISTERS, 0x04, 0xAA, 0xAA, 0xBB, 0xBB };
+
+		ASSERT_EQ(send_rtu_req(child.fd, 1, read_req, sizeof(read_req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
+		ASSERT_EQ(addr == 1);
+		ASSERT_EQ(len == sizeof(read_expected));
+		ASSERT_EQ(memcmp(resp, read_expected, sizeof(read_expected)) == 0);
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
+
 TEST(RtuServerReadWriteMultipleRegistersSingleAndCoalesced)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1267,13 +1395,17 @@ TEST(RtuServerReadWriteMultipleRegistersSingleAndCoalesced)
 
 	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 800));
 	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(len == 4 && resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS);
-	ASSERT_EQ(resp[1] == 2 && get_be16(resp + 2) == 0x1234);
+	ASSERT_EQ(len == 4);
+	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(resp[1] == 2);
+	ASSERT_EQ(get_be16(resp + 2) == 0x1234);
 
 	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 800));
 	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(len == 4 && resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS);
-	ASSERT_EQ(resp[1] == 2 && get_be16(resp + 2) == 0x002A);
+	ASSERT_EQ(len == 4);
+	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(resp[1] == 2);
+	ASSERT_EQ(get_be16(resp + 2) == 0x002A);
 	ASSERT_EQ(recv_none_fd(child.fd, 100));
 
 	/* Both writes took effect. */
