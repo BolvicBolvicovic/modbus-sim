@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "net/rtu_server.h"
+#include "modbus/pdu.h"
 #include "modbus/rtu.h"
 #include "net/net_common.h"
 #include "util/clock.h"

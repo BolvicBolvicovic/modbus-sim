@@ -1,10 +1,12 @@
 #ifndef NET_COMMON_H
 #define NET_COMMON_H
 
-#include "device/device.h"
-#include "device/fault.h"
-#include "util/rng.h"
+#include "vlib/c_types.h"
 #include <signal.h>
+
+typedef struct device_t device_t;
+typedef struct rng_t rng_t;
+typedef struct fault_decision_t fault_decision_t;
 
 /* Returns the device with the given unit id, or NULL. */
 device_t*	net_find_device(device_t** devices, u32 count, u8 unit);
