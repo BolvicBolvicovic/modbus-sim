@@ -313,13 +313,28 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 }
 
 static bool
-tty_is_pty_slave(int fd)
+tty_is_pty(int fd)
 {
-	char	name[64];
+	char		name[64];
+#if defined(__linux__)
+	unsigned int	ptn = 0;
+#endif
 
-	if (ttyname_r(fd, name, sizeof(name)) != 0)
+	if (!isatty(fd))
 		return false;
-	return strncmp(name, "/dev/pts/", 9) == 0;
+	if (ttyname_r(fd, name, sizeof(name)) == 0)
+	{
+		if (strcmp(name, "/dev/ptmx") == 0)
+			return true;
+		if (strncmp(name, "/dev/pts/", 9) == 0)
+			return true;
+	}
+#if defined(__linux__)
+	/* Fallback for master fds whose ttyname_r() may be non-PTS. */
+	if (ioctl(fd, TIOCGPTN, &ptn) == 0)
+		return true;
+#endif
+	return false;
 }
 
 static u32
@@ -327,7 +342,7 @@ tty_baud(int fd)
 {
 	struct termios	tio;
 
-	if (!isatty(fd) || tty_is_pty_slave(fd))
+	if (!isatty(fd) || tty_is_pty(fd))
 		return 0;
 	if (tcgetattr(fd, &tio) != 0)
 		return 0;
@@ -452,7 +467,8 @@ run_rtu(const cli_t* cli, config_t* config)
 			goto cleanup;
 		}
 	}
-	if (config->baud == 0)
+	/* PTY master/slave have no real UART baud; only auto-detect on real tty devices. */
+	if (config->baud == 0 && !cli->rtu_pty)
 		config->baud = tty_baud(fd);
 
 	{

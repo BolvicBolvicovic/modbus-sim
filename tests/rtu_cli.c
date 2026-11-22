@@ -25,6 +25,7 @@ struct rtu_cli_t
 	int	master_fd;
 	char	config[80];
 	char	stderr_path[80];
+	char	stdout_path[80];
 };
 
 static rtu_cli_t g_rtu_cli = { .pid = -1, .master_fd = -1 };
@@ -113,6 +114,11 @@ rtu_cli_stop(void)
 		unlink(fx->stderr_path);
 		fx->stderr_path[0] = '\0';
 	}
+	if (fx->stdout_path[0])
+	{
+		unlink(fx->stdout_path);
+		fx->stdout_path[0] = '\0';
+	}
 	ASSERT_EQ(ok);
 }
 
@@ -174,6 +180,49 @@ rtu_cli_start_with_args(char* const argv[], bool capture_stderr)
 	if (fx->pid <= 0)
 		return false;
 	/* Give the server time to load config and enter the RTU loop. */
+	usleep(300000);
+	return kill(fx->pid, 0) == 0;
+}
+
+static bool
+rtu_cli_start_with_args_capture_stdout(char* const argv[])
+{
+	rtu_cli_t* fx = &g_rtu_cli;
+	int fd;
+
+	if (!rtu_cli_verbose())
+	{
+		strcpy(fx->stderr_path, "/tmp/modbus-sim-rtuclierr-XXXXXX");
+		fd = mkstemp(fx->stderr_path);
+		if (fd < 0)
+			return false;
+		close(fd);
+	}
+	strcpy(fx->stdout_path, "/tmp/modbus-sim-rtucliout-XXXXXX");
+	fd = mkstemp(fx->stdout_path);
+	if (fd < 0)
+		return false;
+	close(fd);
+
+	fx->pid = fork();
+	if (fx->pid == 0)
+	{
+		if (!freopen("/dev/null", "r", stdin))
+			_exit(127);
+		if (!freopen(fx->stdout_path, "w", stdout))
+			_exit(127);
+		setvbuf(stdout, NULL, _IONBF, 0);
+		if (fx->stderr_path[0] && !rtu_cli_verbose())
+		{
+			if (!freopen(fx->stderr_path, "w", stderr))
+				_exit(127);
+			setvbuf(stderr, NULL, _IONBF, 0);
+		}
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	if (fx->pid <= 0)
+		return false;
 	usleep(300000);
 	return kill(fx->pid, 0) == 0;
 }
@@ -883,6 +932,27 @@ TEST(RtuCliFrameGapOverrideBeatsBaud)
 	ASSERT_EQ(ok);
 }
 
+static bool
+rtu_cli_start_real_pty(const char* config_text, char* const extra[], u32 extra_count)
+{
+	rtu_cli_t* fx = &g_rtu_cli;
+	char* argv[16];
+	int argc = 0;
+	const char* bin = getenv("MODBUS_SIM_BIN");
+
+	if (!bin)
+		bin = "./modbus-sim";
+	if (extra_count > 8 || !rtu_cli_write_config(config_text))
+		return false;
+	argv[argc++] = (char*)bin;
+	argv[argc++] = "--rtu-pty";
+	for (u32 i = 0; i < extra_count; i++)
+		argv[argc++] = extra[i];
+	argv[argc++] = fx->config;
+	argv[argc] = NULL;
+	return rtu_cli_start_with_args_capture_stdout(argv);
+}
+
 TEST(RtuCliPtyDefaultUsesUnknownBaudFallback)
 {
 	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
@@ -891,10 +961,32 @@ TEST(RtuCliPtyDefaultUsesUnknownBaudFallback)
 	u8 addr = 0;
 	u32 len = 0;
 	u32 flen = 0;
+	char slave_path[128];
 	bool ok = false;
 
-	ASSERT_EQ(rtu_cli_start_pty("(device (unit-id 1) (holding 0 (static 4660)))\n", NULL, NULL));
+	/* Real --rtu-pty path: #42 regression (master fd must not auto-detect 38400). */
+	ASSERT_EQ(rtu_cli_start_real_pty("(device (unit-id 1) (holding 0 (static 4660)))\n", NULL, 0));
 	ASSERT_EQ(rtu_cli_stderr_contains("frame gap 20 ms (default; baud unknown)"));
+	{
+		FILE* out = fopen(g_rtu_cli.stdout_path, "r");
+		char line[512];
+		bool found = false;
+		slave_path[0] = '\0';
+		ASSERT(out != NULL);
+		while (fgets(line, sizeof(line), out))
+		{
+			char* p = strstr(line, "RTU PTY slave: ");
+			if (!p) continue;
+			p += strlen("RTU PTY slave: ");
+			snprintf(slave_path, sizeof(slave_path), "%.*s", (int)strcspn(p, "\r\n"), p);
+			found = slave_path[0] != '\0';
+			break;
+		}
+		fclose(out);
+		ASSERT_EQ(found);
+	}
+	g_rtu_cli.master_fd = open(slave_path, O_RDWR | O_NOCTTY | O_CLOEXEC);
+	ASSERT(g_rtu_cli.master_fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
 	ASSERT(flen > 4);
@@ -903,7 +995,7 @@ TEST(RtuCliPtyDefaultUsesUnknownBaudFallback)
 	{
 		u8 tmp_addr = 0, tmp_pdu[MODBUS_MAX_PDU];
 		u32 tmp_len = 0;
-		/* Would be split at baud-derived 2ms for PTY default 38400; 20ms fallback keeps it together. */
+		/* Would be split at baud-derived 2ms for PTY master default 38400; 20ms fallback keeps it together. */
 		ok = !recv_rtu_resp_fd(g_rtu_cli.master_fd, &tmp_addr, tmp_pdu, &tmp_len, 5);
 	}
 	if (ok) usleep(5000);
@@ -919,7 +1011,7 @@ TEST(RtuCliBaudOverrideOnPtyLogsDerivedTiming)
 {
 	char* extra[] = { "--baud", "9600" };
 
-	ASSERT_EQ(rtu_cli_start_pty_extra(
+	ASSERT_EQ(rtu_cli_start_real_pty(
 		"(device (unit-id 1) (holding 0 (static 4660)))\n", extra, 2));
 	ASSERT_EQ(rtu_cli_stderr_contains("baud 9600, t3.5 4011 us (frame gap 5 ms)"));
 	rtu_cli_stop();
