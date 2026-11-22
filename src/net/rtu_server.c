@@ -113,62 +113,73 @@ consume_rx(rtu_server_t* server, u32 n)
 	server->rx_len -= n;
 }
 
+typedef enum rtu_frame_result_t rtu_frame_result_t;
+enum rtu_frame_result_t
+{
+	RTU_FRAME_NONE,    /* No frame at offset 0; discard buffered bytes. */
+	RTU_FRAME_FOUND,   /* Complete frame of *frame_len at offset 0. */
+	RTU_FRAME_DISCARD, /* Known request length exceeds buffer and buffer is not
+			    * a complete frame; discard buffered bytes. */
+};
+
+/* Locate a complete RTU frame at rx[0]. Prefer the function-code-derived
+ * request length to avoid false CRC matches on a shorter prefix (issue #18).
+ * For variable/unknown FCs, decode the full buffer as one frame. */
+static rtu_frame_result_t
+rtu_next_frame(const u8* rx, u32 rx_len, u32* frame_len)
+{
+	u8		addr    = 0;
+	const u8*	pdu     = NULL;
+	u32		pdu_len = 0;
+	u32		expected = 0;
+
+	if (modbus_rtu_request_len(rx, rx_len, &expected))
+	{
+		if (expected <= rx_len && modbus_rtu_decode(rx, expected, &addr, &pdu, &pdu_len))
+		{
+			*frame_len = expected;
+			return RTU_FRAME_FOUND;
+		}
+		if (expected > rx_len)
+		{
+			if (rx_len <= MODBUS_RTU_MAX_FRAME &&
+			    modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len))
+			{
+				*frame_len = rx_len;
+				return RTU_FRAME_FOUND;
+			}
+			return RTU_FRAME_DISCARD;
+		}
+	}
+
+	if (rx_len <= MODBUS_RTU_MAX_FRAME &&
+	    modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len))
+	{
+		*frame_len = rx_len;
+		return RTU_FRAME_FOUND;
+	}
+	return RTU_FRAME_NONE;
+}
+
 static void
 process_rx_frames(rtu_server_t* server, u64 now_ms)
 {
-	/* After a frame gap, parse complete RTU request frames. Prefer the expected
-	 * request length derived from the function code to avoid false CRC matches on
-	 * a shorter prefix (issue #18). For variable/unknown FCs, fall back to
-	 * decoding the full buffered frame as one frame. */
 	while (server->rx_len >= 4 && !server->pending.active)
 	{
-		u8		addr = 0;
-		const u8*	pdu = NULL;
-		u32		pdu_len = 0;
-		u32		frame_len = 0;
-		bool		found = false;
+		u32			frame_len = 0;
+		rtu_frame_result_t	result;
 
-		if (modbus_rtu_request_len(server->rx, server->rx_len, &frame_len))
+		result = rtu_next_frame(server->rx, server->rx_len, &frame_len);
+		if (result != RTU_FRAME_FOUND)
 		{
-			if (frame_len <= server->rx_len &&
-			    modbus_rtu_decode(server->rx, frame_len, &addr, &pdu, &pdu_len))
-			{ found = true; }
-			else if (frame_len > server->rx_len)
-			{
-				if (server->rx_len <= MODBUS_RTU_MAX_FRAME &&
-				    modbus_rtu_decode(server->rx, server->rx_len, &addr, &pdu, &pdu_len))
-				{
-					frame_len = server->rx_len;
-					found = true;
-				}
-				else
-				{
-					server->rx_len = 0;
-					return;
-				}
-			}
+			server->rx_len = 0;
+			return;
 		}
 
-		if (!found && server->rx_len <= MODBUS_RTU_MAX_FRAME &&
-		    modbus_rtu_decode(server->rx, server->rx_len, &addr, &pdu, &pdu_len))
-		{
-			frame_len = server->rx_len;
-			found = true;
-		}
-
-		if (found)
-		{
-			handle_frame(server, server->rx, frame_len, now_ms);
-			consume_rx(server, frame_len);
-			if (server->pending.active)
-				return;
-			continue;
-		}
-
-		/* No valid frame starting at offset 0. On a frame gap, remaining bytes
-		 * are noise/partial frames; discard them to avoid false CRC matches. */
-		server->rx_len = 0;
-		return;
+		handle_frame(server, server->rx, frame_len, now_ms);
+		consume_rx(server, frame_len);
+		if (server->pending.active)
+			return;
 	}
 
 	/* 1-3 bytes cannot form a valid RTU frame (addr+FC+CRC). After the gap
