@@ -2,7 +2,8 @@
 #define TCP_SERVER_H
 
 #include "vlib/c_types.h"
-#include "device/device.h"
+
+typedef struct device_t device_t;
 
 /* Name: tcp_server_options_t
  * Description: what the server needs to run. Devices are borrowed, not copied.

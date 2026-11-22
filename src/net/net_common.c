@@ -39,8 +39,5 @@ u32
 net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms, const u8* req, u32 req_len,
 	       u8* resp, fault_decision_t* decision)
 {
-	u32	len = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
-
-	*decision = fault_decide(&dev->fault, rng);
-	return len;
+	return modbus_handle_request(dev, rng, now_ms, req, req_len, resp, decision);
 }

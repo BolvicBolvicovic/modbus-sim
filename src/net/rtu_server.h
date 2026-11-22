@@ -2,7 +2,9 @@
 #define RTU_SERVER_H
 
 #include "vlib/c_types.h"
-#include "device/device.h"
+#include <stdbool.h>
+
+typedef struct device_t device_t;
 
 /* Name: rtu_server_options_t
  * Description: options for serving Modbus RTU over a serial-like file descriptor.

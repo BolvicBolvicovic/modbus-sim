@@ -745,3 +745,17 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		dev->com_event_count = (u16)(dev->com_event_count + 1);
 	return resp_len;
 }
+
+u32
+modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
+		      const u8* req, u32 req_len, u8* resp,
+		      fault_decision_t* decision)
+{
+	u32	len = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
+
+	if (dev)
+		*decision = fault_decide(&dev->fault, rng);
+	else
+		*decision = (fault_decision_t){ 0 };
+	return len;
+}

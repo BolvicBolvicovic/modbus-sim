@@ -3,6 +3,8 @@
 
 #include "vlib/c_types.h"
 #include "device/device.h"
+#include "device/fault.h"
+#include "util/rng.h"
 
 /* Supported function codes. */
 enum modbus_function_code
@@ -49,6 +51,11 @@ enum modbus_exception_code
  * Protocol problems become Modbus exception responses; this never fails.
  * */
 u32	modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp);
+
+/* Handles a PDU and applies device fault decision. */
+u32	modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
+			      const u8* req, u32 req_len, u8* resp,
+			      fault_decision_t* decision);
 
 /* Builds an exception response PDU. Returns its length (2). */
 u32	modbus_exception(u8* resp, u8 function, u8 code);
