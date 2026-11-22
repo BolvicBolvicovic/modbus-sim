@@ -493,12 +493,22 @@ baud_to_speed(u32 baud, speed_t* out)
 	}
 }
 
+static bool
+tty_is_pty_slave(int fd)
+{
+	char	name[64];
+
+	if (ttyname_r(fd, name, sizeof(name)) != 0)
+		return false;
+	return strncmp(name, "/dev/pts/", 9) == 0;
+}
+
 static u32
 tty_baud(int fd)
 {
 	struct termios	tio;
 
-	if (!isatty(fd))
+	if (!isatty(fd) || tty_is_pty_slave(fd))
 		return 0;
 	if (tcgetattr(fd, &tio) != 0)
 		return 0;
@@ -589,8 +599,7 @@ run_rtu(const cli_t* cli, config_t* config)
 			close(fd);
 			return 1;
 		}
-		if (config->baud == 0)
-			config->baud = tty_baud(slave_fd);
+		/* PTY has no real UART baud; keep baud unknown unless explicitly configured. */
 		printf("RTU PTY slave: %s\n", name);
 		fflush(stdout);
 #else
