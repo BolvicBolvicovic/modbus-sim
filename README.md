@@ -86,7 +86,9 @@ Port 502 is the Modbus standard but needs root on Linux. The default here is **1
 In RTU mode, `--rtu-pty` creates a Linux PTY and prints `RTU PTY slave: /dev/pts/N`; connect your
 RTU client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC, unknown unit, and broadcast (unit 0) produce no
-response. Broadcast requests are not executed. Unit ids 0 and 248-255 are rejected in RTU mode
+response. Broadcast requests are not executed. `--rtu-device` opens with `O_NONBLOCK` so startup does not
+hang on FIFOs or similar paths; when the device is a tty, `modbus-sim` configures it as raw 8N1 and
+preserves the existing baud rate. Unit ids 0 and 248-255 are rejected in RTU mode
 because 0 is broadcast and 248-255 are reserved. Frame boundaries use a
 fixed silence-gap approximation (`frame-gap-ms`, default 20 ms) because PTY/pipe streams have no
 baud-rate timing. `--port`/`--bind` are TCP-only; `--frame-gap-ms` is RTU-only. RTU-over-TCP is not

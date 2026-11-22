@@ -16,7 +16,11 @@ path) via CLI `--rtu-pty` or `--rtu-device PATH`. The same PDU handlers and devi
 as for TCP; only framing/transport differ.
 
 Frame format: `[addr][PDU...][CRC lo][CRC hi]` (2-byte Modbus CRC-16, low byte first). A valid
-frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes.
+frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. `--rtu-device` is opened with
+`O_NONBLOCK` so startup does not hang on a blocking open (for example, a FIFO with no writer);
+`modbus-sim` keeps the fd non-blocking for the poll loop. When the fd is a tty, `modbus-sim`
+configures raw 8N1 mode (`CS8`, no parity, 1 stop bit, `CLOCAL|CREAD`, no flow control) and
+preserves the existing baud rate. Non-tty fds skip termios setup.
 
 Frame boundaries use a fixed inter-frame silence gap approximation (`frame-gap-ms`, config or CLI,
 default 20 ms). This is a practical approximation for PTY/pipe byte streams that have no baud rate

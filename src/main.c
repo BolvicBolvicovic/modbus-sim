@@ -266,16 +266,52 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 	return 0;
 }
 
-static void
+/* Applies a known raw 8N1 serial configuration. Preserves the existing baud
+ * rate so a configured serial line keeps its speed. Non-tty fds are skipped. */
+static bool
 set_tty_raw(int fd)
 {
 	struct termios	tio;
+	speed_t		ispeed;
+	speed_t		ospeed;
 
-	if (!isatty(fd) || tcgetattr(fd, &tio) != 0)
-		return;
+	if (!isatty(fd))
+		return true;
+	if (tcgetattr(fd, &tio) != 0)
+		return false;
 
+	ispeed = cfgetispeed(&tio);
+	ospeed = cfgetospeed(&tio);
 	cfmakeraw(&tio);
-	(void)tcsetattr(fd, TCSANOW, &tio);
+	cfsetispeed(&tio, ispeed);
+	cfsetospeed(&tio, ospeed);
+	tio.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CRTSCTS);
+	tio.c_cflag |= CS8 | CLOCAL | CREAD;
+	tio.c_iflag &= ~(IXON | IXOFF | IXANY);
+#ifdef ECHOE
+	tio.c_lflag &= ~ECHOE;
+#endif
+#ifdef ECHOK
+	tio.c_lflag &= ~ECHOK;
+#endif
+#ifdef ECHONL
+	tio.c_lflag &= ~ECHONL;
+#endif
+#ifdef ECHOCTL
+	tio.c_lflag &= ~ECHOCTL;
+#endif
+#ifdef ECHOKE
+	tio.c_lflag &= ~ECHOKE;
+#endif
+#ifdef ECHOPRT
+	tio.c_lflag &= ~ECHOPRT;
+#endif
+#ifdef NOKERNINFO
+	tio.c_lflag &= ~NOKERNINFO;
+#endif
+	if (tcsetattr(fd, TCSANOW, &tio) != 0)
+		return false;
+	return true;
 }
 
 static s32
@@ -295,7 +331,13 @@ run_rtu(const cli_t* cli, config_t* config)
 			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
 			return 1;
 		}
-		set_tty_raw(slave_fd);
+		if (!set_tty_raw(slave_fd))
+		{
+			fprintf(stderr, "cannot configure RTU PTY slave: %s\n", strerror(errno));
+			close(slave_fd);
+			close(fd);
+			return 1;
+		}
 		printf("RTU PTY slave: %s\n", name);
 		fflush(stdout);
 #else
@@ -305,7 +347,7 @@ run_rtu(const cli_t* cli, config_t* config)
 	}
 	else
 	{
-		fd = open(cli->rtu_device, O_RDWR | O_NOCTTY);
+		fd = open(cli->rtu_device, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
 		if (fd < 0)
 		{
 			fprintf(stderr, "cannot open RTU device '%s': %s\n",
@@ -314,7 +356,12 @@ run_rtu(const cli_t* cli, config_t* config)
 		}
 	}
 
-	set_tty_raw(fd);
+	if (!set_tty_raw(fd))
+	{
+		fprintf(stderr, "cannot configure RTU device '%s': %s\n",
+			cli->rtu_pty ? "pty" : cli->rtu_device, strerror(errno));
+		goto cleanup;
+	}
 	{
 		int	flags = fcntl(fd, F_GETFL, 0);
 
