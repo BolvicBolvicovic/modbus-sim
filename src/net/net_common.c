@@ -2,7 +2,7 @@
 #include "modbus/pdu.h"
 #include <stddef.h>
 
-static volatile sig_atomic_t*	g_stop_flag = NULL;
+static volatile sig_atomic_t* volatile	g_stop_flag = NULL;
 
 static void
 on_stop_signal(int signo)

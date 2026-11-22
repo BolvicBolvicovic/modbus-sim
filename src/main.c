@@ -62,6 +62,8 @@ print_usage(void)
 	     "  -v, --verbose        log every request\n"
 	     "  -h, --help           show this help\n"
 	     "\n"
+	     "Exit status: 0 success, 1 runtime/config-load error, 2 invalid CLI or config option.\n"
+	     "\n"
 	     "RTU mode runs Modbus RTU over a bidirectional byte stream (PTY or device).\n"
 	     "Frame boundaries use a fixed silence gap approximation (frame-gap-ms).\n"
 	     "\n"
@@ -252,7 +254,7 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 		if (!validate_rtu_unit_ids(config, error, sizeof(error)))
 		{
 			fprintf(stderr, "%s: %s\n", config_path, error);
-			return 1;
+			return 2;
 		}
 	}
 	else if (cli->check_only)
@@ -309,7 +311,6 @@ run_rtu(const cli_t* cli, config_t* config)
 			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
 			return 1;
 		}
-		set_tty_raw(fd);
 		set_tty_raw(slave_fd);
 		printf("RTU PTY slave: %s\n", name);
 		fflush(stdout);

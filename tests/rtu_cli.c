@@ -418,7 +418,7 @@ TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
 	ok = rtu_cli_start_with_args(argv0, true);
 	ASSERT_EQ(ok);
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
@@ -427,7 +427,7 @@ TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
 	ok = rtu_cli_start_with_args(argv248, true);
 	ASSERT_EQ(ok);
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
@@ -436,7 +436,7 @@ TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
 	ok = rtu_cli_start_with_args(argv255, true);
 	ASSERT_EQ(ok);
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
@@ -471,7 +471,7 @@ TEST(RtuCliCheckRejectsReservedUnitIdsInRtuMode)
 	ok = rtu_cli_start_with_args(argv, true);
 	ASSERT_EQ(ok);
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
