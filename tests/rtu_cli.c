@@ -13,7 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 typedef struct rtu_cli_t rtu_cli_t;
@@ -580,5 +582,156 @@ got_path:
 	}
 	rtu_cli_stop(); /* cleans config/stderr paths; pid/master already handled */
 	ASSERT_EQ(slave_path[0] != '\0');
+	ASSERT_EQ(ok);
+}
+
+
+TEST(RtuCliDeviceOpenDoesNotBlockOnFifoWithoutWriter)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char fifo_path[] = "/tmp/modbus-sim-rtu-fifo-XXXXXX";
+	char* argv[8];
+	int argc = 0;
+	int fd;
+	pid_t pid;
+	int status = 0;
+	bool ok;
+
+	if (!bin)
+		bin = "./modbus-sim";
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0 (static 1)))\n"));
+	fd = mkstemp(fifo_path);
+	ASSERT_EQ(fd >= 0);
+	close(fd);
+	unlink(fifo_path);
+	ASSERT_EQ(mkfifo(fifo_path, 0600) == 0);
+
+	argv[argc++] = (char*)bin;
+	argv[argc++] = "--rtu-device";
+	argv[argc++] = fifo_path;
+	argv[argc++] = g_rtu_cli.config;
+	argv[argc] = NULL;
+
+	pid = fork();
+	if (pid == 0)
+	{
+		if (!freopen("/dev/null", "r", stdin))
+			_exit(127);
+		if (!freopen("/dev/null", "w", stdout))
+			_exit(127);
+		if (!freopen("/dev/null", "w", stderr))
+			_exit(127);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	ASSERT_EQ(pid > 0);
+
+	/* The process should enter the RTU poll loop promptly; a blocking open()
+	 * would hang here until a writer opens the FIFO. A FIFO opened O_RDWR has
+	 * no EOF on Linux, so terminate the process after confirming it started. */
+	usleep(300000);
+	ok = (kill(pid, 0) == 0);
+	kill(pid, SIGTERM);
+	ok = ok && wait_for_process_exit(pid, &status, 3000);
+	if (!ok && waitpid(pid, &status, WNOHANG) != pid)
+	{
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+	}
+
+	unlink(fifo_path);
+	rtu_cli_stop();
+	ASSERT_EQ(ok);
+}
+
+static bool
+rtu_termios_is_8n1_raw(const struct termios* tio)
+{
+	if ((tio->c_cflag & CSIZE) != CS8)
+		return false;
+	if ((tio->c_cflag & PARENB) != 0)
+		return false;
+	if ((tio->c_cflag & CSTOPB) != 0)
+		return false;
+	if ((tio->c_cflag & (CLOCAL | CREAD)) != (CLOCAL | CREAD))
+		return false;
+	if ((tio->c_cflag & CRTSCTS) != 0)
+		return false;
+	if ((tio->c_iflag & (IXON | IXOFF | IXANY)) != 0)
+		return false;
+	if ((tio->c_lflag & (ICANON | ECHO | ECHOE | ISIG | IEXTEN)) != 0)
+		return false;
+	if ((tio->c_oflag & OPOST) != 0)
+		return false;
+	return true;
+}
+
+TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	int master_fd = -1;
+	int slave_fd = -1;
+	char name[128];
+	struct termios tio;
+	struct termios after;
+	pid_t pid;
+	int status = 0;
+	bool ok = false;
+
+	if (!bin)
+		bin = "./modbus-sim";
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0 (static 1)))\n"));
+	ASSERT_EQ(openpty(&master_fd, &slave_fd, name, NULL, NULL) == 0);
+
+	/* Preconfigure a weird/non-8N1 state with a known baud rate. The server
+	 * must leave the tty in 8N1 raw mode while preserving baud. */
+	ASSERT_EQ(tcgetattr(slave_fd, &tio) == 0);
+	cfmakeraw(&tio);
+	cfsetispeed(&tio, B19200);
+	cfsetospeed(&tio, B19200);
+	tio.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CLOCAL | CREAD | CRTSCTS);
+	tio.c_cflag |= CS7 | PARENB | CSTOPB | CRTSCTS;
+	tio.c_iflag |= IXON | IXOFF | IXANY;
+	ASSERT_EQ(tcsetattr(slave_fd, TCSANOW, &tio) == 0);
+
+	pid = fork();
+	if (pid == 0)
+	{
+		char* argv[] = { (char*)bin, "--rtu-device", name, g_rtu_cli.config, NULL };
+		close(master_fd);
+		close(slave_fd);
+		if (!freopen("/dev/null", "r", stdin))
+			_exit(127);
+		if (!freopen("/dev/null", "w", stdout))
+			_exit(127);
+		if (!freopen("/dev/null", "w", stderr))
+			_exit(127);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	ASSERT_EQ(pid > 0);
+
+	/* Give server time to open and configure the device. */
+	usleep(300000);
+	if (kill(pid, 0) == 0)
+	{
+		ASSERT_EQ(tcgetattr(slave_fd, &after) == 0);
+		ok = rtu_termios_is_8n1_raw(&after);
+		ok = ok && cfgetispeed(&after) == B19200;
+		ok = ok && cfgetospeed(&after) == B19200;
+	}
+
+	kill(pid, SIGTERM);
+	wait_for_process_exit(pid, &status, 3000);
+	if (waitpid(pid, &status, WNOHANG) != pid)
+	{
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+	}
+	if (master_fd >= 0)
+		close(master_fd);
+	if (slave_fd >= 0)
+		close(slave_fd);
+	rtu_cli_stop();
 	ASSERT_EQ(ok);
 }
