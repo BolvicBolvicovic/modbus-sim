@@ -13,10 +13,11 @@
 #include <string.h>
 #include <unistd.h>
 
-/* PTY/pipe fds have no baud rate, so true Modbus RTU t3.5 is unknown.
- * Use a conservative fixed inter-frame silence as a practical approximation.
- * Configurable via options->frame_gap_ms; default is 20 ms. */
-#define RTU_DEFAULT_FRAME_GAP_MS 20
+/* PTY/pipe fds have no baud rate or UART character timing, so true Modbus
+ * RTU t3.5/t1.5 cannot be observed from read() boundaries alone. When baud is
+ * known (config/CLI or tty), derive t3.5 per Modbus spec. Otherwise fall back
+ * to a fixed conservative silence gap. frame_gap_ms remains an explicit
+ * override for compatibility and deterministic testing. */
 
 typedef struct rtu_pending_t rtu_pending_t;
 struct rtu_pending_t
@@ -248,6 +249,50 @@ write_pending(rtu_server_t* server)
 	return true;
 }
 
+static u32
+rtu_char_gap_us(u32 baud, u32 fixed_us, u64 char_times_x10)
+{
+	u64	us;
+
+	if (baud == 0)
+		return 0;
+	if (baud > RTU_BAUD_FIXED_THRESHOLD)
+		return fixed_us;
+
+	/* char time = 11 bits / baud; t1.5/t3.5 are char_times_x10 / 10. */
+	us = (char_times_x10 * 11ULL * 1000000ULL + (u64)baud * 10ULL - 1ULL) / ((u64)baud * 10ULL);
+	if (us > 0xFFFFFFFFULL)
+		return 0xFFFFFFFFU;
+	return (u32)us;
+}
+
+u32
+rtu_t35_us(u32 baud)
+{
+	return rtu_char_gap_us(baud, RTU_INTERFRAME_GAP_US_HIGH, 35ULL);
+}
+
+u32
+rtu_t15_us(u32 baud)
+{
+	return rtu_char_gap_us(baud, RTU_INTERCHAR_GAP_US_HIGH, 15ULL);
+}
+
+u32
+rtu_effective_gap_ms(u32 frame_gap_ms, u32 baud)
+{
+	u32	t35;
+
+	if (frame_gap_ms > 0)
+		return frame_gap_ms;
+
+	t35 = rtu_t35_us(baud);
+	if (t35 > 0)
+		return (t35 + 999U) / 1000U; /* ceil to whole ms for poll scheduling */
+
+	return RTU_DEFAULT_FRAME_GAP_MS;
+}
+
 bool
 rtu_gap_elapsed(u64 now_ms, u64 last_rx_ms, u32 gap_ms)
 {
@@ -348,7 +393,7 @@ s32
 rtu_server_run(const rtu_server_options_t* options)
 {
 	rtu_server_t	server;
-	u32		gap_ms = options->frame_gap_ms ? options->frame_gap_ms : RTU_DEFAULT_FRAME_GAP_MS;
+	u32		gap_ms = rtu_effective_gap_ms(options->frame_gap_ms, options->baud);
 
 	memset(&server, 0, sizeof(server));
 	server.options = *options;
@@ -357,8 +402,16 @@ rtu_server_run(const rtu_server_options_t* options)
 	g_rtu_stop = 0;
 	net_install_stop_handlers(&g_rtu_stop);
 
-	LOG_INFO("RTU listening on fd %d (%u device%s), frame gap %u ms. Ctrl-C to stop.",
-		 options->fd, options->device_count, options->device_count == 1 ? "" : "s", gap_ms);
+	if (options->frame_gap_ms > 0)
+		LOG_INFO("RTU listening on fd %d (%u device%s), frame gap %u ms (override). Ctrl-C to stop.",
+			 options->fd, options->device_count, options->device_count == 1 ? "" : "s", gap_ms);
+	else if (options->baud > 0)
+		LOG_INFO("RTU listening on fd %d (%u device%s), baud %u, t3.5 %u us (frame gap %u ms). Ctrl-C to stop.",
+			 options->fd, options->device_count, options->device_count == 1 ? "" : "s",
+			 options->baud, rtu_t35_us(options->baud), gap_ms);
+	else
+		LOG_INFO("RTU listening on fd %d (%u device%s), frame gap %u ms (default; baud unknown). Ctrl-C to stop.",
+			 options->fd, options->device_count, options->device_count == 1 ? "" : "s", gap_ms);
 
 	while (!g_rtu_stop)
 	{

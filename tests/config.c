@@ -97,7 +97,8 @@ TEST(ConfigDefaults)
 	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
 	ASSERT_EQ(config.idle_timeout_ms == CONFIG_DEFAULT_IDLE_TIMEOUT_MS);
-	ASSERT_EQ(config.frame_gap_ms == CONFIG_DEFAULT_FRAME_GAP_MS);
+	ASSERT_EQ(config.frame_gap_ms == 0);
+	ASSERT_EQ(config.baud == 0);
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 }
 
@@ -423,6 +424,23 @@ TEST(ConfigFrameGapRejectsInvalidValues)
 	EXPECT_ERROR("(server (frame-gap-ms 0)) (device (holding 0))", "between 1 and 60000");
 	EXPECT_ERROR("(server (frame-gap-ms 60001)) (device (holding 0))", "between 1 and 60000");
 	EXPECT_ERROR("(server (frame-gap-ms nope)) (device (holding 0))", "whole number");
+}
+
+TEST(ConfigBaudIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (baud 9600)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.baud == 9600);
+}
+
+TEST(ConfigBaudRejectsInvalidValues)
+{
+	EXPECT_ERROR("(server (baud 0)) (device (holding 0))", "between 1 and 4000000");
+	EXPECT_ERROR("(server (baud 4000001)) (device (holding 0))", "between 1 and 4000000");
+	EXPECT_ERROR("(server (baud nope)) (device (holding 0))", "whole number");
 }
 
 TEST(ConfigFloat32StaticAcceptsNonFinite)

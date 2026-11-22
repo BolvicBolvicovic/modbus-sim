@@ -75,7 +75,8 @@ modbus-sim [options] CONFIG.scm
   -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)
       --rtu-pty        RTU: create a PTY and print its slave path
       --rtu-device PATH RTU: serve RTU over an existing serial-like device
-      --frame-gap-ms N RTU: inter-frame silence in ms (overrides config, default 20)
+      --baud N         RTU: serial baud rate for t3.5 timing (overrides config/tty)
+      --frame-gap-ms N RTU: explicit inter-frame silence override in ms
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
   -h, --help           show help
@@ -88,11 +89,15 @@ RTU client to that path. `--rtu-device PATH` serves RTU on an existing bidirecti
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC, unknown unit, and broadcast (unit 0) produce no
 response. Broadcast requests are not executed. `--rtu-device` opens with `O_NONBLOCK` so startup does not
 hang on FIFOs or similar paths; when the device is a tty, `modbus-sim` configures it as raw 8N1 and
-preserves the existing baud rate. Unit ids 0 and 248-255 are rejected in RTU mode
-because 0 is broadcast and 248-255 are reserved. Frame boundaries use a
-fixed silence-gap approximation (`frame-gap-ms`, default 20 ms) because PTY/pipe streams have no
-baud-rate timing. `--port`/`--bind` are TCP-only; `--frame-gap-ms` is RTU-only. RTU-over-TCP is not
-implemented.
+preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. Unit ids 0 and 248-255
+are rejected in RTU mode because 0 is broadcast and 248-255 are reserved.
+
+RTU frame boundaries use Modbus t3.5 when a baud rate is known (explicit `--baud`/config `(baud N)`,
+or the tty's existing baud rate). `--frame-gap-ms` is an explicit inter-frame silence override and
+takes precedence when set. For PTY/pipe streams with no known baud and no override, the default 20 ms
+fallback is used; this is an approximation because read() boundaries do not expose true UART t1.5
+character timing. `--port`/`--bind` are TCP-only; `--baud`/`--frame-gap-ms` are RTU-only. RTU-over-TCP
+is not implemented.
 
 ## Documentation
 

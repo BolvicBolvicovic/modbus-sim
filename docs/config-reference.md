@@ -35,9 +35,13 @@ produce an error message.
 | `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) |
-| `(frame-gap-ms N)` | RTU mode: fixed inter-frame silence gap in milliseconds, 1-60000. Used as a practical frame boundary approximation for byte streams without baud-rate timing | `20` |
+| `(baud N)` | RTU mode: serial baud rate, 1-4000000. When known, Modbus RTU t3.5 inter-frame timing is derived from this baud | `0` (unknown) |
+| `(frame-gap-ms N)` | RTU mode: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) |
 
-The command-line options `--port`, `--bind`, and `--frame-gap-ms` override these.
+The command-line options `--port` and `--bind` override server TCP settings. RTU timing can be
+overridden with `--baud` / `--rtu-baud` and `--frame-gap-ms`; `--frame-gap-ms` takes precedence when
+both are provided. For tty devices, if no explicit baud is configured, `modbus-sim` reads the
+existing tty baud rate for t3.5 timing.
 
 ## `(device ...)`
 

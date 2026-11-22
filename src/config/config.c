@@ -29,18 +29,20 @@ config_set_defaults(config_t* config)
 	strcpy(config->bind_address, "0.0.0.0");
 	config->port            = CONFIG_DEFAULT_PORT;
 	config->idle_timeout_ms = CONFIG_DEFAULT_IDLE_TIMEOUT_MS;
-	config->frame_gap_ms    = CONFIG_DEFAULT_FRAME_GAP_MS;
+	config->frame_gap_ms    = 0; /* auto: derive from baud, else default gap */
+	config->baud            = CONFIG_DEFAULT_BAUD;
 }
 
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms" };
+	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud" };
 	s7_pointer	options = s7_cdr(form);
 	s64		port    = config->port;
 	s64		seed    = config->seed;
 	s64		idle    = config->idle_timeout_ms;
 	s64		frame   = config->frame_gap_ms;
+	s64		baud    = config->baud;
 	const char*	bind    = NULL;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "server"))
@@ -56,6 +58,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return false;
 
 	if (!form_opt_int(ctx, options, "frame-gap-ms", 1, 60000, &frame))
+		return false;
+
+	if (!form_opt_int(ctx, options, "baud", 1, 4000000, &baud))
 		return false;
 
 	if (!form_opt_string(ctx, options, "bind", &bind))
@@ -74,6 +79,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	config->seed            = (u32)seed;
 	config->idle_timeout_ms = (u32)idle;
 	config->frame_gap_ms    = (u32)frame;
+	config->baud            = (u32)baud;
 	return true;
 }
 
