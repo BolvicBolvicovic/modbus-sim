@@ -249,7 +249,7 @@ process_rx_frames(rtu_server_t* server, u64 now_ms)
 }
 
 static bool
-read_available(rtu_server_t* server)
+read_available(rtu_server_t* server, u64 now_ms)
 {
 	ssize_t	got;
 
@@ -268,7 +268,7 @@ read_available(rtu_server_t* server)
 	}
 
 	server->rx_len    += (u32)got;
-	server->last_rx_ms = clock_now_ms();
+	server->last_rx_ms = now_ms;
 	server->have_rx    = true;
 	return true;
 }
@@ -298,11 +298,19 @@ write_pending(rtu_server_t* server)
 	return true;
 }
 
+bool
+rtu_gap_elapsed(u64 now_ms, u64 last_rx_ms, u32 gap_ms)
+{
+	/* A clock sample taken before last_rx_ms must not wrap into a huge
+	 * elapsed time; it simply means no gap has been observed yet. */
+	return now_ms >= last_rx_ms && now_ms - last_rx_ms >= gap_ms;
+}
+
 static bool
 rtu_gap_due(rtu_server_t* server, u64 now_ms, u32 gap_ms)
 {
 	return !server->pending.active && server->have_rx && server->rx_len > 0 &&
-	       now_ms - server->last_rx_ms >= gap_ms;
+	       rtu_gap_elapsed(now_ms, server->last_rx_ms, gap_ms);
 }
 
 static void
@@ -345,7 +353,7 @@ rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
 
 	if (revents & POLLIN)
 	{
-		if (!read_available(server))
+		if (!read_available(server, now_ms))
 		{
 			if (server->have_rx && server->rx_len > 0 && !server->pending.active)
 				process_rx_frames(server, now_ms);

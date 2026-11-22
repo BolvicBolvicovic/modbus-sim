@@ -218,6 +218,17 @@ make_device(arena_t* arena, u8 unit, space_kind_t space, u32 address, u16 value)
 	return dev;
 }
 
+TEST(RtuGapElapsedHandlesStaleClockSample)
+{
+	/* The loop samples the clock before read_available(), so last_rx_ms can be
+	 * newer than now_ms. That must not look like an elapsed gap. */
+	ASSERT_EQ(rtu_gap_elapsed(1000, 1001, 20) == false);
+	ASSERT_EQ(rtu_gap_elapsed(0, ~0ULL, 20) == false);
+	ASSERT_EQ(rtu_gap_elapsed(1000, 1000, 20) == false);
+	ASSERT_EQ(rtu_gap_elapsed(1019, 1000, 20) == false);
+	ASSERT_EQ(rtu_gap_elapsed(1020, 1000, 20) == true);
+}
+
 TEST(RtuServerReadHoldingRegisters)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -803,7 +814,7 @@ TEST(RtuServerFragmentedByteByByteWithinGap)
 	ASSERT_EQ(dev != NULL);
 	{
 		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 200));
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 80));
 	}
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
@@ -811,9 +822,9 @@ TEST(RtuServerFragmentedByteByByteWithinGap)
 	{
 		ok = send_all_fd(child.fd, frame + i, 1);
 		if (ok && i + 1 < flen)
-			usleep(2000); /* well below 200ms gap, tolerant on CI/ASan */
+			usleep(5000); /* well below 80ms gap */
 	}
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 3000);
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
 	if (ok)
 		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
 		     get_be16(resp + 2) == 0x99AA;
