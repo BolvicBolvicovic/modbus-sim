@@ -134,8 +134,8 @@ using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set
 In RTU mode, unit ids must be in the range 1-247. Address 0 is Modbus broadcast and 248-255 are
 reserved by the Modbus serial specification; a device configured with one of these ids cannot be
 addressed by a normal RTU request. `modbus-sim` rejects these ids when starting in RTU mode and
-warns about them during `--check`. RTU broadcast requests (address 0) are received but not executed
-and produce no response.
+when `--check` is combined with RTU flags. RTU broadcast requests (address 0) are received but not
+executed and produce no response.
 
 ## Timing
 

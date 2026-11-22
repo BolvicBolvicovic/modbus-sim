@@ -191,17 +191,6 @@ validate_rtu_unit_ids(const config_t* config, char* err, u32 err_size)
 	return true;
 }
 
-static void
-warn_rtu_unit_ids(const config_t* config)
-{
-	for (u32 i = 0; i < config->device_count; i++)
-	{
-		u8 id = config->devices[i]->unit_id;
-		if (id == 0 || id > 247)
-			fprintf(stderr, "warning: device '%s': unit-id %u is not valid for RTU (allowed: 1-247; 0 is broadcast, 248-255 reserved)\n",
-				config->devices[i]->name, id);
-	}
-}
 
 static const char*
 fault_text(const fault_t* fault, char* buf, u32 size)
@@ -249,16 +238,11 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 	if (cli->frame_gap_override != -1)
 		config->frame_gap_ms = (u32)cli->frame_gap_override;
 
-	if (rtu_mode)
+	if (rtu_mode && !validate_rtu_unit_ids(config, error, sizeof(error)))
 	{
-		if (!validate_rtu_unit_ids(config, error, sizeof(error)))
-		{
-			fprintf(stderr, "%s: %s\n", config_path, error);
-			return 2;
-		}
+		fprintf(stderr, "%s: %s\n", config_path, error);
+		return 2;
 	}
-	else if (cli->check_only)
-		warn_rtu_unit_ids(config);
 
 	if (cli->port_override != -1)
 		config->port = (u16)cli->port_override;
