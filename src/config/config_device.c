@@ -40,7 +40,8 @@ parse_device_id_string(form_ctx_t* ctx, s7_pointer item, device_t* dev, u32 id)
 		return false;
 
 	if (strlen(value) > DEVICE_ID_OBJECT_MAX)
-		return form_fail(ctx, "%s: %s is too long (max %d bytes)",
+		return form_fail(ctx, "%s: %s is too long (max %d bytes, "
+				 "limited by FC 43 / 0x2B MEI 14 response size)",
 				 form_text(ctx, item), names[id], DEVICE_ID_OBJECT_MAX);
 
 	strcpy(dev->device_id[id], value);

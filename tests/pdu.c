@@ -1242,13 +1242,13 @@ TEST(ReadDeviceIdentificationMoreFollows)
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
 
-	/* 7-byte header + 2-byte object header + 244-byte value = 253 (MODBUS_MAX_PDU). */
-	memset(dev->device_id[DEVICE_ID_VENDOR_NAME], 'V', 244);
-	dev->device_id[DEVICE_ID_VENDOR_NAME][244] = '\0';
-	memset(dev->device_id[DEVICE_ID_PRODUCT_CODE], 'P', 244);
-	dev->device_id[DEVICE_ID_PRODUCT_CODE][244] = '\0';
-	memset(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], 'R', 244);
-	dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION][244] = '\0';
+	/* 7-byte MEI header + 2-byte object header + 244-byte value = 253 (MODBUS_MAX_PDU). */
+	memset(dev->device_id[DEVICE_ID_VENDOR_NAME], 'V', DEVICE_ID_OBJECT_MAX);
+	dev->device_id[DEVICE_ID_VENDOR_NAME][DEVICE_ID_OBJECT_MAX] = '\0';
+	memset(dev->device_id[DEVICE_ID_PRODUCT_CODE], 'P', DEVICE_ID_OBJECT_MAX);
+	dev->device_id[DEVICE_ID_PRODUCT_CODE][DEVICE_ID_OBJECT_MAX] = '\0';
+	memset(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], 'R', DEVICE_ID_OBJECT_MAX);
+	dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION][DEVICE_ID_OBJECT_MAX] = '\0';
 
 	len = run(dev, req, sizeof(req), resp);
 	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
@@ -1256,8 +1256,8 @@ TEST(ReadDeviceIdentificationMoreFollows)
 	ASSERT_EQ(resp[5] == 0x01);
 	ASSERT_EQ(resp[6] == 0x01);
 	ASSERT_EQ(resp[7] == 0x00);
-	ASSERT_EQ(resp[8] == 244);
-	ASSERT_EQ(len == 7 + 2 + 244);
+	ASSERT_EQ(resp[8] == DEVICE_ID_OBJECT_MAX);
+	ASSERT_EQ(len == 7 + 2 + DEVICE_ID_OBJECT_MAX);
 
 	req[3] = resp[5];
 	len = run(dev, req, sizeof(req), resp);
@@ -1265,8 +1265,8 @@ TEST(ReadDeviceIdentificationMoreFollows)
 	ASSERT_EQ(resp[5] == 0x02);
 	ASSERT_EQ(resp[6] == 0x01);
 	ASSERT_EQ(resp[7] == 0x01);
-	ASSERT_EQ(resp[8] == 244);
-	ASSERT_EQ(len == 7 + 2 + 244);
+	ASSERT_EQ(resp[8] == DEVICE_ID_OBJECT_MAX);
+	ASSERT_EQ(len == 7 + 2 + DEVICE_ID_OBJECT_MAX);
 
 	req[3] = resp[5];
 	len = run(dev, req, sizeof(req), resp);
@@ -1274,8 +1274,8 @@ TEST(ReadDeviceIdentificationMoreFollows)
 	ASSERT_EQ(resp[5] == 0x00);
 	ASSERT_EQ(resp[6] == 0x01);
 	ASSERT_EQ(resp[7] == 0x02);
-	ASSERT_EQ(resp[8] == 244);
-	ASSERT_EQ(len == 7 + 2 + 244);
+	ASSERT_EQ(resp[8] == DEVICE_ID_OBJECT_MAX);
+	ASSERT_EQ(len == 7 + 2 + DEVICE_ID_OBJECT_MAX);
 	arena_release(arena);
 }
 
