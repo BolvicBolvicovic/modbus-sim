@@ -407,6 +407,12 @@ rtu_cli_file_contains(const char* path, const char* needle)
 	return found;
 }
 
+static bool
+rtu_cli_stderr_contains(const char* needle)
+{
+	return rtu_cli_file_contains(g_rtu_cli.stderr_path, needle);
+}
+
 TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
@@ -845,4 +851,46 @@ TEST(RtuCliFrameGapOverrideBeatsBaud)
 
 	rtu_cli_stop();
 	ASSERT_EQ(ok);
+}
+
+TEST(RtuCliPtyDefaultUsesUnknownBaudFallback)
+{
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME];
+	u8 resp[MODBUS_MAX_PDU];
+	u8 addr = 0;
+	u32 len = 0;
+	u32 flen = 0;
+	bool ok = false;
+
+	ASSERT_EQ(rtu_cli_start_pty("(device (unit-id 1) (holding 0 (static 4660)))\n", NULL, NULL));
+	ASSERT_EQ(rtu_cli_stderr_contains("frame gap 20 ms (default; baud unknown)"));
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT(flen > 4);
+	ok = send_all_fd(g_rtu_cli.master_fd, frame, flen / 2);
+	if (ok)
+	{
+		u8 tmp_addr = 0, tmp_pdu[MODBUS_MAX_PDU];
+		u32 tmp_len = 0;
+		/* Would be split at baud-derived 2ms for PTY default 38400; 20ms fallback keeps it together. */
+		ok = !recv_rtu_resp_fd(g_rtu_cli.master_fd, &tmp_addr, tmp_pdu, &tmp_len, 5);
+	}
+	if (ok) usleep(5000);
+	if (ok) ok = send_all_fd(g_rtu_cli.master_fd, frame + flen / 2, flen - flen / 2);
+	if (ok) ok = recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 1000);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 4660;
+
+	rtu_cli_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuCliBaudOverrideOnPtyLogsDerivedTiming)
+{
+	char* extra[] = { "--baud", "9600" };
+
+	ASSERT_EQ(rtu_cli_start_pty_extra(
+		"(device (unit-id 1) (holding 0 (static 4660)))\n", extra, 2));
+	ASSERT_EQ(rtu_cli_stderr_contains("baud 9600, t3.5 4011 us (frame gap 5 ms)"));
+	rtu_cli_stop();
 }
