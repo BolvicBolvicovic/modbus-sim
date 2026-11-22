@@ -99,3 +99,85 @@ TEST(RtuDecodeExceptionFrame)
 	ASSERT_EQ(out_len == 2);
 	ASSERT_EQ(out[0] == 0x83 && out[1] == 0x02);
 }
+
+TEST(RtuRequestLenMatchesFunctionCode)
+{
+	static const struct {
+		const char*	name;
+		u8		pdu[16];
+		u32		pdu_len;
+	} cases[] = {
+		{ "fc01", { FC_READ_COILS, 0x00, 0x00, 0x00, 0x01 }, 5 },
+		{ "fc02", { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 }, 5 },
+		{ "fc03", { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 }, 5 },
+		{ "fc04", { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x01 }, 5 },
+		{ "fc05", { FC_WRITE_SINGLE_COIL, 0x00, 0x00, 0xFF, 0x00 }, 5 },
+		{ "fc06", { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A }, 5 },
+		{ "fc07", { FC_READ_EXCEPTION_STATUS }, 1 },
+		{ "fc0b", { FC_GET_COM_EVENT_COUNTER }, 1 },
+		{ "fc0c", { FC_GET_COM_EVENT_LOG }, 1 },
+		{ "fc0f", { FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x08,
+			    0x01, 0xFF }, 7 },
+		{ "fc10", { FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x02,
+			    0x04, 0x00, 0x01, 0x00, 0x02 }, 10 },
+		{ "fc11", { FC_REPORT_SERVER_ID }, 1 },
+		{ "fc14", { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01,
+			    0x00, 0x00, 0x00, 0x01 }, 9 },
+		{ "fc15", { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01,
+			    0x00, 0x00, 0x00, 0x01, 0x00, 0x02 }, 11 },
+		{ "fc16", { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0x00, 0xFF,
+			    0x00, 0x00 }, 7 },
+		{ "fc17", { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00,
+			    0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x02,
+			    0x00, 0x2A }, 12 },
+		{ "fc18", { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, 3 },
+		{ "fc2b", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01,
+			    0x00 }, 4 },
+	};
+	u8	frame[MODBUS_RTU_MAX_FRAME];
+	u32	i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+	{
+		u32	frame_len = modbus_rtu_encode(frame, 1, cases[i].pdu,
+						       cases[i].pdu_len);
+		u32	got = 0;
+
+		ASSERT_EQ(frame_len == 1 + cases[i].pdu_len + 2);
+		ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len, &got));
+		ASSERT_EQ(got == frame_len);
+
+		/* Trailing bytes from a coalesced write must not change the answer. */
+		got = 0;
+		ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len + 3, &got));
+		ASSERT_EQ(got == frame_len);
+	}
+}
+
+TEST(RtuRequestLenRejectsVariableUnsupportedAndTruncated)
+{
+	u8	fc08[] = { 1, FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x00, 0x00 };
+	u8	unknown[] = { 1, 0x2A, 0x00, 0x00, 0x00, 0x00 };
+	u8	one_byte[] = { 1 };
+	u8	fc0f_short[] = { 1, FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x01 };
+	u8	fc17_short[] = { 1, FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00,
+				 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
+	u8	fc14_short[] = { 1, FC_READ_FILE_RECORD };
+	u8	mei_short[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT };
+	u8	mei_wrong[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00 };
+	u8	fc0f_oversized[] = { 1, FC_WRITE_MULTIPLE_COILS, 0x00, 0x00,
+				     0x00, 0x01, 0xFF };
+	u32	len = 0;
+
+	/* Diagnostics has no length field; it is framed by the inter-frame gap. */
+	ASSERT_FAILURE(modbus_rtu_request_len(fc08, sizeof(fc08), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(unknown, sizeof(unknown), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(one_byte, sizeof(one_byte), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(fc0f_short, sizeof(fc0f_short), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(fc17_short, sizeof(fc17_short), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(fc14_short, sizeof(fc14_short), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(mei_short, sizeof(mei_short), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(mei_wrong, sizeof(mei_wrong), &len));
+	ASSERT_FAILURE(modbus_rtu_request_len(fc0f_oversized, sizeof(fc0f_oversized),
+					      &len));
+}

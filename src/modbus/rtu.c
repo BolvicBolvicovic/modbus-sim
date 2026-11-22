@@ -1,4 +1,5 @@
 #include "modbus/rtu.h"
+#include "modbus/pdu.h"
 
 /* Reflected CRC-16/Modbus table (polynomial 0xA001). */
 static const u16 crc16_table[256] = {
@@ -84,5 +85,74 @@ modbus_rtu_decode(const u8* buf, u32 len, u8* addr, const u8** pdu, u32* pdu_len
 	*addr = buf[0];
 	*pdu = buf + 1;
 	*pdu_len = len - 3;
+	return true;
+}
+
+bool
+modbus_rtu_request_len(const u8* buf, u32 buf_len, u32* frame_len)
+{
+	u8	fc;
+	u32	pdu_len = 0;
+
+	if (buf_len < 2)
+		return false;
+
+	fc = buf[1];
+	switch (fc)
+	{
+	case FC_READ_COILS:
+	case FC_READ_DISCRETE_INPUTS:
+	case FC_READ_HOLDING_REGISTERS:
+	case FC_READ_INPUT_REGISTERS:
+	case FC_WRITE_SINGLE_COIL:
+	case FC_WRITE_SINGLE_REGISTER:
+		pdu_len = 5;
+		break;
+	case FC_READ_EXCEPTION_STATUS:
+	case FC_GET_COM_EVENT_COUNTER:
+	case FC_GET_COM_EVENT_LOG:
+	case FC_REPORT_SERVER_ID:
+		pdu_len = 1;
+		break;
+	case FC_WRITE_MULTIPLE_COILS:
+	case FC_WRITE_MULTIPLE_REGISTERS:
+		if (buf_len < 7)
+			return false;
+		pdu_len = 6 + (u32)buf[6];
+		break;
+	case FC_MASK_WRITE_REGISTER:
+		pdu_len = 7;
+		break;
+	case FC_READ_WRITE_MULTIPLE_REGISTERS:
+		/* addr + fc + read addr/qty + write addr/qty + byte count */
+		if (buf_len < 11)
+			return false;
+		pdu_len = 10 + (u32)buf[10];
+		break;
+	case FC_READ_FIFO_QUEUE:
+		pdu_len = 3;
+		break;
+	case FC_READ_FILE_RECORD:
+	case FC_WRITE_FILE_RECORD:
+		if (buf_len < 3)
+			return false;
+		pdu_len = 2 + (u32)buf[2];
+		break;
+	case FC_ENCAPSULATED_INTERFACE_TRANSPORT:
+		if (buf_len < 3)
+			return false;
+		if (buf[2] == 0x0E) /* MEI type 14: Read Device Identification */
+			pdu_len = 4;
+		else
+			return false;
+		break;
+	default:
+		return false;
+	}
+
+	if (pdu_len < 1 || pdu_len > MODBUS_MAX_PDU)
+		return false;
+
+	*frame_len = 1 + pdu_len + 2;
 	return true;
 }
