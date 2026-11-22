@@ -75,7 +75,7 @@ modbus-sim [options] CONFIG.scm
   -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)
       --rtu-pty        RTU: create a PTY and print its slave path
       --rtu-device PATH RTU: serve RTU over an existing serial-like device
-      --baud N         RTU: serial baud rate for t3.5 timing (overrides config/tty)
+      --baud N         RTU: standard termios baud for t3.5 timing (overrides config/tty)
       --frame-gap-ms N RTU: explicit inter-frame silence override in ms
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request

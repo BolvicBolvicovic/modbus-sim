@@ -18,6 +18,7 @@
 #include "config/config.h"
 #include "net/rtu_server.h"
 #include "net/tcp_server.h"
+#include "util/baud.h"
 #include "util/ip.h"
 #include "util/log.h"
 #include <errno.h>
@@ -58,7 +59,7 @@ print_usage(void)
 	     "  -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)\n"
 	     "      --rtu-pty        RTU: create a PTY and print its slave path\n"
 	     "      --rtu-device PATH RTU: serve RTU over an existing serial-like device\n"
-	     "      --baud N         RTU: serial baud rate for t3.5 timing (overrides config/tty)\n"
+	     "      --baud N         RTU: standard termios baud for t3.5 timing (overrides config/tty)\n"
 	     "      --frame-gap-ms N RTU: explicit inter-frame silence override in ms\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
@@ -90,6 +91,22 @@ parse_u32_arg(const char* text, u32 min, u32 max, const char* name, u32* out)
 	}
 
 	*out = (u32)value;
+	return true;
+}
+
+static bool
+parse_baud_arg(const char* text, u32* out)
+{
+	u32	baud = 0;
+
+	if (!parse_u32_arg(text, 1, 4000000, "baud", &baud))
+		return false;
+	if (!baud_is_standard(baud))
+	{
+		fprintf(stderr, "baud must be a standard termios rate (e.g. 9600, 19200, 38400, 115200)\n");
+		return false;
+	}
+	*out = baud;
 	return true;
 }
 
@@ -130,7 +147,7 @@ parse_args(int argc, char** argv, cli_t* cli)
 		{
 			u32 baud = 0;
 
-			if (!parse_u32_arg(argv[++i], 1, 4000000, "baud", &baud))
+			if (!parse_baud_arg(argv[++i], &baud))
 				return false;
 			cli->baud_override = (s32)baud;
 		}
@@ -295,204 +312,6 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 	return 0;
 }
 
-static u32
-speed_to_baud(speed_t speed)
-{
-	switch (speed)
-	{
-#ifdef B50
-	case B50: return 50;
-#endif
-#ifdef B75
-	case B75: return 75;
-#endif
-#ifdef B110
-	case B110: return 110;
-#endif
-#ifdef B134
-	case B134: return 134;
-#endif
-#ifdef B150
-	case B150: return 150;
-#endif
-#ifdef B200
-	case B200: return 200;
-#endif
-#ifdef B300
-	case B300: return 300;
-#endif
-#ifdef B600
-	case B600: return 600;
-#endif
-#ifdef B1200
-	case B1200: return 1200;
-#endif
-#ifdef B1800
-	case B1800: return 1800;
-#endif
-#ifdef B2400
-	case B2400: return 2400;
-#endif
-#ifdef B4800
-	case B4800: return 4800;
-#endif
-#ifdef B9600
-	case B9600: return 9600;
-#endif
-#ifdef B19200
-	case B19200: return 19200;
-#endif
-#ifdef B38400
-	case B38400: return 38400;
-#endif
-#ifdef B57600
-	case B57600: return 57600;
-#endif
-#ifdef B115200
-	case B115200: return 115200;
-#endif
-#ifdef B230400
-	case B230400: return 230400;
-#endif
-#ifdef B460800
-	case B460800: return 460800;
-#endif
-#ifdef B500000
-	case B500000: return 500000;
-#endif
-#ifdef B576000
-	case B576000: return 576000;
-#endif
-#ifdef B921600
-	case B921600: return 921600;
-#endif
-#ifdef B1000000
-	case B1000000: return 1000000;
-#endif
-#ifdef B1152000
-	case B1152000: return 1152000;
-#endif
-#ifdef B1500000
-	case B1500000: return 1500000;
-#endif
-#ifdef B2000000
-	case B2000000: return 2000000;
-#endif
-#ifdef B2500000
-	case B2500000: return 2500000;
-#endif
-#ifdef B3000000
-	case B3000000: return 3000000;
-#endif
-#ifdef B3500000
-	case B3500000: return 3500000;
-#endif
-#ifdef B4000000
-	case B4000000: return 4000000;
-#endif
-	default: return 0;
-	}
-}
-
-static bool
-baud_to_speed(u32 baud, speed_t* out)
-{
-	switch (baud)
-	{
-#ifdef B50
-	case 50: *out = B50; return true;
-#endif
-#ifdef B75
-	case 75: *out = B75; return true;
-#endif
-#ifdef B110
-	case 110: *out = B110; return true;
-#endif
-#ifdef B134
-	case 134: *out = B134; return true;
-#endif
-#ifdef B150
-	case 150: *out = B150; return true;
-#endif
-#ifdef B200
-	case 200: *out = B200; return true;
-#endif
-#ifdef B300
-	case 300: *out = B300; return true;
-#endif
-#ifdef B600
-	case 600: *out = B600; return true;
-#endif
-#ifdef B1200
-	case 1200: *out = B1200; return true;
-#endif
-#ifdef B1800
-	case 1800: *out = B1800; return true;
-#endif
-#ifdef B2400
-	case 2400: *out = B2400; return true;
-#endif
-#ifdef B4800
-	case 4800: *out = B4800; return true;
-#endif
-#ifdef B9600
-	case 9600: *out = B9600; return true;
-#endif
-#ifdef B19200
-	case 19200: *out = B19200; return true;
-#endif
-#ifdef B38400
-	case 38400: *out = B38400; return true;
-#endif
-#ifdef B57600
-	case 57600: *out = B57600; return true;
-#endif
-#ifdef B115200
-	case 115200: *out = B115200; return true;
-#endif
-#ifdef B230400
-	case 230400: *out = B230400; return true;
-#endif
-#ifdef B460800
-	case 460800: *out = B460800; return true;
-#endif
-#ifdef B500000
-	case 500000: *out = B500000; return true;
-#endif
-#ifdef B576000
-	case 576000: *out = B576000; return true;
-#endif
-#ifdef B921600
-	case 921600: *out = B921600; return true;
-#endif
-#ifdef B1000000
-	case 1000000: *out = B1000000; return true;
-#endif
-#ifdef B1152000
-	case 1152000: *out = B1152000; return true;
-#endif
-#ifdef B1500000
-	case 1500000: *out = B1500000; return true;
-#endif
-#ifdef B2000000
-	case 2000000: *out = B2000000; return true;
-#endif
-#ifdef B2500000
-	case 2500000: *out = B2500000; return true;
-#endif
-#ifdef B3000000
-	case 3000000: *out = B3000000; return true;
-#endif
-#ifdef B3500000
-	case 3500000: *out = B3500000; return true;
-#endif
-#ifdef B4000000
-	case 4000000: *out = B4000000; return true;
-#endif
-	default: return false;
-	}
-}
-
 static bool
 tty_is_pty_slave(int fd)
 {
@@ -512,7 +331,7 @@ tty_baud(int fd)
 		return 0;
 	if (tcgetattr(fd, &tio) != 0)
 		return 0;
-	return speed_to_baud(cfgetospeed(&tio));
+	return baud_from_speed(cfgetospeed(&tio));
 }
 
 /* Applies a known raw 8N1 serial configuration. When baud is 0, preserves the
