@@ -411,6 +411,7 @@ TEST(RtuServerExceptionResponseHasRtuCrc)
 	ASSERT_EQ(ok);
 }
 
+#if defined(__linux__)
 static bool
 rtu_child_cpu_ms(pid_t pid, u64* out_ms)
 {
@@ -460,6 +461,7 @@ rtu_child_cpu_ms(pid_t pid, u64* out_ms)
 	*out_ms = (u64)(utime + stime) * 1000ULL / (u64)ticks;
 	return true;
 }
+#endif
 
 TEST(RtuServerShortJunkThenValidRequest)
 {
@@ -481,16 +483,22 @@ TEST(RtuServerShortJunkThenValidRequest)
 	for (u32 junk_len = 1; junk_len <= 3 && ok; junk_len++)
 	{
 		u8	junk[3] = { 0xAA, 0xBB, 0xCC };
+#if defined(__linux__)
 		u64	cpu_before = 0;
 		u64	cpu_after = 0;
+#endif
 
 		ok = send_all_fd(child.fd, junk, junk_len);
 		ok = ok && recv_none_fd(child.fd, 60);
 		/* After gap elapses, server must drop short junk and return to poll(). */
+#if defined(__linux__)
 		if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
 		if (ok) usleep(200000);
 		if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_after);
 		if (ok) ok = (cpu_after - cpu_before) < 150;
+#else
+		if (ok) usleep(200000);
+#endif
 
 		if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
 		if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 500);
@@ -637,8 +645,10 @@ TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
 	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
 	rtu_child_t	child = { 0 };
 	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+#if defined(__linux__)
 	u64		cpu_before = 0;
 	u64		cpu_after = 0;
+#endif
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
@@ -652,8 +662,10 @@ TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
 
 	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
 	/* Let the server observe frame gap and queue the delayed response. */
-	if (ok) usleep(40000);
+	if (ok) usleep(120000);
+#if defined(__linux__)
 	if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
+#endif
 	if (ok)
 	{
 		close(child.fd);
@@ -662,10 +674,12 @@ TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
 	/* Before issue #19 fix, poll() on a hung-up fd with pending response
 	 * returned immediately and burned CPU until the delay elapsed. */
 	if (ok) usleep(350000);
+#if defined(__linux__)
 	if (ok && !rtu_child_cpu_ms(child.pid, &cpu_after))
 		cpu_after = cpu_before; /* process already exited; no spin */
 	/* Tolerant for ASan/CI scheduling noise. */
 	if (ok) ok = (cpu_after - cpu_before) < 200;
+#endif
 
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
@@ -972,6 +986,177 @@ TEST(RtuServerDelayAndDropFaultsOverRtu)
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
 	ASSERT_EQ(ok);
+}
+
+static bool
+rtu_expect_fc03(rtu_child_t* child, u8 unit, u16 reg, u16 value)
+{
+	u8	req[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8	resp[MODBUS_MAX_PDU];
+	u8	addr = 0;
+	u32	len = 0;
+
+	put_be16(req + 1, reg);
+	return send_rtu_req(child->fd, unit, req, sizeof(req)) &&
+	       recv_rtu_resp(child->fd, &addr, resp, &len, 1200) &&
+	       addr == unit && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
+	       resp[1] == 2 && get_be16(resp + 2) == value;
+}
+
+TEST(RtuServerSupportedFunctionCodesFraming)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev = device_new(arena, 0);
+	rtu_child_t	child = { 0 };
+
+	ASSERT_EQ(dev != NULL);
+	dev->unit_id = 1;
+	strcpy(dev->name, "rtu-fc-all");
+	dev->server_id = 0x2A;
+	dev->run_indicator = 0xFF;
+
+	{
+		static const struct { space_kind_t s; u32 a; value_type_t t; u16 v; } seeds[] = {
+			{ SPACE_COIL, 0, VT_BOOL, 1 }, { SPACE_COIL, 1, VT_BOOL, 0 },
+			{ SPACE_DISCRETE, 0, VT_BOOL, 1 },
+			{ SPACE_INPUT, 0, VT_U16, 0x1122 }, { SPACE_INPUT, 1, VT_U16, 0x3344 },
+			{ SPACE_HOLDING, 0, VT_U16, 0x0001 }, { SPACE_HOLDING, 1, VT_U16, 0x0002 },
+			{ SPACE_HOLDING, 2, VT_U16, 0x0003 }, { SPACE_HOLDING, 3, VT_U16, 0x0004 },
+			{ SPACE_HOLDING, 8, VT_U16, 0x00FF },
+		};
+		for (u32 i = 0; i < sizeof(seeds) / sizeof(seeds[0]); i++)
+		{
+			point_t p = { 0 };
+			p.space = seeds[i].s; p.address = seeds[i].a; p.type = seeds[i].t;
+			p.kind = POINT_STATIC; p.static_value = seeds[i].v;
+			ASSERT_EQ(device_add_point(dev, &p) == NULL);
+		}
+		{
+			u16 rec = 0xBEEF;
+			ASSERT_EQ(device_add_file_record(dev, 1, 0, 1, &rec) == NULL);
+		}
+	}
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	{
+		u8 req[] = { FC_READ_COILS, 0x00, 0x00, 0x00, 0x02 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==FC_READ_COILS && resp[1]==1 && resp[2]==0x01);
+	}
+	{
+		u8 req[] = { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==FC_READ_DISCRETE_INPUTS && resp[2]==0x01);
+	}
+	ASSERT_EQ(rtu_expect_fc03(&child, 1, 0, 0x0001));
+	{
+		u8 req[] = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x02 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==6 && resp[0]==FC_READ_INPUT_REGISTERS && get_be16(resp+2)==0x1122 && get_be16(resp+4)==0x3344);
+	}
+	{
+		u8 req[] = { FC_WRITE_SINGLE_COIL, 0x00, 0x01, 0xFF, 0x00 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_SINGLE_COIL);
+	}
+	{
+		u8 req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x02, 0x00, 0x2A }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_SINGLE_REGISTER);
+		ASSERT_EQ(rtu_expect_fc03(&child, 1, 2, 0x002A));
+	}
+	{
+		u8 req[] = { FC_READ_EXCEPTION_STATUS }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==2 && resp[0]==FC_READ_EXCEPTION_STATUS);
+	}
+	{
+		u8 req[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_DIAGNOSTICS && resp[3]==0x12 && resp[4]==0x34);
+	}
+	{
+		u8 req[] = { FC_GET_COM_EVENT_COUNTER }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_GET_COM_EVENT_COUNTER);
+	}
+	{
+		u8 req[] = { FC_GET_COM_EVENT_LOG }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==8 && resp[0]==FC_GET_COM_EVENT_LOG);
+	}
+	{
+		u8 req[] = { FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x02, 0x01, 0x02 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_MULTIPLE_COILS);
+	}
+	{
+		u8 req[] = { FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x03, 0x00, 0x01, 0x02, 0x00, 0x99 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==5 && resp[0]==FC_WRITE_MULTIPLE_REGISTERS);
+		ASSERT_EQ(rtu_expect_fc03(&child, 1, 3, 0x0099));
+	}
+	{
+		u8 req[] = { FC_REPORT_SERVER_ID }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==FC_REPORT_SERVER_ID && resp[1]==2 && resp[2]==0x2A && resp[3]==0xFF);
+	}
+	{
+		u8 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==FC_READ_FILE_RECORD && len>=6 && get_be16(resp+4)==0xBEEF);
+	}
+	{
+		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x12, 0x34 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==FC_WRITE_FILE_RECORD);
+	}
+	{
+		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x08, 0x00, 0x0F, 0x00, 0xF0 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==7 && resp[0]==FC_MASK_WRITE_REGISTER);
+		ASSERT_EQ(rtu_expect_fc03(&child, 1, 8, 0x00FF));
+	}
+	{
+		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x77 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && len==4 && resp[0]==FC_READ_WRITE_MULTIPLE_REGISTERS && get_be16(resp+2)==0x0001);
+		ASSERT_EQ(rtu_expect_fc03(&child, 1, 1, 0x0077));
+	}
+	{
+		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==(u8)(FC_READ_FIFO_QUEUE|0x80) && resp[1]==EXC_ILLEGAL_DATA_ADDRESS);
+	}
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 }, resp[MODBUS_MAX_PDU], addr=0; u32 len=0;
+		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+		ASSERT_EQ(addr==1 && resp[0]==FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1]==0x0E);
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
 }
 
 TEST(RtuServerUnitIdEdges)
