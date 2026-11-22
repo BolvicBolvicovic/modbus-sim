@@ -413,6 +413,36 @@ rtu_cli_stderr_contains(const char* needle)
 	return rtu_cli_file_contains(g_rtu_cli.stderr_path, needle);
 }
 
+TEST(RtuCliRejectsNonStandardBaud)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-pty", "--baud", "12345", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+	ASSERT_EQ(rtu_cli_stderr_contains("standard termios rate"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliCheckRejectsNonStandardBaud)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-pty", "--baud", "12345", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+	ASSERT_EQ(rtu_cli_stderr_contains("standard termios rate"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
 TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");

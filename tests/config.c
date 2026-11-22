@@ -441,6 +441,7 @@ TEST(ConfigBaudRejectsInvalidValues)
 	EXPECT_ERROR("(server (baud 0)) (device (holding 0))", "between 1 and 4000000");
 	EXPECT_ERROR("(server (baud 4000001)) (device (holding 0))", "between 1 and 4000000");
 	EXPECT_ERROR("(server (baud nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (baud 12345)) (device (holding 0))", "standard termios rate");
 }
 
 TEST(ConfigFloat32StaticAcceptsNonFinite)

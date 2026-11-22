@@ -24,7 +24,7 @@ preserves the existing baud rate. Non-tty fds skip termios setup.
 
 Frame boundaries use Modbus RTU inter-frame timing when a baud rate is known: t3.5 is 1.750 ms for
 baud rates above 19200, otherwise `ceil(3.5 * 11 / baud * 1,000,000)` microseconds. The baud can be
-set explicitly with config `(server (baud N))` or CLI `--baud N` (`--rtu-baud` alias). For tty
+set explicitly with config `(server (baud N))` or CLI `--baud N` (`--rtu-baud` alias). Baud values must be standard termios rates. For tty
 devices, when no explicit baud is configured, `modbus-sim` reads the tty's current output baud and
 derives t3.5 from it. `frame-gap-ms` (config or CLI `--frame-gap-ms`) remains an explicit
 inter-frame silence override and takes precedence over baud-derived timing for compatibility.

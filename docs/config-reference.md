@@ -35,7 +35,7 @@ produce an error message.
 | `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) |
-| `(baud N)` | RTU mode: serial baud rate, 1-4000000. When known, Modbus RTU t3.5 inter-frame timing is derived from this baud | `0` (unknown) |
+| `(baud N)` | RTU mode: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). When known, Modbus RTU t3.5 inter-frame timing is derived from this baud | `0` (unknown) |
 | `(frame-gap-ms N)` | RTU mode: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) |
 
 The command-line options `--port` and `--bind` override server TCP settings. RTU timing can be
