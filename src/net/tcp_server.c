@@ -420,6 +420,7 @@ tcp_server_run(const tcp_server_options_t* options)
 	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
 		server.conns[i].fd = -1;
 
+	g_stop = 0;
 	net_install_stop_handlers(&g_stop);
 	if (listen_open(&server) < 0)
 		return 2;
