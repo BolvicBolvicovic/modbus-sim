@@ -1027,3 +1027,82 @@ TEST(RtuServerUnitIdEdges)
 	arena_release(arena);
 	ASSERT_EQ(ok);
 }
+
+TEST(RtuServerReadWriteMultipleRegistersSingleAndCoalesced)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	rtu_child_t	child = { 0 };
+	u8		pdu1[12] = { FC_READ_WRITE_MULTIPLE_REGISTERS };
+	u8		pdu2[12] = { FC_READ_WRITE_MULTIPLE_REGISTERS };
+	u8		wire[MODBUS_RTU_MAX_FRAME * 2];
+	u8		buf[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		wire_len = 0;
+	u32		got = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		point_t		p = { 0 };
+		device_t*	devices[] = { dev };
+
+		p.space = SPACE_HOLDING;
+		p.address = 1;
+		p.type = VT_U16;
+		p.kind = POINT_STATIC;
+		p.static_value = 0;
+		ASSERT_EQ(device_add_point(dev, &p) == NULL);
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	/* FC 23: read address 0, write address 1 = 0x002A. */
+	put_be16(pdu1 + 1, 0);    /* read address */
+	put_be16(pdu1 + 3, 1);    /* read quantity */
+	put_be16(pdu1 + 5, 1);    /* write address */
+	put_be16(pdu1 + 7, 1);    /* write quantity */
+	pdu1[9] = 2;              /* byte count */
+	put_be16(pdu1 + 10, 0x002A);
+
+	/* FC 23: read address 1 (0x002A), write address 0 = 0x0BAD. */
+	put_be16(pdu2 + 1, 1);
+	put_be16(pdu2 + 3, 1);
+	put_be16(pdu2 + 5, 0);
+	put_be16(pdu2 + 7, 1);
+	pdu2[9] = 2;
+	put_be16(pdu2 + 10, 0x0BAD);
+
+	/* Two coalesced FC 23 requests in one write. */
+	wire_len  = modbus_rtu_encode(wire, 1, pdu1, sizeof(pdu1));
+	wire_len += modbus_rtu_encode(wire + wire_len, 1, pdu2, sizeof(pdu2));
+	ok = send_all_fd(child.fd, wire, wire_len);
+	ASSERT_EQ(ok);
+
+	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 800));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == 4 && resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(resp[1] == 2 && get_be16(resp + 2) == 0x1234);
+
+	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 800));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == 4 && resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(resp[1] == 2 && get_be16(resp + 2) == 0x002A);
+	ASSERT_EQ(recv_none_fd(child.fd, 100));
+
+	/* Both writes took effect. */
+	{
+		u8	read_req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x02 };
+
+		ASSERT_EQ(send_rtu_req(child.fd, 1, read_req, sizeof(read_req)));
+		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
+		ASSERT_EQ(addr == 1 && resp[0] == FC_READ_HOLDING_REGISTERS);
+		ASSERT_EQ(resp[1] == 4);
+		ASSERT_EQ(get_be16(resp + 2) == 0x0BAD);
+		ASSERT_EQ(get_be16(resp + 4) == 0x002A);
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
