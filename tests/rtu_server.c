@@ -693,6 +693,53 @@ TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
 	ASSERT_EQ(ok);
 }
 
+TEST(RtuServerPendingDelayedResponseHangupWithRequestNoSpin)
+{
+	/* Issue #40: request and POLLHUP seen in the same poll; the queued delayed
+	 * response cannot be delivered and must not cause a busy loop. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u32		flen;
+#if defined(__linux__)
+	u64		cpu_before = 0;
+	u64		cpu_after = 0;
+#endif
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	dev->fault.kind     = FAULT_DELAY;
+	dev->fault.delay_ms = 500;
+	dev->fault.percent  = 100;
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ok = send_all_fd(child.fd, frame, flen);
+	if (ok)
+	{
+		close(child.fd);
+		child.fd = -1;
+	}
+	if (ok) usleep(120000);
+#if defined(__linux__)
+	if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
+#endif
+	if (ok) usleep(350000);
+#if defined(__linux__)
+	if (ok && !rtu_child_cpu_ms(child.pid, &cpu_after))
+		cpu_after = cpu_before;
+	if (ok) ok = (cpu_after - cpu_before) < 200;
+#endif
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
 TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 {
 	arena_t*	arena = ARENA_ALLOC();

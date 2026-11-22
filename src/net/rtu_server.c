@@ -360,17 +360,31 @@ rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
 		(void)read_available(server, now_ms);
 	}
 
-	if ((revents & POLLHUP) && !server->read_closed)
+	if (revents & POLLHUP)
 	{
-		/* Peer hangup before EOF read. Mirror EOF handling: process buffered
-		 * frames and let a queued response drain. If a delayed response is
-		 * already pending, the peer cannot receive it. */
+		/* Peer hangup: any already-pending response cannot be delivered. If we
+		 * have not seen EOF/read-close yet, process buffered complete frames once
+		 * (issue #32), but if that queues a response, drop it and exit instead of
+		 * spinning on repeated POLLHUP (issue #40). */
 		if (server->pending.active)
 		{
 			pending_clear(&server->pending);
 			return false;
 		}
-		server->read_closed = true;
+		if (!server->read_closed)
+		{
+			server->read_closed = true;
+			if (server->have_rx && server->rx_len > 0)
+			{
+				process_rx_frames(server, now_ms);
+				if (server->pending.active)
+				{
+					pending_clear(&server->pending);
+					return false;
+				}
+			}
+		}
+		return false;
 	}
 
 	if (server->read_closed)
