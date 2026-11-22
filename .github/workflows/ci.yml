@@ -22,6 +22,9 @@ jobs:
           ./tools/check_deps.sh --self-test
           ./tools/check_deps.sh
 
+      - name: Test runner self-test
+        run: ./tools/run_tests.sh --self-test
+
       - name: Unit tests
         run: make tests
 
