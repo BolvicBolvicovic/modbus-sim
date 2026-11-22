@@ -39,10 +39,11 @@ while IFS= read -r line; do
 				exit 1
 			fi
 			total=$((total + 1))
-			if ! "$timeout_cmd" --foreground -k 5s "$test_timeout" "$bin" -s "$suite" -t "$line" >"$out" 2>&1; then
-				rc=$?
+			"$timeout_cmd" --foreground -k 5s "$test_timeout" "$bin" -s "$suite" -t "$line" >"$out" 2>&1
+			rc=$?
+			if [ "$rc" -ne 0 ]; then
 				failed=$((failed + 1))
-				if [ "$rc" -eq 124 ]; then
+				if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
 					printf 'FAIL %s :: %s (timeout after %s)\n' "$suite" "$line" "$test_timeout"
 				else
 					printf 'FAIL %s :: %s\n' "$suite" "$line"
