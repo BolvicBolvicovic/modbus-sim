@@ -940,8 +940,9 @@ TEST(RtuServerFragmentedAcrossGapDoesNotFormValidFrame)
 
 TEST(RtuServerBaudDerivedGapFragments)
 {
-	/* 9600 baud -> t3.5 ~4.01ms, effective gap 5ms. Fragments inside gap form one
-	 * frame; fragments separated by more than t3.5 must be discarded. */
+	/* 9600 baud -> t3.5 ~4.01ms, t1.5 ~1.72ms. Byte-stream read() boundaries
+	 * cannot model true UART char gaps, so this uses two-byte chunks to avoid
+	 * false t1.5 splits while still exercising baud-derived framing. */
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x55AA);
 	rtu_child_t	child = { 0 };
@@ -960,11 +961,13 @@ TEST(RtuServerBaudDerivedGapFragments)
 	}
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	for (u32 i = 0; i < flen && ok; i++)
+	for (u32 i = 0; i < flen && ok; i += 2)
 	{
-		ok = send_all_fd(child.fd, frame + i, 1);
-		if (ok && i + 1 < flen)
-			usleep(1000); /* < t3.5 */
+		u32 n = (i + 2 <= flen) ? 2 : (flen - i);
+
+		ok = send_all_fd(child.fd, frame + i, n);
+		if (ok && i + n < flen)
+			usleep(1000); /* < t1.5 */
 	}
 	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
 	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x55AA;
@@ -981,6 +984,44 @@ TEST(RtuServerBaudDerivedGapFragments)
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
 	ASSERT_EQ(ok);
+}
+
+TEST(RtuServerBaudT15GapDiscardsPartialFrame)
+{
+	/* 1200 baud -> t1.5 ~13.75ms, t3.5 ~32.08ms. A gap between t1.5 and t3.5
+	 * inside an incomplete frame must discard it (no response), but the server
+	 * must recover on the next clean frame. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x7788);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		flen = 0;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 1200));
+	}
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT(flen > 4);
+	ASSERT_EQ(send_all_fd(child.fd, frame, 2));
+	usleep(5000); /* let server read first chunk */
+	usleep(20000); /* total > t1.5 (13.75ms), < t3.5 (32.08ms) */
+	ASSERT_EQ(send_all_fd(child.fd, frame + 2, flen - 2));
+	ASSERT_EQ(recv_none_fd(child.fd, 120));
+
+	ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(get_be16(resp + 2) == 0x7788);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
 }
 
 TEST(RtuServerFrameGapOverrideBeatsBaud)

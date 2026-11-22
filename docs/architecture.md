@@ -83,11 +83,12 @@ One thread, one `poll()` call. Per connection there is one receive buffer and on
 
 Also single-threaded `poll()` on one bidirectional fd (PTY master, existing device, or similar byte
 stream). RTU has no MBAP length field, so frame boundaries are detected by inter-frame silence. When a
-baud rate is known (config/CLI or tty), the gap is Modbus t3.5 derived from baud; `frame-gap-ms`
-is an explicit override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a
-practical approximation for PTY/pipe streams that do not expose UART t1.5 timing. After a gap,
-complete valid CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0)
-produce no response. Delayed fault responses use the same due-time poll pattern as TCP.
+baud rate is known (config/CLI or tty) and no explicit `frame-gap-ms` override is set, Modbus t3.5 is
+derived from baud for inter-frame boundaries and t1.5 is enforced as a best-effort intra-frame
+read() boundary check. `frame-gap-ms` is an explicit inter-frame override. With no known baud,
+`frame-gap-ms` or the 20 ms default is used as a practical approximation. After a gap, complete valid
+CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0) produce no response.
+Delayed fault responses use the same due-time poll pattern as TCP.
 
 ## Coding rules used here
 
@@ -130,8 +131,8 @@ them with s7 while the config is read, or keep an s7 environment alive and call 
 disconnect). `net/tcp_server.c` and `net/rtu_server.c` already act on a `fault_decision_t`, so new
 fields are applied in their response paths.
 
-**RTU timing / RTU-over-TCP.** RTU derives inter-frame t3.5 from known baud rates and keeps
-`frame-gap-ms` as an explicit override/fallback for byte streams without UART timing. Enforced
-intra-frame t1.5 detection on PTY/pipe read boundaries is still not modeled. RTU-over-TCP, if
-added, should be a separate transport/framing choice, not a silent change to existing TCP or RTU
-byte-stream behavior.
+**RTU timing / RTU-over-TCP.** RTU derives inter-frame t3.5 from known baud rates and, in
+baud-derived auto mode, enforces t1.5 as a best-effort intra-frame read() boundary check on byte
+streams. `frame-gap-ms` remains an explicit inter-frame override/fallback for streams without UART
+timing. True UART character-level timing is still not modeled. RTU-over-TCP, if added, should be a
+separate transport/framing choice, not a silent change to existing TCP or RTU byte-stream behavior.

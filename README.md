@@ -93,10 +93,11 @@ preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. 
 are rejected in RTU mode because 0 is broadcast and 248-255 are reserved.
 
 RTU frame boundaries use Modbus t3.5 when a baud rate is known (explicit `--baud`/config `(baud N)`,
-or the tty's existing baud rate). `--frame-gap-ms` is an explicit inter-frame silence override and
-takes precedence when set. For PTY/pipe streams with no known baud and no override, the default 20 ms
-fallback is used; this is an approximation because read() boundaries do not expose true UART t1.5
-character timing. `--port`/`--bind` are TCP-only; `--baud`/`--frame-gap-ms` are RTU-only. RTU-over-TCP
+or the tty's existing baud rate). In baud-derived auto mode (no `--frame-gap-ms` override), the
+server also enforces t1.5 as a best-effort intra-frame read() boundary check. `--frame-gap-ms` is an
+explicit inter-frame silence override and takes precedence when set. For PTY/pipe streams with no
+known baud and no override, the default 20 ms fallback is used; read() boundaries do not expose true
+UART character timing. `--port`/`--bind` are TCP-only; `--baud`/`--frame-gap-ms` are RTU-only. RTU-over-TCP
 is not implemented.
 
 ## Documentation

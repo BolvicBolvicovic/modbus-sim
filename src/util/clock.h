@@ -8,4 +8,9 @@
  * */
 u64	clock_now_ms(void);
 
+/* Name: clock_now_us
+ * Description: monotonic time in microseconds. Never goes backwards.
+ * */
+u64	clock_now_us(void);
+
 #endif
