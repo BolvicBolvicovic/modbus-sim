@@ -442,7 +442,7 @@ TEST(RtuCliRejectsReservedUnitIdsInRtuMode)
 	rtu_cli_stop();
 }
 
-TEST(RtuCliCheckWarnsOnReservedUnitIdsWithoutRtuMode)
+TEST(RtuCliCheckSkipsReservedUnitIdWarningWithoutRtuMode)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
 	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
@@ -454,8 +454,8 @@ TEST(RtuCliCheckWarnsOnReservedUnitIdsWithoutRtuMode)
 	ASSERT_EQ(ok);
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
 	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "warning:"));
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	ASSERT_EQ(!rtu_cli_file_contains(g_rtu_cli.stderr_path, "not valid for RTU"));
+	ASSERT_EQ(!rtu_cli_file_contains(g_rtu_cli.stderr_path, "warning:"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
 }

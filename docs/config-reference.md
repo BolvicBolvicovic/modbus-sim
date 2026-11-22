@@ -62,8 +62,8 @@ The command-line options `--port`, `--bind`, and `--frame-gap-ms` override these
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
 
 Unit ids must be different between devices. In RTU mode, unit ids 0 and 248-255 are rejected at
-startup (and reported by `--check`) because address 0 is broadcast and 248-255 are reserved by the
-Modbus serial specification.
+startup and by `--check` when RTU flags are given because address 0 is broadcast and 248-255 are
+reserved by the Modbus serial specification.
 
 ## Data points
 

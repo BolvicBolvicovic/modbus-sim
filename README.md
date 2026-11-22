@@ -87,7 +87,7 @@ In RTU mode, `--rtu-pty` creates a Linux PTY and prints `RTU PTY slave: /dev/pts
 RTU client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC, unknown unit, and broadcast (unit 0) produce no
 response. Broadcast requests are not executed. Unit ids 0 and 248-255 are rejected in RTU mode
-(and warned by `--check`) because 0 is broadcast and 248-255 are reserved. Frame boundaries use a
+because 0 is broadcast and 248-255 are reserved. Frame boundaries use a
 fixed silence-gap approximation (`frame-gap-ms`, default 20 ms) because PTY/pipe streams have no
 baud-rate timing. `--port`/`--bind` are TCP-only; `--frame-gap-ms` is RTU-only. RTU-over-TCP is not
 implemented.
