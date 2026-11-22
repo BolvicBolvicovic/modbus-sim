@@ -735,3 +735,114 @@ TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
 	rtu_cli_stop();
 	ASSERT_EQ(ok);
 }
+
+static bool
+rtu_cli_start_pty_extra(const char* config_text, char* const extra[], u32 extra_count)
+{
+	rtu_cli_t* fx = &g_rtu_cli;
+	char* argv[16];
+	int argc = 0;
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	int slave = -1;
+	char name[128];
+
+	if (!bin)
+		bin = "./modbus-sim";
+	if (extra_count > 8 || !rtu_cli_write_config(config_text))
+		return false;
+	if (openpty(&fx->master_fd, &slave, name, NULL, NULL) < 0)
+		return false;
+	{
+		struct termios tio;
+		if (tcgetattr(fx->master_fd, &tio) == 0)
+		{
+			cfmakeraw(&tio);
+			(void)tcsetattr(fx->master_fd, TCSANOW, &tio);
+		}
+	}
+	close(slave);
+	argv[argc++] = (char*)bin;
+	argv[argc++] = "--rtu-device";
+	argv[argc++] = name;
+	for (u32 i = 0; i < extra_count; i++)
+		argv[argc++] = extra[i];
+	argv[argc++] = fx->config;
+	argv[argc] = NULL;
+	return rtu_cli_start_with_args(argv, true);
+}
+
+TEST(RtuCliBaudAffectsRtuTiming)
+{
+	/* 9600 baud -> t3.5 ~4.01ms, effective 5ms. CLI --baud must make the server
+	 * treat byte gaps larger than t3.5 as frame boundaries. */
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME];
+	u8 resp[MODBUS_MAX_PDU];
+	u8 addr = 0;
+	u32 len = 0;
+	u32 flen = 0;
+	char* extra[] = { "--baud", "9600" };
+	bool ok = true;
+
+	ASSERT_EQ(rtu_cli_start_pty_extra(
+		"(device (unit-id 1) (holding 0 (static 4660)))\n", extra, 2));
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+
+	for (u32 i = 0; i < flen && ok; i++)
+	{
+		ok = send_all_fd(g_rtu_cli.master_fd, frame + i, 1);
+		if (ok && i + 1 < flen)
+			usleep(1000); /* < t3.5 */
+	}
+	if (ok) ok = recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 1000);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 4660;
+
+	if (ok) ok = send_all_fd(g_rtu_cli.master_fd, frame, flen / 2);
+	if (ok) usleep(20000); /* > t3.5 */
+	if (ok) ok = send_all_fd(g_rtu_cli.master_fd, frame + flen / 2, flen - flen / 2);
+	if (ok)
+	{
+		u8 tmp_addr = 0, tmp_pdu[MODBUS_MAX_PDU];
+		u32 tmp_len = 0;
+		ok = !recv_rtu_resp_fd(g_rtu_cli.master_fd, &tmp_addr, tmp_pdu, &tmp_len, 120);
+	}
+	if (ok) ok = send_rtu_req_fd(g_rtu_cli.master_fd, 1, req, sizeof(req));
+	if (ok) ok = recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 800);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 4660;
+
+	rtu_cli_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuCliFrameGapOverrideBeatsBaud)
+{
+	/* Baud-derived t3.5 at 9600 is ~4ms, but explicit --frame-gap-ms override must win. */
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME];
+	u8 resp[MODBUS_MAX_PDU];
+	u8 addr = 0;
+	u32 len = 0;
+	u32 flen = 0;
+	char* extra[] = { "--baud", "9600", "--frame-gap-ms", "80" };
+	bool ok = false;
+
+	ASSERT_EQ(rtu_cli_start_pty_extra(
+		"(device (unit-id 1) (holding 0 (static 4660)))\n", extra, 4));
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT(flen > 4);
+
+	ok = send_all_fd(g_rtu_cli.master_fd, frame, flen / 2);
+	if (ok)
+	{
+		u8 tmp_addr = 0, tmp_pdu[MODBUS_MAX_PDU];
+		u32 tmp_len = 0;
+		ok = !recv_rtu_resp_fd(g_rtu_cli.master_fd, &tmp_addr, tmp_pdu, &tmp_len, 30); /* > t3.5, < override */
+	}
+	if (ok) usleep(30000);
+	if (ok) ok = send_all_fd(g_rtu_cli.master_fd, frame + flen / 2, flen - flen / 2);
+	if (ok) ok = recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 1200);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 4660;
+
+	rtu_cli_stop();
+	ASSERT_EQ(ok);
+}
