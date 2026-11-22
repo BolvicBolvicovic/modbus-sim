@@ -15,9 +15,11 @@
 
 /* PTY/pipe fds have no baud rate or UART character timing, so true Modbus
  * RTU t3.5/t1.5 cannot be observed from read() boundaries alone. When baud is
- * known (config/CLI or tty), derive t3.5 per Modbus spec. Otherwise fall back
- * to a fixed conservative silence gap. frame_gap_ms remains an explicit
- * override for compatibility and deterministic testing. */
+ * known (config/CLI or tty), derive t3.5 per Modbus spec and enforce t1.5 as
+ * an intra-frame gap on read() boundaries (best-effort on byte streams).
+ * Otherwise fall back to a fixed conservative silence gap. frame_gap_ms
+ * remains an explicit inter-frame override for compatibility and deterministic
+ * testing. */
 
 typedef struct rtu_pending_t rtu_pending_t;
 struct rtu_pending_t
@@ -37,6 +39,7 @@ struct rtu_server_t
 	u8			rx[MODBUS_RTU_MAX_FRAME * 4];
 	u32			rx_len;
 	u64			last_rx_ms;
+	u64			last_rx_us;
 	bool			have_rx;
 	bool			read_closed;
 	rtu_pending_t		pending;
@@ -193,15 +196,57 @@ process_rx_frames(rtu_server_t* server, u64 now_ms)
 		consume_rx(server, server->rx_len - MODBUS_RTU_MAX_FRAME);
 }
 
+static void
+rtu_note_rx_gap(rtu_server_t* server, u64 now_ms, u64 now_us)
+{
+	u32	t15;
+	u32	t35;
+
+	if (!server->have_rx || server->rx_len == 0 || server->pending.active)
+		return;
+	/* Enforce t1.5/t3.5 only in baud-derived auto mode. Explicit frame-gap-ms
+	 * remains an inter-frame override for compatibility/deterministic tests. */
+	if (server->options.frame_gap_ms > 0 || server->options.baud == 0)
+		return;
+	if (now_us < server->last_rx_us)
+		return;
+
+	t15 = rtu_t15_us(server->options.baud);
+	t35 = rtu_t35_us(server->options.baud);
+	if (t15 == 0 || t35 == 0)
+		return;
+
+	{
+		u64	elapsed = now_us - server->last_rx_us;
+
+		if (elapsed >= t35)
+		{
+			process_rx_frames(server, now_ms);
+			server->have_rx = server->rx_len > 0;
+			return;
+		}
+		if (elapsed >= t15)
+		{
+			/* Intra-frame gap > t1.5: discard partial frame. */
+			server->rx_len = 0;
+			server->have_rx = false;
+		}
+	}
+}
+
 static bool
 read_available(rtu_server_t* server, u64 now_ms)
 {
 	ssize_t	got;
+	u64	now_us;
 
 	if (server->read_closed)
 		return false;
 	if (server->rx_len >= sizeof(server->rx))
 		consume_rx(server, server->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
+
+	now_us = clock_now_us();
+	rtu_note_rx_gap(server, now_ms, now_us);
 
 	got = read(server->options.fd, server->rx + server->rx_len,
 		   sizeof(server->rx) - server->rx_len);
@@ -218,9 +263,10 @@ read_available(rtu_server_t* server, u64 now_ms)
 		return false;
 	}
 
-	server->rx_len    += (u32)got;
-	server->last_rx_ms = now_ms;
-	server->have_rx    = true;
+	server->rx_len     += (u32)got;
+	server->last_rx_ms  = now_ms;
+	server->last_rx_us  = now_us;
+	server->have_rx     = true;
 	return true;
 }
 

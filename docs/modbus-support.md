@@ -32,8 +32,11 @@ inter-frame silence override and takes precedence over baud-derived timing for c
 For byte streams with no UART character timing (PTY/pipe) and no known baud, `modbus-sim` falls back
 to `frame-gap-ms` if configured, otherwise the default 20 ms. In that fallback mode the boundary is
 still a practical approximation because read() chunk boundaries do not expose true t1.5 character
-timing. When baud is known, the server uses t3.5-derived frame gaps; t1.5 is defined by the same
-timing model but is not enforced as an intra-frame boundary detector on PTY/pipe streams.
+timing. When baud is known and no explicit `frame-gap-ms` override is set, the server derives both
+t3.5 (inter-frame) and t1.5 (intra-frame) from baud. A read() gap >= t3.5 is treated as an
+inter-frame boundary; a gap > t1.5 and < t3.5 inside an incomplete frame discards that partial frame.
+On PTY/pipe byte streams this is a best-effort boundary check at read() granularity, not true UART
+character timing.
 
 No response is produced for:
 
@@ -173,7 +176,7 @@ Current intentional transport/behavior limits (not spec deviations in supported 
 
 ## Not supported (yet)
 
-- Enforced intra-frame t1.5 character timing on byte-stream transports (t3.5 is derived when baud is known; PTY/pipe read boundaries cannot observe true UART character gaps)
+- True UART character-level t1.5 timing on byte-stream transports (baud-derived t1.5 is enforced at read() boundary granularity when baud is known and no explicit frame-gap-ms override is set)
 - RTU-over-TCP
 - IPv6
 - TLS (Modbus/TCP Security)
