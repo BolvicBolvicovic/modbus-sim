@@ -209,13 +209,28 @@ TEST(ConfigDeviceIdentificationRejectsTooLong)
 	config_t	config = { 0 };
 	char		err[512] = "";
 	char		text[512];
-	char		longv[247];
+	char		longv[246];
 
-	memset(longv, 'x', 246);
-	longv[246] = '\0';
+	memset(longv, 'x', 245);
+	longv[245] = '\0';
 	snprintf(text, sizeof(text), "(device (vendor-name \"%s\") (holding 0))", longv);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "vendor-name is too long") != NULL);
+	ASSERT_EQ(strstr(err, "FC 43 / 0x2B MEI 14") != NULL);
+}
+
+TEST(ConfigDeviceIdentificationAcceptsMaxSize)
+{
+	config_t	config = { 0 };
+	char		err[512] = "";
+	char		text[512];
+	char		maxv[245];
+
+	memset(maxv, 'V', 244);
+	maxv[244] = '\0';
+	snprintf(text, sizeof(text), "(device (vendor-name \"%s\") (holding 0))", maxv);
+	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strlen(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME]) == 244);
 }
 
 #define EXPECT_ERROR(text, fragment)							\

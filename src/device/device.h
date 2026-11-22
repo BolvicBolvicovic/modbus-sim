@@ -10,7 +10,7 @@
 #include <stddef.h>
 
 #define DEVICE_NAME_MAX		64
-#define DEVICE_ID_OBJECT_MAX	245
+#define DEVICE_ID_OBJECT_MAX	244	/* 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
 #define DEVICE_MAX_POINTS	8192
 #define ADDRESS_SPACE_SIZE	65536
 
