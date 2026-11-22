@@ -22,9 +22,18 @@ frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. `--rtu-device`
 configures raw 8N1 mode (`CS8`, no parity, 1 stop bit, `CLOCAL|CREAD`, no flow control) and
 preserves the existing baud rate. Non-tty fds skip termios setup.
 
-Frame boundaries use a fixed inter-frame silence gap approximation (`frame-gap-ms`, config or CLI,
-default 20 ms). This is a practical approximation for PTY/pipe byte streams that have no baud rate
-or UART character timing; it is not a true t3.5 serial-line measurement.
+Frame boundaries use Modbus RTU inter-frame timing when a baud rate is known: t3.5 is 1.750 ms for
+baud rates above 19200, otherwise `ceil(3.5 * 11 / baud * 1,000,000)` microseconds. The baud can be
+set explicitly with config `(server (baud N))` or CLI `--baud N` (`--rtu-baud` alias). For tty
+devices, when no explicit baud is configured, `modbus-sim` reads the tty's current output baud and
+derives t3.5 from it. `frame-gap-ms` (config or CLI `--frame-gap-ms`) remains an explicit
+inter-frame silence override and takes precedence over baud-derived timing for compatibility.
+
+For byte streams with no UART character timing (PTY/pipe) and no known baud, `modbus-sim` falls back
+to `frame-gap-ms` if configured, otherwise the default 20 ms. In that fallback mode the boundary is
+still a practical approximation because read() chunk boundaries do not expose true t1.5 character
+timing. When baud is known, the server uses t3.5-derived frame gaps; t1.5 is defined by the same
+timing model but is not enforced as an intra-frame boundary detector on PTY/pipe streams.
 
 No response is produced for:
 
@@ -164,7 +173,7 @@ Current intentional transport/behavior limits (not spec deviations in supported 
 
 ## Not supported (yet)
 
-- True serial-line Modbus RTU timing (t3.5/t1.5 derived from baud rate); RTU uses a fixed silence gap approximation
+- Enforced intra-frame t1.5 character timing on byte-stream transports (t3.5 is derived when baud is known; PTY/pipe read boundaries cannot observe true UART character gaps)
 - RTU-over-TCP
 - IPv6
 - TLS (Modbus/TCP Security)

@@ -40,7 +40,8 @@ struct cli_t
 	bool		show_help;
 	bool		rtu_pty;
 	s32		port_override;		/* -1 = use the config's port */
-	s32		frame_gap_override;	/* -1 = use config/default */
+	s32		frame_gap_override;	/* -1 = use config/auto */
+	s32		baud_override;		/* -1 = use config/tty/default */
 	const char*	bind_override;		/* NULL = use the config's bind */
 	const char*	rtu_device;		/* NULL = TCP mode */
 };
@@ -57,7 +58,8 @@ print_usage(void)
 	     "  -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)\n"
 	     "      --rtu-pty        RTU: create a PTY and print its slave path\n"
 	     "      --rtu-device PATH RTU: serve RTU over an existing serial-like device\n"
-	     "      --frame-gap-ms N RTU: inter-frame silence in ms (overrides config, default 20)\n"
+	     "      --baud N         RTU: serial baud rate for t3.5 timing (overrides config/tty)\n"
+	     "      --frame-gap-ms N RTU: explicit inter-frame silence override in ms\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
 	     "  -h, --help           show this help\n"
@@ -65,7 +67,7 @@ print_usage(void)
 	     "Exit status: 0 success, 1 runtime/config-load error, 2 invalid CLI or config option.\n"
 	     "\n"
 	     "RTU mode runs Modbus RTU over a bidirectional byte stream (PTY or device).\n"
-	     "Frame boundaries use a fixed silence gap approximation (frame-gap-ms).\n"
+	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
 	     "\n"
 	     "Try:  modbus-sim profiles/minimal.scm\n"
 	     "Docs: README.md and docs/");
@@ -97,6 +99,7 @@ parse_args(int argc, char** argv, cli_t* cli)
 {
 	cli->port_override      = -1;
 	cli->frame_gap_override = -1;
+	cli->baud_override      = -1;
 
 	for (int i = 1; i < argc; i++)
 	{
@@ -123,6 +126,14 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->bind_override = argv[++i];
 		else if (strcmp(arg, "--rtu-device") == 0 && more)
 			cli->rtu_device = argv[++i];
+		else if ((strcmp(arg, "--baud") == 0 || strcmp(arg, "--rtu-baud") == 0) && more)
+		{
+			u32 baud = 0;
+
+			if (!parse_u32_arg(argv[++i], 1, 4000000, "baud", &baud))
+				return false;
+			cli->baud_override = (s32)baud;
+		}
 		else if (strcmp(arg, "--frame-gap-ms") == 0 && more)
 		{
 			u32 gap = 0;
@@ -158,6 +169,11 @@ parse_args(int argc, char** argv, cli_t* cli)
 	if (cli->frame_gap_override != -1 && !cli->rtu_pty && !cli->rtu_device)
 	{
 		fprintf(stderr, "--frame-gap-ms is only valid in RTU mode\n");
+		return false;
+	}
+	if (cli->baud_override != -1 && !cli->rtu_pty && !cli->rtu_device)
+	{
+		fprintf(stderr, "--baud is only valid in RTU mode\n");
 		return false;
 	}
 	return true;
@@ -211,9 +227,20 @@ print_summary(const config_t* config, bool rtu_mode, const char* rtu_path)
 	char	fault[96];
 
 	if (rtu_mode)
-		printf("%u device%s, RTU %s, frame-gap %u ms\n",
+	{
+		printf("%u device%s, RTU %s",
 		       config->device_count, config->device_count == 1 ? "" : "s",
-		       rtu_path ? rtu_path : "(fd)", config->frame_gap_ms);
+		       rtu_path ? rtu_path : "(fd)");
+		if (config->frame_gap_ms > 0)
+			printf(", frame-gap %u ms (override)\n", config->frame_gap_ms);
+		else if (config->baud > 0)
+			printf(", baud %u, t3.5 %u us (frame-gap %u ms)\n",
+			       config->baud, rtu_t35_us(config->baud),
+			       rtu_effective_gap_ms(0, config->baud));
+		else
+			printf(", frame-gap %u ms (default; baud unknown)\n",
+			       rtu_effective_gap_ms(0, 0));
+	}
 	else
 		printf("%u device%s on %s:%u\n", config->device_count, config->device_count == 1 ? "" : "s",
 		       config->bind_address, config->port);
@@ -237,6 +264,8 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 
 	if (cli->frame_gap_override != -1)
 		config->frame_gap_ms = (u32)cli->frame_gap_override;
+	if (cli->baud_override != -1)
+		config->baud = (u32)cli->baud_override;
 
 	if (rtu_mode && !validate_rtu_unit_ids(config, error, sizeof(error)))
 	{
@@ -266,23 +295,245 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 	return 0;
 }
 
-/* Applies a known raw 8N1 serial configuration. Preserves the existing baud
- * rate so a configured serial line keeps its speed. Non-tty fds are skipped. */
+static u32
+speed_to_baud(speed_t speed)
+{
+	switch (speed)
+	{
+#ifdef B50
+	case B50: return 50;
+#endif
+#ifdef B75
+	case B75: return 75;
+#endif
+#ifdef B110
+	case B110: return 110;
+#endif
+#ifdef B134
+	case B134: return 134;
+#endif
+#ifdef B150
+	case B150: return 150;
+#endif
+#ifdef B200
+	case B200: return 200;
+#endif
+#ifdef B300
+	case B300: return 300;
+#endif
+#ifdef B600
+	case B600: return 600;
+#endif
+#ifdef B1200
+	case B1200: return 1200;
+#endif
+#ifdef B1800
+	case B1800: return 1800;
+#endif
+#ifdef B2400
+	case B2400: return 2400;
+#endif
+#ifdef B4800
+	case B4800: return 4800;
+#endif
+#ifdef B9600
+	case B9600: return 9600;
+#endif
+#ifdef B19200
+	case B19200: return 19200;
+#endif
+#ifdef B38400
+	case B38400: return 38400;
+#endif
+#ifdef B57600
+	case B57600: return 57600;
+#endif
+#ifdef B115200
+	case B115200: return 115200;
+#endif
+#ifdef B230400
+	case B230400: return 230400;
+#endif
+#ifdef B460800
+	case B460800: return 460800;
+#endif
+#ifdef B500000
+	case B500000: return 500000;
+#endif
+#ifdef B576000
+	case B576000: return 576000;
+#endif
+#ifdef B921600
+	case B921600: return 921600;
+#endif
+#ifdef B1000000
+	case B1000000: return 1000000;
+#endif
+#ifdef B1152000
+	case B1152000: return 1152000;
+#endif
+#ifdef B1500000
+	case B1500000: return 1500000;
+#endif
+#ifdef B2000000
+	case B2000000: return 2000000;
+#endif
+#ifdef B2500000
+	case B2500000: return 2500000;
+#endif
+#ifdef B3000000
+	case B3000000: return 3000000;
+#endif
+#ifdef B3500000
+	case B3500000: return 3500000;
+#endif
+#ifdef B4000000
+	case B4000000: return 4000000;
+#endif
+	default: return 0;
+	}
+}
+
 static bool
-set_tty_raw(int fd)
+baud_to_speed(u32 baud, speed_t* out)
+{
+	switch (baud)
+	{
+#ifdef B50
+	case 50: *out = B50; return true;
+#endif
+#ifdef B75
+	case 75: *out = B75; return true;
+#endif
+#ifdef B110
+	case 110: *out = B110; return true;
+#endif
+#ifdef B134
+	case 134: *out = B134; return true;
+#endif
+#ifdef B150
+	case 150: *out = B150; return true;
+#endif
+#ifdef B200
+	case 200: *out = B200; return true;
+#endif
+#ifdef B300
+	case 300: *out = B300; return true;
+#endif
+#ifdef B600
+	case 600: *out = B600; return true;
+#endif
+#ifdef B1200
+	case 1200: *out = B1200; return true;
+#endif
+#ifdef B1800
+	case 1800: *out = B1800; return true;
+#endif
+#ifdef B2400
+	case 2400: *out = B2400; return true;
+#endif
+#ifdef B4800
+	case 4800: *out = B4800; return true;
+#endif
+#ifdef B9600
+	case 9600: *out = B9600; return true;
+#endif
+#ifdef B19200
+	case 19200: *out = B19200; return true;
+#endif
+#ifdef B38400
+	case 38400: *out = B38400; return true;
+#endif
+#ifdef B57600
+	case 57600: *out = B57600; return true;
+#endif
+#ifdef B115200
+	case 115200: *out = B115200; return true;
+#endif
+#ifdef B230400
+	case 230400: *out = B230400; return true;
+#endif
+#ifdef B460800
+	case 460800: *out = B460800; return true;
+#endif
+#ifdef B500000
+	case 500000: *out = B500000; return true;
+#endif
+#ifdef B576000
+	case 576000: *out = B576000; return true;
+#endif
+#ifdef B921600
+	case 921600: *out = B921600; return true;
+#endif
+#ifdef B1000000
+	case 1000000: *out = B1000000; return true;
+#endif
+#ifdef B1152000
+	case 1152000: *out = B1152000; return true;
+#endif
+#ifdef B1500000
+	case 1500000: *out = B1500000; return true;
+#endif
+#ifdef B2000000
+	case 2000000: *out = B2000000; return true;
+#endif
+#ifdef B2500000
+	case 2500000: *out = B2500000; return true;
+#endif
+#ifdef B3000000
+	case 3000000: *out = B3000000; return true;
+#endif
+#ifdef B3500000
+	case 3500000: *out = B3500000; return true;
+#endif
+#ifdef B4000000
+	case 4000000: *out = B4000000; return true;
+#endif
+	default: return false;
+	}
+}
+
+static u32
+tty_baud(int fd)
+{
+	struct termios	tio;
+
+	if (!isatty(fd))
+		return 0;
+	if (tcgetattr(fd, &tio) != 0)
+		return 0;
+	return speed_to_baud(cfgetospeed(&tio));
+}
+
+/* Applies a known raw 8N1 serial configuration. When baud is 0, preserves the
+ * existing baud rate so a configured serial line keeps its speed. Non-tty fds
+ * are skipped. */
+static bool
+set_tty_raw(int fd, u32 baud)
 {
 	struct termios	tio;
 	speed_t		ispeed;
 	speed_t		ospeed;
+	speed_t		requested = B9600;
 
 	if (!isatty(fd))
 		return true;
 	if (tcgetattr(fd, &tio) != 0)
 		return false;
+	if (baud > 0 && !baud_to_speed(baud, &requested))
+	{
+		errno = EINVAL;
+		return false;
+	}
 
 	ispeed = cfgetispeed(&tio);
 	ospeed = cfgetospeed(&tio);
 	cfmakeraw(&tio);
+	if (baud > 0)
+	{
+		ispeed = requested;
+		ospeed = requested;
+	}
 	cfsetispeed(&tio, ispeed);
 	cfsetospeed(&tio, ospeed);
 	tio.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CRTSCTS);
@@ -331,13 +582,15 @@ run_rtu(const cli_t* cli, config_t* config)
 			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
 			return 1;
 		}
-		if (!set_tty_raw(slave_fd))
+		if (!set_tty_raw(slave_fd, config->baud))
 		{
 			fprintf(stderr, "cannot configure RTU PTY slave: %s\n", strerror(errno));
 			close(slave_fd);
 			close(fd);
 			return 1;
 		}
+		if (config->baud == 0)
+			config->baud = tty_baud(slave_fd);
 		printf("RTU PTY slave: %s\n", name);
 		fflush(stdout);
 #else
@@ -356,7 +609,7 @@ run_rtu(const cli_t* cli, config_t* config)
 		}
 	}
 
-	if (!set_tty_raw(fd))
+	if (!set_tty_raw(fd, config->baud))
 	{
 		fprintf(stderr, "cannot configure RTU device '%s': %s\n",
 			cli->rtu_pty ? "pty" : cli->rtu_device, strerror(errno));
@@ -371,12 +624,15 @@ run_rtu(const cli_t* cli, config_t* config)
 			goto cleanup;
 		}
 	}
+	if (config->baud == 0)
+		config->baud = tty_baud(fd);
 
 	{
 		rtu_server_options_t	options = {
 			.fd           = fd,
 			.seed         = config->seed,
 			.frame_gap_ms = config->frame_gap_ms,
+			.baud         = config->baud,
 			.devices      = config->devices,
 			.device_count = config->device_count,
 		};

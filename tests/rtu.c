@@ -1,6 +1,7 @@
 #include "vtest.h"
 #include "modbus/rtu.h"
 #include "modbus/pdu.h"
+#include "net/rtu_server.h"
 #include <string.h>
 
 TEST(RtuCrcKnownVector)
@@ -265,4 +266,34 @@ TEST(RtuRequestLenFc23ValidAndMalformed)
 		ASSERT_SUCCESS(modbus_rtu_request_len(zero_write, sizeof(zero_write), &len));
 		ASSERT_EQ(len == 1 + 10 + 2);
 	}
+}
+
+TEST(RtuTimingT35T15SpecValues)
+{
+	/* Modbus over Serial Line spec: t3.5 fixed above 19200, else 3.5 char times. */
+	ASSERT_EQ(rtu_t35_us(0) == 0);
+	ASSERT_EQ(rtu_t15_us(0) == 0);
+	ASSERT_EQ(rtu_t35_us(9600) == 4011); /* ceil(3.5*11/9600*1e6) */
+	ASSERT_EQ(rtu_t15_us(9600) == 1719); /* ceil(1.5*11/9600*1e6) */
+	ASSERT_EQ(rtu_t35_us(19200) == 2006); /* ceil(3.5*11/19200*1e6) */
+	ASSERT_EQ(rtu_t15_us(19200) == 860);
+	ASSERT_EQ(rtu_t35_us(19201) == 1750);
+	ASSERT_EQ(rtu_t15_us(19201) == 750);
+	ASSERT_EQ(rtu_t35_us(115200) == 1750);
+	ASSERT_EQ(rtu_t15_us(115200) == 750);
+}
+
+TEST(RtuEffectiveGapMsResolution)
+{
+	/* Explicit override wins for compatibility. */
+	ASSERT_EQ(rtu_effective_gap_ms(20, 115200) == 20);
+	ASSERT_EQ(rtu_effective_gap_ms(1, 9600) == 1);
+
+	/* Auto mode derives from baud (ceil to whole ms for poll scheduling). */
+	ASSERT_EQ(rtu_effective_gap_ms(0, 9600) == 5);
+	ASSERT_EQ(rtu_effective_gap_ms(0, 19200) == 3);
+	ASSERT_EQ(rtu_effective_gap_ms(0, 115200) == 2);
+
+	/* No override and no baud: conservative PTY/pipe fallback. */
+	ASSERT_EQ(rtu_effective_gap_ms(0, 0) == RTU_DEFAULT_FRAME_GAP_MS);
 }

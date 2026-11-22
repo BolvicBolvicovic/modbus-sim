@@ -59,7 +59,7 @@ recv_none_fd(int fd, u32 timeout_ms)
 }
 
 static bool
-rtu_child_start(rtu_child_t* child, device_t** devices, u32 device_count, u32 frame_gap_ms)
+rtu_child_start_opts(rtu_child_t* child, device_t** devices, u32 device_count, u32 frame_gap_ms, u32 baud)
 {
 	int fds[2] = { -1, -1 };
 
@@ -81,6 +81,7 @@ rtu_child_start(rtu_child_t* child, device_t** devices, u32 device_count, u32 fr
 			.fd           = fds[1],
 			.seed         = 1,
 			.frame_gap_ms = frame_gap_ms,
+			.baud         = baud,
 			.devices      = devices,
 			.device_count = device_count,
 		};
@@ -94,6 +95,12 @@ rtu_child_start(rtu_child_t* child, device_t** devices, u32 device_count, u32 fr
 	close(fds[1]);
 	child->fd = fds[0];
 	return true;
+}
+
+static bool
+rtu_child_start(rtu_child_t* child, device_t** devices, u32 device_count, u32 frame_gap_ms)
+{
+	return rtu_child_start_opts(child, devices, device_count, frame_gap_ms, 0);
 }
 
 static bool
@@ -878,6 +885,91 @@ TEST(RtuServerFragmentedAcrossGapDoesNotFormValidFrame)
 	if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
 	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 800);
 	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x1234;
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuServerBaudDerivedGapFragments)
+{
+	/* 9600 baud -> t3.5 ~4.01ms, effective gap 5ms. Fragments inside gap form one
+	 * frame; fragments separated by more than t3.5 must be discarded. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x55AA);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		flen = 0;
+	bool		ok = true;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
+	}
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	for (u32 i = 0; i < flen && ok; i++)
+	{
+		ok = send_all_fd(child.fd, frame + i, 1);
+		if (ok && i + 1 < flen)
+			usleep(1000); /* < t3.5 */
+	}
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x55AA;
+
+	/* Split across a gap larger than t3.5 should not produce a response. */
+	if (ok) ok = send_all_fd(child.fd, frame, flen / 2);
+	if (ok) usleep(20000);
+	if (ok) ok = send_all_fd(child.fd, frame + flen / 2, flen - flen / 2);
+	if (ok) ok = recv_none_fd(child.fd, 120);
+	if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x55AA;
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuServerFrameGapOverrideBeatsBaud)
+{
+	/* Baud-derived t3.5 would be ~4ms at 9600, but explicit frame-gap-ms override
+	 * should keep fragments together for the configured gap. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		flen = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 80, 9600));
+	}
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT(flen > 4);
+	ok = send_all_fd(child.fd, frame, flen / 2);
+	if (ok)
+	{
+		u8 tmp_a = 0, tmp_p[MODBUS_MAX_PDU];
+		u32 tmp_l = 0;
+		ok = !recv_rtu_resp(child.fd, &tmp_a, tmp_p, &tmp_l, 30); /* > t3.5, < override */
+	}
+	if (ok) usleep(30000);
+	if (ok) ok = send_all_fd(child.fd, frame + flen / 2, flen - flen / 2);
+	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1200);
+	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x3344;
 
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
