@@ -35,6 +35,14 @@ load_text(const char* text, config_t* config, char* err, u32 err_size)
 	return ok;
 }
 
+#define EXPECT_ERROR(text, fragment)							\
+	do {										\
+		config_t	c = { 0 };						\
+		char		e[256] = "";						\
+		ASSERT_FAILURE(load_text((text), &c, e, sizeof(e)));			\
+		ASSERT_EQ(strstr(e, (fragment)) != NULL);				\
+	} while (0)
+
 TEST(ConfigLoadsServerAndDevice)
 {
 	config_t	config = { 0 };
@@ -250,6 +258,85 @@ TEST(ConfigServerIdAdditionalDataRejectsOverLength)
 	ASSERT_EQ(strstr(err, "249 bytes") != NULL);
 }
 
+TEST(ConfigComStatusIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (com-status 65535) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->com_status == 0xFFFF);
+
+	ASSERT_SUCCESS(load_text("(device (com-status 0) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->com_status == 0);
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->com_status == 0);
+}
+
+TEST(ConfigComStatusRejectsOtherValues)
+{
+	EXPECT_ERROR("(device (com-status 1) (holding 0))", "must be 0 (ready) or 65535 (busy)");
+	EXPECT_ERROR("(device (com-status 65534) (holding 0))", "must be 0 (ready) or 65535 (busy)");
+	EXPECT_ERROR("(device (com-status -1) (holding 0))", "between 0 and 65535");
+	EXPECT_ERROR("(device (com-status 65536) (holding 0))", "between 0 and 65535");
+	EXPECT_ERROR("(device (com-status \"busy\") (holding 0))", "whole number");
+}
+
+/* Builds (device (holding 0) (com-event 0) ... ) with `count` event entries. */
+static void
+make_com_event_config(char* buf, u32 size, u32 count)
+{
+	u32	used = (u32)snprintf(buf, size, "(device (holding 0)");
+
+	for (u32 i = 0; i < count; i++)
+		used += (u32)snprintf(buf + used, size - used, " (com-event %u)", i);
+	snprintf(buf + used, size - used, ")");
+}
+
+TEST(ConfigComEventsAreParsedInOrder)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (com-event 0) (com-event 255) (com-event 7) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->com_event_log_count == 3);
+	ASSERT_EQ(config.devices[0]->com_events[0] == 0);
+	ASSERT_EQ(config.devices[0]->com_events[1] == 255);
+	ASSERT_EQ(config.devices[0]->com_events[2] == 7);
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->com_event_log_count == 0);
+}
+
+TEST(ConfigComEventsAcceptMaximum)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[1024];
+
+	make_com_event_config(text, sizeof(text), DEVICE_MAX_COM_EVENTS);
+	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->com_event_log_count == DEVICE_MAX_COM_EVENTS);
+	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
+		ASSERT_EQ(config.devices[0]->com_events[i] == (u8)i);
+}
+
+TEST(ConfigComEventsRejectOverMaxAndInvalidValues)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[1024];
+
+	make_com_event_config(text, sizeof(text), DEVICE_MAX_COM_EVENTS + 1);
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "too many (com-event ...) entries (max 64)") != NULL);
+
+	EXPECT_ERROR("(device (com-event 256) (holding 0))", "between 0 and 255");
+	EXPECT_ERROR("(device (com-event -1) (holding 0))", "between 0 and 255");
+	EXPECT_ERROR("(device (com-event \"x\") (holding 0))", "whole number");
+}
+
 TEST(ConfigDeviceIdentificationDefaultsAndOverrides)
 {
 	config_t	config = { 0 };
@@ -303,14 +390,6 @@ TEST(ConfigDeviceIdentificationAcceptsMaxSize)
 	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strlen(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME]) == 244);
 }
-
-#define EXPECT_ERROR(text, fragment)							\
-	do {										\
-		config_t	c = { 0 };						\
-		char		e[256] = "";						\
-		ASSERT_FAILURE(load_text((text), &c, e, sizeof(e)));			\
-		ASSERT_EQ(strstr(e, (fragment)) != NULL);				\
-	} while (0)
 
 TEST(ConfigErrorsAreReadable)
 {

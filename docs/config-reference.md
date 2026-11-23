@@ -54,6 +54,8 @@ explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t
 | `(server-id N)` | Server ID byte returned by Report Server ID (FC 17), 0-255 | `0` |
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
 | `(server-id-additional-data "HEXBYTES")` | Additional Data returned by Report Server ID (FC 17): even-length hex string, empty allowed, 0-249 bytes (`""` = none) | `""` |
+| `(com-status N)` | Status returned by Get Com Event Counter (FC 11) and Get Com Event Log (FC 12), `0` (ready) or `65535` (busy) | `0` |
+| `(com-event N)` | One FC 12 event byte, 0-255. Repeatable up to 64 entries; reported in configuration order | none (empty log) |
 | `(vendor-name "Text")` | MEI 14 Read Device Identification object 0x00, 0-244 bytes | `"modbus-sim"` |
 | `(product-code "Text")` | MEI 14 object 0x01, 0-244 bytes | `"modbus-sim"` |
 | `(major-minor-revision "Text")` | MEI 14 object 0x02, 0-244 bytes | `"1.0"` |
@@ -275,6 +277,31 @@ writable via Modbus and not modified by the simulator). The response `FIFO Count
 configured values and is always at most 31. Config is limited to 16 FIFO queues per device. See
 [modbus-support.md](modbus-support.md) for the exact request/response format and exception
 conditions.
+
+## Serial communication status and event log (FC 11/12)
+
+```scheme
+(com-status N)      ; N is 0 (ready) or 65535 (busy); default 0
+(com-event N)       ; one event byte, 0-255; repeat up to 64 times; default empty
+```
+
+```scheme
+(device
+  (com-status 0)
+  (com-event 128)
+  (com-event 255)
+  (holding 0))
+```
+
+`com-status` is the status field returned by both FC 11 and FC 12. Any value other than `0` or
+`65535` is rejected by `--check` and at startup.
+
+Each `com-event` supplies one byte of the FC 12 Events field, in the order written. Values must be
+0-255 and at most 64 entries are allowed; a 65th entry is rejected. FC 12 Byte Count is
+`6 + number of event bytes`, so an empty log gives Byte Count `6` and an 8-byte PDU, and 64 events
+give Byte Count `70`. The simulator reports the configured bytes verbatim and does not interpret
+serial-line event nibbles (it does not split an event byte into transmitter/receiver status or
+decode its meaning). The log is static for the run; FC 08 does not clear it.
 
 ## Error messages
 

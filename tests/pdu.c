@@ -451,6 +451,94 @@ TEST(GetComEventLogRejectsMalformedRequest)
 	arena_release(arena);
 }
 
+TEST(GetComEventCounterReportsConfiguredStatus)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[] = { FC_GET_COM_EVENT_COUNTER };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->com_status = 0xFFFF;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
+	ASSERT_EQ(resp[1] == 0xFF && resp[2] == 0xFF);
+	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00); /* FC 11 is not an event */
+	arena_release(arena);
+}
+
+TEST(GetComEventLogReportsConfiguredStatusAndEvents)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[] = { FC_GET_COM_EVENT_LOG };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->com_status         = 0xFFFF;
+	dev->com_events[0]      = 0x01;
+	dev->com_events[1]      = 0x80;
+	dev->com_events[2]      = 0xFF;
+	dev->com_event_log_count = 3;
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 11);
+	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG);
+	ASSERT_EQ(resp[1] == 9);
+	ASSERT_EQ(resp[2] == 0xFF && resp[3] == 0xFF);
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00); /* no events counted */
+	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x01); /* message count */
+	ASSERT_EQ(resp[8] == 0x01 && resp[9] == 0x80 && resp[10] == 0xFF);
+	arena_release(arena);
+}
+
+TEST(GetComEventLogReportsMaximumEvents)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[] = { FC_GET_COM_EVENT_LOG };
+	u8		resp[MODBUS_MAX_PDU];
+
+	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
+	{
+		dev->com_events[i] = (u8)(i + 1);
+		dev->com_event_log_count++;
+	}
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 8 + DEVICE_MAX_COM_EVENTS);
+	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG);
+	ASSERT_EQ(resp[1] == 6 + DEVICE_MAX_COM_EVENTS);
+	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x00);
+	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
+		ASSERT_EQ(resp[8 + i] == (u8)(i + 1));
+	arena_release(arena);
+}
+
+TEST(GetComEventFunctionsRejectMalformedWithConfiguredValues)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		fc11_extra[] = { FC_GET_COM_EVENT_COUNTER, 0x00 };
+	u8		fc12_extra[] = { FC_GET_COM_EVENT_LOG, 0x00 };
+	u8		req[]        = { FC_GET_COM_EVENT_LOG };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->com_status          = 0xFFFF;
+	dev->com_events[0]       = 0x42;
+	dev->com_event_log_count = 1;
+
+	ASSERT_EQ(run(dev, fc11_extra, sizeof(fc11_extra), resp) == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_COUNTER | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(run(dev, fc12_extra, sizeof(fc12_extra), resp) == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_LOG | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 9);
+	ASSERT_EQ(resp[1] == 7 && resp[2] == 0xFF && resp[3] == 0xFF);
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00); /* exceptions are not events */
+	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x03); /* both malformed PDUs counted */
+	ASSERT_EQ(resp[8] == 0x42);
+	arena_release(arena);
+}
+
 TEST(DiagnosticsReturnQueryDataEchoesRequest)
 {
 	arena_t*	arena = ARENA_ALLOC();

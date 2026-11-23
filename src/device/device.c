@@ -42,8 +42,11 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->server_id        = 0;
 	dev->run_indicator    = 0xFF;
 	dev->server_id_additional_data_len = 0;
+	dev->com_status       = 0;
 	dev->com_event_count  = 0;
 	dev->message_count    = 0;
+	dev->com_event_log_count = 0;
+	memset(dev->com_events, 0, sizeof(dev->com_events));
 	dev->start_ms         = start_ms;
 	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "modbus-sim");
 	strcpy(dev->device_id[DEVICE_ID_PRODUCT_CODE], "modbus-sim");

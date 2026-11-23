@@ -516,7 +516,7 @@ get_com_event_counter(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	resp[0] = req[0];
-	put_be16(resp + 1, 0x0000);
+	put_be16(resp + 1, dev->com_status);
 	put_be16(resp + 3, dev->com_event_count);
 	return 5;
 }
@@ -528,11 +528,12 @@ get_com_event_log(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	resp[0] = req[0];
-	resp[1] = 6; /* status + event count + message count, no events */
-	put_be16(resp + 2, 0x0000);
+	resp[1] = (u8)(6 + dev->com_event_log_count);
+	put_be16(resp + 2, dev->com_status);
 	put_be16(resp + 4, dev->com_event_count);
 	put_be16(resp + 6, dev->message_count);
-	return 8;
+	memcpy(resp + 8, dev->com_events, dev->com_event_log_count);
+	return 8 + dev->com_event_log_count;
 }
 
 static u32

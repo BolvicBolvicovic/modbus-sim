@@ -68,6 +68,7 @@ struct space_t
 #define DEVICE_MAX_RECORD_VALUES	126
 #define DEVICE_MAX_FIFOS		16
 #define DEVICE_MAX_FIFO_VALUES		31
+#define DEVICE_MAX_COM_EVENTS		64
 
 /* Name: file_segment_t
  * Description: one contiguous block of 16-bit register values in a file,
@@ -130,8 +131,11 @@ struct device_t
 	u8		run_indicator;		/* FC 17 Run Indicator Status (0xFF run, 0x00 off) */
 	u8		server_id_additional_data[DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX];
 	u8		server_id_additional_data_len;
+	u16		com_status;		/* FC 11/12 status: 0 ready, 0xFFFF busy */
 	u16		com_event_count;	/* FC 11/12 event counter, wraps modulo 65536 */
 	u16		message_count;		/* FC 12 message counter, wraps modulo 65536 */
+	u16		com_event_log_count;	/* number of configured FC 12 event bytes */
+	u8		com_events[DEVICE_MAX_COM_EVENTS]; /* FC 12 event bytes, in order */
 	u64		start_ms;		/* ramps count their time from here */
 	fault_t		fault;
 	arena_t*	arena;			/* backing arena for dynamic config storage */

@@ -151,6 +151,36 @@ parse_server_id_additional_data(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+static bool
+parse_com_status(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s64	status = 0;
+
+	if (!form_get_int(ctx, item, 0, 65535, &status))
+		return false;
+	if (status != 0 && status != 65535)
+		return form_fail(ctx, "%s: must be 0 (ready) or 65535 (busy)",
+				 form_text(ctx, item));
+
+	dev->com_status = (u16)status;
+	return true;
+}
+
+static bool
+parse_com_event(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s64	event = 0;
+
+	if (!form_get_int(ctx, item, 0, 255, &event))
+		return false;
+	if (dev->com_event_log_count >= DEVICE_MAX_COM_EVENTS)
+		return form_fail(ctx, "%s: too many (com-event ...) entries (max %d)",
+				 form_text(ctx, item), DEVICE_MAX_COM_EVENTS);
+
+	dev->com_events[dev->com_event_log_count++] = (u8)event;
+	return true;
+}
+
 /* (note "text") is documentation for humans. It is checked and ignored. */
 static bool
 parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
@@ -535,6 +565,8 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "server-id",        parse_server_id        },
 	{ "run-indicator",    parse_run_indicator    },
 	{ "server-id-additional-data", parse_server_id_additional_data },
+	{ "com-status",       parse_com_status       },
+	{ "com-event",        parse_com_event        },
 	{ "vendor-name",      parse_vendor_name      },
 	{ "product-code",     parse_product_code     },
 	{ "major-minor-revision", parse_major_minor_revision },
@@ -575,9 +607,9 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 	if (!entry)
 		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
-				 "run-indicator, server-id-additional-data, vendor-name, product-code, "
-				 "major-minor-revision, vendor-url, product-name, model-name, user-application-name, "
-				 "fault, note, coil, discrete, input, holding, file or fifo", head);
+				 "run-indicator, server-id-additional-data, com-status, com-event, vendor-name, "
+				 "product-code, major-minor-revision, vendor-url, product-name, model-name, "
+				 "user-application-name, fault, note, coil, discrete, input, holding, file or fifo", head);
 
 	return entry->parse(ctx, item, dev);
 }
