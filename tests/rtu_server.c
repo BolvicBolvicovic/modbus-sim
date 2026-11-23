@@ -1099,6 +1099,47 @@ TEST(RtuServerBaudSplitFrameThreeMsIsAnswered)
 	arena_release(arena);
 }
 
+TEST(RtuServerBaudFrameSplitThreeWaysAcrossGapsIsAnswered)
+{
+	/* Issue #57: the deferred prefix must survive a second t3.5 gap when the
+	 * remaining bytes still do not form a complete frame. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x77AA);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u32		chunks[3] = { 3, 3, 2 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		flen = 0;
+	u32		offset = 0;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
+	}
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT_EQ(flen == chunks[0] + chunks[1] + chunks[2]);
+	for (u32 i = 0; i < 3; i++)
+	{
+		ASSERT_EQ(send_all_fd(child.fd, frame + offset, chunks[i]));
+		offset += chunks[i];
+		if (i + 1 < 3)
+			usleep(6000); /* cross one t3.5 gap (~4 ms at 9600 baud) */
+	}
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == 4);
+	ASSERT_EQ(get_be16(resp + 2) == 0x77AA);
+	ASSERT_EQ(recv_none_fd(child.fd, 100));
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
+
 TEST(RtuServerBaudT15GapDiscardsPartialFrame)
 {
 	/* 1200 baud -> t1.5 ~13.75ms, t3.5 ~32.08ms. With strict-t15 opt-in, a gap

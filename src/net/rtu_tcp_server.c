@@ -234,7 +234,7 @@ static void
 conn_write(rtu_tcp_conn_t* conn)
 {
 	ssize_t sent;
-	rtu_pending_t* p = &conn->framer.pending;
+	pending_response_t* p = &conn->framer.pending;
 
 	if (!p->active)
 		return;
@@ -254,7 +254,7 @@ conn_write(rtu_tcp_conn_t* conn)
 	conn->last_activity_ms = clock_now_ms();
 	if (p->sent >= p->len)
 	{
-		rtu_pending_clear(p);
+		pending_response_clear(p);
 		if (conn->read_closed)
 			conn_close(conn);
 	}
@@ -303,7 +303,7 @@ build_poll_table(rtu_tcp_server_t* server, struct pollfd* fds, rtu_tcp_conn_t** 
 
 		if (conn->framer.pending.active)
 		{
-			rtu_pending_t* p = &conn->framer.pending;
+			pending_response_t* p = &conn->framer.pending;
 			if (p->due_ms <= now_ms)
 			{
 				fds[count - 1].events = POLLOUT;
@@ -350,7 +350,7 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	{
 		if (conn->read_closed)
 			return;
-		rtu_pending_clear(&f->pending);
+		pending_response_clear(&f->pending);
 		conn_close(conn);
 		return;
 	}
@@ -362,7 +362,7 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 			conn_process(server, conn, clock_now_ms());
 			if (f->pending.active)
 			{
-				rtu_pending_clear(&f->pending);
+				pending_response_clear(&f->pending);
 				conn_close(conn);
 				return;
 			}

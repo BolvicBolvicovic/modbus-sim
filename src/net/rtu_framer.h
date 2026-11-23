@@ -2,6 +2,7 @@
 #define RTU_FRAMER_H
 
 #include "modbus/rtu.h"
+#include "net/net_common.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
@@ -13,16 +14,6 @@
 typedef struct device_t device_t;
 typedef struct rng_t rng_t;
 
-typedef struct rtu_pending_t rtu_pending_t;
-struct rtu_pending_t
-{
-	bool	active;
-	u8	buf[MODBUS_RTU_MAX_FRAME];
-	u32	len;
-	u32	sent;
-	u64	due_ms;
-};
-
 typedef struct rtu_framer_t rtu_framer_t;
 struct rtu_framer_t
 {
@@ -33,7 +24,7 @@ struct rtu_framer_t
 	bool		have_rx;
 	bool		gap_deferred;
 	u32		gap_deferred_len;
-	rtu_pending_t	pending;
+	pending_response_t	pending;
 };
 
 /* Name: rtu_framer_ctx_t
@@ -54,7 +45,6 @@ struct rtu_framer_ctx_t
 	const char*	peer;
 };
 
-void	rtu_pending_clear(rtu_pending_t* pending);
 void	rtu_framer_init(rtu_framer_t* framer);
 void	rtu_framer_consume(rtu_framer_t* framer, u32 n);
 bool	rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len, u64 due_ms);

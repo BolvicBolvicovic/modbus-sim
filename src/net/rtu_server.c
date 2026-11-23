@@ -16,7 +16,7 @@
 
 /* PTY/pipe fds have no baud rate or UART character timing, so true Modbus
  * RTU t3.5/t1.5 cannot be observed from read() boundaries alone. When baud is
- * known (config/CLI or tty), derive t3.5 per Modbus spec. Optional strict_t15
+ * known (config or tty), derive t3.5 per Modbus spec. Optional strict_t15
  * enables a best-effort intra-frame t1.5 discard heuristic on read()
  * boundaries in baud-derived auto mode. Otherwise fall back to a fixed
  * conservative silence gap. frame_gap_ms remains an explicit inter-frame
@@ -112,7 +112,7 @@ static bool
 write_pending(rtu_server_t* server)
 {
 	ssize_t	sent = 0;
-	rtu_pending_t*	p = &server->framer.pending;
+	pending_response_t*	p = &server->framer.pending;
 
 	if (!p->active)
 		return true;
@@ -131,7 +131,7 @@ write_pending(rtu_server_t* server)
 
 	p->sent += (u32)sent;
 	if (p->sent >= p->len)
-		rtu_pending_clear(p);
+		pending_response_clear(p);
 	return true;
 }
 
@@ -179,10 +179,7 @@ rtu_handle_hangup(rtu_server_t* server, u64 now_ms)
 	rtu_framer_t* f = &server->framer;
 
 	if (f->pending.active)
-	{
-		rtu_pending_clear(&f->pending);
-		return false;
-	}
+		return net_handle_hangup(&f->pending);
 	if (server->read_closed)
 		return false;
 
@@ -191,10 +188,7 @@ rtu_handle_hangup(rtu_server_t* server, u64 now_ms)
 	{
 		rtu_framer_process(f, &server->ctx, now_ms);
 		if (f->pending.active)
-		{
-			rtu_pending_clear(&f->pending);
-			return false;
-		}
+			return net_handle_hangup(&f->pending);
 	}
 	return false;
 }

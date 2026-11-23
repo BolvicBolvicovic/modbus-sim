@@ -23,11 +23,7 @@ struct ascii_server_t
 	rng_t			rng;
 	u8			rx[MODBUS_ASCII_MAX_FRAME];
 	u32			rx_len;
-	u8			pending[MODBUS_ASCII_MAX_FRAME];
-	u32			pending_len;
-	u32			pending_sent;
-	u64			pending_due_ms;
-	bool			pending_active;
+	pending_response_t	pending;
 	bool			read_closed;
 };
 
@@ -73,19 +69,19 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 	if (decision.drop)
 		return;
 
-	frame_len = modbus_ascii_encode(server->pending, addr, resp, resp_len);
+	frame_len = modbus_ascii_encode(server->pending.buf, addr, resp, resp_len);
 	if (frame_len == 0)
 		return;
-	server->pending_active = true;
-	server->pending_len = frame_len;
-	server->pending_sent = 0;
-	server->pending_due_ms = now_ms + decision.delay_ms;
+	server->pending.active = true;
+	server->pending.len = frame_len;
+	server->pending.sent = 0;
+	server->pending.due_ms = now_ms + decision.delay_ms;
 }
 
 static void
 ascii_process(ascii_server_t* server, u64 now_ms)
 {
-	while (server->rx_len > 0 && !server->pending_active)
+	while (server->rx_len > 0 && !server->pending.active)
 	{
 		u32			len = 0;
 		modbus_ascii_scan_t	scan = modbus_ascii_scan(server->rx, server->rx_len, &len);
@@ -133,13 +129,13 @@ ascii_read_available(ascii_server_t* server)
 static bool
 ascii_write_pending(ascii_server_t* server)
 {
-	ssize_t sent;
+	pending_response_t*	p = &server->pending;
+	ssize_t		sent;
 
-	if (!server->pending_active || server->pending_due_ms > clock_now_ms())
+	if (!p->active || p->due_ms > clock_now_ms())
 		return true;
 
-	sent = write(server->options.fd, server->pending + server->pending_sent,
-		     server->pending_len - server->pending_sent);
+	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
 		if (errno == EAGAIN ||
@@ -148,13 +144,9 @@ ascii_write_pending(ascii_server_t* server)
 			return true;
 		return false;
 	}
-	server->pending_sent += (u32)sent;
-	if (server->pending_sent >= server->pending_len)
-	{
-		server->pending_active = false;
-		server->pending_len = 0;
-		server->pending_sent = 0;
-	}
+	p->sent += (u32)sent;
+	if (p->sent >= p->len)
+		pending_response_clear(p);
 	return true;
 }
 
@@ -164,15 +156,15 @@ ascii_build_poll(const ascii_server_t* server, struct pollfd* pfd, int* timeout,
 	*timeout = 1000;
 	*pfd = (struct pollfd){ .fd = server->options.fd, .events = 0 };
 
-	if (server->pending_active)
+	if (server->pending.active)
 	{
-		if (server->pending_due_ms <= now_ms)
+		if (server->pending.due_ms <= now_ms)
 		{
 			pfd->events |= POLLOUT;
 			*timeout = 0;
 		}
 		else
-			*timeout = (int)(server->pending_due_ms - now_ms);
+			*timeout = (int)(server->pending.due_ms - now_ms);
 		return;
 	}
 	if (server->read_closed)
@@ -194,13 +186,8 @@ ascii_handle_revents(ascii_server_t* server, short revents, u64 now_ms)
 		(void)ascii_read_available(server);
 	ascii_process(server, now_ms);
 	if (revents & POLLHUP)
-	{
-		if (server->pending_active)
-			return true;
-		server->read_closed = true;
-		return server->pending_active;
-	}
-	if (server->read_closed && !server->pending_active)
+		return net_handle_hangup(&server->pending);
+	if (server->read_closed && !server->pending.active)
 		return false;
 	return true;
 }

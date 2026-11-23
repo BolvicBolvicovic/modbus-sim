@@ -5,19 +5,10 @@
 #include <string.h>
 
 void
-rtu_pending_clear(rtu_pending_t* pending)
-{
-	pending->active = false;
-	pending->len    = 0;
-	pending->sent   = 0;
-	pending->due_ms = 0;
-}
-
-void
 rtu_framer_init(rtu_framer_t* framer)
 {
 	memset(framer, 0, sizeof(*framer));
-	rtu_pending_clear(&framer->pending);
+	pending_response_clear(&framer->pending);
 }
 
 static bool
@@ -190,7 +181,17 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 		clear_deferral(framer);
 
 		if (retry > 0 && retry < framer->rx_len)
-			rtu_framer_consume(framer, retry);
+		{
+			/* The prefix may be a frame split across several t3.5 gaps.
+			 * Keep it unless the new bytes form a complete frame on
+			 * their own (a stale prefix followed by a fresh request). */
+			if (modbus_rtu_next_frame(framer->rx + retry,
+						  framer->rx_len - retry, &frame_len) ==
+			    MODBUS_RTU_FRAME_FOUND)
+				rtu_framer_consume(framer, retry);
+			else
+				return true;
+		}
 		else if (framer->rx_len <= MODBUS_RTU_MAX_FRAME)
 		{
 			/* Second gap with no new data: discard. */
@@ -288,7 +289,9 @@ rtu_gap_elapsed(u64 now_ms, u64 last_rx_ms, u32 gap_ms)
 void
 rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us)
 {
-	u32 t35;
+	u32	t35;
+	u32	t15;
+	u64	elapsed;
 
 	if (!framer->have_rx ||
 	    framer->rx_len == 0 ||
@@ -301,21 +304,18 @@ rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_m
 	t35 = rtu_t35_us(ctx->baud);
 	if (t35 == 0)
 		return;
+	elapsed = now_us - framer->last_rx_us;
+	if (elapsed >= t35)
 	{
-		u64 elapsed = now_us - framer->last_rx_us;
-		if (elapsed >= t35)
-		{
-			rtu_framer_on_gap_due(framer, ctx, now_ms, now_us);
-			return;
-		}
-
-		if (ctx->strict_t15 == false) return;
-
-		u32 t15 = rtu_t15_us(ctx->baud);
-		if (t15 > 0 && elapsed >= t15)
-		{
-			discard_rx(framer, ctx);
-			framer->have_rx = false;
-		}
+		rtu_framer_on_gap_due(framer, ctx, now_ms, now_us);
+		return;
+	}
+	if (!ctx->strict_t15)
+		return;
+	t15 = rtu_t15_us(ctx->baud);
+	if (t15 > 0 && elapsed >= t15)
+	{
+		discard_rx(framer, ctx);
+		framer->have_rx = false;
 	}
 }

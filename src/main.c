@@ -21,19 +21,12 @@
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
 #include "net/tcp_server.h"
-#include "util/baud.h"
 #include "util/log.h"
 #include "util/serial.h"
-#include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
 #include <unistd.h>
-#if defined(__linux__)
-#include <pty.h>
-#endif
 
 typedef struct cli_t cli_t;
 struct cli_t
@@ -198,172 +191,27 @@ print_summary(const config_t* config)
 }
 
 
-static bool
-tty_is_pty(int fd)
-{
-	char		name[64];
-#if defined(__linux__)
-	unsigned int	ptn = 0;
-#endif
-
-	if (!isatty(fd))
-		return false;
-	if (ttyname_r(fd, name, sizeof(name)) == 0)
-	{
-		if (strcmp(name, "/dev/ptmx") == 0)
-			return true;
-		if (strncmp(name, "/dev/pts/", 9) == 0)
-			return true;
-	}
-#if defined(__linux__)
-	/* Fallback for master fds whose ttyname_r() may be non-PTS. */
-	if (ioctl(fd, TIOCGPTN, &ptn) == 0)
-		return true;
-#endif
-	return false;
-}
-
-static u32
-tty_baud(int fd)
-{
-	struct termios	tio;
-
-	if (!isatty(fd) || tty_is_pty(fd))
-		return 0;
-	if (tcgetattr(fd, &tio) != 0)
-		return 0;
-	return baud_from_speed(cfgetospeed(&tio));
-}
-
-/* Applies raw mode with the selected parity and stop bits. When baud is 0,
- * preserves the existing baud rate so a configured serial line keeps its
- * speed. Non-tty fds are skipped. */
-static bool
-set_tty_raw(int fd, u32 baud, parity_t parity, u32 stop_bits)
-{
-	struct termios	tio;
-	speed_t		ispeed;
-	speed_t		ospeed;
-	speed_t		requested = B9600;
-	tcflag_t	clear = 0;
-	tcflag_t	set = 0;
-
-	if (!isatty(fd))
-		return true;
-	if (!serial_line_flags(parity, stop_bits, &clear, &set))
-	{
-		errno = EOPNOTSUPP;
-		return false;
-	}
-	if (tcgetattr(fd, &tio) != 0)
-		return false;
-	if (baud > 0 && !baud_to_speed(baud, &requested))
-	{
-		errno = EINVAL;
-		return false;
-	}
-
-	ispeed = cfgetispeed(&tio);
-	ospeed = cfgetospeed(&tio);
-	cfmakeraw(&tio);
-	if (baud > 0)
-	{
-		ispeed = requested;
-		ospeed = requested;
-	}
-	cfsetispeed(&tio, ispeed);
-	cfsetospeed(&tio, ospeed);
-	tio.c_cflag &= ~(clear | CRTSCTS);
-	tio.c_cflag |= set | CLOCAL | CREAD;
-	tio.c_iflag &= ~(IXON | IXOFF | IXANY);
-#ifdef ECHOE
-	tio.c_lflag &= ~ECHOE;
-#endif
-#ifdef ECHOK
-	tio.c_lflag &= ~ECHOK;
-#endif
-#ifdef ECHONL
-	tio.c_lflag &= ~ECHONL;
-#endif
-#ifdef ECHOCTL
-	tio.c_lflag &= ~ECHOCTL;
-#endif
-#ifdef ECHOKE
-	tio.c_lflag &= ~ECHOKE;
-#endif
-#ifdef ECHOPRT
-	tio.c_lflag &= ~ECHOPRT;
-#endif
-#ifdef NOKERNINFO
-	tio.c_lflag &= ~NOKERNINFO;
-#endif
-	if (tcsetattr(fd, TCSANOW, &tio) != 0)
-		return false;
-	return true;
-}
-
 static s32
 run_rtu(config_t* config)
 {
-	int	fd       = -1;
-	int	slave_fd = -1;
-	s32	status   = 1;
+	char	name[128] = { 0 };
+	int	slave_fd  = -1;
+	s32	status    = 1;
+	int	fd;
 
-	if (config->mode == SERVER_MODE_RTU_PTY)
+	fd = open_serial_fd(config->mode == SERVER_MODE_RTU_PTY, "RTU", config->path,
+			    config->baud, config->parity, config->stop_bits,
+			    &slave_fd, name, sizeof(name));
+	if (fd < 0)
+		return 1;
+	if (slave_fd >= 0)
 	{
-#if defined(__linux__)
-		char	name[128];
-
-		if (openpty(&fd, &slave_fd, name, NULL, NULL) < 0)
-		{
-			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
-			return 1;
-		}
-		if (!set_tty_raw(slave_fd, config->baud, config->parity, config->stop_bits))
-		{
-			fprintf(stderr, "cannot configure RTU PTY slave: %s\n", strerror(errno));
-			close(slave_fd);
-			close(fd);
-			return 1;
-		}
-		/* PTY has no real UART baud; keep baud unknown unless explicitly configured. */
 		printf("RTU PTY slave: %s\n", name);
 		fflush(stdout);
-#else
-		fprintf(stderr, "RTU PTY mode is not supported on this platform\n");
-		return 2;
-#endif
-	}
-	else
-	{
-		fd = open(config->path, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
-		if (fd < 0)
-		{
-			fprintf(stderr, "cannot open RTU device '%s': %s\n",
-				config->path, strerror(errno));
-			return 1;
-		}
-	}
-
-	if (!set_tty_raw(fd, config->baud, config->parity, config->stop_bits))
-	{
-		fprintf(stderr, "cannot configure RTU device '%s': %s\n",
-			config->mode == SERVER_MODE_RTU_PTY ? "pty" : config->path,
-			strerror(errno));
-		goto cleanup;
-	}
-	{
-		int	flags = fcntl(fd, F_GETFL, 0);
-
-		if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-		{
-			fprintf(stderr, "cannot set RTU fd non-blocking: %s\n", strerror(errno));
-			goto cleanup;
-		}
 	}
 	/* PTY master/slave have no real UART baud; only auto-detect on real tty devices. */
 	if (config->baud == 0 && config->mode == SERVER_MODE_RTU_DEVICE)
-		config->baud = tty_baud(fd);
+		config->baud = serial_tty_baud(fd);
 
 	{
 		rtu_server_options_t	options = {
@@ -380,7 +228,6 @@ run_rtu(config_t* config)
 		status = rtu_server_run(&options);
 	}
 
-cleanup:
 	if (slave_fd >= 0)
 		close(slave_fd);
 	if (fd >= 0)
@@ -391,62 +238,23 @@ cleanup:
 static s32
 run_ascii(config_t* config)
 {
-	int	fd       = -1;
-	int	slave_fd = -1;
-	s32	status   = 1;
+	char	name[128] = { 0 };
+	int	slave_fd  = -1;
+	s32	status    = 1;
+	int	fd;
 
-	if (config->mode == SERVER_MODE_ASCII_PTY)
+	/* Baud sets only the serial line speed here; it never affects ASCII framing. */
+	fd = open_serial_fd(config->mode == SERVER_MODE_ASCII_PTY, "ASCII", config->path,
+			    config->baud, PARITY_NONE, 1,
+			    &slave_fd, name, sizeof(name));
+	if (fd < 0)
+		return 1;
+	if (slave_fd >= 0)
 	{
-#if defined(__linux__)
-		char	name[128];
-
-		if (openpty(&fd, &slave_fd, name, NULL, NULL) < 0)
-		{
-			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
-			return 1;
-		}
-		if (!set_tty_raw(slave_fd, config->baud, PARITY_NONE, 1))
-		{
-			fprintf(stderr, "cannot configure ASCII PTY slave: %s\n", strerror(errno));
-			close(slave_fd);
-			close(fd);
-			return 1;
-		}
 		printf("ASCII PTY slave: %s\n", name);
 		fflush(stdout);
-#else
-		fprintf(stderr, "ASCII PTY mode is not supported on this platform\n");
-		return 2;
-#endif
-	}
-	else
-	{
-		fd = open(config->path, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
-		if (fd < 0)
-		{
-			fprintf(stderr, "cannot open ASCII device '%s': %s\n",
-				config->path, strerror(errno));
-			return 1;
-		}
 	}
 
-	if (!set_tty_raw(fd, config->baud, PARITY_NONE, 1))
-	{
-		fprintf(stderr, "cannot configure ASCII device '%s': %s\n",
-			config->mode == SERVER_MODE_ASCII_PTY ? "pty" : config->path,
-			strerror(errno));
-		goto cleanup;
-	}
-	{
-		int	flags = fcntl(fd, F_GETFL, 0);
-
-		if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-		{
-			fprintf(stderr, "cannot set ASCII fd non-blocking: %s\n", strerror(errno));
-			goto cleanup;
-		}
-	}
-	/* Baud sets only the serial line speed here; it never affects ASCII framing. */
 	{
 		ascii_server_options_t	options = {
 			.fd           = fd,
@@ -458,7 +266,6 @@ run_ascii(config_t* config)
 		status = ascii_server_run(&options);
 	}
 
-cleanup:
 	if (slave_fd >= 0)
 		close(slave_fd);
 	if (fd >= 0)

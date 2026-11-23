@@ -61,6 +61,22 @@ net_record_rtu_comm_error(device_t** devices, u32 count)
 	}
 }
 
+void
+pending_response_clear(pending_response_t* pending)
+{
+	pending->active = false;
+	pending->len    = 0;
+	pending->sent   = 0;
+	pending->due_ms = 0;
+}
+
+bool
+net_handle_hangup(pending_response_t* pending)
+{
+	pending_response_clear(pending);
+	return false;
+}
+
 int
 net_tcp_listen(const char* bind_address, u16 port, int backlog)
 {
