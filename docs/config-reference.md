@@ -35,12 +35,12 @@ produce an error message.
 | `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) |
-| `(baud N)` | RTU/RTU-over-TCP: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). When known, Modbus RTU t3.5 inter-frame timing is derived from this baud | `0` (unknown) |
-| `(frame-gap-ms N)` | RTU/RTU-over-TCP: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) |
-| `(strict-t15 on\|off)` | RTU byte streams: opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Not supported for RTU-over-TCP | `off` |
-| `(broadcast-execute on\|off)` | RTU/RTU-over-TCP: when on, unit-0 (broadcast) requests execute on every configured device and produce no response. Ignored for MBAP/TCP | `off` |
-| `(parity none\|even\|odd\|mark\|space)` | RTU byte streams: tty parity. `mark` and `space` require `CMSPAR` support. Not supported for RTU-over-TCP | `none` |
-| `(stop-bits 1\|2)` | RTU byte streams: number of tty stop bits. Not supported for RTU-over-TCP | `1` |
+| `(baud N)` | RTU/ASCII/RTU-over-TCP: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) |
+| `(frame-gap-ms N)` | RTU/RTU-over-TCP: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms. Ignored in ASCII mode | `0` (auto) |
+| `(strict-t15 on\|off)` | RTU byte streams: opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Not supported for RTU-over-TCP; ignored in ASCII mode | `off` |
+| `(broadcast-execute on\|off)` | RTU/RTU-over-TCP: when on, unit-0 (broadcast) requests execute on every configured device and produce no response. Ignored for MBAP/TCP and ASCII | `off` |
+| `(parity none\|even\|odd\|mark\|space)` | RTU byte streams: tty parity. `mark` and `space` require `CMSPAR` support. Not supported for RTU-over-TCP; ignored in ASCII (always 8N1) | `none` |
+| `(stop-bits 1\|2)` | RTU byte streams: number of tty stop bits. Not supported for RTU-over-TCP; ignored in ASCII (always 8N1) | `1` |
 
 The command-line options `--port` and `--bind` override server listen settings for TCP and RTU-over-TCP. RTU timing can be
 overridden with `--baud` / `--rtu-baud`, `--frame-gap-ms`, and `--strict-t15`; `--frame-gap-ms` takes precedence over
@@ -51,12 +51,20 @@ explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t
 RTU-over-TCP. Non-default parity/stop bits in the config are likewise rejected with `--check --rtu-tcp`; plain TCP
 ignores them.
 
+Modbus ASCII is selected only on the command line with `--ascii-pty` or `--ascii-device PATH`; there
+are no ASCII-specific Scheme entries. ASCII frames are `:` + hex `[addr][PDU][LRC]` + `CR LF` and
+are delimited by `CR LF`, not inter-frame silence. `--port`, `--bind`, `--frame-gap-ms`, and
+`--strict-t15` are invalid command-line options in ASCII mode. `--baud` is allowed but only changes
+the line speed; it never changes ASCII framing or timing. ASCII always uses 8N1, so `(parity ...)` and
+`(stop-bits ...)` are ignored there, and `(broadcast-execute on)` does not execute ASCII unit-0
+frames. ASCII flags cannot be combined with RTU flags, and there is no ASCII-over-TCP mode.
+
 ## `(device ...)`
 
 | Entry | Meaning | Default |
 |---|---|---|
 | `(name "Text")` | Name shown in logs and `--check`, up to 63 characters | `"unnamed"` |
-| `(unit-id N)` | Modbus unit id (slave address). TCP: 0-255. RTU: 1-247 (`0` is broadcast, `248-255` reserved by Modbus serial spec) | `1` |
+| `(unit-id N)` | Modbus unit id (slave address). TCP: 0-255. RTU/ASCII: 1-247 (`0` is broadcast, `248-255` reserved by Modbus serial spec) | `1` |
 | `(exception-status N)` | Byte returned by Read Exception Status (FC 07), 0-255 | `0` |
 | `(server-id N)` | Server ID byte returned by Report Server ID (FC 17), 0-255 | `0` |
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
@@ -98,9 +106,9 @@ served in ascending ID order. Configuring any extended object raises FC 43 Confo
 legacy alias (CANopen is not implemented). See [modbus-support.md](modbus-support.md) for response
 semantics.
 
-Unit ids must be different between devices. In RTU mode, unit ids 0 and 248-255 are rejected at
-startup and by `--check` when RTU flags are given because address 0 is broadcast and 248-255 are
-reserved by the Modbus serial specification.
+Unit ids must be different between devices. In RTU and ASCII modes, unit ids 0 and 248-255 are
+rejected at startup and by `--check` when RTU or ASCII flags are given because address 0 is
+broadcast and 248-255 are reserved by the Modbus serial specification.
 
 ## Data points
 

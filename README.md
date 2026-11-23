@@ -1,7 +1,8 @@
 # modbus-sim
 
-A Modbus TCP/RTU device simulator. You describe a device in a small text file; `modbus-sim`
-pretends to be that device on the network. Point your SCADA, PLC, gateway or test script at it.
+A Modbus TCP/RTU/ASCII device simulator. You describe a device in a small text file; `modbus-sim`
+pretends to be that device on the network or on a serial byte stream. Point your SCADA, PLC,
+gateway or test script at it.
 
 You do **not** need to know Scheme. The config file is a list of `(name value)` entries, and
 there are ready-made profiles you can copy.
@@ -42,7 +43,7 @@ loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP and Modbus RTU (PTY/device byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
+| Protocol | Modbus TCP, Modbus RTU (PTY/device byte stream), and Modbus ASCII (PTY/device byte stream, serial only). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
 | Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |
@@ -77,7 +78,9 @@ modbus-sim [options] CONFIG.scm
       --rtu-pty        RTU: create a PTY and print its slave path
       --rtu-device PATH RTU: serve RTU over an existing serial-like device
       --rtu-tcp        RTU-over-TCP: serve RTU frames over TCP
-      --baud N         RTU/RTU-over-TCP: baud for t3.5 timing (overrides config/tty)
+      --ascii-pty      ASCII: create a PTY and print its slave path
+      --ascii-device PATH ASCII: serve Modbus ASCII over an existing serial-like device
+      --baud N         RTU/ASCII/RTU-over-TCP: standard termios baud (ASCII: line speed only)
       --frame-gap-ms N RTU/RTU-over-TCP: explicit inter-frame silence override in ms
       --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)
       --broadcast-execute RTU/RTU-over-TCP: run unit-0 requests on all devices (no response)
@@ -111,6 +114,19 @@ fallback is used; read() boundaries do not expose true UART character timing.
 `--strict-t15` (or config `(server (strict-t15 on))`) enables an opt-in best-effort t1.5 discard
 heuristic for RTU byte streams in baud-derived auto mode. It is never applied to RTU-over-TCP.
 
+ASCII mode is separate: `--ascii-pty` creates a Linux PTY and prints `ASCII PTY slave: /dev/pts/N`,
+while `--ascii-device PATH` serves ASCII on an existing bidirectional byte stream. Frames are
+`:` + uppercase hex for `[addr][PDU][LRC]` + `CR LF`; received hex may be upper- or lowercase.
+Frames are delimited by `CR LF`, so t3.5/t1.5 and `--frame-gap-ms` do not apply; complete frames are
+answered immediately, including several frames in one read. A missing colon, invalid hex, odd hex
+count, bad LRC, or wrong terminator produces no response and never reaches the PDU handlers. Like
+RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. ASCII here uses raw
+8N1, not the traditional 7E1 serial settings, and is **serial byte-stream only**: there is no
+ASCII-over-TCP mode, and this is not Modbus TCP (MBAP). `--baud` may set the line speed but never
+changes ASCII framing or timing. `--port`, `--bind`, `--frame-gap-ms`, and `--strict-t15` are invalid
+with ASCII flags. ASCII modes are mutually exclusive and cannot be combined with RTU modes.
+`--check --ascii-pty`/`--check --ascii-device PATH` validates unit ids as 1-247, like RTU.
+
 `--rtu-tcp` serves Modbus RTU frames (`[addr][PDU][CRC lo hi]`) on a TCP listen socket as a
 separate transport/framing choice. It is not Modbus TCP (MBAP) and does not change existing TCP or
 RTU byte-stream behavior. `--port`/`--bind` apply to TCP and RTU-over-TCP; `--baud`/`--frame-gap-ms`
@@ -132,8 +148,8 @@ same all-devices/no-response semantics. MBAP/TCP unit 0 is never broadcast and i
 src/            the program, one folder per module (headers next to their .c files)
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
-  modbus/       Modbus TCP MBAP, RTU CRC/framing, and PDU handlers
-  net/          TCP, RTU byte-stream, and RTU-over-TCP network loops
+  modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
+  net/          TCP, RTU byte-stream, ASCII byte-stream, and RTU-over-TCP network loops
   util/         clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
