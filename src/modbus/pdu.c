@@ -6,6 +6,8 @@
 
 _Static_assert(MODBUS_MAX_PDU / 2 == DEVICE_MAX_RECORD_VALUES,
 	       "file record value limit must match Modbus PDU capacity");
+_Static_assert(4 + DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX == MODBUS_MAX_PDU,
+	       "FC 17 response must fit a Modbus PDU");
 
 u32
 modbus_exception(u8* resp, u8 function, u8 code)
@@ -536,14 +538,18 @@ get_com_event_log(device_t* dev, const u8* req, u32 req_len, u8* resp)
 static u32
 report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
+	u32	additional_len = dev->server_id_additional_data_len;
+
 	if (req_len != 1)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	resp[0] = req[0];
-	resp[1] = 2; /* server ID + run indicator, no additional data */
+	resp[1] = (u8)(2 + additional_len);
 	resp[2] = dev->server_id;
 	resp[3] = dev->run_indicator;
-	return 4;
+	if (additional_len)
+		memcpy(resp + 4, dev->server_id_additional_data, additional_len);
+	return 4 + additional_len;
 }
 
 enum mei_type

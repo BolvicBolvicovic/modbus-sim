@@ -180,6 +180,76 @@ TEST(ConfigReportServerIdRejectsOutOfRange)
 	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
 }
 
+TEST(ConfigServerIdAdditionalDataIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (server-id-additional-data \"00fFa510\") (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == 4);
+	ASSERT_EQ(config.devices[0]->server_id_additional_data[0] == 0x00);
+	ASSERT_EQ(config.devices[0]->server_id_additional_data[1] == 0xFF);
+	ASSERT_EQ(config.devices[0]->server_id_additional_data[2] == 0xA5);
+	ASSERT_EQ(config.devices[0]->server_id_additional_data[3] == 0x10);
+
+	ASSERT_SUCCESS(load_text("(device (server-id-additional-data \"\") (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == 0);
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == 0);
+}
+
+TEST(ConfigServerIdAdditionalDataAcceptsMaxLength)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		hex[2 * DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX + 1];
+	char		text[sizeof(hex) + 64];
+
+	for (u32 i = 0; i < 2 * DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX; i++)
+		hex[i] = (i % 2 == 0) ? 'A' : (char)('0' + (i / 2) % 10);
+	hex[2 * DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX] = '\0';
+	snprintf(text, sizeof(text), "(device (server-id-additional-data \"%s\"))", hex);
+
+	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX);
+	ASSERT_EQ(config.devices[0]->server_id_additional_data[0] == 0xA0);
+	ASSERT_EQ(config.devices[0]->server_id_additional_data[DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX - 1] == 0xA8);
+}
+
+TEST(ConfigServerIdAdditionalDataRejectsInvalidHex)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(device (server-id-additional-data \"abc\"))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "even number of hex digits") != NULL);
+
+	ASSERT_FAILURE(load_text("(device (server-id-additional-data \"00gg\"))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "invalid hex digit") != NULL);
+
+	ASSERT_FAILURE(load_text("(device (server-id-additional-data 1234))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "expected text in double quotes") != NULL);
+}
+
+TEST(ConfigServerIdAdditionalDataRejectsOverLength)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		hex[2 * (DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX + 1) + 1];
+	char		text[sizeof(hex) + 64];
+
+	memset(hex, '0', sizeof(hex) - 1);
+	hex[sizeof(hex) - 1] = '\0';
+	snprintf(text, sizeof(text), "(device (server-id-additional-data \"%s\"))", hex);
+
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "too many hex digits") != NULL);
+	ASSERT_EQ(strstr(err, "249 bytes") != NULL);
+}
+
 TEST(ConfigDeviceIdentificationDefaultsAndOverrides)
 {
 	config_t	config = { 0 };

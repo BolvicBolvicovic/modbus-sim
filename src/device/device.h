@@ -11,6 +11,8 @@
 
 #define DEVICE_NAME_MAX		64
 #define DEVICE_ID_OBJECT_MAX	244	/* 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
+/* 253-byte Modbus PDU minus FC, byte count, server ID and run indicator. */
+#define DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX	249
 #define DEVICE_MAX_POINTS	8192
 #define ADDRESS_SPACE_SIZE	65536
 
@@ -126,6 +128,8 @@ struct device_t
 	u8		exception_status;	/* FC 07 (Read Exception Status) response byte */
 	u8		server_id;		/* FC 17 (Report Server ID) server ID byte */
 	u8		run_indicator;		/* FC 17 Run Indicator Status (0xFF run, 0x00 off) */
+	u8		server_id_additional_data[DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX];
+	u8		server_id_additional_data_len;
 	u16		com_event_count;	/* FC 11/12 event counter, wraps modulo 65536 */
 	u16		message_count;		/* FC 12 message counter, wraps modulo 65536 */
 	u64		start_ms;		/* ramps count their time from here */

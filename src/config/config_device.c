@@ -104,6 +104,53 @@ parse_run_indicator(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+static int
+hex_digit(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+static bool
+parse_server_id_additional_data(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	u8	bytes[DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX];
+	const char*	label = "server-id-additional-data";
+	const char*	text  = NULL;
+	size_t	len   = 0;
+
+	if (!form_get_string(ctx, item, &text))
+		return false;
+
+	len = strlen(text);
+	if (len > 2u * DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX)
+		return form_fail(ctx, "%s: too many hex digits (max %d bytes of additional data, "
+				 "limited by the FC 17 response PDU size)",
+				 label, DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX);
+	if (len % 2 != 0)
+		return form_fail(ctx, "%s: expected an even number of hex digits", label);
+
+	for (size_t i = 0; i < len; i += 2)
+	{
+		int	hi = hex_digit(text[i]);
+		int	lo = hex_digit(text[i + 1]);
+
+		if (hi < 0 || lo < 0)
+			return form_fail(ctx, "%s: invalid hex digit at position %u (use 0-9, a-f or A-F)",
+					 label, (u32)(hi < 0 ? i : i + 1));
+		bytes[i / 2] = (u8)((hi << 4) | lo);
+	}
+
+	memcpy(dev->server_id_additional_data, bytes, len / 2);
+	dev->server_id_additional_data_len = (u8)(len / 2);
+	return true;
+}
+
 /* (note "text") is documentation for humans. It is checked and ignored. */
 static bool
 parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
@@ -487,6 +534,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "exception-status", parse_exception_status },
 	{ "server-id",        parse_server_id        },
 	{ "run-indicator",    parse_run_indicator    },
+	{ "server-id-additional-data", parse_server_id_additional_data },
 	{ "vendor-name",      parse_vendor_name      },
 	{ "product-code",     parse_product_code     },
 	{ "major-minor-revision", parse_major_minor_revision },
@@ -527,8 +575,9 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 	if (!entry)
 		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
-				 "run-indicator, vendor-name, product-code, major-minor-revision, vendor-url, product-name, "
-				 "model-name, user-application-name, fault, note, coil, discrete, input, holding, file or fifo", head);
+				 "run-indicator, server-id-additional-data, vendor-name, product-code, "
+				 "major-minor-revision, vendor-url, product-name, model-name, user-application-name, "
+				 "fault, note, coil, discrete, input, holding, file or fifo", head);
 
 	return entry->parse(ctx, item, dev);
 }
