@@ -16,6 +16,7 @@
 #endif
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
+#include "net/rtu_framer.h"
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
 #include "net/tcp_server.h"

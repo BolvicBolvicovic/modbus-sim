@@ -3,7 +3,6 @@
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
 #include "net/net_common.h"
-#include "net/rtu_server.h"
 #include "net/rtu_framer.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -38,6 +37,7 @@ typedef struct rtu_tcp_server_t rtu_tcp_server_t;
 struct rtu_tcp_server_t
 {
 	rtu_tcp_server_options_t	options;
+	rtu_framer_ctx_t		ctx;
 	int				listen_fd;
 	u32				gap_ms;
 	u64				accept_backoff_until_ms;
@@ -47,6 +47,28 @@ struct rtu_tcp_server_t
 };
 
 static volatile sig_atomic_t	g_rtu_tcp_stop = 0;
+
+static void
+rtu_tcp_init_ctx(rtu_tcp_server_t* server)
+{
+	server->ctx = (rtu_framer_ctx_t){
+		.devices = server->options.devices,
+		.device_count = server->options.device_count,
+		.rng = &server->rng,
+		.frame_gap_ms = server->options.frame_gap_ms,
+		.baud = server->options.baud,
+		.strict_t15 = false,
+		.peer = NULL,
+	};
+}
+
+static bool
+gap_due(rtu_tcp_conn_t* conn, u64 now_ms, u32 gap_ms)
+{
+	rtu_framer_t* f = &conn->framer;
+	return !f->pending.active && f->have_rx && f->rx_len > 0 &&
+	       (conn->read_closed || rtu_gap_elapsed(now_ms, f->last_rx_ms, gap_ms));
+}
 
 static void
 conn_close(rtu_tcp_conn_t* conn)
@@ -133,20 +155,36 @@ accept_clients(rtu_tcp_server_t* server)
 }
 
 static void
+conn_process_gap_due(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms, u64 now_us)
+{
+	rtu_framer_ctx_t ctx = server->ctx;
+	ctx.peer = conn->peer;
+	rtu_framer_on_gap_due(&conn->framer, &ctx, now_ms, now_us);
+}
+
+static void
+conn_process(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms)
+{
+	rtu_framer_ctx_t ctx = server->ctx;
+	ctx.peer = conn->peer;
+	rtu_framer_process(&conn->framer, &ctx, now_ms);
+}
+
+static void
 conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
 	ssize_t got;
 	u64 now_ms = clock_now_ms();
 	u64 now_us = clock_now_us();
 	rtu_framer_t* f = &conn->framer;
+	rtu_framer_ctx_t ctx = server->ctx;
 
+	ctx.peer = conn->peer;
 	if (conn->read_closed)
 		return;
 	if (f->rx_len >= sizeof(f->rx))
 		rtu_framer_consume(f, f->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
-	rtu_framer_note_gap(f, server->options.devices, server->options.device_count,
-			    &server->rng, now_ms, now_us, server->options.frame_gap_ms,
-			    server->options.baud, false, conn->peer);
+	rtu_framer_note_gap(f, &ctx, now_ms, now_us);
 
 	got = recv(conn->fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len, 0);
 	if (got == 0)
@@ -154,9 +192,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		conn->read_closed = true;
 		if (f->rx_len > 0)
 		{
-			rtu_framer_process(f, server->options.devices, server->options.device_count,
-					   &server->rng, now_ms, server->options.frame_gap_ms,
-					   server->options.baud, conn->peer);
+			rtu_framer_process(f, &ctx, now_ms);
 			f->have_rx = f->rx_len > 0;
 		}
 		if (!f->pending.active)
@@ -177,9 +213,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	conn->last_activity_ms = now_ms;
 	if (server->options.frame_gap_ms == 0 && server->options.baud != 0 && f->gap_deferred && f->rx_len > f->gap_deferred_len)
 	{
-		bool incomplete = rtu_framer_process(f, server->options.devices, server->options.device_count,
-						     &server->rng, now_ms, server->options.frame_gap_ms,
-						     server->options.baud, conn->peer);
+		bool incomplete = rtu_framer_process(f, &ctx, now_ms);
 		f->have_rx = f->rx_len > 0;
 		if (!incomplete)
 		{
@@ -215,14 +249,6 @@ conn_write(rtu_tcp_conn_t* conn)
 		if (conn->read_closed)
 			conn_close(conn);
 	}
-}
-
-static bool
-gap_due(rtu_tcp_conn_t* conn, u64 now_ms, u32 gap_ms)
-{
-	rtu_framer_t* f = &conn->framer;
-	return !f->pending.active && f->have_rx && f->rx_len > 0 &&
-	       (conn->read_closed || rtu_gap_elapsed(now_ms, f->last_rx_ms, gap_ms));
 }
 
 static void
@@ -281,13 +307,11 @@ build_poll_table(rtu_tcp_server_t* server, struct pollfd* fds, rtu_tcp_conn_t** 
 			}
 			continue;
 		}
-
 		if (conn->read_closed)
 		{
 			*timeout = 0;
 			continue;
 		}
-
 		if (conn->framer.have_rx && conn->framer.rx_len > 0)
 		{
 			u64 due = conn->framer.last_rx_ms + server->gap_ms;
@@ -308,14 +332,88 @@ build_poll_table(rtu_tcp_server_t* server, struct pollfd* fds, rtu_tcp_conn_t** 
 	return count;
 }
 
+static void
+conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
+{
+	rtu_framer_t* f = &conn->framer;
+
+	if (f->pending.active)
+	{
+		if (conn->read_closed)
+			return;
+		rtu_pending_clear(&f->pending);
+		conn_close(conn);
+		return;
+	}
+	if (!conn->read_closed)
+	{
+		conn->read_closed = true;
+		if (f->have_rx && f->rx_len > 0)
+		{
+			conn_process(server, conn, clock_now_ms());
+			if (f->pending.active)
+			{
+				rtu_pending_clear(&f->pending);
+				conn_close(conn);
+				return;
+			}
+		}
+	}
+	conn_close(conn);
+}
+
+static void
+conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, short revents)
+{
+	if (conn->fd < 0)
+		return;
+	if (revents & (POLLERR | POLLNVAL))
+	{
+		conn_close(conn);
+		return;
+	}
+	if (revents & POLLIN)
+		conn_read(server, conn);
+	if (conn->fd >= 0 && (revents & POLLOUT))
+		conn_write(conn);
+	if (conn->fd >= 0 && (revents & POLLHUP))
+	{
+		conn_handle_hangup(server, conn);
+		return;
+	}
+	if (conn->fd >= 0 && gap_due(conn, clock_now_ms(), server->gap_ms))
+		conn_process_gap_due(server, conn, clock_now_ms(), clock_now_us());
+}
+
+static void
+rtu_tcp_log_startup(const rtu_tcp_server_options_t* options, u32 gap_ms)
+{
+	if (options->frame_gap_ms > 0)
+		LOG_INFO("RTU-over-TCP listening on %s:%u (%u device%s), frame gap %u ms (override). Ctrl-C to stop.",
+			 options->bind_address, options->port, options->device_count,
+			 options->device_count == 1 ? "" : "s", gap_ms);
+	else if (options->baud > 0)
+		LOG_INFO("RTU-over-TCP listening on %s:%u (%u device%s), baud %u, t3.5 %u us (frame gap %u ms). Ctrl-C to stop.",
+			 options->bind_address, options->port, options->device_count,
+			 options->device_count == 1 ? "" : "s", options->baud, rtu_t35_us(options->baud), gap_ms);
+	else
+		LOG_INFO("RTU-over-TCP listening on %s:%u (%u device%s), frame gap %u ms (default; baud unknown). Ctrl-C to stop.",
+			 options->bind_address, options->port, options->device_count,
+			 options->device_count == 1 ? "" : "s", gap_ms);
+}
+
 s32
 rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 {
 	rtu_tcp_server_t server = { 0 };
+	struct pollfd fds[RTU_TCP_MAX_CONNECTIONS + 1];
+	rtu_tcp_conn_t* owners[RTU_TCP_MAX_CONNECTIONS + 1];
+
 	server.options = *options;
 	server.gap_ms = rtu_effective_gap_ms(options->frame_gap_ms, options->baud);
 	server.listen_fd = -1;
 	rng_seed(&server.rng, options->seed);
+	rtu_tcp_init_ctx(&server);
 	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
 	{
 		server.conns[i].fd = -1;
@@ -326,24 +424,10 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 	net_install_stop_handlers(&g_rtu_tcp_stop);
 	if (listen_open(&server) < 0)
 		return 2;
-
-	if (options->frame_gap_ms > 0)
-		LOG_INFO("RTU-over-TCP listening on %s:%u (%u device%s), frame gap %u ms (override). Ctrl-C to stop.",
-			 options->bind_address, options->port, options->device_count,
-			 options->device_count == 1 ? "" : "s", server.gap_ms);
-	else if (options->baud > 0)
-		LOG_INFO("RTU-over-TCP listening on %s:%u (%u device%s), baud %u, t3.5 %u us (frame gap %u ms). Ctrl-C to stop.",
-			 options->bind_address, options->port, options->device_count,
-			 options->device_count == 1 ? "" : "s", options->baud, rtu_t35_us(options->baud), server.gap_ms);
-	else
-		LOG_INFO("RTU-over-TCP listening on %s:%u (%u device%s), frame gap %u ms (default; baud unknown). Ctrl-C to stop.",
-			 options->bind_address, options->port, options->device_count,
-			 options->device_count == 1 ? "" : "s", server.gap_ms);
+	rtu_tcp_log_startup(options, server.gap_ms);
 
 	while (!g_rtu_tcp_stop)
 	{
-		struct pollfd fds[RTU_TCP_MAX_CONNECTIONS + 1];
-		rtu_tcp_conn_t* owners[RTU_TCP_MAX_CONNECTIONS + 1];
 		u32 count;
 		int timeout;
 		u64 now_ms = clock_now_ms();
@@ -352,35 +436,8 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 		for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
 		{
 			rtu_tcp_conn_t* conn = &server.conns[i];
-			if (conn->fd < 0)
-				continue;
-			if (gap_due(conn, now_ms, server.gap_ms))
-			{
-				rtu_framer_t* f = &conn->framer;
-				bool incomplete = rtu_framer_process(f, server.options.devices, server.options.device_count,
-								     &server.rng, now_ms, server.options.frame_gap_ms,
-								     server.options.baud, conn->peer);
-				f->have_rx = f->rx_len > 0;
-				if (incomplete && !f->gap_deferred)
-				{
-					f->gap_deferred = true;
-					f->gap_deferred_len = f->rx_len;
-					f->last_rx_ms = now_ms;
-					f->last_rx_us = clock_now_us();
-				}
-				else if (incomplete)
-				{
-					f->rx_len = 0;
-					f->have_rx = false;
-					f->gap_deferred = false;
-					f->gap_deferred_len = 0;
-				}
-				else
-				{
-					f->gap_deferred = false;
-					f->gap_deferred_len = 0;
-				}
-			}
+			if (conn->fd >= 0 && gap_due(conn, now_ms, server.gap_ms))
+				conn_process_gap_due(&server, conn, now_ms, clock_now_us());
 		}
 
 		count = build_poll_table(&server, fds, owners, now_ms, &timeout);
@@ -399,78 +456,7 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 				accept_clients(&server);
 				continue;
 			}
-			if (conn->fd < 0)
-				continue;
-			if (revents & (POLLERR | POLLNVAL))
-			{
-				conn_close(conn);
-				continue;
-			}
-			if (revents & POLLIN)
-				conn_read(&server, conn);
-			if (conn->fd >= 0 && (revents & POLLOUT))
-				conn_write(conn);
-			if (conn->fd >= 0 && (revents & POLLHUP))
-			{
-				/* Peer gone: drop any pending response and close. If EOF was not
-				 * observed as recv==0, process buffered complete frames once, but
-				 * a response queued here cannot be delivered on a hung-up peer.
-				 * When EOF was already observed, keep trying to deliver the queued
-				 * response; conn_write closes on send failure. */
-				rtu_framer_t* f = &conn->framer;
-				if (f->pending.active)
-				{
-					if (conn->read_closed)
-						continue;
-					rtu_pending_clear(&f->pending);
-					conn_close(conn);
-					continue;
-				}
-				if (!conn->read_closed)
-				{
-					conn->read_closed = true;
-					if (f->have_rx && f->rx_len > 0)
-					{
-						rtu_framer_process(f, server.options.devices, server.options.device_count,
-								   &server.rng, clock_now_ms(), server.options.frame_gap_ms,
-								   server.options.baud, conn->peer);
-						if (f->pending.active)
-						{
-							rtu_pending_clear(&f->pending);
-							conn_close(conn);
-							continue;
-						}
-					}
-				}
-				conn_close(conn);
-				continue;
-			}
-			if (conn->fd >= 0 && gap_due(conn, clock_now_ms(), server.gap_ms))
-			{
-				rtu_framer_t* f = &conn->framer;
-				bool incomplete = rtu_framer_process(f, server.options.devices, server.options.device_count,
-								     &server.rng, clock_now_ms(), server.options.frame_gap_ms,
-								     server.options.baud, conn->peer);
-				f->have_rx = f->rx_len > 0;
-				if (incomplete && !f->gap_deferred)
-				{
-					f->gap_deferred = true;
-					f->gap_deferred_len = f->rx_len;
-					f->last_rx_ms = clock_now_ms();
-				}
-				else if (incomplete)
-				{
-					f->rx_len = 0;
-					f->have_rx = false;
-					f->gap_deferred = false;
-					f->gap_deferred_len = 0;
-				}
-				else
-				{
-					f->gap_deferred = false;
-					f->gap_deferred_len = 0;
-				}
-			}
+			conn_handle_revents(&server, conn, revents);
 		}
 	}
 

@@ -1,7 +1,6 @@
 #include "net/rtu_framer.h"
 #include "modbus/pdu.h"
 #include "net/net_common.h"
-#include "net/rtu_server.h"
 #include "util/log.h"
 #include <string.h>
 
@@ -57,8 +56,8 @@ rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len, u64 
 }
 
 static void
-handle_frame(rtu_framer_t* framer, device_t** devices, u32 device_count, rng_t* rng,
-	     u64 now_ms, const u8* frame, u32 len, const char* peer)
+handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
+	     const u8* frame, u32 len)
 {
 	u8			addr = 0;
 	const u8*		pdu = NULL;
@@ -72,13 +71,13 @@ handle_frame(rtu_framer_t* framer, device_t** devices, u32 device_count, rng_t* 
 		return;
 	if (addr == 0)
 		return; /* broadcast: no response */
-	dev = net_find_device(devices, device_count, addr);
+	dev = net_find_device(ctx->devices, ctx->device_count, addr);
 	if (!dev)
 		return; /* unknown unit: no response */
 
-	resp_len = net_handle_pdu(dev, rng, now_ms, pdu, pdu_len, resp, &decision);
-	if (peer)
-		LOG_DEBUG("%s rtu unit=%u fc=0x%02X -> %s%s", peer, addr, pdu[0],
+	resp_len = net_handle_pdu(dev, ctx->rng, now_ms, pdu, pdu_len, resp, &decision);
+	if (ctx->peer)
+		LOG_DEBUG("%s rtu unit=%u fc=0x%02X -> %s%s", ctx->peer, addr, pdu[0],
 			  (resp[0] & 0x80) ? "exception" : "ok",
 			  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
 	else
@@ -91,11 +90,9 @@ handle_frame(rtu_framer_t* framer, device_t** devices, u32 device_count, rng_t* 
 }
 
 bool
-rtu_framer_process(rtu_framer_t* framer, device_t** devices, u32 device_count,
-		   rng_t* rng, u64 now_ms, u32 frame_gap_ms, u32 baud,
-		   const char* peer)
+rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms)
 {
-	bool keep_incomplete = rtu_framer_keep_incomplete(frame_gap_ms, baud);
+	bool keep_incomplete = rtu_framer_keep_incomplete(ctx->frame_gap_ms, ctx->baud);
 
 	while (framer->rx_len > 0 && !framer->pending.active)
 	{
@@ -104,7 +101,7 @@ rtu_framer_process(rtu_framer_t* framer, device_t** devices, u32 device_count,
 
 		if (result == MODBUS_RTU_FRAME_FOUND)
 		{
-			handle_frame(framer, devices, device_count, rng, now_ms, framer->rx, frame_len, peer);
+			handle_frame(framer, ctx, now_ms, framer->rx, frame_len);
 			rtu_framer_consume(framer, frame_len);
 			framer->gap_deferred = false;
 			framer->gap_deferred_len = 0;
@@ -187,45 +184,107 @@ rtu_framer_process(rtu_framer_t* framer, device_t** devices, u32 device_count,
 }
 
 void
-rtu_framer_note_gap(rtu_framer_t* framer, device_t** devices, u32 device_count,
-		    rng_t* rng, u64 now_ms, u64 now_us, u32 frame_gap_ms,
-		    u32 baud, bool strict_t15, const char* peer)
+rtu_framer_on_gap_due(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us)
+{
+	bool incomplete = rtu_framer_process(framer, ctx, now_ms);
+
+	framer->have_rx = framer->rx_len > 0;
+	if (incomplete && !framer->gap_deferred)
+	{
+		framer->gap_deferred = true;
+		framer->gap_deferred_len = framer->rx_len;
+		framer->last_rx_ms = now_ms;
+		framer->last_rx_us = now_us;
+		return;
+	}
+	if (incomplete)
+	{
+		framer->rx_len = 0;
+		framer->have_rx = false;
+		framer->gap_deferred = false;
+		framer->gap_deferred_len = 0;
+		return;
+	}
+	framer->gap_deferred = false;
+	framer->gap_deferred_len = 0;
+}
+
+static u32
+rtu_char_gap_us(u32 baud, u32 fixed_us, u64 char_times_x10)
+{
+	u64	us;
+
+	if (baud == 0)
+		return 0;
+	if (baud > RTU_BAUD_FIXED_THRESHOLD)
+		return fixed_us;
+
+	/* char time = 11 bits / baud; t1.5/t3.5 are char_times_x10 / 10. */
+	us = (char_times_x10 * 11ULL * 1000000ULL + (u64)baud * 10ULL - 1ULL) / ((u64)baud * 10ULL);
+	if (us > 0xFFFFFFFFULL)
+		return 0xFFFFFFFFU;
+	return (u32)us;
+}
+
+u32
+rtu_t35_us(u32 baud)
+{
+	return rtu_char_gap_us(baud, RTU_INTERFRAME_GAP_US_HIGH, 35ULL);
+}
+
+u32
+rtu_t15_us(u32 baud)
+{
+	return rtu_char_gap_us(baud, RTU_INTERCHAR_GAP_US_HIGH, 15ULL);
+}
+
+u32
+rtu_effective_gap_ms(u32 frame_gap_ms, u32 baud)
+{
+	u32	t35;
+
+	if (frame_gap_ms > 0)
+		return frame_gap_ms;
+
+	t35 = rtu_t35_us(baud);
+	if (t35 > 0)
+		return (t35 + 999U) / 1000U; /* ceil to whole ms for poll scheduling */
+
+	return RTU_DEFAULT_FRAME_GAP_MS;
+}
+
+bool
+rtu_gap_elapsed(u64 now_ms, u64 last_rx_ms, u32 gap_ms)
+{
+	/* A clock sample taken before last_rx_ms must not wrap into a huge
+	 * elapsed time; it simply means no gap has been observed yet. */
+	return now_ms >= last_rx_ms && now_ms - last_rx_ms >= gap_ms;
+}
+
+void
+rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us)
 {
 	u32 t35;
 
 	if (!framer->have_rx || framer->rx_len == 0 || framer->pending.active)
 		return;
-	if (frame_gap_ms > 0 || baud == 0)
+	if (ctx->frame_gap_ms > 0 || ctx->baud == 0)
 		return;
 	if (now_us < framer->last_rx_us)
 		return;
-	t35 = rtu_t35_us(baud);
+	t35 = rtu_t35_us(ctx->baud);
 	if (t35 == 0)
 		return;
 	{
 		u64 elapsed = now_us - framer->last_rx_us;
 		if (elapsed >= t35)
 		{
-			bool incomplete = rtu_framer_process(framer, devices, device_count, rng,
-							     now_ms, frame_gap_ms, baud, peer);
-			framer->have_rx = framer->rx_len > 0;
-			if (incomplete)
-			{
-				framer->gap_deferred = true;
-				framer->gap_deferred_len = framer->rx_len;
-				framer->last_rx_ms = now_ms;
-				framer->last_rx_us = now_us;
-			}
-			else
-			{
-				framer->gap_deferred = false;
-				framer->gap_deferred_len = 0;
-			}
+			rtu_framer_on_gap_due(framer, ctx, now_ms, now_us);
 			return;
 		}
-		if (strict_t15)
+		if (ctx->strict_t15)
 		{
-			u32 t15 = rtu_t15_us(baud);
+			u32 t15 = rtu_t15_us(ctx->baud);
 			if (t15 > 0 && elapsed >= t15)
 			{
 				framer->rx_len = 0;

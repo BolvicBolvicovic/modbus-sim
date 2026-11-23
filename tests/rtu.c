@@ -1,7 +1,7 @@
 #include "vtest.h"
 #include "modbus/rtu.h"
 #include "modbus/pdu.h"
-#include "net/rtu_server.h"
+#include "net/rtu_framer.h"
 #include <string.h>
 
 TEST(RtuCrcKnownVector)
