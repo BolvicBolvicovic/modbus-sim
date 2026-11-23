@@ -30,13 +30,19 @@ enum modbus_function_code
 	FC_ENCAPSULATED_INTERFACE_TRANSPORT = 0x2B,
 };
 
-/* Exception codes. */
+/* Exception codes. 0x09 is reserved by the Modbus specification. */
 enum modbus_exception_code
 {
-	EXC_ILLEGAL_FUNCTION      = 0x01,
-	EXC_ILLEGAL_DATA_ADDRESS  = 0x02,
-	EXC_ILLEGAL_DATA_VALUE    = 0x03,
-	EXC_GATEWAY_TARGET_FAILED = 0x0B,
+	EXC_ILLEGAL_FUNCTION           = 0x01,
+	EXC_ILLEGAL_DATA_ADDRESS       = 0x02,
+	EXC_ILLEGAL_DATA_VALUE         = 0x03,
+	EXC_SLAVE_DEVICE_FAILURE       = 0x04,
+	EXC_ACKNOWLEDGE                = 0x05,
+	EXC_SLAVE_DEVICE_BUSY          = 0x06,
+	EXC_NEGATIVE_ACKNOWLEDGE       = 0x07,
+	EXC_MEMORY_PARITY_ERROR        = 0x08,
+	EXC_GATEWAY_PATH_UNAVAILABLE   = 0x0A,
+	EXC_GATEWAY_TARGET_FAILED      = 0x0B,
 };
 
 /* Protocol limits from the Modbus specification. */

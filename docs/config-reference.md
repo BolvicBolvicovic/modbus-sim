@@ -212,18 +212,27 @@ the chance given by `percent`.
 
 | Entry | Meaning | Default |
 |---|---|---|
-| `(kind delay)` or `(kind drop)` | required. `delay` sends the response late, `drop` never sends it | - |
-| `(delay-ms N)` | for `delay`: how late, 1-60000 ms. Required for `delay` | - |
+| `(kind delay)`, `(kind drop)`, `(kind exception)` or `(kind corrupt)` | required. `delay` sends the response late, `drop` never sends it, `exception` replaces it with a Modbus exception, `corrupt` flips a payload byte | - |
+| `(delay-ms N)` | for `delay` only: how late, 1-60000 ms. Required for `delay`, rejected for other kinds | - |
+| `(code N)` | for `exception` only: exception code to return, one of 1-8, 10 or 11 (decimal). Required for `exception`, rejected for other kinds; 9 is reserved | - |
 | `(percent N)` | chance per response, 0-100 | `100` |
 
 ```scheme
 (fault (kind delay) (delay-ms 1500) (percent 30))   ; 3 in 10 answers arrive 1.5 s late
 (fault (kind drop) (percent 20))                    ; 1 in 5 answers never arrives
+(fault (kind exception) (code 4) (percent 100))     ; every answer becomes exception 04
+(fault (kind corrupt) (percent 50))                 ; half of the answers get a flipped payload byte
 ```
 
 - Delays do not block the server: other clients are served while a response waits.
 - A dropped response means the client sees a timeout. The write or read itself **still
   happens** on the device, like a real device whose answer got lost.
+- Exception and corrupt faults also affect only the response: the request is still processed
+  normally (writes apply, counters and ramp timing update). Exception faults replace the whole
+  response with `[FC|0x80][code]`. Corrupt faults flip the first payload byte after the function
+  code (XOR with `0xFF`, or the function code itself for a one-byte response); the response length
+  does not change. See [modbus-support.md](modbus-support.md) for the exception codes this simulator
+  otherwise emits.
 - Use `(seed N)` in `(server ...)` to repeat the exact same pattern of faults on every run.
 
 ## `(file ...)` (File Records, FC 20/21)
@@ -345,6 +354,10 @@ is wrong and show the entry. Common ones:
 | `the file has more than one (server ...)` | Keep a single `(server ...)` block |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
 | `device has more than one (fault ...)` | Only one fault per device |
+| `missing required option (code ...)` | `(kind exception)` needs `(code N)` |
+| `code is only valid for kind exception` | Remove `(code ...)` from other fault kinds |
+| `delay-ms is only valid for kind delay` | Remove `(delay-ms ...)` from other fault kinds |
+| `code 9 is reserved` | Use one of 1-8, 10 or 11 |
 | `unknown top-level form` | Only `(server ...)` and `(device ...)` are allowed at the top |
 
 ## A complete example

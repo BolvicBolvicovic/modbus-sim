@@ -271,9 +271,11 @@ fault_text(const fault_t* fault, char* buf, u32 size)
 {
 	switch (fault->kind)
 	{
-		case FAULT_NONE : return "none";
-		case FAULT_DROP : snprintf(buf, size, "drop %u%% of responses", fault->percent); break;
-		case FAULT_DELAY: snprintf(buf, size, "delay %u%% of responses by %u ms", fault->percent, fault->delay_ms); break;
+		case FAULT_NONE     : return "none";
+		case FAULT_DROP     : snprintf(buf, size, "drop %u%% of responses", fault->percent); break;
+		case FAULT_DELAY    : snprintf(buf, size, "delay %u%% of responses by %u ms", fault->percent, fault->delay_ms); break;
+		case FAULT_EXCEPTION: snprintf(buf, size, "exception %u on %u%% of responses", fault->exception_code, fault->percent); break;
+		case FAULT_CORRUPT  : snprintf(buf, size, "corrupt %u%% of responses", fault->percent); break;
 	}
 
 	return buf;
