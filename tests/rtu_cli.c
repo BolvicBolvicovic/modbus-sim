@@ -1016,3 +1016,56 @@ TEST(RtuCliBaudOverrideOnPtyLogsDerivedTiming)
 	ASSERT_EQ(rtu_cli_stderr_contains("baud 9600, t3.5 4011 us (frame gap 5 ms)"));
 	rtu_cli_stop();
 }
+
+TEST(RtuCliCheckRtuTcpPrintsTimingSummary)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-tcp",
+			 "--baud", "9600", g_rtu_cli.config, NULL };
+	int status = 0;
+	bool ok;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ok = rtu_cli_start_with_args_capture_stdout(argv);
+	ASSERT_EQ(ok);
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "RTU-over-TCP"));
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path,
+					"baud 9600, t3.5 4011 us (frame-gap 5 ms)"));
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "config OK"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliRejectsRtuTcpWithStrictT15)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-tcp",
+			 "--strict-t15", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+	ASSERT_EQ(rtu_cli_stderr_contains("strict-t15 is not supported for RTU-over-TCP"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliRejectsRtuTcpWithRtuDevice)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-tcp", "--rtu-pty",
+			 g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+	ASSERT_EQ(rtu_cli_stderr_contains("--rtu-tcp cannot be used with --rtu-pty/--rtu-device"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
