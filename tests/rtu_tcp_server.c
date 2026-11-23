@@ -6,14 +6,30 @@
 #include "util/clock.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/* Integration tests for RTU-over-TCP. Each test starts a real server on a dynamic
+ * loopback port and the fixture guarantees cleanup on failure (PRE_TEST/atexit),
+ * so a failing ASSERT cannot leave an orphan server or temp config behind. */
+
+typedef struct fixture_t fixture_t;
+struct fixture_t
+{
+	pid_t	pid;
+	u16	port;
+	char	cfg[80];
+};
+
+static fixture_t g_fx = { .pid = -1 };
 
 static bool
 send_all_fd(int fd, const u8* buf, u32 len)
@@ -73,60 +89,22 @@ recv_rtu_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 	return false;
 }
 
-static pid_t
-start_rtu_tcp_args(const char* cfg, u16 port, const char* extra1, const char* extra2)
+static bool
+wait_for_eof_fd(int fd, u32 timeout_ms)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
-	char portbuf[16];
-	char* argv[12];
-	u32 argc = 0;
-	pid_t pid;
-
-	snprintf(portbuf, sizeof(portbuf), "%u", port);
-	argv[argc++] = (char*)(bin ? bin : "./modbus-sim");
-	argv[argc++] = "--rtu-tcp";
-	argv[argc++] = "--port";
-	argv[argc++] = portbuf;
-	argv[argc++] = "--bind";
-	argv[argc++] = "127.0.0.1";
-	if (extra1)
-		argv[argc++] = (char*)extra1;
-	if (extra2)
-		argv[argc++] = (char*)extra2;
-	argv[argc++] = (char*)cfg;
-	argv[argc] = NULL;
-
-	pid = fork();
-	if (pid == 0)
+	u8 b;
+	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
+			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	for (;;)
 	{
-		execv(argv[0], argv);
-		_exit(127);
+		ssize_t got = recv(fd, &b, 1, 0);
+		if (got == 0)
+			return true;
+		if (got < 0 && errno == EINTR)
+			continue;
+		return false;
 	}
-	return pid;
-}
-
-static pid_t
-start_rtu_tcp(const char* cfg, u16 port)
-{
-	return start_rtu_tcp_args(cfg, port, NULL, NULL);
-}
-
-static int
-connect_port(u16 port, u32 tries)
-{
-	for (u32 i = 0; i < tries; i++)
-	{
-		int fd = socket(AF_INET, SOCK_STREAM, 0);
-		struct sockaddr_in a = { 0 };
-		a.sin_family = AF_INET;
-		a.sin_port = htons(port);
-		inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-		if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0)
-			return fd;
-		close(fd);
-		usleep(20000);
-	}
-	return -1;
 }
 
 static u16
@@ -148,12 +126,78 @@ find_free_port(void)
 }
 
 static void
-write_cfg(char* cfg_path, size_t cfg_size, const char* body)
+server_stop(void)
+{
+	int status = 0;
+	pid_t pid = g_fx.pid;
+	bool ok = true;
+
+	g_fx.pid = -1;
+	if (pid > 0)
+	{
+		kill(pid, SIGTERM);
+		for (u32 i = 0; i < 200; i++)
+		{
+			pid_t done = waitpid(pid, &status, WNOHANG);
+			if (done == pid)
+				goto reaped;
+			if (done < 0 && errno == ECHILD)
+			{
+				ok = false;
+				break;
+			}
+			usleep(10000);
+		}
+		kill(pid, SIGKILL);
+		ok = waitpid(pid, &status, 0) == pid;
+reaped:
+		if (ok)
+			ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	}
+	if (g_fx.cfg[0])
+	{
+		unlink(g_fx.cfg);
+		g_fx.cfg[0] = '\0';
+	}
+	g_fx.port = 0;
+	ASSERT_EQ(ok);
+}
+
+static void
+server_cleanup(void)
+{
+	pid_t pid = g_fx.pid;
+	g_fx.pid = -1;
+	if (pid > 0)
+	{
+		kill(pid, SIGTERM);
+		for (u32 i = 0; i < 200; i++)
+		{
+			int st = 0;
+			pid_t done = waitpid(pid, &st, WNOHANG);
+			if (done == pid || (done < 0 && errno == ECHILD))
+				goto done;
+			usleep(10000);
+		}
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+	}
+done:
+	if (g_fx.cfg[0])
+	{
+		unlink(g_fx.cfg);
+		g_fx.cfg[0] = '\0';
+	}
+	g_fx.port = 0;
+}
+
+static void
+write_cfg(const char* body)
 {
 	int cfd;
 	FILE* f;
-	snprintf(cfg_path, cfg_size, "/tmp/modbus-sim-rtutcp-XXXXXX");
-	cfd = mkstemp(cfg_path);
+	snprintf(g_fx.cfg, sizeof(g_fx.cfg), "/tmp/modbus-sim-rtutcp-XXXXXX");
+	cfd = mkstemp(g_fx.cfg);
 	ASSERT(cfd >= 0);
 	f = fdopen(cfd, "w");
 	ASSERT(f != NULL);
@@ -161,24 +205,101 @@ write_cfg(char* cfg_path, size_t cfg_size, const char* body)
 	fclose(f);
 }
 
+static pid_t
+start_rtu_tcp_args(const char* extra1, const char* extra2)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char portbuf[16];
+	char* argv[12];
+	u32 argc = 0;
+	pid_t pid;
+
+	snprintf(portbuf, sizeof(portbuf), "%u", g_fx.port);
+	argv[argc++] = (char*)(bin ? bin : "./modbus-sim");
+	argv[argc++] = "--rtu-tcp";
+	argv[argc++] = "--port";
+	argv[argc++] = portbuf;
+	argv[argc++] = "--bind";
+	argv[argc++] = "127.0.0.1";
+	if (extra1)
+		argv[argc++] = (char*)extra1;
+	if (extra2)
+		argv[argc++] = (char*)extra2;
+	argv[argc++] = g_fx.cfg;
+	argv[argc] = NULL;
+
+	pid = fork();
+	if (pid == 0)
+	{
+		prctl(PR_SET_PDEATHSIG, SIGTERM);
+		if (getppid() == 1)
+			_exit(0);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	return pid;
+}
+
+static void
+server_start_args(const char* body, const char* extra1, const char* extra2)
+{
+	g_fx.port = find_free_port();
+	ASSERT(g_fx.port != 0);
+	write_cfg(body);
+	g_fx.pid = start_rtu_tcp_args(extra1, extra2);
+	ASSERT(g_fx.pid > 0);
+}
+
+static void
+server_start(const char* body)
+{
+	server_start_args(body, NULL, NULL);
+}
+
+static int
+connect_port(u32 tries, u32 timeout_ms)
+{
+	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
+			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
+	for (u32 i = 0; i < tries; i++)
+	{
+		int fd = socket(AF_INET, SOCK_STREAM, 0);
+		struct sockaddr_in a = { 0 };
+		if (fd < 0)
+			return -1;
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+		a.sin_family = AF_INET;
+		a.sin_port = htons(g_fx.port);
+		inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+		if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0)
+			return fd;
+		close(fd);
+		usleep(20000);
+	}
+	return -1;
+}
+
+SETUP_SUITE()
+{
+	(void)_ss_arena;
+	atexit(server_cleanup);
+}
+
+PRE_TEST()
+{
+	server_stop();
+}
+
 TEST(RtuOverTcpServesReadHoldingRegisters)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME];
-	u8 resp[MODBUS_MAX_PDU];
-	u8 addr = 0;
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg), "(server (port 1502))\n(device (unit-id 1) (holding 0 (static 4660)))\n");
-
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(server (port 1502))\n(device (unit-id 1) (holding 0 (static 4660)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
@@ -191,30 +312,21 @@ TEST(RtuOverTcpServesReadHoldingRegisters)
 	ASSERT_EQ(get_be16(resp + 2) == 4660);
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
 }
 
 TEST(RtuOverTcpWriteThenRead)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x01, 0x00, 0x2A };
 	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x01, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg),
-		  "(device (unit-id 7)\n"
-		  "  (holding 0 (static 0))\n"
-		  "  (holding 1 (static 0)))\n");
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(device (unit-id 7)\n"
+		     "  (holding 0 (static 0))\n"
+		     "  (holding 1 (static 0)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 7, write_pdu, sizeof(write_pdu));
@@ -227,57 +339,41 @@ TEST(RtuOverTcpWriteThenRead)
 	ASSERT_EQ(send_all_fd(fd, frame, flen));
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
 	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
-	ASSERT_EQ(get_be16(resp + 2) == 0x002A);
+	ASSERT_EQ(get_be16(resp + 2) == 42);
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
 }
 
 TEST(RtuOverTcpBadCrcGetsNoResponse)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg), "(device (unit-id 1) (holding 0 (static 1)))\n");
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(device (unit-id 1) (holding 0 (static 1)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	frame[flen - 1] ^= 0xFF; /* corrupt CRC */
+	frame[flen - 1] ^= 0xFF;
 	ASSERT_EQ(send_all_fd(fd, frame, flen));
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 250) == false);
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
 }
 
 TEST(RtuOverTcpUnknownUnitGetsNoResponse)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg), "(device (unit-id 1) (holding 0 (static 1)))\n");
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(device (unit-id 1) (holding 0 (static 1)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 99, req_pdu, sizeof(req_pdu));
@@ -285,26 +381,18 @@ TEST(RtuOverTcpUnknownUnitGetsNoResponse)
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 250) == false);
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
 }
 
 TEST(RtuOverTcpBroadcastGetsNoResponse)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg), "(device (unit-id 1) (holding 0 (static 0)))\n");
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(device (unit-id 1) (holding 0 (static 0)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 0, req_pdu, sizeof(req_pdu));
@@ -312,44 +400,18 @@ TEST(RtuOverTcpBroadcastGetsNoResponse)
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 250) == false);
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
-}
-
-static bool
-wait_for_eof_fd(int fd, u32 timeout_ms)
-{
-	u8 b;
-	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
-			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	for (;;)
-	{
-		ssize_t got = recv(fd, &b, 1, 0);
-		if (got == 0)
-			return true;
-		if (got < 0 && errno == EINTR)
-			continue;
-		return false;
-	}
+	server_stop();
 }
 
 TEST(RtuOverTcpHalfCloseAfterRequestSendsResponse)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg), "(device (unit-id 1) (holding 0 (static 4660)))\n");
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(device (unit-id 1) (holding 0 (static 4660)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
@@ -364,30 +426,21 @@ TEST(RtuOverTcpHalfCloseAfterRequestSendsResponse)
 	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
 }
 
 TEST(RtuOverTcpHalfCloseAfterDelayedRequestSendsResponse)
 {
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	u16 port = find_free_port();
 	u64 start;
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg),
-		  "(device (unit-id 1)\n"
-		  "  (holding 0 (static 4660))\n"
-		  "  (fault (kind delay) (delay-ms 200) (percent 100)))\n");
-	pid = start_rtu_tcp(cfg, port);
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start("(device (unit-id 1)\n"
+		     "  (holding 0 (static 4660))\n"
+		     "  (fault (kind delay) (delay-ms 200) (percent 100)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
@@ -404,33 +457,85 @@ TEST(RtuOverTcpHalfCloseAfterDelayedRequestSendsResponse)
 	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
+}
+
+TEST(RtuOverTcpFragmentedRequest)
+{
+	int fd;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start("(device (unit-id 1) (holding 0 (static 4660)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	for (u32 i = 0; i < flen; i++)
+	{
+		ASSERT_EQ(send_all_fd(fd, frame + i, 1));
+		usleep(2000);
+	}
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 4660);
+
+	close(fd);
+	server_stop();
+}
+
+TEST(RtuOverTcpPipelinedRequests)
+{
+	int fd;
+	u8 req1[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 req2[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x01, 0x00, 0x01 };
+	u8 frame1[MODBUS_RTU_MAX_FRAME], frame2[MODBUS_RTU_MAX_FRAME];
+	u8 all[MODBUS_RTU_MAX_FRAME * 2], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, len1, len2;
+
+	server_start("(device (unit-id 1)\n"
+		     "  (holding 0 (static 4660))\n"
+		     "  (holding 1 (static 22136)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	len1 = modbus_rtu_encode(frame1, 1, req1, sizeof(req1));
+	len2 = modbus_rtu_encode(frame2, 1, req2, sizeof(req2));
+	memcpy(all, frame1, len1);
+	memcpy(all + len1, frame2, len2);
+	ASSERT_EQ(send_all_fd(fd, all, len1 + len2));
+
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 4660);
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 22136);
+
+	close(fd);
+	server_stop();
 }
 
 TEST(RtuOverTcpPipelinedRequestsWithBaudGetResponses)
 {
 	/* Acceptance: two pipelined requests 3 ms apart over RTU-over-TCP with
 	 * --baud 9600 are both answered. TCP read() boundaries must not trigger t1.5. */
-	char cfg[64];
-	pid_t pid;
 	int fd;
 	u8 req1[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 req2[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x01, 0x00, 0x01 };
 	u8 frame1[MODBUS_RTU_MAX_FRAME], frame2[MODBUS_RTU_MAX_FRAME];
 	u8 resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, len1, len2;
-	u16 port = find_free_port();
 
-	ASSERT(port != 0);
-	write_cfg(cfg, sizeof(cfg),
-		  "(device (unit-id 1)\n"
-		  "  (holding 0 (static 4660))\n"
-		  "  (holding 1 (static 22136)))\n");
-	pid = start_rtu_tcp_args(cfg, port, "--baud", "9600");
-	ASSERT(pid > 0);
-	fd = connect_port(port, 100);
+	server_start_args("(device (unit-id 1)\n"
+			  "  (holding 0 (static 4660))\n"
+			  "  (holding 1 (static 22136)))\n",
+			  "--baud", "9600");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
 	len1 = modbus_rtu_encode(frame1, 1, req1, sizeof(req1));
@@ -451,7 +556,193 @@ TEST(RtuOverTcpPipelinedRequestsWithBaudGetResponses)
 	ASSERT_EQ(get_be16(resp + 2) == 22136);
 
 	close(fd);
-	kill(pid, SIGTERM);
-	waitpid(pid, NULL, 0);
-	unlink(cfg);
+	server_stop();
+}
+
+TEST(RtuOverTcpDelayFaultDoesNotBlockOtherClients)
+{
+	int delayed, fast;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+	u64 start, fast_ms, delayed_ms;
+
+	server_start("(device (unit-id 1) (holding 0 (static 11))\n"
+		     "  (fault (kind delay) (delay-ms 500) (percent 100)))\n"
+		     "(device (unit-id 2) (holding 0 (static 22)))\n");
+	delayed = connect_port(100, 2000);
+	fast = connect_port(100, 2000);
+	ASSERT(delayed >= 0 && fast >= 0);
+
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(delayed, frame, flen));
+	flen = modbus_rtu_encode(frame, 2, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fast, frame, flen));
+	start = (u64)clock_now_ms();
+
+	ASSERT_EQ(recv_rtu_resp(fast, &addr, resp, &plen, 2000));
+	fast_ms = clock_now_ms() - start;
+	ASSERT_EQ(addr == 2);
+	ASSERT_EQ(get_be16(resp + 2) == 22);
+
+	ASSERT_EQ(recv_rtu_resp(delayed, &addr, resp, &plen, 2000));
+	delayed_ms = clock_now_ms() - start;
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(get_be16(resp + 2) == 11);
+	ASSERT_EQ(fast_ms < 300);
+	ASSERT_EQ(delayed_ms >= 400);
+
+	close(delayed);
+	close(fast);
+	server_stop();
+}
+
+TEST(RtuOverTcpDropFaultStillAppliesWrites)
+{
+	int fd;
+	u8 write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x04, 0xD2 }; /* 1234 */
+	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+	bool dropped = false;
+
+	server_start_args("(server (seed 1))\n"
+			  "(device (unit-id 1) (holding 0 (static 0))\n"
+			  "  (fault (kind drop) (percent 50)))\n",
+			  NULL, NULL);
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	for (u32 i = 0; i < 40 && !dropped; i++)
+	{
+		flen = modbus_rtu_encode(frame, 1, write_pdu, sizeof(write_pdu));
+		ASSERT_EQ(send_all_fd(fd, frame, flen));
+		dropped = !recv_rtu_resp(fd, &addr, resp, &plen, 120);
+	}
+	ASSERT_EQ(dropped);
+
+	for (u32 i = 0; i < 40; i++)
+	{
+		flen = modbus_rtu_encode(frame, 1, read_pdu, sizeof(read_pdu));
+		ASSERT_EQ(send_all_fd(fd, frame, flen));
+		if (recv_rtu_resp(fd, &addr, resp, &plen, 300))
+		{
+			ASSERT_EQ(get_be16(resp + 2) == 1234);
+			close(fd);
+			server_stop();
+			return;
+		}
+	}
+	ASSERT(false && "did not observe write effect through drop fault");
+}
+
+TEST(RtuOverTcpIdleTimeoutClosesConnection)
+{
+	int fd;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+	int probe;
+
+	server_start("(server (idle-timeout-ms 100))\n"
+		     "(device (unit-id 1) (holding 0 (static 5)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
+
+	/* Server should still accept a new connection after idle close. */
+	probe = connect_port(100, 2000);
+	ASSERT(probe >= 0);
+	ASSERT_EQ(send_all_fd(probe, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(probe, &addr, resp, &plen, 2000));
+	ASSERT_EQ(get_be16(resp + 2) == 5);
+
+	close(probe);
+	close(fd);
+	server_stop();
+}
+
+TEST(RtuOverTcpConnectionLimit)
+{
+	int clients[32];
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen, opened = 0;
+	bool refused = false;
+
+	for (u32 i = 0; i < 32; i++)
+		clients[i] = -1;
+	server_start("(device (unit-id 1) (holding 0 (static 5)))\n");
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+
+	for (u32 i = 0; i < 32; i++)
+	{
+		clients[i] = connect_port(50, 2000);
+		if (clients[i] < 0)
+			break;
+		opened++;
+		usleep(10000);
+	}
+	ASSERT_EQ(opened == 32);
+	ASSERT_EQ(send_all_fd(clients[0], frame, flen));
+	ASSERT_EQ(recv_rtu_resp(clients[0], &addr, resp, &plen, 2000));
+
+	/* 33rd connection may be refused, closed, or left unserviced; it must not be
+	 * served while 32 connections are already active. */
+	{
+		int extra = connect_port(1, 200);
+		if (extra < 0)
+			refused = true;
+		else
+		{
+			refused = !send_all_fd(extra, frame, flen) ||
+				  !recv_rtu_resp(extra, &addr, resp, &plen, 300);
+			close(extra);
+		}
+	}
+	ASSERT_EQ(refused);
+
+	for (u32 i = 0; i < opened; i++)
+		if (clients[i] >= 0)
+			close(clients[i]);
+	server_stop();
+}
+
+TEST(RtuOverTcpLargeFc16Frame)
+{
+	/* Max-size FC16 request (123 registers) over RTU-over-TCP. */
+	int fd;
+	u8 req_pdu[1 + 2 + 2 + 1 + 123 * 2];
+	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x7A, 0x00, 0x01 }; /* reg 122 */
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start("(device (unit-id 1) (holding 0 (count 125) (static 0)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	req_pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+	put_be16(req_pdu + 1, 0);
+	put_be16(req_pdu + 3, 123);
+	req_pdu[5] = 246;
+	for (u32 i = 0; i < 123; i++)
+		put_be16(req_pdu + 6 + i * 2, (u16)(0x2000 + i));
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT(flen > 0);
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 3) == 123);
+
+	flen = modbus_rtu_encode(frame, 1, read_pdu, sizeof(read_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(get_be16(resp + 2) == 0x2000 + 122);
+
+	close(fd);
+	server_stop();
 }

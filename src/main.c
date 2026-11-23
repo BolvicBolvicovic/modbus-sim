@@ -265,30 +265,39 @@ fault_text(const fault_t* fault, char* buf, u32 size)
 }
 
 static void
+print_rtu_timing(const config_t* config)
+{
+	if (config->frame_gap_ms > 0)
+		printf(", frame-gap %u ms (override)", config->frame_gap_ms);
+	else if (config->baud > 0)
+		printf(", baud %u, t3.5 %u us (frame-gap %u ms)",
+		       config->baud, rtu_t35_us(config->baud),
+		       rtu_effective_gap_ms(0, config->baud));
+	else
+		printf(", frame-gap %u ms (default; baud unknown)",
+		       rtu_effective_gap_ms(0, 0));
+}
+
+static void
 print_summary(const config_t* config, bool rtu_mode, bool rtu_tcp_mode, const char* rtu_path)
 {
 	char	fault[96];
 
 	if (rtu_tcp_mode)
 	{
-		printf("%u device%s, RTU-over-TCP %s:%u\n",
+		printf("%u device%s, RTU-over-TCP %s:%u",
 		       config->device_count, config->device_count == 1 ? "" : "s",
 		       config->bind_address, config->port);
+		print_rtu_timing(config);
+		putchar('\n');
 	}
 	else if (rtu_mode)
 	{
 		printf("%u device%s, RTU %s",
 		       config->device_count, config->device_count == 1 ? "" : "s",
 		       rtu_path ? rtu_path : "(fd)");
-		if (config->frame_gap_ms > 0)
-			printf(", frame-gap %u ms (override)\n", config->frame_gap_ms);
-		else if (config->baud > 0)
-			printf(", baud %u, t3.5 %u us (frame-gap %u ms)\n",
-			       config->baud, rtu_t35_us(config->baud),
-			       rtu_effective_gap_ms(0, config->baud));
-		else
-			printf(", frame-gap %u ms (default; baud unknown)\n",
-			       rtu_effective_gap_ms(0, 0));
+		print_rtu_timing(config);
+		putchar('\n');
 	}
 	else
 		printf("%u device%s on %s:%u\n", config->device_count, config->device_count == 1 ? "" : "s",
