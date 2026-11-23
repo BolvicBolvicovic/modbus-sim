@@ -27,6 +27,7 @@ struct rtu_framer_t
 	u64		last_rx_us;
 	bool		have_rx;
 	bool		gap_deferred;
+	u32		gap_deferred_len;
 	rtu_pending_t	pending;
 };
 

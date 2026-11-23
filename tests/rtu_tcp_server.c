@@ -77,7 +77,7 @@ recv_rtu_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 		const u8* p = NULL;
 		u32 l = 0;
 		if (!recv_exact_fd(fd, frame + got, 1, timeout_ms))
-			return false;
+		return false;
 		got++;
 		if (got >= 4 && modbus_rtu_decode(frame, got, addr, &p, &l))
 		{
@@ -391,7 +391,7 @@ TEST(RtuOverTcpBroadcastGetsNoResponse)
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
 
-	server_start("(device (unit-id 1) (holding 0 (static 0)))\n");
+	server_start_args("(device (unit-id 1) (holding 0 (static 0)))\n", "--baud", "9600");
 	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
 
@@ -745,4 +745,103 @@ TEST(RtuOverTcpLargeFc16Frame)
 
 	close(fd);
 	server_stop();
+}
+
+static void
+assert_rtu_tcp_fc16_split_answered(u32 split_after)
+{
+	u8 resp[MODBUS_MAX_PDU];
+	u8 frame[MODBUS_RTU_MAX_FRAME];
+	u8 pdu[6 + 8 * 2];
+	u32 plen = 0, flen;
+	u8 addr = 0;
+	int fd;
+
+	pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+	put_be16(pdu + 1, 0);
+	put_be16(pdu + 3, 8);
+	pdu[5] = 16;
+	for (u32 i = 0; i < 8; i++)
+		put_be16(pdu + 6 + i * 2, (u16)(0x6000 + i));
+
+	server_start_args("(device (unit-id 1) (holding 0 (count 16) (static 0)))\n", "--baud", "9600");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+	flen = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT(flen > split_after);
+	ASSERT_EQ(send_all_fd(fd, frame, split_after));
+	usleep(6000);
+	ASSERT_EQ(send_all_fd(fd, frame + split_after, flen - split_after));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	close(fd);
+	server_stop();
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 1) == 0);
+	ASSERT_EQ(get_be16(resp + 3) == 8);
+}
+
+TEST(RtuOverTcpIncompleteFc16SplitAfter5Answered)
+{
+	assert_rtu_tcp_fc16_split_answered(5);
+}
+
+TEST(RtuOverTcpIncompleteFc16SplitAfter7Answered)
+{
+	assert_rtu_tcp_fc16_split_answered(7);
+}
+
+TEST(RtuOverTcpIncompleteFc16SplitAfter20Answered)
+{
+	assert_rtu_tcp_fc16_split_answered(20);
+}
+
+TEST(RtuOverTcpIncompleteFc08SplitAnswered)
+{
+	u8 resp[MODBUS_MAX_PDU];
+	u8 frame[MODBUS_RTU_MAX_FRAME];
+	u8 pdu[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
+	u32 plen = 0, flen;
+	u8 addr = 0;
+	int fd;
+
+	server_start("(device (unit-id 1) (holding 0 (static 0)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+	flen = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT(flen > 4);
+	ASSERT_EQ(send_all_fd(fd, frame, 4));
+	usleep(6000);
+	ASSERT_EQ(send_all_fd(fd, frame + 4, flen - 4));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	close(fd);
+	server_stop();
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(plen == sizeof(pdu));
+	ASSERT_EQ(memcmp(resp, pdu, sizeof(pdu)) == 0);
+}
+
+TEST(RtuOverTcpTruncatedFrameDoesNotLoseValidRequest)
+{
+	u8 resp[MODBUS_MAX_PDU];
+	u8 good[MODBUS_RTU_MAX_FRAME];
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 trunc[] = { 0x01, FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00 };
+	u32 plen = 0, good_len;
+	u8 addr = 0;
+	int fd;
+
+	server_start_args("(device (unit-id 1) (holding 0 (static 4386)))\n", "--baud", "9600");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+	good_len = modbus_rtu_encode(good, 1, req, sizeof(req));
+	ASSERT_EQ(send_all_fd(fd, trunc, sizeof(trunc)));
+	usleep(10000);
+	ASSERT_EQ(send_all_fd(fd, good, good_len));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	close(fd);
+	server_stop();
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 4386);
 }

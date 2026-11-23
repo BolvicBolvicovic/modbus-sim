@@ -68,7 +68,18 @@ read_available(rtu_server_t* server, u64 now_ms)
 	f->last_rx_ms = now_ms;
 	f->last_rx_us = now_us;
 	f->have_rx = true;
-	f->gap_deferred = false;
+	if (server->options.frame_gap_ms == 0 && server->options.baud != 0 && f->gap_deferred && f->rx_len > f->gap_deferred_len)
+	{
+		bool incomplete = rtu_framer_process(f, server->options.devices, server->options.device_count,
+						     &server->rng, now_ms, server->options.frame_gap_ms,
+						     server->options.baud, NULL);
+		f->have_rx = f->rx_len > 0;
+		if (!incomplete)
+		{
+			f->gap_deferred = false;
+			f->gap_deferred_len = 0;
+		}
+	}
 	return true;
 }
 
@@ -301,17 +312,21 @@ rtu_server_run(const rtu_server_options_t* options)
 			if (incomplete && !f->gap_deferred)
 			{
 				f->gap_deferred = true;
+				f->gap_deferred_len = f->rx_len;
 				f->last_rx_ms = now_ms;
+				f->last_rx_us = clock_now_us();
 			}
 			else if (incomplete)
 			{
 				f->rx_len = 0;
 				f->have_rx = false;
 				f->gap_deferred = false;
+				f->gap_deferred_len = 0;
 			}
 			else
 			{
 				f->gap_deferred = false;
+				f->gap_deferred_len = 0;
 				continue;
 			}
 		}
@@ -339,16 +354,22 @@ rtu_server_run(const rtu_server_options_t* options)
 			if (incomplete && !f->gap_deferred)
 			{
 				f->gap_deferred = true;
+				f->gap_deferred_len = f->rx_len;
 				f->last_rx_ms = now_ms;
+				f->last_rx_us = clock_now_us();
 			}
 			else if (incomplete)
 			{
 				f->rx_len = 0;
 				f->have_rx = false;
 				f->gap_deferred = false;
+				f->gap_deferred_len = 0;
 			}
 			else
+			{
 				f->gap_deferred = false;
+				f->gap_deferred_len = 0;
+			}
 		}
 	}
 
