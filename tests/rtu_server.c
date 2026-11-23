@@ -3,6 +3,7 @@
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "net/rtu_framer.h"
 #include "net/rtu_server.h"
 #include "device/device.h"
 #include "util/clock.h"

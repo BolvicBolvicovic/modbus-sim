@@ -45,6 +45,25 @@ check_layer() {
 	[ "$fail" -eq 0 ] || exit 1
 }
 
+check_file_forbidden_include() {
+	file=$1
+	pattern=$2
+	reason=$3
+	[ -f "$file" ] || return 0
+	bad=$(grep -nE "$pattern" "$file" 2>/dev/null || true)
+	[ -n "$bad" ] || return 0
+	printf 'Forbidden dependency include found (%s):\n' "$reason" >&2
+	printf '%s:%s\n' "$file" "$bad" >&2
+	exit 1
+}
+
+check_extra_rules() {
+	root=$1
+	# Issue 50: RTU timing/framing helpers live in rtu_framer; the TCP RTU server
+	# is a peer of the byte-stream RTU server, not its client.
+	check_file_forbidden_include "$root/src/net/rtu_tcp_server.c" 		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)net/rtu_server\.h[">]' 		"rtu_tcp_server.c must not include rtu_server.h"
+}
+
 check_tree() {
 	root=$1
 	check_layer "$root" net    "net modbus util"
@@ -52,6 +71,7 @@ check_tree() {
 	check_layer "$root" device "device util"
 	check_layer "$root" config "config device util"
 	check_layer "$root" util   "util"
+	check_extra_rules "$root"
 }
 
 self_test() {
@@ -100,6 +120,14 @@ self_test() {
 	expect_fail util-modbus     util   "modbus/pdu.h"
 	expect_fail util-config     util   "config/config.h"
 	expect_fail util-relative   util   "../modbus/rtu.h"
+
+	# Issue 50 acceptance fixture.
+	mkdir -p "$tmp/rtu-tcp-server-peer/src/net"
+	printf '#include "net/rtu_server.h"\n' >"$tmp/rtu-tcp-server-peer/src/net/rtu_tcp_server.c"
+	if ( check_tree "$tmp/rtu-tcp-server-peer" ) >/dev/null 2>&1; then
+		printf 'check_deps.sh self-test: rtu-tcp-server-peer did not fail\n' >&2
+		exit 1
+	fi
 	printf 'check_deps.sh self-test: ok\n'
 }
 
