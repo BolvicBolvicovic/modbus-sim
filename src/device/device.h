@@ -111,7 +111,6 @@ struct device_fifo_t
 enum diagnostic_register_bit
 {
 	DIAG_REG_CHARACTER_OVERRUN       = 1u << 0,
-	DIAG_REG_ASCII_DELIMITER_CHANGED = 1u << 5,
 };
 
 /* MEI 14 (Read Device Identification) object ids. */
@@ -152,7 +151,6 @@ struct device_t
 	u16		diag_nak_count;		/* FC 08 subfunction 0x0010 */
 	u16		diag_busy_count;	/* FC 08 subfunction 0x0011 */
 	u16		diag_overrun_count;	/* FC 08 subfunction 0x0012 */
-	u8		ascii_delimiter;	/* FC 08 subfunction 0x0003, default LF */
 	bool		listen_only;		/* FC 08 subfunction 0x0004 */
 	u64		start_ms;		/* ramps count their time from here */
 	fault_t		fault;

@@ -529,8 +529,8 @@ diagnostic_counter_response(u8* resp, u16 subfunction, u16 value)
 	return 5;
 }
 
-/* Shared reset for 0x0001 and 0x000A; the ASCII delimiter and listen-only
- * state are deliberately not part of it. */
+/* Shared reset for 0x0001 and 0x000A; listen-only state is deliberately not
+ * part of it. */
 static void
 clear_diagnostic_counters(device_t* dev)
 {
@@ -555,6 +555,10 @@ diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	subfunction = get_be16(req + 1);
+	/* The end-of-message delimiter is a per-port setting; ASCII framing is
+	 * always CR LF, so a request to change it is an illegal data value. */
+	if (subfunction == DIAG_SUB_CHANGE_ASCII_DELIMITER)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 	/* Return Query Data keeps its original N x 2-byte echo shape. */
 	if (subfunction == DIAG_SUB_RETURN_QUERY_DATA)
 	{
@@ -570,9 +574,7 @@ diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	data = get_be16(req + 3);
-	if (subfunction != DIAG_SUB_RESTART_COMMUNICATIONS &&
-	    subfunction != DIAG_SUB_CHANGE_ASCII_DELIMITER &&
-	    data != 0)
+	if (subfunction != DIAG_SUB_RESTART_COMMUNICATIONS && data != 0)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	switch (subfunction)
@@ -599,14 +601,6 @@ diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return 5;
 	case DIAG_SUB_READ_DIAGNOSTIC_REGISTER:
 		return diagnostic_counter_response(resp, subfunction, dev->diagnostic_register);
-	case DIAG_SUB_CHANGE_ASCII_DELIMITER:
-		if ((data & 0x00FF) != 0)
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-
-		dev->ascii_delimiter = (u8)(data >> 8);
-		dev->diagnostic_register |= DIAG_REG_ASCII_DELIMITER_CHANGED;
-		memcpy(resp, req, 5);
-		return 5;
 	case DIAG_SUB_LISTEN_ONLY_MODE:
 		dev->listen_only = true;
 		return 0;

@@ -59,8 +59,8 @@ No response is produced for:
 Modbus ASCII is served over a bidirectional byte stream (Linux PTY or an existing serial-like
 device path) via `(server (mode ascii-pty))` or `(server (mode ascii-device) (path "PATH"))`. It is a
 separate transport/framing choice: it uses the same PDU handlers and device model as TCP/RTU, but it
-is not Modbus TCP (MBAP) and there is no ASCII-over-TCP mode. ASCII accepts only `mode`, `seed`,
-`baud` and (in device mode) `path` in `(server ...)`.
+is not Modbus TCP (MBAP) and there is no ASCII-over-TCP mode. ASCII accepts `mode`, `seed`, `baud`,
+`data-bits`, `parity`, `stop-bits` and (in device mode) `path` in `(server ...)`.
 
 Frame format on the wire is `:` + uppercase hex digits for `[addr][PDU...][LRC]` + `CR LF`.
 `addr` is one byte, the PDU is 1..253 bytes, and the LRC is one byte:
@@ -87,15 +87,18 @@ No response is produced, and no PDU is dispatched, for:
   digit, overlong frame, or a lone `CR`/`LF` inside a frame.
 - **Bad LRC**: the decoded LRC does not match the sum of address and PDU bytes.
 - **Unknown unit**: no configured device has that unit id.
-- **Broadcast (unit 0)**: intentionally ignored, as in RTU.
+- **Broadcast (unit 0)**: intentionally ignored in every ASCII mode. `broadcast-execute` is rejected
+  by config validation for ASCII, so a unit-0 frame is never executed on a device.
 - **Fault drop**: the configured fault decision suppresses the response.
 
 Delay faults still hold the ASCII response until the configured delay has elapsed, without blocking
 other work in the poll loop. Unit ids must be 1-247 in ASCII modes, as in RTU; `--check` with an ASCII
 mode applies the same check. `(server (baud N))` may set the serial line/PTY speed but never affects
-ASCII framing or timing. When the fd is a tty, `modbus-sim` configures raw 8N1 (`CS8`, no parity, 1
-stop bit, no flow control), **not** the traditional Modbus ASCII 7E1 settings. Each config selects
-exactly one mode; TCP listen and RTU timing entries are rejected in ASCII modes.
+ASCII framing or timing. When the fd is a tty, `modbus-sim` configures raw 8N1 by default (8 data
+bits, no parity, 1 stop bit, no flow control). The traditional Modbus ASCII 7E1 line format is opt-in:
+`(server (data-bits 7) (parity even) (stop-bits 1))` sets `CS7`, even parity and 1 stop bit. Each
+config selects exactly one mode; TCP listen, RTU timing, and broadcast entries are rejected in ASCII
+modes.
 
 ### Modbus RTU over TCP
 
@@ -144,14 +147,14 @@ explicit listen mode selected in `(server ...)`.
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
-Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: request PDU `[0x08, sub-hi, sub-lo, data...]`. Although the Modbus spec defines FC 08 as serial-line only, this simulator exposes it through TCP, RTU, and RTU-over-TCP. All subfunctions below are per-device and persist only while the simulator runs (no config fields). A request shorter than 3 bytes is rejected with exception 03 (illegal data value); an unknown subfunction in a longer request is rejected with exception 01 (illegal function), including vendor-specific subfunctions `0x0013` and `0x0015`. Every supported subfunction except `0x0000` requires exactly 5 bytes; other lengths are rejected with exception 03. For those subfunctions the data word is reserved and must be `0x0000` (exception 03 otherwise), except `0x0001` (accepts `0x0000` or `0xFF00`) and `0x0003` (`CHAR 00`: the delimiter is the high byte and the low byte must be 0). Counter responses are 5 bytes and fit the normal Modbus PDU buffer. Subfunctions `0x0004` and a Restart Communications request received while listen-only produce no response at all: the TCP/RTU transports suppress the response frame/MBAP message entirely. While listen-only, requests are still monitored for the bus/slave message count (`0x000B`/`0x000E`) but are not otherwise processed.
+Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: request PDU `[0x08, sub-hi, sub-lo, data...]`. Although the Modbus spec defines FC 08 as serial-line only, this simulator exposes it through TCP, RTU, ASCII, and RTU-over-TCP. All subfunctions below are per-device and persist only while the simulator runs (no config fields). A request shorter than 3 bytes is rejected with exception 03 (illegal data value); an unknown subfunction in a longer request is rejected with exception 01 (illegal function), including vendor-specific subfunctions `0x0013` and `0x0015`. Every supported subfunction except `0x0000` requires exactly 5 bytes; other lengths are rejected with exception 03. For those subfunctions the data word is reserved and must be `0x0000` (exception 03 otherwise), except `0x0001` (accepts `0x0000` or `0xFF00`). `0x0003` is recognized but always answered with exception 03. Counter responses are 5 bytes and fit the normal Modbus PDU buffer. Subfunctions `0x0004` and a Restart Communications request received while listen-only produce no response at all: the TCP/RTU transports suppress the response frame/MBAP message entirely. While listen-only, requests are still monitored for the bus/slave message count (`0x000B`/`0x000E`) but are not otherwise processed.
 
 | Subfunction | Name | Behavior |
 |---|---|---|
 | `0x0000` | Return Query Data | Echoes the request PDU unchanged, as before. Requires at least 5 bytes and an odd total PDU length (an even-length data field); even total lengths get exception 03. |
 | `0x0001` | Restart Communications Option | Data must be `0x0000` or `0xFF00` (otherwise exception 03). Both values clear all FC 08 diagnostic counters, the diagnostic register, and the FC 11/12 communication event counter, and exit listen-only mode; then the request is echoed when not already listen-only. `0xFF00` also clears the FC 12 communications event log (event bytes and log length); `0x0000` leaves the log intact. A restart received while listen-only is processed but answered with silence. Restart Communications requests are not counted as successful completions in the event log. |
-| `0x0002` | Read Diagnostic Register | Returns the 16-bit diagnostic register in the count field. Default `0x0000`; only bit `0x0020` (ASCII delimiter changed) is set by `0x0003`. Bit `0x0001` (character overrun) is never set. |
-| `0x0003` | Change ASCII Delimiter | The high data byte is stored as the delimiter and the low byte must be `0` (otherwise exception 03), then the diagnostic register bit `0x0020` is set and the request is echoed. The stored value is diagnostic state only: ASCII transport uses `CR LF` framing and is unaffected. Default delimiter is LF (`0x0A`). |
+| `0x0002` | Read Diagnostic Register | Returns the 16-bit diagnostic register in the count field. Default `0x0000`; no supported subfunction sets a bit in it, and bit `0x0001` (character overrun) is never set. |
+| `0x0003` | Change ASCII Delimiter | Always rejected with exception 03 (illegal data value), whatever the data word or request length. The end-of-message character is a per-port setting, not per-device state; ASCII framing is fixed at `CR LF`. |
 | `0x0004` | Listen Only Mode | Enters per-device listen-only mode and returns no response. Until Restart Communications (`0x0000` or `0xFF00`) is received, all other requests to that device are ignored before PDU processing: the message count (`0x000B`/`0x000E`) still increments for each monitored request, while the event counter, device state, and responses do not change. The no-response counter (`0x000F`) increments for each ignored request and bad RTU frames still increment the bus communication-error counter (`0x000C`). |
 | `0x000A` | Clear Counters | Echoes the request and clears the FC 08 diagnostic counters and diagnostic register. It does not clear the FC 11/12 communication event counter or the FC 12 event log, and does not exit listen-only mode. Like every other request except restart, it is ignored while listen-only. |
 | `0x000B` | Return Bus Message Count | Returns the per-device `message_count` (also used by FC 12), including the counter-read request itself. |
@@ -255,7 +258,8 @@ In RTU and ASCII modes, unit ids must be in the range 1-247. Address 0 is Modbus
 cannot be addressed by a normal serial request. `modbus-sim` rejects these ids when starting in an
 RTU or ASCII mode and when `--check` reads such a mode. RTU broadcast requests (address 0) are
 received but are ignored unless `(server (broadcast-execute on))` is set; when enabled they execute
-on all devices and still produce no response. ASCII broadcast frames are received but never executed.
+on all devices and still produce no response. ASCII broadcast frames are received but never executed,
+and `broadcast-execute` is rejected at load time for ASCII modes.
 MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 
 ## Timing
@@ -273,7 +277,7 @@ MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 The previously tracked Modbus spec deviations have been resolved:
 
 - **FC 11/12 event counter:** counts successful message completions only; not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11/12). FC 12 message count still counts handled request PDUs, including exceptions.
-- **FC 08 Diagnostics:** public subfunctions `0x0000-0x0004`, `0x000A-0x0012`, and `0x0014` are supported with per-device state. Return Query Data (`0x0000`) accepts and echoes an N x 2-byte data field, and malformed odd-length data is rejected as illegal data value (03). `0x0003` only stores the `CHAR 00` delimiter and sets a diagnostic-register bit; it does not change the ASCII transport's `CR LF` framing. Listen-only mode suppresses all requests before processing except Restart Communications, which is processed and also silent; monitored requests still increment the bus/slave message count. RTU bad frames and malformed ASCII frames increment the bus communication-error counter for every device; exception responses do not. NAK, busy, and character-overrun counters are intentionally always 0.
+- **FC 08 Diagnostics:** public subfunctions `0x0000-0x0004`, `0x000A-0x0012`, and `0x0014` are supported with per-device state. Return Query Data (`0x0000`) accepts and echoes an N x 2-byte data field, and malformed odd-length data is rejected as illegal data value (03). `0x0003` is always answered with exception 03 because the delimiter is a per-port setting and ASCII `CR LF` framing cannot be changed per device. Listen-only mode suppresses all requests before processing except Restart Communications, which is processed and also silent; monitored requests still increment the bus/slave message count. RTU bad frames and malformed ASCII frames increment the bus communication-error counter for every device; exception responses do not. NAK, busy, and character-overrun counters are intentionally always 0.
 - **File number 0:** rejected; config and PDU validation accept file numbers `0x0001-0xFFFF`.
 - **FC 20/21 record range exceeding 0x270F:** rejected as illegal data value (03) for both FC 20 and FC 21.
 

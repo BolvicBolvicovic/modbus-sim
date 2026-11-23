@@ -244,7 +244,7 @@ ascii_cli_start_with_args(char* const argv[])
 }
 
 static bool
-ascii_cli_start_device(const char* devices)
+ascii_cli_start_device_with_options(const char* options, const char* devices, bool dirty_line)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
 	char config[1024];
@@ -260,11 +260,21 @@ ascii_cli_start_device(const char* devices)
 	if (tcgetattr(g_ascii_cli.master_fd, &tio) == 0)
 	{
 		cfmakeraw(&tio);
+		cfsetispeed(&tio, B19200);
+		cfsetospeed(&tio, B19200);
+		if (dirty_line)
+		{
+			tio.c_cflag &= ~(CSIZE | PARENB | PARODD | CSTOPB | CRTSCTS);
+#ifdef CMSPAR
+			tio.c_cflag &= ~CMSPAR;
+#endif
+			tio.c_cflag |= CS7 | PARENB | PARODD | CSTOPB | CRTSCTS;
+		}
 		(void)tcsetattr(g_ascii_cli.master_fd, TCSANOW, &tio);
 	}
 	close(slave);
-	snprintf(config, sizeof(config), "(server (mode ascii-device) (path \"%s\"))\n%s\n",
-		 name, devices);
+	snprintf(config, sizeof(config), "(server (mode ascii-device) (path \"%s\")%s%s)\n%s\n",
+		 name, options[0] ? " " : "", options, devices);
 	if (!ascii_cli_write_config(config) || !ascii_cli_capture_stderr())
 		return false;
 
@@ -272,6 +282,12 @@ ascii_cli_start_device(const char* devices)
 	argv[1] = g_ascii_cli.config;
 	argv[2] = NULL;
 	return ascii_cli_start_with_args(argv);
+}
+
+static bool
+ascii_cli_start_device(const char* devices)
+{
+	return ascii_cli_start_device_with_options("", devices, false);
 }
 
 static bool
@@ -456,6 +472,85 @@ TEST(AsciiCliServesOverPtyDevice)
 	ASSERT_EQ(ok);
 }
 
+TEST(AsciiCliDefaultLineFlagsAre8N1)
+{
+	struct termios tio;
+
+	ASSERT_EQ(ascii_cli_start_device_with_options("",
+						      "(device (unit-id 1) (holding 0))\n", true));
+	ASSERT_EQ(tcgetattr(g_ascii_cli.master_fd, &tio) == 0);
+	ASSERT_EQ((tio.c_cflag & CSIZE) == CS8);
+	ASSERT_EQ((tio.c_cflag & (PARENB | PARODD | CSTOPB | CRTSCTS)) == 0);
+	ASSERT_EQ((tio.c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD));
+	ASSERT_EQ(cfgetispeed(&tio) == B19200 && cfgetospeed(&tio) == B19200);
+	ascii_cli_stop();
+}
+
+TEST(AsciiCliSevenE1LineFlagsFromConfig)
+{
+	struct termios tio;
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 addrs[1] = { 0 };
+	u8 pdus[1][MODBUS_MAX_PDU] = { { 0 } };
+	u32 lens[1] = { 0 };
+	bool ok = false;
+
+	ASSERT_EQ(ascii_cli_start_device_with_options(
+		"(data-bits 7) (parity even) (stop-bits 1)",
+		"(device (unit-id 1) (holding 0 (static 4660)))\n", true));
+
+	/* Linux PTYs force CS8 and strip PARENB, so tests/serial.c checks CS7 and
+	 * PARENB directly; here verify the observable part of the 7E1 selection. */
+	ok = tcgetattr(g_ascii_cli.master_fd, &tio) == 0;
+	ok = ok && (tio.c_cflag & CSIZE) == CS8;
+	ok = ok && (tio.c_cflag & (PARODD | CSTOPB | CRTSCTS)) == 0;
+#ifdef CMSPAR
+	ok = ok && (tio.c_cflag & CMSPAR) == 0;
+#endif
+	ok = ok && (tio.c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD);
+	ok = ok && cfgetispeed(&tio) == B19200 && cfgetospeed(&tio) == B19200;
+	ok = ok && send_ascii_req_fd(g_ascii_cli.master_fd, 1, req, sizeof(req));
+	ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+					ASCII_CLI_IO_TIMEOUT_MS);
+	ok = ok && addrs[0] == 1 && lens[0] == 4 && get_be16(pdus[0] + 2) == 0x1234;
+
+	ascii_cli_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiCliChangeDelimiterRejectedAndCrlfFramingUnchanged)
+{
+	u8 delimiter_req[] = { FC_DIAGNOSTICS, 0x00, 0x03, 0x23, 0x00 };
+	u8 register_req[]  = { FC_DIAGNOSTICS, 0x00, 0x02, 0x00, 0x00 };
+	u8 read_req[]      = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 addrs[1] = { 0 };
+	u8 pdus[1][MODBUS_MAX_PDU] = { { 0 } };
+	u32 lens[1] = { 0 };
+	bool ok = false;
+
+	ASSERT_EQ(ascii_cli_start_device("(device (unit-id 1) (holding 0 (static 4660)))\n"));
+
+	ok = send_ascii_req_fd(g_ascii_cli.master_fd, 1, delimiter_req, sizeof(delimiter_req));
+	ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+					ASCII_CLI_IO_TIMEOUT_MS);
+	ok = ok && addrs[0] == 1 && lens[0] == 2 &&
+	     pdus[0][0] == (FC_DIAGNOSTICS | 0x80) && pdus[0][1] == EXC_ILLEGAL_DATA_VALUE;
+
+	ok = ok && send_ascii_req_fd(g_ascii_cli.master_fd, 1, register_req, sizeof(register_req));
+	ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+					ASCII_CLI_IO_TIMEOUT_MS);
+	ok = ok && addrs[0] == 1 && lens[0] == 5 && get_be16(pdus[0] + 3) == 0;
+
+	/* Framing is still CR LF: a normal request gets its normal answer. */
+	ok = ok && send_ascii_req_fd(g_ascii_cli.master_fd, 1, read_req, sizeof(read_req));
+	ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+					ASCII_CLI_IO_TIMEOUT_MS);
+	ok = ok && addrs[0] == 1 && lens[0] == 4 && get_be16(pdus[0] + 2) == 0x1234;
+
+	ascii_cli_stop();
+	ASSERT_EQ(ok);
+}
+
 TEST(AsciiCliSilentOnBroadcastAndUnknownUnit)
 {
 	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
@@ -608,6 +703,11 @@ TEST(AsciiCliConfigModeValidatesUnitIdsAndRejectsRemovedFlags)
 				  "(device (unit-id 1) (holding 0 (static 1)))\n";
 	const char* ascii_reserved = "(server (mode ascii-pty))\n"
 				     "(device (unit-id 248) (holding 0))\n";
+	const char* ascii_7e1 = "(server (mode ascii-device) (path \"/dev/ttyS0\")"
+				" (data-bits 7) (parity even) (stop-bits 1))\n"
+				"(device (unit-id 1) (holding 0 (static 1)))\n";
+	const char* ascii_broadcast = "(server (mode ascii-pty) (broadcast-execute on))\n"
+				      "(device (unit-id 1) (holding 0 (static 1)))\n";
 	const char* valid = "(device (unit-id 1) (holding 0 (static 1)))\n";
 	bool ok = true;
 
@@ -624,6 +724,17 @@ TEST(AsciiCliConfigModeValidatesUnitIdsAndRejectsRemovedFlags)
 		char* argv[] = { (char*)bin, "--check", g_ascii_cli.config, NULL };
 
 		ok = ok && ascii_cli_run_check(ascii_valid, argv, 0, NULL);
+	}
+	{
+		char* argv[] = { (char*)bin, "--check", g_ascii_cli.config, NULL };
+
+		ok = ok && ascii_cli_run_check(ascii_7e1, argv, 0, NULL);
+	}
+	{
+		char* argv[] = { (char*)bin, "--check", g_ascii_cli.config, NULL };
+
+		ok = ok && ascii_cli_run_check(ascii_broadcast, argv, 1,
+					       "ASCII never executes unit-0 broadcasts");
 	}
 	{
 		char* argv[] = { (char*)bin, "--ascii-pty", "--port", "1502",

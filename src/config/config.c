@@ -53,6 +53,7 @@ config_set_defaults(config_t* config)
 	config->baud              = CONFIG_DEFAULT_BAUD;
 	config->strict_t15        = false;
 	config->broadcast_execute = false;
+	config->data_bits         = 8;
 	config->parity            = PARITY_NONE;
 	config->stop_bits         = 1;
 }
@@ -60,11 +61,11 @@ config_set_defaults(config_t* config)
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
+	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits" };
 	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
 	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
 	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
-	static const char* const ascii_keys[] = { "mode", "seed", "baud" };
+	static const char* const ascii_keys[] = { "mode", "seed", "baud", "data-bits", "parity", "stop-bits" };
 	const char* const* allowed = NULL;
 	u32		allowed_count     = 0;
 	s7_pointer	options           = s7_cdr(form);
@@ -73,6 +74,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	s64		idle              = config->idle_timeout_ms;
 	s64		frame             = config->frame_gap_ms;
 	s64		baud              = config->baud;
+	s64		data_bits         = config->data_bits;
 	s64		stop_bits         = config->stop_bits;
 	u32		parity            = config->parity;
 	u32		mode              = config->mode;
@@ -111,6 +113,13 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 			allowed_count = ARRAY_COUNT(ascii_keys);
 			break;
 	}
+	/* ASCII never executes broadcasts; call that out instead of relying on the
+	 * generic mode check below. */
+	if ((mode == SERVER_MODE_ASCII_PTY || mode == SERVER_MODE_ASCII_DEVICE) &&
+	    !form_is_absent(ctx, form_find(ctx, options, "broadcast-execute")))
+		return form_fail(ctx, "server: broadcast-execute is not valid in %s mode (ASCII never executes unit-0 broadcasts)",
+				 MODE_NAMES[mode]);
+
 	/* Check presence, not value: even a default-valued option is rejected when
 	 * the mode does not support it. (path) has its own required/forbidden checks below. */
 	for (u32 i = 0; i < ARRAY_COUNT(keys); i++)
@@ -154,6 +163,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (!form_opt_bool(ctx, options, "broadcast-execute", &broadcast_execute))
 		return false;
 
+	if (!form_opt_int(ctx, options, "data-bits", 7, 8, &data_bits))
+		return false;
+
 	if (!form_opt_choice(ctx, options, "parity", PARITY_NAMES, ARRAY_COUNT(PARITY_NAMES), &parity))
 		return false;
 
@@ -194,6 +206,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	config->baud              = (u32)baud;
 	config->strict_t15        = strict_t15;
 	config->broadcast_execute = broadcast_execute;
+	config->data_bits         = (u32)data_bits;
 	config->parity            = (parity_t)parity;
 	config->stop_bits         = (u32)stop_bits;
 	return true;

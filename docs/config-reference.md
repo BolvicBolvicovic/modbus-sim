@@ -53,9 +53,10 @@ that is present but not allowed is rejected at load time, even if its value woul
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
 | `(frame-gap-ms N)` | Explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) | `rtu-pty`, `rtu-device`, `rtu-tcp` |
 | `(strict-t15 on\|off)` | Opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Never applied to RTU-over-TCP | `off` | `rtu-pty`, `rtu-device` |
-| `(broadcast-execute on\|off)` | When on, unit-0 (broadcast) requests execute on every configured device and produce no response. Never applies to MBAP/TCP or ASCII | `off` | `rtu-pty`, `rtu-device`, `rtu-tcp` |
-| `(parity none\|even\|odd\|mark\|space)` | tty parity. `mark` and `space` require `CMSPAR` support | `none` | `rtu-pty`, `rtu-device` |
-| `(stop-bits 1\|2)` | Number of tty stop bits | `1` | `rtu-pty`, `rtu-device` |
+| `(broadcast-execute on\|off)` | When on, unit-0 (broadcast) requests execute on every configured device and produce no response. Never applies to MBAP/TCP or ASCII; supplying it in an ASCII mode is a load-time error | `off` | `rtu-pty`, `rtu-device`, `rtu-tcp` |
+| `(data-bits 7\|8)` | Number of tty data bits. ASCII defaults to 8; `(data-bits 7)` with `(parity even)` selects traditional 7E1 Modbus ASCII | `8` | `ascii-pty`, `ascii-device` |
+| `(parity none\|even\|odd\|mark\|space)` | tty parity. `mark` and `space` require `CMSPAR` support | `none` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
+| `(stop-bits 1\|2)` | Number of tty stop bits | `1` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
 | `(path "PATH")` | Byte-stream device path; opened with `O_NONBLOCK` | none | `rtu-device`, `ascii-device` (required there) |
 
 Examples (each is a complete `(server ...)` block; a config file may contain only one):
@@ -78,6 +79,7 @@ Examples (each is a complete `(server ...)` block; a config file may contain onl
 ```scheme
 (server (mode ascii-pty) (baud 9600))
 (server (mode ascii-device) (path "/dev/ttyUSB1"))
+(server (mode ascii-pty) (data-bits 7) (parity even) (stop-bits 1)) ; 7E1 line
 ```
 
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
@@ -86,8 +88,11 @@ existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames 
 RTU timing options are not allowed in ASCII modes. A second `:` before the terminator resynchronizes
 to that new frame, and a partial frame with no further bytes for 1 s is dropped. Discarded or
 undecodable ASCII frames increment the FC 08 bus communication error counter (`0x000C`) on every
-device. `(baud N)` in ASCII only changes the line speed. ASCII always uses 8N1, so parity and stop
-bits are fixed and there is no ASCII-over-TCP mode.
+device. `(baud N)` in ASCII only changes the line speed. ASCII tty line settings default to 8N1;
+select 7E1 explicitly with `(data-bits 7) (parity even) (stop-bits 1)` when talking to a master that
+uses the serial-line default. These settings never change ASCII framing, and there is no
+ASCII-over-TCP mode. Unit-0 broadcast frames are silently ignored in ASCII modes;
+`broadcast-execute` is rejected there at load time, including by `--check`.
 
 ## `(device ...)`
 
@@ -399,6 +404,7 @@ is wrong and show the entry. Common ones:
 | `ramp range is too large for the step` | The ramp would need 2^63 steps or more; increase `step` or narrow `from`/`to` |
 | `the file has more than one (server ...)` | Keep a single `(server ...)` block |
 | `server: parity is not valid in tcp mode` | The entry is not allowed by the selected mode; move it to a mode that supports it or remove it |
+| `server: broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)` | ASCII never executes broadcasts; remove the entry |
 | `server: (path ...) is required in rtu-device and ascii-device modes` | Add `(path "PATH")` |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
 | `device has more than one (fault ...)` | Only one fault per device |

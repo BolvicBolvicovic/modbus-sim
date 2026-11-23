@@ -662,8 +662,7 @@ TEST(DiagnosticsRestartCommunicationsClearsStateAndEchoes)
 	u8		req[5];
 	u8		resp[MODBUS_MAX_PDU];
 
-	dev->ascii_delimiter        = 'X';
-	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
 	dev->diag_comm_error_count  = 7;
 	dev->diag_exception_count   = 8;
 	dev->diag_no_response_count = 9;
@@ -681,9 +680,8 @@ TEST(DiagnosticsRestartCommunicationsClearsStateAndEchoes)
 	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
 	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
 	ASSERT_EQ(dev->com_event_count == 0);
-	ASSERT_EQ(dev->ascii_delimiter == 'X');
 
-	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
 	dev->diag_comm_error_count  = 7;
 	dev->diag_exception_count   = 8;
 	dev->diag_no_response_count = 9;
@@ -911,43 +909,36 @@ TEST(DiagnosticsRestartCommunicationsRejectsInvalidShapeAndValue)
 	arena_release(arena);
 }
 
-TEST(DiagnosticsDiagnosticRegisterAndAsciiDelimiter)
+TEST(DiagnosticsChangeAsciiDelimiterIsIllegalDataValue)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[6];
-	u8		resp[MODBUS_MAX_PDU];
+	static const u16	values[] = { 0x0000, 0x0023, 0x2300, 0x2323 };
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	u8			req[6];
+	u8			resp[MODBUS_MAX_PDU];
 
-	ASSERT_EQ(dev->ascii_delimiter == '\n');
 	diagnostic_request(req, DIAG_SUB_READ_DIAGNOSTIC_REGISTER, 0x0000);
 	ASSERT_EQ(run(dev, req, 5, resp) == 5);
 	ASSERT_EQ(get_be16(resp + 1) == DIAG_SUB_READ_DIAGNOSTIC_REGISTER);
 	ASSERT_EQ(get_be16(resp + 3) == 0);
 
-	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x2300);
-	ASSERT_EQ(run(dev, req, 5, resp) == 5);
-	ASSERT_EQ(memcmp(resp, req, 5) == 0);
-	ASSERT_EQ(dev->ascii_delimiter == '#');
-	ASSERT_EQ(dev->diagnostic_register == DIAG_REG_ASCII_DELIMITER_CHANGED);
-
-	diagnostic_request(req, DIAG_SUB_READ_DIAGNOSTIC_REGISTER, 0x0000);
-	ASSERT_EQ(run(dev, req, 5, resp) == 5);
-	ASSERT_EQ(get_be16(resp + 3) == DIAG_REG_ASCII_DELIMITER_CHANGED);
-
-	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x0023);
-	ASSERT_EQ(run(dev, req, 5, resp) == 2);
-	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
-	ASSERT_EQ(dev->ascii_delimiter == '#');
-	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x2323);
-	ASSERT_EQ(run(dev, req, 5, resp) == 2);
-	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
-	ASSERT_EQ(dev->ascii_delimiter == '#');
+	for (u32 i = 0; i < ARRAY_COUNT(values); i++)
+	{
+		diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, values[i]);
+		ASSERT_EQ(run(dev, req, 5, resp) == 2);
+		ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+		ASSERT_EQ(dev->diagnostic_register == 0);
+	}
 
 	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x2300);
 	ASSERT_EQ(run(dev, req, 3, resp) == 2);
 	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
 	ASSERT_EQ(run(dev, req, 6, resp) == 2);
 	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+
+	diagnostic_request(req, DIAG_SUB_READ_DIAGNOSTIC_REGISTER, 0x0000);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
 	arena_release(arena);
 }
 
@@ -959,7 +950,7 @@ TEST(DiagnosticsClearOverrunCounterAndFlag)
 	u8		resp[MODBUS_MAX_PDU];
 
 	dev->diag_overrun_count  = 5;
-	dev->diagnostic_register = DIAG_REG_CHARACTER_OVERRUN | DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diagnostic_register = DIAG_REG_CHARACTER_OVERRUN;
 	diagnostic_request(req, DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT, 0x0000);
 	ASSERT_EQ(run(dev, req, 5, resp) == 5);
 	ASSERT_EQ(get_be16(resp + 3) == 5);
@@ -968,7 +959,7 @@ TEST(DiagnosticsClearOverrunCounterAndFlag)
 	ASSERT_EQ(run(dev, req, 5, resp) == 5);
 	ASSERT_EQ(memcmp(resp, req, 5) == 0);
 	ASSERT_EQ(dev->diag_overrun_count == 0);
-	ASSERT_EQ(dev->diagnostic_register == DIAG_REG_ASCII_DELIMITER_CHANGED);
+	ASSERT_EQ(dev->diagnostic_register == 0);
 
 	diagnostic_request(req, DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT, 0x0000);
 	ASSERT_EQ(run(dev, req, 5, resp) == 5);
@@ -988,8 +979,7 @@ TEST(DiagnosticsClearCountersResetsAllDiagnostics)
 	u8		resp[MODBUS_MAX_PDU];
 
 	dev->listen_only            = false;
-	dev->ascii_delimiter        = 'X';
-	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
 	dev->diag_comm_error_count  = 7;
 	dev->diag_exception_count   = 8;
 	dev->diag_no_response_count = 9;
@@ -1008,7 +998,6 @@ TEST(DiagnosticsClearCountersResetsAllDiagnostics)
 	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
 	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
 	ASSERT_EQ(dev->com_event_count == 12);
-	ASSERT_EQ(dev->ascii_delimiter == 'X');
 	arena_release(arena);
 }
 

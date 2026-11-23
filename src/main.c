@@ -55,8 +55,9 @@ print_usage(void)
 	     "Exit status: 0 success, 1 config-load/runtime error, 2 invalid CLI arguments.\n"
 	     "\n"
 	     "RTU byte streams use a PTY or an existing serial-like device selected by\n"
-	     "(server (mode rtu-pty|rtu-device) ...). ASCII uses 8N1 over a byte stream\n"
-	     "(PTY or device) selected by (mode ascii-pty|ascii-device); it has no TCP form.\n"
+	     "(server (mode rtu-pty|rtu-device) ...). ASCII uses a byte stream (PTY or\n"
+	     "device) selected by (mode ascii-pty|ascii-device); it has no TCP form.\n"
+	     "ASCII defaults to 8N1; (data-bits 7) (parity even) (stop-bits 1) selects 7E1.\n"
 	     "ASCII frames are ':' + hex + LRC + CRLF, delimited by CRLF, not by timing.\n"
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
@@ -200,7 +201,7 @@ run_rtu(config_t* config)
 	int	fd;
 
 	fd = open_serial_fd(config->mode == SERVER_MODE_RTU_PTY, "RTU", config->path,
-			    config->baud, config->parity, config->stop_bits,
+			    config->baud, 8, config->parity, config->stop_bits,
 			    &slave_fd, name, sizeof(name));
 	if (fd < 0)
 		return 1;
@@ -245,7 +246,7 @@ run_ascii(config_t* config)
 
 	/* Baud sets only the serial line speed here; it never affects ASCII framing. */
 	fd = open_serial_fd(config->mode == SERVER_MODE_ASCII_PTY, "ASCII", config->path,
-			    config->baud, PARITY_NONE, 1,
+			    config->baud, config->data_bits, config->parity, config->stop_bits,
 			    &slave_fd, name, sizeof(name));
 	if (fd < 0)
 		return 1;

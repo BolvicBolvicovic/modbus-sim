@@ -54,7 +54,6 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->diag_nak_count         = 0;
 	dev->diag_busy_count        = 0;
 	dev->diag_overrun_count     = 0;
-	dev->ascii_delimiter        = '\n';
 	dev->listen_only            = false;
 	dev->start_ms               = start_ms;
 	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "modbus-sim");

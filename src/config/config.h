@@ -46,8 +46,9 @@ struct config_t
 	u32		baud;			/* RTU serial baud rate; 0 = unknown */
 	bool		strict_t15;		/* RTU byte streams: opt-in t1.5 discard heuristic */
 	bool		broadcast_execute;	/* RTU transports: execute unit-0 requests on all devices */
-	parity_t	parity;			/* RTU byte streams: serial parity */
-	u32		stop_bits;		/* RTU byte streams: 1 or 2 */
+	u32		data_bits;		/* ASCII byte streams: 7 or 8 */
+	parity_t	parity;			/* RTU and ASCII byte streams: serial parity */
+	u32		stop_bits;		/* RTU and ASCII byte streams: 1 or 2 */
 	u32		device_count;
 	device_t*	devices[CONFIG_MAX_DEVICES];
 };

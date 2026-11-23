@@ -92,7 +92,7 @@ default here is **1502**.
 | `rtu-pty` | Modbus RTU over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `frame-gap-ms`, `strict-t15`, `broadcast-execute`, `parity`, `stop-bits` |
 | `rtu-device` | Modbus RTU over an existing byte-stream device | `path`, plus the `rtu-pty` entries |
 | `rtu-tcp` | Modbus RTU frames over a TCP listen socket | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
-| `ascii-pty` | Modbus ASCII over a new Linux PTY (slave path printed at startup) | `seed`, `baud` |
+| `ascii-pty` | Modbus ASCII over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `data-bits`, `parity`, `stop-bits` |
 | `ascii-device` | Modbus ASCII over an existing byte-stream device | `path`, plus the `ascii-pty` entries |
 
 `mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
@@ -120,19 +120,22 @@ Any other entry is rejected at load time, even when its value is the default. Se
 ; Modbus ASCII: choose a PTY or an existing device, never both in one config
 (server (mode ascii-pty) (baud 9600))
 (server (mode ascii-device) (path "/dev/ttyUSB1"))
+(server (mode ascii-pty) (data-bits 7) (parity even) (stop-bits 1)) ; 7E1 line
 ```
 
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC and unknown unit produce no response. Broadcast
 (unit 0) requests are ignored by default. `broadcast-execute` (allowed in `rtu-pty`, `rtu-device`
-and `rtu-tcp`) makes them execute on every configured device and never send a response. Unit ids 0
-and 248-255 are rejected in all serial modes because 0 is broadcast and 248-255 are reserved.
-MBAP/TCP unit 0 is only a unit id and never broadcast.
+and `rtu-tcp`) makes them execute on every configured device and never send a response. ASCII modes
+never execute broadcasts and reject `broadcast-execute` at load time. Unit ids 0 and 248-255 are
+rejected in all serial modes because 0 is broadcast and 248-255 are reserved. MBAP/TCP unit 0 is
+only a unit id and never broadcast.
 
 Device modes open the path with `O_NONBLOCK` so startup does not hang on FIFOs or similar paths.
 When the fd is a tty, RTU modes configure raw mode with the selected parity and stop bits (default
 8N1) and preserve the existing baud rate unless `(baud N)` is given. Use
 `(parity none|even|odd|mark|space)` and `(stop-bits 1|2)` to change the tty line format; `mark` and
-`space` need `CMSPAR` support. ASCII ttys always use raw 8N1.
+`space` need `CMSPAR` support. ASCII ttys also default to raw 8N1; select the traditional Modbus
+ASCII 7E1 line with `(data-bits 7) (parity even) (stop-bits 1)`.
 
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or the tty's existing baud).
 `(frame-gap-ms N)` is an explicit inter-frame silence override and takes precedence when set. For
@@ -146,7 +149,8 @@ answered immediately, including several frames in one read. A missing colon, inv
 count, bad LRC, or wrong terminator produces no response and never reaches the PDU handlers. Like
 RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. ASCII is **serial
 byte-stream only**: there is no ASCII-over-TCP mode, and this is not Modbus TCP (MBAP). `(baud N)`
-may set the line speed but never changes ASCII framing or timing.
+may set the line speed but never changes ASCII framing or timing. FC 08 subfunction `0x0003`
+(Change ASCII Delimiter) is rejected with exception 03; `CR LF` framing is fixed.
 
 ## Documentation
 

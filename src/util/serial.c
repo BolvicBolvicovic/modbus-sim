@@ -11,10 +11,11 @@
 #endif
 
 bool
-serial_line_flags(parity_t parity, u32 stop_bits, tcflag_t* clear, tcflag_t* set)
+serial_line_flags(u32 data_bits, parity_t parity, u32 stop_bits,
+		  tcflag_t* clear, tcflag_t* set)
 {
 	*clear = CSIZE | PARENB | PARODD | CSTOPB;
-	*set   = CS8;
+	*set   = data_bits == 7 ? CS7 : CS8;
 #ifdef CMSPAR
 	*clear |= CMSPAR;
 #else
@@ -74,11 +75,11 @@ serial_tty_baud(int fd)
 	return baud_from_speed(cfgetospeed(&tio));
 }
 
-/* Applies raw mode with the selected parity and stop bits. When baud is 0,
- * preserves the existing baud rate so a configured serial line keeps its
- * speed. Non-tty fds are skipped. */
+/* Applies raw mode with the selected line format. When baud is 0, preserves
+ * the existing baud rate so a configured serial line keeps its speed.
+ * Non-tty fds are skipped. */
 static bool
-set_tty_raw(int fd, u32 baud, parity_t parity, u32 stop_bits)
+set_tty_raw(int fd, u32 baud, u32 data_bits, parity_t parity, u32 stop_bits)
 {
 	struct termios	tio;
 	speed_t		ispeed;
@@ -89,7 +90,7 @@ set_tty_raw(int fd, u32 baud, parity_t parity, u32 stop_bits)
 
 	if (!isatty(fd))
 		return true;
-	if (!serial_line_flags(parity, stop_bits, &clear, &set))
+	if (!serial_line_flags(data_bits, parity, stop_bits, &clear, &set))
 	{
 		errno = EOPNOTSUPP;
 		return false;
@@ -143,8 +144,8 @@ set_tty_raw(int fd, u32 baud, parity_t parity, u32 stop_bits)
 
 int
 open_serial_fd(bool pty, const char* label, const char* path, u32 baud,
-	       parity_t parity, u32 stop_bits, int* slave_fd,
-	       char* name, size_t name_size)
+	       u32 data_bits, parity_t parity, u32 stop_bits,
+	       int* slave_fd, char* name, size_t name_size)
 {
 #if defined(__linux__)
 	char	pty_name[128];
@@ -162,7 +163,7 @@ open_serial_fd(bool pty, const char* label, const char* path, u32 baud,
 			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
 			return -1;
 		}
-		if (!set_tty_raw(slave, baud, parity, stop_bits))
+		if (!set_tty_raw(slave, baud, data_bits, parity, stop_bits))
 		{
 			fprintf(stderr, "cannot configure %s PTY slave: %s\n", label, strerror(errno));
 			close(slave);
@@ -189,7 +190,7 @@ open_serial_fd(bool pty, const char* label, const char* path, u32 baud,
 		}
 	}
 
-	if (!set_tty_raw(fd, baud, parity, stop_bits))
+	if (!set_tty_raw(fd, baud, data_bits, parity, stop_bits))
 	{
 		fprintf(stderr, "cannot configure %s device '%s': %s\n",
 			label, pty ? "pty" : path, strerror(errno));

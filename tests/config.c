@@ -123,6 +123,7 @@ TEST(ConfigDefaults)
 	ASSERT_EQ(config.baud == 0);
 	ASSERT_EQ(config.strict_t15 == false);
 	ASSERT_EQ(config.broadcast_execute == false);
+	ASSERT_EQ(config.data_bits == 8);
 	ASSERT_EQ(config.parity == PARITY_NONE);
 	ASSERT_EQ(config.stop_bits == 1);
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
@@ -786,6 +787,36 @@ TEST(ConfigBroadcastExecuteRejectsInvalidValues)
 	EXPECT_ERROR("(server (mode rtu-tcp) (broadcast-execute 2)) (device (holding 0))", "expected on or off");
 }
 
+TEST(ConfigDataBitsAreParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (data-bits 7)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.data_bits == 7);
+
+	ASSERT_SUCCESS(load_text("(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits 8))"
+				 " (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.data_bits == 8);
+}
+
+TEST(ConfigDataBitsRejectsInvalidValuesAndModes)
+{
+	EXPECT_ERROR("(server (mode ascii-pty) (data-bits 0)) (device (holding 0))",
+		     "between 7 and 8");
+	EXPECT_ERROR("(server (mode ascii-pty) (data-bits 9)) (device (holding 0))",
+		     "between 7 and 8");
+	EXPECT_ERROR("(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits nope))"
+		     " (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-pty) (data-bits 7)) (device (holding 0))",
+		     "data-bits is not valid in rtu-pty mode");
+	EXPECT_ERROR("(server (mode tcp) (data-bits 8)) (device (holding 0))",
+		     "data-bits is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode rtu-tcp) (data-bits 7)) (device (holding 0))",
+		     "data-bits is not valid in rtu-tcp mode");
+}
+
 TEST(ConfigParityIsParsed)
 {
 	config_t		config = { 0 };
@@ -1022,6 +1053,8 @@ TEST(ConfigTcpModeRejectsSerialOptions)
 		     "parity is not valid in tcp mode");
 	EXPECT_ERROR("(server (mode tcp) (stop-bits 1)) (device (holding 0))",
 		     "stop-bits is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode tcp) (data-bits 7)) (device (holding 0))",
+		     "data-bits is not valid in tcp mode");
 }
 
 TEST(ConfigSerialModesRejectTcpListenOptions)
@@ -1046,20 +1079,41 @@ TEST(ConfigSerialModesRejectTcpListenOptions)
 	}
 }
 
-TEST(ConfigAsciiModeRejectsRtuOptions)
+TEST(ConfigAsciiModeRejectsRtuOptionsAndBroadcast)
 {
 	EXPECT_ERROR("(server (mode ascii-pty) (broadcast-execute on)) (device (holding 0))",
-		     "broadcast-execute is not valid in ascii-pty mode");
+		     "broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)");
 	EXPECT_ERROR("(server (mode ascii-device) (path \"/dev/ttyS0\") (broadcast-execute off))"
-		     " (device (holding 0))", "broadcast-execute is not valid in ascii-device mode");
+		     " (device (holding 0))",
+		     "broadcast-execute is not valid in ascii-device mode (ASCII never executes unit-0 broadcasts)");
 	EXPECT_ERROR("(server (mode ascii-pty) (frame-gap-ms 20)) (device (holding 0))",
 		     "frame-gap-ms is not valid in ascii-pty mode");
 	EXPECT_ERROR("(server (mode ascii-pty) (strict-t15 on)) (device (holding 0))",
 		     "strict-t15 is not valid in ascii-pty mode");
-	EXPECT_ERROR("(server (mode ascii-pty) (parity none)) (device (holding 0))",
-		     "parity is not valid in ascii-pty mode");
-	EXPECT_ERROR("(server (mode ascii-pty) (stop-bits 1)) (device (holding 0))",
-		     "stop-bits is not valid in ascii-pty mode");
+}
+
+TEST(ConfigAsciiModeAcceptsLineSettings)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode ascii-pty) (seed 3) (baud 115200)"
+		" (data-bits 7) (parity even) (stop-bits 1)) (device (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.baud == 115200);
+	ASSERT_EQ(config.seed == 3);
+	ASSERT_EQ(config.data_bits == 7);
+	ASSERT_EQ(config.parity == PARITY_EVEN);
+	ASSERT_EQ(config.stop_bits == 1);
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits 8)"
+		" (parity odd) (stop-bits 2)) (device (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.data_bits == 8);
+	ASSERT_EQ(config.parity == PARITY_ODD);
+	ASSERT_EQ(config.stop_bits == 2);
 }
 
 TEST(ConfigAsciiModeAcceptsBaudOnly)
