@@ -2,6 +2,7 @@
 #define RTU_TCP_SERVER_H
 
 #include "vlib/c_types.h"
+#include <stdbool.h>
 
 typedef struct device_t device_t;
 
@@ -10,7 +11,8 @@ typedef struct device_t device_t;
  * RTU frames (addr+PDU+CRC) are transported over TCP connections.
  * frame_gap_ms/baud follow the same RTU timing rules as the byte-stream RTU server.
  * strict_t15 is intentionally not supported for RTU-over-TCP: TCP read() boundaries
- * do not reflect UART character timing.
+ * do not reflect UART character timing. broadcast_execute runs unit-0 requests on
+ * every device without a response.
  * */
 typedef struct rtu_tcp_server_options_t rtu_tcp_server_options_t;
 struct rtu_tcp_server_options_t
@@ -21,6 +23,7 @@ struct rtu_tcp_server_options_t
 	u32		idle_timeout_ms;
 	u32		frame_gap_ms;
 	u32		baud;
+	bool		broadcast_execute; /* opt-in: execute unit-0 requests on all devices */
 	device_t**	devices;
 	u32		device_count;
 };

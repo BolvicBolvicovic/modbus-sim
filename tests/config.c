@@ -99,6 +99,8 @@ TEST(ConfigDefaults)
 	ASSERT_EQ(config.idle_timeout_ms == CONFIG_DEFAULT_IDLE_TIMEOUT_MS);
 	ASSERT_EQ(config.frame_gap_ms == 0);
 	ASSERT_EQ(config.baud == 0);
+	ASSERT_EQ(config.strict_t15 == false);
+	ASSERT_EQ(config.broadcast_execute == false);
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 }
 
@@ -442,6 +444,34 @@ TEST(ConfigBaudRejectsInvalidValues)
 	EXPECT_ERROR("(server (baud 4000001)) (device (holding 0))", "between 1 and 4000000");
 	EXPECT_ERROR("(server (baud nope)) (device (holding 0))", "whole number");
 	EXPECT_ERROR("(server (baud 12345)) (device (holding 0))", "standard termios rate");
+}
+
+TEST(ConfigBroadcastExecuteIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (broadcast-execute on)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.broadcast_execute == true);
+
+	ASSERT_SUCCESS(load_text("(server (broadcast-execute off)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.broadcast_execute == false);
+
+	ASSERT_SUCCESS(load_text("(server (broadcast-execute yes)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.broadcast_execute == true);
+
+	ASSERT_SUCCESS(load_text("(server (broadcast-execute #f)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.broadcast_execute == false);
+}
+
+TEST(ConfigBroadcastExecuteRejectsInvalidValues)
+{
+	EXPECT_ERROR("(server (broadcast-execute maybe)) (device (holding 0))", "expected on or off");
+	EXPECT_ERROR("(server (broadcast-execute 2)) (device (holding 0))", "expected on or off");
 }
 
 TEST(ConfigFloat32StaticAcceptsNonFinite)

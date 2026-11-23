@@ -45,8 +45,10 @@ No response is produced for:
 
 - **Bad CRC**: frames whose CRC does not match are silently ignored.
 - **Unknown unit**: a valid frame addressed to a unit id with no configured device is ignored.
-- **Broadcast (unit 0)**: intentionally ignored; broadcast semantics are not modeled in this
-  simulator.
+- **Broadcast (unit 0)**: ignored by default. With `--broadcast-execute` or config
+  `(server (broadcast-execute on))`, a broadcast request is executed on every configured device
+  (normal request handling: tick, counters, writes) and no response frame is sent. Fault delays/drops
+  are not applied because there is no response to send.
 
 ### Modbus RTU over TCP
 
@@ -56,7 +58,9 @@ MBAP framing, RTU mode still uses byte-stream framing, and `--rtu-tcp` uses RTU 
 (`[addr][PDU][CRC lo hi]`) carried over TCP connections.
 
 The same PDU handlers, device model, unit-id routing, fault injection, and RTU CRC validation are
-used. Bad CRC, unknown unit, and broadcast (unit 0) produce no response, matching RTU behavior.
+used. Bad CRC and unknown unit produce no response, matching RTU behavior. Broadcast (unit 0) is
+ignored by default; `--broadcast-execute` or config `(server (broadcast-execute on))` executes it on
+every configured device with no response, exactly as for RTU byte streams.
 `--port` and `--bind` apply to RTU-over-TCP. `--baud` and `--frame-gap-ms` apply for RTU inter-frame
 timing: explicit `frame-gap-ms` takes precedence; otherwise baud-derived t3.5 is used when baud is
 known; otherwise the 20 ms default fallback is used. t1.5 discard is never applied to RTU-over-TCP,
@@ -169,8 +173,10 @@ using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set
 In RTU mode, unit ids must be in the range 1-247. Address 0 is Modbus broadcast and 248-255 are
 reserved by the Modbus serial specification; a device configured with one of these ids cannot be
 addressed by a normal RTU request. `modbus-sim` rejects these ids when starting in RTU mode and
-when `--check` is combined with RTU flags. RTU broadcast requests (address 0) are received but not
-executed and produce no response.
+when `--check` is combined with RTU flags. RTU broadcast requests (address 0) are received but are
+ignored unless `--broadcast-execute` or `(broadcast-execute on)` is set; when enabled they execute on
+all devices and still produce no response. MBAP/TCP unit 0 is unrelated: it is only a unit id and is
+never broadcast, regardless of this option.
 
 ## Timing
 

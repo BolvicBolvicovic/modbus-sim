@@ -100,7 +100,8 @@ rtu_child_start_opts(rtu_child_t* child, device_t** devices, u32 device_count, u
 }
 
 static bool
-rtu_child_start_opts_strict(rtu_child_t* child, device_t** devices, u32 device_count, u32 frame_gap_ms, u32 baud, bool strict_t15)
+rtu_child_start_opts_flags(rtu_child_t* child, device_t** devices, u32 device_count, u32 frame_gap_ms,
+			   u32 baud, bool strict_t15, bool broadcast_execute)
 {
 	int fds[2] = { -1, -1 };
 
@@ -124,6 +125,7 @@ rtu_child_start_opts_strict(rtu_child_t* child, device_t** devices, u32 device_c
 			.frame_gap_ms = frame_gap_ms,
 			.baud         = baud,
 			.strict_t15   = strict_t15,
+			.broadcast_execute = broadcast_execute,
 			.devices      = devices,
 			.device_count = device_count,
 		};
@@ -427,6 +429,40 @@ TEST(RtuServerBroadcastNoResponse)
 		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 500);
 		ok = ok && addr == 1 && get_be16(resp + 2) == 0;
 	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuServerBroadcastExecuteWritesAllDevicesWithoutResponse)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev1  = make_device(arena, 1, SPACE_HOLDING, 0, 0);
+	device_t*	dev2  = make_device(arena, 2, SPACE_HOLDING, 0, 0);
+	rtu_child_t	child = { 0 };
+	u8		write_req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A };
+	u8		read_req[]  = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len  = 0;
+	bool		ok   = false;
+
+	ASSERT_EQ(dev1 != NULL && dev2 != NULL);
+	{
+		device_t* devices[] = { dev1, dev2 };
+		ASSERT_EQ(rtu_child_start_opts_flags(&child, devices, 2, 5, 0, false, true));
+	}
+
+	ok = send_rtu_req(child.fd, 0, write_req, sizeof(write_req));
+	ok = ok && recv_none_fd(child.fd, 200);
+	for (u8 unit = 1; unit <= 2 && ok; unit++)
+	{
+		ok = send_rtu_req(child.fd, unit, read_req, sizeof(read_req));
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 500);
+		ok = ok && addr == unit && get_be16(resp + 2) == 0x002A;
+	}
+	ok = ok && recv_none_fd(child.fd, 80);
 
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
@@ -1081,7 +1117,7 @@ TEST(RtuServerBaudT15GapDiscardsPartialFrame)
 	ASSERT_EQ(dev != NULL);
 	{
 		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start_opts_strict(&child, devices, 1, 0, 1200, true));
+		ASSERT_EQ(rtu_child_start_opts_flags(&child, devices, 1, 0, 1200, true, false));
 	}
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));

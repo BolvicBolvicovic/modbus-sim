@@ -356,6 +356,24 @@ recv_rtu_resp_fd(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 }
 
 static bool
+recv_none_fd(int fd, u32 timeout_ms)
+{
+	struct pollfd pfd = { .fd = fd, .events = POLLIN };
+	int rc = poll(&pfd, 1, (int)timeout_ms);
+
+	if (rc <= 0)
+		return true;
+	if (pfd.revents & POLLIN)
+	{
+		u8	buf[16];
+		ssize_t	got = read(fd, buf, sizeof(buf));
+
+		return got <= 0;
+	}
+	return true;
+}
+
+static bool
 send_rtu_req_fd(int fd, u8 addr, const u8* pdu, u32 pdu_len)
 {
 	u8 frame[MODBUS_RTU_MAX_FRAME];
@@ -1097,6 +1115,66 @@ TEST(RtuCliCheckRtuTcpPrintsTimingSummary)
 	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path,
 					"baud 9600, t3.5 4011 us (frame-gap 5 ms)"));
 	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "config OK"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliBroadcastExecuteOverrideEnablesExecution)
+{
+	u8		write_req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A };
+	u8		read_req[]  = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len  = 0;
+	char*		extra[] = { "--broadcast-execute" };
+	bool		ok = false;
+
+	ASSERT_EQ(rtu_cli_start_pty_extra(
+		"(server (broadcast-execute off))\n"
+		"(device (unit-id 1) (holding 0 (static 0)))\n"
+		"(device (unit-id 2) (holding 0 (static 0)))\n", extra, 1));
+
+	ok = send_rtu_req_fd(g_rtu_cli.master_fd, 0, write_req, sizeof(write_req));
+	ok = ok && recv_none_fd(g_rtu_cli.master_fd, 200);
+	for (u8 unit = 1; unit <= 2 && ok; unit++)
+	{
+		ok = send_rtu_req_fd(g_rtu_cli.master_fd, unit, read_req, sizeof(read_req));
+		ok = ok && recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 1000);
+		ok = ok && addr == unit && get_be16(resp + 2) == 0x002A;
+	}
+
+	rtu_cli_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuCliRejectsBroadcastExecuteInTcpMode)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--broadcast-execute", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+	ASSERT_EQ(rtu_cli_stderr_contains("--broadcast-execute is only valid in RTU/RTU-over-TCP mode"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliCheckRtuTcpBroadcastExecutePrintsSummary)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-tcp",
+			 "--broadcast-execute", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args_capture_stdout(argv));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "RTU-over-TCP"));
+	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "broadcast-execute on"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
 }

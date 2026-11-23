@@ -44,6 +44,7 @@ rtu_server_init_ctx(rtu_server_t* server)
 		.frame_gap_ms = server->options.frame_gap_ms,
 		.baud = server->options.baud,
 		.strict_t15 = server->options.strict_t15,
+		.broadcast_execute = server->options.broadcast_execute,
 		.peer = NULL,
 	};
 }

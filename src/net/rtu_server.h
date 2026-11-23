@@ -15,6 +15,7 @@ typedef struct device_t device_t;
  * RTU_DEFAULT_FRAME_GAP_MS is used.
  * strict_t15 enables best-effort intra-frame t1.5 discard checks in baud-derived
  * auto mode; it is opt-in because read() boundaries do not reflect UART timing.
+ * broadcast_execute runs unit-0 requests on every device without a response.
  * */
 typedef struct rtu_server_options_t rtu_server_options_t;
 struct rtu_server_options_t
@@ -24,6 +25,7 @@ struct rtu_server_options_t
 	u32		frame_gap_ms;	/* explicit inter-frame silence override; 0 = auto */
 	u32		baud;		/* serial baud rate for RTU timing; 0 = unknown */
 	bool		strict_t15;	/* opt-in: discard partial frames on t1.5 gaps */
+	bool		broadcast_execute; /* opt-in: execute unit-0 requests on all devices */
 	device_t**	devices;
 	u32		device_count;
 };
