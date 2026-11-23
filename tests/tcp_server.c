@@ -177,7 +177,9 @@ recv_reply(client_t* client, u8 unit, u16 tid, u8* pdu, u32* pdu_len)
 		return false;
 
 	mbap_decode(raw, &header);
-	if (!mbap_is_valid(&header) || header.transaction != tid || header.unit != unit)
+	if (!mbap_is_valid(&header) ||
+	    header.transaction != tid ||
+	    header.unit != unit)
 		return false;
 
 	*pdu_len = header.length - 1;
@@ -241,7 +243,10 @@ wait_for_server_close(client_t* client, u32 timeout_ms)
 
 		if (got == 0)
 			return true;
-		if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+		if (got < 0 &&
+		    errno != EAGAIN &&
+		    errno != EWOULDBLOCK &&
+		    errno != EINTR)
 			return true;
 		usleep(10000);
 	}
@@ -303,7 +308,9 @@ server_stop(void)
 			}
 			usleep(10000);
 		}
-		if (!reaped && ok && waitpid(pid, &status, WNOHANG) != pid)
+		if (!reaped &&
+		    ok &&
+		    waitpid(pid, &status, WNOHANG) != pid)
 		{
 			kill(pid, SIGKILL);
 			reaped = waitpid(pid, &status, 0) == pid;
@@ -2352,7 +2359,8 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 		}
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 		if (exchange(&client, 1, req, 5, resp, &len) &&
-		    len == 4 && register_value(resp, len, 0) == 5)
+		    len == 4 &&
+		    register_value(resp, len, 0) == 5)
 			break;
 		if (i == 29)
 			ok = false;
@@ -2444,7 +2452,8 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 		}
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 		if (exchange(&extra, 1, req, 5, resp, &len) &&
-		    len == 4 && register_value(resp, len, 0) == 5)
+		    len == 4 &&
+		    register_value(resp, len, 0) == 5)
 			break;
 		if (i == 99)
 			ok = false;

@@ -1,5 +1,5 @@
 #include "net/rtu_framer.h"
-#include "modbus/pdu.h"
+#include "modbus/pdu.h" // IWYU pragma: keep
 #include "net/net_common.h"
 #include "util/log.h"
 #include <string.h>
@@ -242,7 +242,9 @@ rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_m
 {
 	u32 t35;
 
-	if (!framer->have_rx || framer->rx_len == 0 || framer->pending.active)
+	if (!framer->have_rx ||
+	    framer->rx_len == 0 ||
+	    framer->pending.active)
 		return;
 	if (ctx->frame_gap_ms > 0 || ctx->baud == 0)
 		return;
@@ -258,16 +260,16 @@ rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_m
 			rtu_framer_on_gap_due(framer, ctx, now_ms, now_us);
 			return;
 		}
-		if (ctx->strict_t15)
+
+		if (ctx->strict_t15 == false) return;
+
+		u32 t15 = rtu_t15_us(ctx->baud);
+		if (t15 > 0 && elapsed >= t15)
 		{
-			u32 t15 = rtu_t15_us(ctx->baud);
-			if (t15 > 0 && elapsed >= t15)
-			{
-				framer->rx_len = 0;
-				framer->have_rx = false;
-				framer->gap_deferred = false;
-				framer->gap_deferred_len = 0;
-			}
+			framer->rx_len = 0;
+			framer->have_rx = false;
+			framer->gap_deferred = false;
+			framer->gap_deferred_len = 0;
 		}
 	}
 }

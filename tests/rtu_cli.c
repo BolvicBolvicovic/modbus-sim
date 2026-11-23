@@ -91,7 +91,9 @@ rtu_cli_stop(void)
 			}
 			usleep(10000);
 		}
-		if (!reaped && ok && waitpid(pid, &status, WNOHANG) != pid)
+		if (!reaped &&
+		    ok &&
+		    waitpid(pid, &status, WNOHANG) != pid)
 		{
 			kill(pid, SIGKILL);
 			reaped = waitpid(pid, &status, 0) == pid;
@@ -228,7 +230,9 @@ rtu_cli_start_with_args(char* const argv[], bool capture_stderr)
 {
 	rtu_cli_t* fx = &g_rtu_cli;
 
-	if (capture_stderr && !rtu_cli_verbose() && !rtu_cli_capture_stderr())
+	if (capture_stderr &&
+	    !rtu_cli_verbose() &&
+	    !rtu_cli_capture_stderr())
 		return false;
 
 	fx->pid = fork();
@@ -238,7 +242,9 @@ rtu_cli_start_with_args(char* const argv[], bool capture_stderr)
 			_exit(127);
 		if (!freopen("/dev/null", "w", stdout))
 			_exit(127);
-		if (capture_stderr && fx->stderr_path[0] && !rtu_cli_verbose())
+		if (capture_stderr &&
+		    fx->stderr_path[0] &&
+		    !rtu_cli_verbose())
 		{
 			if (!freopen(fx->stderr_path, "w", stderr))
 				_exit(127);

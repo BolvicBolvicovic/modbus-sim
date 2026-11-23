@@ -91,8 +91,13 @@ parse_u32_arg(const char* text, u32 min, u32 max, const char* name, u32* out)
 
 	errno = 0;
 	value = strtoul(text, &end, 10);
-	if (errno == ERANGE || end == text || *end != '\0' ||
-	    text[0] < '0' || text[0] > '9' || value < min || value > max)
+	if (errno == ERANGE ||
+	    end == text ||
+	    *end != '\0' ||
+	    text[0] < '0' ||
+	    text[0] > '9' ||
+	    value < min ||
+	    value > max)
 	{
 		fprintf(stderr, "%s must be a whole number between %u and %u\n", name, min, max);
 		return false;
@@ -200,17 +205,26 @@ parse_args(int argc, char** argv, cli_t* cli)
 		fprintf(stderr, "--bind is only valid in TCP/RTU-over-TCP mode\n");
 		return false;
 	}
-	if (cli->frame_gap_override != -1 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
+	if (cli->frame_gap_override != -1 &&
+	    !cli->rtu_pty &&
+	    !cli->rtu_device &&
+	    !cli->rtu_tcp)
 	{
 		fprintf(stderr, "--frame-gap-ms is only valid in RTU/RTU-over-TCP mode\n");
 		return false;
 	}
-	if (cli->baud_override != -1 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
+	if (cli->baud_override != -1 &&
+	    !cli->rtu_pty &&
+	    !cli->rtu_device &&
+	    !cli->rtu_tcp)
 	{
 		fprintf(stderr, "--baud is only valid in RTU/RTU-over-TCP mode\n");
 		return false;
 	}
-	if (cli->strict_t15 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
+	if (cli->strict_t15 &&
+	    !cli->rtu_pty &&
+	    !cli->rtu_device &&
+	    !cli->rtu_tcp)
 	{
 		fprintf(stderr, "--strict-t15 is only valid in RTU/RTU-over-TCP mode\n");
 		return false;

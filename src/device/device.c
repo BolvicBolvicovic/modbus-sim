@@ -91,7 +91,9 @@ validate_point(const device_t* dev, const point_t* point)
 	if (point->kind != POINT_RAMP)
 		return NULL;
 
-	if (!isfinite(point->ramp.from) || !isfinite(point->ramp.to) || !isfinite(point->ramp.step))
+	if (!isfinite(point->ramp.from) ||
+	    !isfinite(point->ramp.to) ||
+	    !isfinite(point->ramp.step))
 		return "ramp numbers must be finite";
 
 	if (point->ramp.step <= 0)

@@ -191,7 +191,10 @@ read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* res
 	write_qty  = get_be16(req + 7);
 	byte_count = req[9];
 
-	if (read_qty < 1 || read_qty > 0x007D || write_qty < 1 || write_qty > 0x0079)
+	if (read_qty < 1 ||
+	    read_qty > 0x007D ||
+	    write_qty < 1 ||
+	    write_qty > 0x0079)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	if (byte_count != write_qty * 2 || req_len != 10 + byte_count)
@@ -253,7 +256,9 @@ read_file_record_shape_ok(const u8* req, u32 req_len, u32* subreq_count, u32* re
 		return false;
 
 	byte_count = req[1];
-	if (byte_count < 0x07 || byte_count > 0xF5 || (byte_count % 7) != 0)
+	if (byte_count < 0x07 ||
+	    byte_count > 0xF5 ||
+	    (byte_count % 7) != 0)
 		return false;
 	if (req_len != 2 + byte_count)
 		return false;
@@ -267,8 +272,11 @@ read_file_record_shape_ok(const u8* req, u32 req_len, u32* subreq_count, u32* re
 		u32		rec_no  = get_be16(sr + 3);
 		u32		rec_len = get_be16(sr + 5);
 
-		if (sr[0] != 0x06 || file_no < 0x0001 || rec_no > 0x270F
-		    || rec_len < 1 || rec_no + rec_len - 1 > 0x270F)
+		if (sr[0] != 0x06 ||
+		    file_no < 0x0001 ||
+		    rec_no > 0x270F ||
+		    rec_len < 1 ||
+		    rec_no + rec_len - 1 > 0x270F)
 			return false;
 		*resp_data_len += 2 + rec_len * 2;
 	}
@@ -740,8 +748,9 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return modbus_exception(resp, fc, EXC_ILLEGAL_FUNCTION);
 
 	resp_len = handler(dev, req, req_len, resp);
-	if ((resp[0] & 0x80) == 0 && fc != FC_GET_COM_EVENT_COUNTER
-	    && fc != FC_GET_COM_EVENT_LOG)
+	if ((resp[0] & 0x80) == 0 &&
+	    fc != FC_GET_COM_EVENT_COUNTER &&
+	    fc != FC_GET_COM_EVENT_LOG)
 		dev->com_event_count = (u16)(dev->com_event_count + 1);
 	return resp_len;
 }

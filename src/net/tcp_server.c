@@ -246,7 +246,9 @@ conn_write(tcp_server_t* server, conn_t* conn)
 	ssize_t	sent = send(conn->fd, conn->tx + conn->tx_sent, conn->tx_len - conn->tx_sent,
 			    MSG_NOSIGNAL);
 
-	if (sent < 0 && errno != EAGAIN && errno != EINTR)
+	if (sent < 0 &&
+	    errno != EAGAIN &&
+	    errno != EINTR)
 	{
 		conn_close(conn);
 		return;

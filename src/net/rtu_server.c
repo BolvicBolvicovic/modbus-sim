@@ -79,7 +79,9 @@ read_available(rtu_server_t* server, u64 now_ms)
 	}
 	if (got < 0)
 	{
-		if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
+		if (errno == EAGAIN ||
+		    errno == EINTR ||
+		    errno == EWOULDBLOCK)
 			return true;
 		server->read_closed = true;
 		return false;
@@ -89,7 +91,10 @@ read_available(rtu_server_t* server, u64 now_ms)
 	f->last_rx_ms = now_ms;
 	f->last_rx_us = now_us;
 	f->have_rx = true;
-	if (server->options.frame_gap_ms == 0 && server->options.baud != 0 && f->gap_deferred && f->rx_len > f->gap_deferred_len)
+	if (server->options.frame_gap_ms == 0 &&
+	    server->options.baud != 0 &&
+	    f->gap_deferred &&
+	    f->rx_len > f->gap_deferred_len)
 	{
 		bool incomplete = rtu_framer_process(f, &server->ctx, now_ms);
 		f->have_rx = f->rx_len > 0;
@@ -116,7 +121,9 @@ write_pending(rtu_server_t* server)
 	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
-		if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
+		if (errno == EAGAIN ||
+		    errno == EINTR ||
+		    errno == EWOULDBLOCK)
 			return true;
 		return false;
 	}

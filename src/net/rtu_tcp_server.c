@@ -199,7 +199,10 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 			conn_close(conn);
 		return;
 	}
-	if (got < 0 && errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK)
+	if (got < 0 &&
+	    errno != EAGAIN &&
+	    errno != EINTR &&
+	    errno != EWOULDBLOCK)
 	{
 		conn_close(conn);
 		return;
@@ -211,7 +214,10 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	f->last_rx_us = now_us;
 	f->have_rx = true;
 	conn->last_activity_ms = now_ms;
-	if (server->options.frame_gap_ms == 0 && server->options.baud != 0 && f->gap_deferred && f->rx_len > f->gap_deferred_len)
+	if (server->options.frame_gap_ms == 0 &&
+	    server->options.baud != 0 &&
+	    f->gap_deferred &&
+	    f->rx_len > f->gap_deferred_len)
 	{
 		bool incomplete = rtu_framer_process(f, &ctx, now_ms);
 		f->have_rx = f->rx_len > 0;
@@ -236,7 +242,9 @@ conn_write(rtu_tcp_conn_t* conn)
 	sent = send(conn->fd, p->buf + p->sent, p->len - p->sent, MSG_NOSIGNAL);
 	if (sent < 0)
 	{
-		if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
+		if (errno == EAGAIN ||
+		    errno == EINTR ||
+		    errno == EWOULDBLOCK)
 			return;
 		conn_close(conn);
 		return;
