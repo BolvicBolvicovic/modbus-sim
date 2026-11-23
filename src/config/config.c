@@ -61,6 +61,12 @@ static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
 	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
+	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
+	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
+	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
+	static const char* const ascii_keys[] = { "mode", "seed", "baud" };
+	const char* const* allowed = NULL;
+	u32		allowed_count     = 0;
 	s7_pointer	options           = s7_cdr(form);
 	s64		port              = config->port;
 	s64		seed              = config->seed;
@@ -80,6 +86,50 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 
 	if (!form_opt_choice(ctx, options, "mode", MODE_NAMES, ARRAY_COUNT(MODE_NAMES), &mode))
 		return false;
+
+	if (!form_opt_string(ctx, options, "path", &path))
+		return false;
+
+	switch (mode)
+	{
+		case SERVER_MODE_TCP:
+			allowed = tcp_keys;
+			allowed_count = ARRAY_COUNT(tcp_keys);
+			break;
+		case SERVER_MODE_RTU_TCP:
+			allowed = rtu_tcp_keys;
+			allowed_count = ARRAY_COUNT(rtu_tcp_keys);
+			break;
+		case SERVER_MODE_RTU_PTY:
+		case SERVER_MODE_RTU_DEVICE:
+			allowed = rtu_serial_keys;
+			allowed_count = ARRAY_COUNT(rtu_serial_keys);
+			break;
+		case SERVER_MODE_ASCII_PTY:
+		case SERVER_MODE_ASCII_DEVICE:
+			allowed = ascii_keys;
+			allowed_count = ARRAY_COUNT(ascii_keys);
+			break;
+	}
+	/* Check presence, not value: even a default-valued option is rejected when
+	 * the mode does not support it. (path) has its own required/forbidden checks below. */
+	for (u32 i = 0; i < ARRAY_COUNT(keys); i++)
+	{
+		bool supported = false;
+
+		if (strcmp(keys[i], "path") == 0 ||
+		    form_is_absent(ctx, form_find(ctx, options, keys[i])))
+			continue;
+		for (u32 j = 0; j < allowed_count; j++)
+		{
+			if (strcmp(keys[i], allowed[j]) != 0)
+				continue;
+			supported = true;
+			break;
+		}
+		if (!supported)
+			return form_fail(ctx, "server: %s is not valid in %s mode", keys[i], MODE_NAMES[mode]);
+	}
 
 	if (!form_opt_int(ctx, options, "port", 1, 65535, &port))
 		return false;
@@ -111,9 +161,6 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return false;
 
 	if (!form_opt_string(ctx, options, "bind", &bind))
-		return false;
-
-	if (!form_opt_string(ctx, options, "path", &path))
 		return false;
 
 	if (bind && strlen(bind) >= CONFIG_BIND_MAX)
@@ -184,15 +231,6 @@ check_mode_rules(form_ctx_t* ctx, const config_t* config)
 					 config->devices[i]->name, id);
 	}
 
-	if (config->mode == SERVER_MODE_RTU_TCP)
-	{
-		if (config->strict_t15)
-			return form_fail(ctx, "server: strict-t15 is not supported for RTU-over-TCP");
-		if (config->parity != PARITY_NONE)
-			return form_fail(ctx, "server: parity is not supported for RTU-over-TCP");
-		if (config->stop_bits != 1)
-			return form_fail(ctx, "server: stop-bits are not supported for RTU-over-TCP");
-	}
 	return true;
 }
 

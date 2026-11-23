@@ -8,7 +8,7 @@ You do **not** need to know Scheme. The config file is a list of `(name value)` 
 there are ready-made profiles you can copy.
 
 ```scheme
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Minimal example")
@@ -73,67 +73,80 @@ See [docs/profiles.md](docs/profiles.md).
 ```
 modbus-sim [options] CONFIG.scm
 
-  -p, --port N         TCP/RTU-over-TCP: listen on port N (overrides the config)
-  -b, --bind ADDR      TCP/RTU-over-TCP: listen on IPv4 address ADDR (overrides the config)
-      --rtu-pty        RTU: create a PTY and print its slave path
-      --rtu-device PATH RTU: serve RTU over an existing serial-like device
-      --rtu-tcp        RTU-over-TCP: serve RTU frames over TCP
-      --ascii-pty      ASCII: create a PTY and print its slave path
-      --ascii-device PATH ASCII: serve Modbus ASCII over an existing serial-like device
-      --baud N         RTU/ASCII/RTU-over-TCP: standard termios baud (ASCII: line speed only)
-      --frame-gap-ms N RTU/RTU-over-TCP: explicit inter-frame silence override in ms
-      --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)
-      --broadcast-execute RTU/RTU-over-TCP: run unit-0 requests on all devices (no response)
-      --parity NAME    RTU byte stream: none|even|odd|mark|space (overrides config)
-      --stop-bits N    RTU byte stream: 1 or 2 stop bits (overrides config)
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
-  -h, --help           show help
+  -h, --help           show this help
 ```
 
-Port 502 is the Modbus standard but needs root on Linux. The default here is **1502**.
+There are no server CLI options: the transport mode, path and all server settings are selected in
+`(server ...)` in the config file. Port 502 is the Modbus standard but needs root on Linux; the
+default here is **1502**.
 
-In RTU mode, `--rtu-pty` creates a Linux PTY and prints `RTU PTY slave: /dev/pts/N`; connect your
-RTU client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
+## Transports
+
+`(server (mode NAME))` selects one of six modes:
+
+| Mode | Transport | Server entries allowed with `mode` |
+|---|---|---|
+| `tcp` | Modbus TCP (MBAP) over TCP | `port`, `bind`, `seed`, `idle-timeout-ms` |
+| `rtu-pty` | Modbus RTU over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `frame-gap-ms`, `strict-t15`, `broadcast-execute`, `parity`, `stop-bits` |
+| `rtu-device` | Modbus RTU over an existing byte-stream device | `path`, plus the `rtu-pty` entries |
+| `rtu-tcp` | Modbus RTU frames over a TCP listen socket | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
+| `ascii-pty` | Modbus ASCII over a new Linux PTY (slave path printed at startup) | `seed`, `baud` |
+| `ascii-device` | Modbus ASCII over an existing byte-stream device | `path`, plus the `ascii-pty` entries |
+
+`mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
+Any other entry is rejected at load time, even when its value is the default. See
+[docs/config-reference.md](docs/config-reference.md) for ranges and defaults.
+
+```scheme
+; Modbus TCP
+(server (mode tcp) (port 1502) (bind "127.0.0.1") (idle-timeout-ms 5000))
+```
+
+```scheme
+; Modbus RTU: choose a PTY or an existing device, never both in one config
+(server (mode rtu-pty) (baud 9600) (frame-gap-ms 20)
+        (parity even) (stop-bits 2) (strict-t15 on))
+(server (mode rtu-device) (path "/dev/ttyUSB0") (baud 19200))
+```
+
+```scheme
+; Modbus RTU over TCP (RTU frames, not MBAP)
+(server (mode rtu-tcp) (port 1502) (bind "0.0.0.0") (baud 9600) (broadcast-execute on))
+```
+
+```scheme
+; Modbus ASCII: choose a PTY or an existing device, never both in one config
+(server (mode ascii-pty) (baud 9600))
+(server (mode ascii-device) (path "/dev/ttyUSB1"))
+```
+
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC and unknown unit produce no response. Broadcast
-(unit 0) requests are ignored by default. `--broadcast-execute` (or config
-`(server (broadcast-execute on))`) makes them execute on every configured device and never send a
-response. `--rtu-device` opens with `O_NONBLOCK` so startup does not hang on FIFOs or similar paths;
-when the device is a tty, `modbus-sim` configures it as raw mode with the selected parity and stop bits
-(default 8N1) and preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. Use
-`--parity none|even|odd|mark|space` or config `(server (parity NAME))`, and `--stop-bits 1|2` or
-`(server (stop-bits N))`, to change the tty line format; `mark` and `space` need `CMSPAR` support.
-These settings apply only to byte-stream RTU. Unit ids 0 and 248-255 are rejected in RTU mode because 0
-is broadcast and 248-255 are reserved.
+(unit 0) requests are ignored by default. `broadcast-execute` (allowed in `rtu-pty`, `rtu-device`
+and `rtu-tcp`) makes them execute on every configured device and never send a response. Unit ids 0
+and 248-255 are rejected in all serial modes because 0 is broadcast and 248-255 are reserved.
+MBAP/TCP unit 0 is only a unit id and never broadcast.
 
-RTU frame boundaries use Modbus t3.5 when a baud rate is known (explicit `--baud`/config `(baud N)`,
-or the tty's existing baud rate). `--frame-gap-ms` is an explicit inter-frame silence override and
-takes precedence when set. For PTY/pipe streams with no known baud and no override, the default 20 ms
-fallback is used; read() boundaries do not expose true UART character timing.
+Device modes open the path with `O_NONBLOCK` so startup does not hang on FIFOs or similar paths.
+When the fd is a tty, RTU modes configure raw mode with the selected parity and stop bits (default
+8N1) and preserve the existing baud rate unless `(baud N)` is given. Use
+`(parity none|even|odd|mark|space)` and `(stop-bits 1|2)` to change the tty line format; `mark` and
+`space` need `CMSPAR` support. ASCII ttys always use raw 8N1.
 
-`--strict-t15` (or config `(server (strict-t15 on))`) enables an opt-in best-effort t1.5 discard
-heuristic for RTU byte streams in baud-derived auto mode. It is never applied to RTU-over-TCP.
+RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or the tty's existing baud).
+`(frame-gap-ms N)` is an explicit inter-frame silence override and takes precedence when set. For
+PTY/pipe streams with no known baud and no override, the default 20 ms fallback is used. In
+baud-derived auto mode, `(strict-t15 on)` enables a best-effort t1.5 discard heuristic for RTU byte
+streams only; it is never applied to RTU-over-TCP.
 
-ASCII mode is separate: `--ascii-pty` creates a Linux PTY and prints `ASCII PTY slave: /dev/pts/N`,
-while `--ascii-device PATH` serves ASCII on an existing bidirectional byte stream. Frames are
-`:` + uppercase hex for `[addr][PDU][LRC]` + `CR LF`; received hex may be upper- or lowercase.
-Frames are delimited by `CR LF`, so t3.5/t1.5 and `--frame-gap-ms` do not apply; complete frames are
+ASCII frames are `:` + uppercase hex for `[addr][PDU][LRC]` + `CR LF`; received hex may be upper- or
+lowercase. Frames are delimited by `CR LF`, so RTU timing options do not apply; complete frames are
 answered immediately, including several frames in one read. A missing colon, invalid hex, odd hex
 count, bad LRC, or wrong terminator produces no response and never reaches the PDU handlers. Like
-RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. ASCII here uses raw
-8N1, not the traditional 7E1 serial settings, and is **serial byte-stream only**: there is no
-ASCII-over-TCP mode, and this is not Modbus TCP (MBAP). `--baud` may set the line speed but never
-changes ASCII framing or timing. `--port`, `--bind`, `--frame-gap-ms`, and `--strict-t15` are invalid
-with ASCII flags. ASCII modes are mutually exclusive and cannot be combined with RTU modes.
-`--check --ascii-pty`/`--check --ascii-device PATH` validates unit ids as 1-247, like RTU.
-
-`--rtu-tcp` serves Modbus RTU frames (`[addr][PDU][CRC lo hi]`) on a TCP listen socket as a
-separate transport/framing choice. It is not Modbus TCP (MBAP) and does not change existing TCP or
-RTU byte-stream behavior. `--port`/`--bind` apply to TCP and RTU-over-TCP; `--baud`/`--frame-gap-ms`
-apply to RTU and RTU-over-TCP for RTU frame timing. `--broadcast-execute` works here too, with the
-same all-devices/no-response semantics. MBAP/TCP unit 0 is never broadcast and is unaffected.
-`--parity`/`--stop-bits` apply only to RTU byte streams; non-default config values are rejected with
-`--check --rtu-tcp`, while plain TCP ignores them.
+RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. ASCII is **serial
+byte-stream only**: there is no ASCII-over-TCP mode, and this is not Modbus TCP (MBAP). `(baud N)`
+may set the line speed but never changes ASCII framing or timing.
 
 ## Documentation
 

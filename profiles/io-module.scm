@@ -7,7 +7,7 @@
 ;   input 0-7       analog inputs; channel 0 sweeps the full range, the rest are fixed
 ;   holding 0-3     analog outputs (writable)
 
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Remote I/O module")

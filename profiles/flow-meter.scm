@@ -7,7 +7,7 @@
 ;   coil 0      reset totalizer (writable)
 ;   discrete 0  empty-pipe alarm
 
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Flow meter")

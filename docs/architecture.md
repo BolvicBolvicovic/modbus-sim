@@ -109,7 +109,7 @@ Single-threaded `poll()` TCP listen/server loop, similar to the TCP server, but 
 carries Modbus RTU frames instead of MBAP. It reuses `net/rtu_framer` for shared RTU rx/framing,
 `modbus/rtu` for CRC/frame codec and t3.5 timing helpers, and the shared PDU/fault dispatch path.
 t1.5 discard is not enforced on RTU-over-TCP because TCP read() boundaries do not reflect UART
-character timing. This is an explicit separate transport selected by `--rtu-tcp`; it does not alter
+character timing. This is an explicit separate transport selected by `(server (mode rtu-tcp))`; it does not alter
 TCP MBAP behavior or RTU byte-stream behavior.
 
 ## Coding rules used here

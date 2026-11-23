@@ -13,7 +13,7 @@
 ;   discrete 0  high-temperature alarm
 ;   discrete 1  sensor-fault alarm
 
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Temperature controller")

@@ -6,6 +6,7 @@
 ; Input register 0-1: energy counter (float32, kWh, counts up).
 
 (server
+  (mode tcp)
   (port 1502)
   (seed 11))
 

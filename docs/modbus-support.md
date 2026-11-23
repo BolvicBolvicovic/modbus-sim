@@ -11,26 +11,27 @@ is disconnected.
 
 ### Modbus RTU
 
-Modbus RTU is served over a bidirectional byte stream (Linux PTY or an existing serial-like device
-path) via CLI `--rtu-pty` or `--rtu-device PATH`. The same PDU handlers and device model are used
-as for TCP; only framing/transport differ.
+Modbus RTU is served over a bidirectional byte stream selected with `(server (mode rtu-pty))` (a new
+Linux PTY whose slave path is printed at startup) or `(server (mode rtu-device) (path "PATH"))` (an
+existing serial-like device). The same PDU handlers and device model are used as for TCP; only
+framing/transport differ.
 
 Frame format: `[addr][PDU...][CRC lo][CRC hi]` (2-byte Modbus CRC-16, low byte first). A valid
-frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. `--rtu-device` is opened with
+frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. Device-mode paths are opened with
 `O_NONBLOCK` so startup does not hang on a blocking open (for example, a FIFO with no writer);
 `modbus-sim` keeps the fd non-blocking for the poll loop. When the fd is a tty, `modbus-sim`
 configures raw mode (`CS8`, `CLOCAL|CREAD`, no flow control) with the selected parity and stop bits,
 and preserves the existing baud rate. The default is 8N1 (no parity, 1 stop bit); config
-`(server (parity even))` / `(server (stop-bits 2))` or CLI `--parity` / `--stop-bits` select
-`none|even|odd|mark|space` parity and 1 or 2 stop bits. `mark` and `space` require `CMSPAR` support
-on the host. These settings apply only to RTU byte-stream ttys; non-tty fds skip termios setup.
+`(server (parity even))` / `(server (stop-bits 2))` select `none|even|odd|mark|space` parity and 1 or
+2 stop bits. `mark` and `space` require `CMSPAR` support on the host. These settings apply only to
+RTU byte-stream ttys; non-tty fds skip termios setup.
 
 Frame boundaries use Modbus RTU inter-frame timing when a baud rate is known: t3.5 is 1.750 ms for
 baud rates above 19200, otherwise `ceil(3.5 * 11 / baud * 1,000,000)` microseconds. The baud can be
-set explicitly with config `(server (baud N))` or CLI `--baud N` (`--rtu-baud` alias). Baud values must be standard termios rates. For tty
+set explicitly with `(server (baud N))`; baud values must be standard termios rates. For tty
 devices, when no explicit baud is configured, `modbus-sim` reads the tty's current output baud and
-derives t3.5 from it. `frame-gap-ms` (config or CLI `--frame-gap-ms`) remains an explicit
-inter-frame silence override and takes precedence over baud-derived timing for compatibility.
+derives t3.5 from it. `(server (frame-gap-ms N))` remains an explicit inter-frame silence override
+and takes precedence over baud-derived timing.
 
 For byte streams with no UART character timing (PTY/pipe) and no known baud, `modbus-sim` falls back
 to `frame-gap-ms` if configured, otherwise the default 20 ms. In that fallback mode the boundary is
@@ -38,28 +39,28 @@ still a practical approximation because read() chunk boundaries do not expose tr
 timing. When baud is known and no explicit `frame-gap-ms` override is set, a read() gap >= t3.5 is
 treated as an inter-frame boundary.
 
-Optional strict t1.5: for RTU byte streams only, `--strict-t15` or config `(server (strict-t15 on))`
-enables a best-effort intra-frame t1.5 discard heuristic in baud-derived auto mode. A read() gap
-between t1.5 and t3.5 inside an incomplete frame discards that partial frame. It is opt-in because
-read() boundaries do not reflect true UART character timing and can split valid frames on PTYs, real
-serial ports, and other byte streams. It is never applied to RTU-over-TCP.
+Optional strict t1.5: for RTU byte streams only, `(server (strict-t15 on))` enables a best-effort
+intra-frame t1.5 discard heuristic in baud-derived auto mode. A read() gap between t1.5 and t3.5
+inside an incomplete frame discards that partial frame. It is opt-in because read() boundaries do
+not reflect true UART character timing and can split valid frames on PTYs, real serial ports, and
+other byte streams. It is never applied to RTU-over-TCP.
 
 No response is produced for:
 
 - **Bad CRC**: frames whose CRC does not match are silently ignored.
 - **Unknown unit**: a valid frame addressed to a unit id with no configured device is ignored.
-- **Broadcast (unit 0)**: ignored by default. With `--broadcast-execute` or config
-  `(server (broadcast-execute on))`, a broadcast request is executed on every configured device
-  (normal request handling: tick, counters, writes) and no response frame is sent. Fault delays/drops
-  are not applied because there is no response to send.
+- **Broadcast (unit 0)**: ignored by default. With `(server (broadcast-execute on))`, a broadcast
+  request is executed on every configured device (normal request handling: tick, counters, writes)
+  and no response frame is sent. Fault delays/drops are not applied because there is no response to
+  send.
 
 ### Modbus ASCII
 
 Modbus ASCII is served over a bidirectional byte stream (Linux PTY or an existing serial-like
-device path) via CLI `--ascii-pty` or `--ascii-device PATH`. It is a separate transport/framing
-choice: it uses the same PDU handlers and device model as TCP/RTU, but it is not Modbus TCP (MBAP)
-and there is no ASCII-over-TCP mode. No new Scheme config fields are added for ASCII; selecting the
-mode is CLI-only.
+device path) via `(server (mode ascii-pty))` or `(server (mode ascii-device) (path "PATH"))`. It is a
+separate transport/framing choice: it uses the same PDU handlers and device model as TCP/RTU, but it
+is not Modbus TCP (MBAP) and there is no ASCII-over-TCP mode. ASCII accepts only `mode`, `seed`,
+`baud` and (in device mode) `path` in `(server ...)`.
 
 Frame format on the wire is `:` + uppercase hex digits for `[addr][PDU...][LRC]` + `CR LF`.
 `addr` is one byte, the PDU is 1..253 bytes, and the LRC is one byte:
@@ -68,7 +69,7 @@ even number of hex digits. Responses use uppercase hex; received frames accept u
 hex. The maximum encoded frame is `1 + 2 + 2*253 + 2 + 2 = 513` bytes.
 
 Framing is delimiter-based: a frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5,
-`--frame-gap-ms`, or `--strict-t15` behavior for ASCII; complete frames are dispatched immediately,
+`frame-gap-ms`, or `strict-t15` behavior for ASCII; complete frames are dispatched immediately,
 including several complete frames delivered in one `read()`. A bounded RX buffer accumulates
 partial frames across reads.
 
@@ -82,33 +83,32 @@ No response is produced, and no PDU is dispatched, for:
 - **Fault drop**: the configured fault decision suppresses the response.
 
 Delay faults still hold the ASCII response until the configured delay has elapsed, without blocking
-other work in the poll loop. Unit ids must be 1-247 in ASCII mode, as in RTU; `--check` combined with
-ASCII flags applies the same check. `--baud N` (or config `(server (baud N))`) may set the serial
-line/PTY speed but never affects ASCII framing or timing. When the fd is a tty, `modbus-sim`
-configures raw 8N1 (`CS8`, no parity, 1 stop bit, no flow control), **not** the traditional Modbus
-ASCII 7E1 settings. `--port`, `--bind`, `--frame-gap-ms`, and `--strict-t15` are invalid with ASCII
-flags, and ASCII flags cannot be combined with RTU flags.
+other work in the poll loop. Unit ids must be 1-247 in ASCII modes, as in RTU; `--check` with an ASCII
+mode applies the same check. `(server (baud N))` may set the serial line/PTY speed but never affects
+ASCII framing or timing. When the fd is a tty, `modbus-sim` configures raw 8N1 (`CS8`, no parity, 1
+stop bit, no flow control), **not** the traditional Modbus ASCII 7E1 settings. Each config selects
+exactly one mode; TCP listen and RTU timing entries are rejected in ASCII modes.
 
 ### Modbus RTU over TCP
 
-`modbus-sim --rtu-tcp` serves Modbus RTU frames on a TCP listen socket. This is a separate
-transport/framing choice from Modbus TCP (MBAP) and from RTU byte streams: TCP mode still uses
-MBAP framing, RTU mode still uses byte-stream framing, and `--rtu-tcp` uses RTU frames
+`(server (mode rtu-tcp))` serves Modbus RTU frames on a TCP listen socket. This is a separate
+transport/framing choice from Modbus TCP (MBAP) and from RTU byte streams: `tcp` mode still uses
+MBAP framing, RTU byte-stream modes still use byte-stream framing, and `rtu-tcp` uses RTU frames
 (`[addr][PDU][CRC lo hi]`) carried over TCP connections.
 
 The same PDU handlers, device model, unit-id routing, fault injection, and RTU CRC validation are
 used. Bad CRC and unknown unit produce no response, matching RTU behavior. Broadcast (unit 0) is
-ignored by default; `--broadcast-execute` or config `(server (broadcast-execute on))` executes it on
-every configured device with no response, exactly as for RTU byte streams.
-`--port` and `--bind` apply to RTU-over-TCP. `--baud` and `--frame-gap-ms` apply for RTU inter-frame
-timing: explicit `frame-gap-ms` takes precedence; otherwise baud-derived t3.5 is used when baud is
-known; otherwise the 20 ms default fallback is used. t1.5 discard is never applied to RTU-over-TCP,
-because TCP read() boundaries do not reflect UART character timing and can split valid pipelined
-requests. Serial parity and stop bits do not apply either (no tty is configured); non-default values
-in the config are rejected when RTU-over-TCP is selected.
+ignored by default; `(server (broadcast-execute on))` executes it on every configured device with no
+response, exactly as for RTU byte streams. `port` and `bind` select the listen socket, and
+`idle-timeout-ms` closes idle connections. `baud` and `frame-gap-ms` select RTU inter-frame timing:
+explicit `frame-gap-ms` takes precedence; otherwise baud-derived t3.5 is used when baud is known;
+otherwise the 20 ms default fallback is used. t1.5 discard is never applied to RTU-over-TCP, because
+TCP read() boundaries do not reflect UART character timing and can split valid pipelined requests.
+Serial parity and stop bits do not apply either (no tty is configured), and their presence in the
+config is rejected in `rtu-tcp` mode.
 
 RTU-over-TCP is not Modbus TCP and is not a transparent gateway/proxy implementation; it is an
-explicit listen mode selected with `--rtu-tcp`.
+explicit listen mode selected in `(server ...)`.
 
 ## Function codes
 
@@ -244,12 +244,11 @@ using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set
 
 In RTU and ASCII modes, unit ids must be in the range 1-247. Address 0 is Modbus broadcast and
 248-255 are reserved by the Modbus serial specification; a device configured with one of these ids
-cannot be addressed by a normal serial request. `modbus-sim` rejects these ids when starting in RTU
-or ASCII mode and when `--check` is combined with RTU or ASCII flags. RTU broadcast requests
-(address 0) are received but are ignored unless `--broadcast-execute` or `(broadcast-execute on)`
-is set; when enabled they execute on all devices and still produce no response. ASCII broadcast
-frames are received but never executed, regardless of `(broadcast-execute on)`. MBAP/TCP unit 0 is
-unrelated: it is only a unit id and is never broadcast, regardless of this option.
+cannot be addressed by a normal serial request. `modbus-sim` rejects these ids when starting in an
+RTU or ASCII mode and when `--check` reads such a mode. RTU broadcast requests (address 0) are
+received but are ignored unless `(server (broadcast-execute on))` is set; when enabled they execute
+on all devices and still produce no response. ASCII broadcast frames are received but never executed.
+MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 
 ## Timing
 
@@ -274,7 +273,7 @@ Current intentional transport/behavior limits (not spec deviations in supported 
 
 ## Not supported (yet)
 
-- True UART character-level t1.5 timing on byte-stream transports. Optional `--strict-t15`/`(strict-t15 on)` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
+- True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
 - ASCII-over-TCP: not implemented; ASCII is a serial byte-stream transport only
 - IPv6
 - TLS (Modbus/TCP Security)

@@ -1184,17 +1184,18 @@ TEST(RtuCliCheckRtuTcpBroadcastExecutePrintsSummary)
 	rtu_cli_stop();
 }
 
-TEST(RtuCliCheckTcpIgnoresSerialLineConfig)
+TEST(RtuCliCheckTcpRejectsSerialLineConfig)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
 	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
 	int status = 0;
 
-	ASSERT_EQ(rtu_cli_write_config("(server (parity even) (stop-bits 2))\n"
+	ASSERT_EQ(rtu_cli_write_config("(server (mode tcp) (parity even) (stop-bits 2))\n"
 				       "(device (unit-id 1) (holding 0))\n"));
 	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+	ASSERT_EQ(rtu_cli_stderr_contains("parity is not valid in tcp mode"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
 }

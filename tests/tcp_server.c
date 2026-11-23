@@ -425,7 +425,7 @@ server_start(const char* server_options, const char* devices)
 		return false;
 	}
 
-	snprintf(config, sizeof(config), "(server (port %u) (bind \"127.0.0.1\") %s)\n%s\n",
+	snprintf(config, sizeof(config), "(server (mode tcp) (port %u) (bind \"127.0.0.1\") %s)\n%s\n",
 		 fx->port, server_options ? server_options : "", devices);
 
 	strcpy(fx->config, "/tmp/modbus-sim-net-XXXXXX");
@@ -653,13 +653,14 @@ TEST(NetUnitIdRoutingAndGatewayException)
 	ASSERT_EQ(ok);
 }
 
-TEST(NetBroadcastExecuteConfigDoesNotAffectTcpUnitZero)
+TEST(NetTcpUnitZeroIsNotBroadcast)
 {
 	client_t client = { .fd = -1 };
 	u8	 req[8];
 	u8	 resp[MODBUS_MAX_PDU];
 	u32	 len  = 0;
-	bool	 ok   = server_start("(broadcast-execute on)",
+	/* broadcast-execute is rejected in tcp mode, so unit 0 is just a unit id. */
+	bool	 ok   = server_start("",
 				     "(device (unit-id 1) (holding 0 (static 11)))\n"
 				     "(device (unit-id 2) (holding 0 (static 22)))");
 

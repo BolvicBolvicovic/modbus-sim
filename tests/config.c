@@ -65,7 +65,7 @@ TEST(ConfigLoadsServerAndDevice)
 
 	ASSERT_SUCCESS(load_text(
 		"; a comment\n"
-		"(server (port 1600) (bind \"127.0.0.1\") (seed 5))\n"
+		"(server (mode tcp) (port 1600) (bind \"127.0.0.1\") (seed 5))\n"
 		"(device (name \"Test\") (unit-id 4)\n"
 		"  (holding 0 (static 42))\n"
 		"  (input 0 (type float32) (static 1.0))\n"
@@ -663,7 +663,8 @@ TEST(ConfigBindAcceptsValidIpv4)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (bind \"127.0.0.1\")) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"127.0.0.1\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
 	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
 }
 
@@ -672,7 +673,8 @@ TEST(ConfigBindRejectsHostname)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(server (bind \"localhost\")) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(server (mode tcp) (bind \"localhost\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "not an IPv4 address") != NULL);
 }
 
@@ -681,7 +683,8 @@ TEST(ConfigBindRejectsIpv6)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(server (bind \"::1\")) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(server (mode tcp) (bind \"::1\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "not an IPv4 address") != NULL);
 }
 
@@ -693,7 +696,7 @@ TEST(ConfigBindRejectsOverlongString)
 
 	/* CONFIG_BIND_MAX is 64; 63 chars is max content, 64+ is overlong. */
 	snprintf(text, sizeof(text),
-		 "(server (bind \"%.*s\")) (device (holding 0))",
+		 "(server (mode tcp) (bind \"%.*s\")) (device (holding 0))",
 		 64, "111.111.111.111111.111.111.111111.111.111.111111.111.111.1111111");
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too long") != NULL);
@@ -704,20 +707,20 @@ TEST(ConfigIdleTimeoutIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (idle-timeout-ms 5000)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (idle-timeout-ms 5000)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.idle_timeout_ms == 5000);
 
-	ASSERT_SUCCESS(load_text("(server (idle-timeout-ms 0)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (idle-timeout-ms 0)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.idle_timeout_ms == 0);
 }
 
 TEST(ConfigIdleTimeoutRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (idle-timeout-ms -1)) (device (holding 0))", "between 0 and 86400000");
-	EXPECT_ERROR("(server (idle-timeout-ms 86400001)) (device (holding 0))", "between 0 and 86400000");
-	EXPECT_ERROR("(server (idle-timeout-ms nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms -1)) (device (holding 0))", "between 0 and 86400000");
+	EXPECT_ERROR("(server (mode rtu-tcp) (idle-timeout-ms 86400001)) (device (holding 0))", "between 0 and 86400000");
+	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms nope)) (device (holding 0))", "whole number");
 }
 
 TEST(ConfigFrameGapIsParsed)
@@ -725,16 +728,16 @@ TEST(ConfigFrameGapIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (frame-gap-ms 5)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (frame-gap-ms 5)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.frame_gap_ms == 5);
 }
 
 TEST(ConfigFrameGapRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (frame-gap-ms 0)) (device (holding 0))", "between 1 and 60000");
-	EXPECT_ERROR("(server (frame-gap-ms 60001)) (device (holding 0))", "between 1 and 60000");
-	EXPECT_ERROR("(server (frame-gap-ms nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-pty) (frame-gap-ms 0)) (device (holding 0))", "between 1 and 60000");
+	EXPECT_ERROR("(server (mode rtu-tcp) (frame-gap-ms 60001)) (device (holding 0))", "between 1 and 60000");
+	EXPECT_ERROR("(server (mode rtu-pty) (frame-gap-ms nope)) (device (holding 0))", "whole number");
 }
 
 TEST(ConfigBaudIsParsed)
@@ -742,17 +745,17 @@ TEST(ConfigBaudIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (baud 9600)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (baud 9600)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.baud == 9600);
 }
 
 TEST(ConfigBaudRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (baud 0)) (device (holding 0))", "between 1 and 4000000");
-	EXPECT_ERROR("(server (baud 4000001)) (device (holding 0))", "between 1 and 4000000");
-	EXPECT_ERROR("(server (baud nope)) (device (holding 0))", "whole number");
-	EXPECT_ERROR("(server (baud 12345)) (device (holding 0))", "standard termios rate");
+	EXPECT_ERROR("(server (mode rtu-pty) (baud 0)) (device (holding 0))", "between 1 and 4000000");
+	EXPECT_ERROR("(server (mode ascii-pty) (baud 4000001)) (device (holding 0))", "between 1 and 4000000");
+	EXPECT_ERROR("(server (mode rtu-pty) (baud nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-tcp) (baud 12345)) (device (holding 0))", "standard termios rate");
 }
 
 TEST(ConfigBroadcastExecuteIsParsed)
@@ -760,27 +763,27 @@ TEST(ConfigBroadcastExecuteIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (broadcast-execute on)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (broadcast-execute on)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == true);
 
-	ASSERT_SUCCESS(load_text("(server (broadcast-execute off)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (broadcast-execute off)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == false);
 
-	ASSERT_SUCCESS(load_text("(server (broadcast-execute yes)) (device (holding 0))",
-				 &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyS0\") (broadcast-execute yes))"
+				 " (device (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == true);
 
-	ASSERT_SUCCESS(load_text("(server (broadcast-execute #f)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (broadcast-execute #f)) (device (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == false);
 }
 
 TEST(ConfigBroadcastExecuteRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (broadcast-execute maybe)) (device (holding 0))", "expected on or off");
-	EXPECT_ERROR("(server (broadcast-execute 2)) (device (holding 0))", "expected on or off");
+	EXPECT_ERROR("(server (mode rtu-pty) (broadcast-execute maybe)) (device (holding 0))", "expected on or off");
+	EXPECT_ERROR("(server (mode rtu-tcp) (broadcast-execute 2)) (device (holding 0))", "expected on or off");
 }
 
 TEST(ConfigParityIsParsed)
@@ -792,7 +795,7 @@ TEST(ConfigParityIsParsed)
 
 	for (u32 i = 0; i < ARRAY_COUNT(names); i++)
 	{
-		snprintf(text, sizeof(text), "(server (parity %s)) (device (holding 0))", names[i]);
+		snprintf(text, sizeof(text), "(server (mode rtu-pty) (parity %s)) (device (holding 0))", names[i]);
 		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 		ASSERT_EQ(config.parity == (parity_t)i);
 	}
@@ -800,8 +803,8 @@ TEST(ConfigParityIsParsed)
 
 TEST(ConfigParityRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (parity nope)) (device (holding 0))", "expected one of: none, even, odd, mark, space");
-	EXPECT_ERROR("(server (parity 1)) (device (holding 0))", "expected one of: none, even, odd, mark, space");
+	EXPECT_ERROR("(server (mode rtu-pty) (parity nope)) (device (holding 0))", "expected one of: none, even, odd, mark, space");
+	EXPECT_ERROR("(server (mode rtu-device) (path \"/dev/ttyS0\") (parity 1)) (device (holding 0))", "expected one of: none, even, odd, mark, space");
 }
 
 TEST(ConfigStopBitsAreParsed)
@@ -809,18 +812,20 @@ TEST(ConfigStopBitsAreParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (stop-bits 1)) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (stop-bits 1)) (device (holding 0))",
+				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.stop_bits == 1);
 
-	ASSERT_SUCCESS(load_text("(server (stop-bits 2)) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyS0\") (stop-bits 2))"
+				 " (device (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.stop_bits == 2);
 }
 
 TEST(ConfigStopBitsRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (stop-bits 0)) (device (holding 0))", "between 1 and 2");
-	EXPECT_ERROR("(server (stop-bits 3)) (device (holding 0))", "between 1 and 2");
-	EXPECT_ERROR("(server (stop-bits nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-pty) (stop-bits 0)) (device (holding 0))", "between 1 and 2");
+	EXPECT_ERROR("(server (mode rtu-device) (path \"/dev/ttyS0\") (stop-bits 3)) (device (holding 0))", "between 1 and 2");
+	EXPECT_ERROR("(server (mode rtu-pty) (stop-bits nope)) (device (holding 0))", "whole number");
 }
 
 TEST(ConfigServerModeNamesAreParsed)
@@ -966,50 +971,106 @@ TEST(ConfigTcpModeAcceptsFullUnitIdRange)
 	}
 }
 
-TEST(ConfigRtuTcpRejectsStrictT15)
+TEST(ConfigRtuTcpRejectsSerialOptions)
 {
-	config_t	config = { 0 };
-	char		err[256] = "";
-
+	/* Presence alone is invalid here: even the default value is rejected. */
 	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 on)) (device (holding 0))",
-		     "strict-t15 is not supported for RTU-over-TCP");
-
-	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (strict-t15 off)) (device (holding 0))",
-				 &config, err, sizeof(err)));
-	ASSERT_EQ(config.strict_t15 == false);
+		     "strict-t15 is not valid in rtu-tcp mode");
+	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 off)) (device (holding 0))",
+		     "strict-t15 is not valid in rtu-tcp mode");
+	EXPECT_ERROR("(server (mode rtu-tcp) (parity none)) (device (holding 0))",
+		     "parity is not valid in rtu-tcp mode");
+	EXPECT_ERROR("(server (mode rtu-tcp) (parity even)) (device (holding 0))",
+		     "parity is not valid in rtu-tcp mode");
+	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 1)) (device (holding 0))",
+		     "stop-bits is not valid in rtu-tcp mode");
+	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 2)) (device (holding 0))",
+		     "stop-bits is not valid in rtu-tcp mode");
 }
 
-TEST(ConfigRtuTcpRejectsNonNoneParity)
-{
-	config_t		config = { 0 };
-	char			err[256] = "";
-	char			text[160];
-	static const char* const names[] = { "even", "odd", "mark", "space" };
-
-	for (u32 i = 0; i < ARRAY_COUNT(names); i++)
-	{
-		snprintf(text, sizeof(text), "(server (mode rtu-tcp) (parity %s)) (device (holding 0))",
-			 names[i]);
-		ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
-		ASSERT_EQ(strstr(err, "parity is not supported for RTU-over-TCP") != NULL);
-	}
-
-	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (parity none)) (device (holding 0))",
-				 &config, err, sizeof(err)));
-	ASSERT_EQ(config.parity == PARITY_NONE);
-}
-
-TEST(ConfigRtuTcpRejectsTwoStopBits)
+TEST(ConfigRtuTcpAcceptsListenAndTimingOptions)
 {
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 2)) (device (holding 0))",
-		     "stop-bits are not supported for RTU-over-TCP");
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-tcp) (port 1503) (bind \"127.0.0.1\") (seed 4)"
+		" (idle-timeout-ms 500) (baud 9600) (frame-gap-ms 20) (broadcast-execute on))"
+		" (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.port == 1503);
+	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+	ASSERT_EQ(config.seed == 4);
+	ASSERT_EQ(config.idle_timeout_ms == 500);
+	ASSERT_EQ(config.baud == 9600);
+	ASSERT_EQ(config.frame_gap_ms == 20);
+	ASSERT_EQ(config.broadcast_execute == true);
+}
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (stop-bits 1)) (device (holding 0))",
+TEST(ConfigTcpModeRejectsSerialOptions)
+{
+	EXPECT_ERROR("(server (mode tcp) (broadcast-execute on)) (device (holding 0))",
+		     "broadcast-execute is not valid in tcp mode");
+	EXPECT_ERROR("(server (broadcast-execute off)) (device (holding 0))",
+		     "broadcast-execute is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode tcp) (baud 9600)) (device (holding 0))",
+		     "baud is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode tcp) (frame-gap-ms 20)) (device (holding 0))",
+		     "frame-gap-ms is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode tcp) (strict-t15 off)) (device (holding 0))",
+		     "strict-t15 is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode tcp) (parity none)) (device (holding 0))",
+		     "parity is not valid in tcp mode");
+	EXPECT_ERROR("(server (mode tcp) (stop-bits 1)) (device (holding 0))",
+		     "stop-bits is not valid in tcp mode");
+}
+
+TEST(ConfigSerialModesRejectTcpListenOptions)
+{
+	char		text[256];
+	char		fragment[80];
+	static const char* const options[] = {
+		"(port 1502)", "(bind \"127.0.0.1\")", "(idle-timeout-ms 100)"
+	};
+
+	for (u32 i = 1; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		if (SERVER_MODES[i].mode == SERVER_MODE_RTU_TCP)
+			continue;
+		for (u32 j = 0; j < ARRAY_COUNT(options); j++)
+		{
+			snprintf(text, sizeof(text), "(server (mode %s)%s %s) (device (holding 0))",
+				 SERVER_MODES[i].name, SERVER_MODES[i].path_option, options[j]);
+			snprintf(fragment, sizeof(fragment), "is not valid in %s mode", SERVER_MODES[i].name);
+			EXPECT_ERROR(text, fragment);
+		}
+	}
+}
+
+TEST(ConfigAsciiModeRejectsRtuOptions)
+{
+	EXPECT_ERROR("(server (mode ascii-pty) (broadcast-execute on)) (device (holding 0))",
+		     "broadcast-execute is not valid in ascii-pty mode");
+	EXPECT_ERROR("(server (mode ascii-device) (path \"/dev/ttyS0\") (broadcast-execute off))"
+		     " (device (holding 0))", "broadcast-execute is not valid in ascii-device mode");
+	EXPECT_ERROR("(server (mode ascii-pty) (frame-gap-ms 20)) (device (holding 0))",
+		     "frame-gap-ms is not valid in ascii-pty mode");
+	EXPECT_ERROR("(server (mode ascii-pty) (strict-t15 on)) (device (holding 0))",
+		     "strict-t15 is not valid in ascii-pty mode");
+	EXPECT_ERROR("(server (mode ascii-pty) (parity none)) (device (holding 0))",
+		     "parity is not valid in ascii-pty mode");
+	EXPECT_ERROR("(server (mode ascii-pty) (stop-bits 1)) (device (holding 0))",
+		     "stop-bits is not valid in ascii-pty mode");
+}
+
+TEST(ConfigAsciiModeAcceptsBaudOnly)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (seed 3) (baud 115200)) (device (holding 0))",
 				 &config, err, sizeof(err)));
-	ASSERT_EQ(config.stop_bits == 1);
+	ASSERT_EQ(config.baud == 115200);
+	ASSERT_EQ(config.seed == 3);
 }
 
 TEST(ConfigSerialModesAcceptSerialOptions)

@@ -14,7 +14,7 @@
 ;   coil 0 run command   coil 1 fault reset
 ;   discrete 0 running   discrete 1 fault active
 
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Variable frequency drive")

@@ -4,7 +4,7 @@
 ; Unit 1 is a temperature sensor, unit 2 is a flow meter.
 ; An unknown unit id gets exception 0x0B (gateway target failed to respond).
 
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Room temperature sensor")

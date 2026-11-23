@@ -1,7 +1,7 @@
 # Config reference
 
-A config file describes the simulator: which port to use and which devices exist.
-Save it with any name, for example `my-device.scm`, and run `./modbus-sim my-device.scm`.
+A config file describes the simulator: which transport and server options to use, and which devices
+exist. Save it with any name, for example `my-device.scm`, and run `./modbus-sim my-device.scm`.
 
 ## Scheme in one minute
 
@@ -29,35 +29,62 @@ produce an error message.
 
 ## `(server ...)`
 
-| Entry | Meaning | Default |
+`(mode NAME)` selects the transport. There are six modes; device modes require `(path "PATH")`:
+
+| Mode | Transport | `(path ...)` |
 |---|---|---|
-| `(port N)` | TCP port, 1-65535 | `1502` |
-| `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` |
-| `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) |
-| `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) |
-| `(baud N)` | RTU/ASCII/RTU-over-TCP: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) |
-| `(frame-gap-ms N)` | RTU/RTU-over-TCP: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms. Ignored in ASCII mode | `0` (auto) |
-| `(strict-t15 on\|off)` | RTU byte streams: opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Not supported for RTU-over-TCP; ignored in ASCII mode | `off` |
-| `(broadcast-execute on\|off)` | RTU/RTU-over-TCP: when on, unit-0 (broadcast) requests execute on every configured device and produce no response. Ignored for MBAP/TCP and ASCII | `off` |
-| `(parity none\|even\|odd\|mark\|space)` | RTU byte streams: tty parity. `mark` and `space` require `CMSPAR` support. Not supported for RTU-over-TCP; ignored in ASCII (always 8N1) | `none` |
-| `(stop-bits 1\|2)` | RTU byte streams: number of tty stop bits. Not supported for RTU-over-TCP; ignored in ASCII (always 8N1) | `1` |
+| `tcp` | Modbus TCP (MBAP) on a TCP listen socket | forbidden |
+| `rtu-pty` | Modbus RTU on a new Linux PTY (slave path is printed at startup) | forbidden |
+| `rtu-device` | Modbus RTU on an existing byte-stream device | required |
+| `rtu-tcp` | Modbus RTU frames on a TCP listen socket (not MBAP) | forbidden |
+| `ascii-pty` | Modbus ASCII on a new Linux PTY (slave path is printed at startup) | forbidden |
+| `ascii-device` | Modbus ASCII on an existing byte-stream device | required |
 
-The command-line options `--port` and `--bind` override server listen settings for TCP and RTU-over-TCP. RTU timing can be
-overridden with `--baud` / `--rtu-baud`, `--frame-gap-ms`, and `--strict-t15`; `--frame-gap-ms` takes precedence over
-baud-derived timing when both are provided. `strict-t15` is never applied to RTU-over-TCP. For tty devices, if no
-explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t3.5 timing.
-`--broadcast-execute` overrides `(broadcast-execute ...)` and is valid in RTU and RTU-over-TCP modes only.
-`--parity` and `--stop-bits` override the tty line format for RTU byte streams only; they cannot be combined with TCP or
-RTU-over-TCP. Non-default parity/stop bits in the config are likewise rejected with `--check --rtu-tcp`; plain TCP
-ignores them.
+Only the entries listed for the selected mode are accepted. `mode` is allowed in every mode; an entry
+that is present but not allowed is rejected at load time, even if its value would be the default
+(for example `(stop-bits 1)` in `tcp` mode). `path` has its own required/forbidden checks.
 
-Modbus ASCII is selected only on the command line with `--ascii-pty` or `--ascii-device PATH`; there
-are no ASCII-specific Scheme entries. ASCII frames are `:` + hex `[addr][PDU][LRC]` + `CR LF` and
-are delimited by `CR LF`, not inter-frame silence. `--port`, `--bind`, `--frame-gap-ms`, and
-`--strict-t15` are invalid command-line options in ASCII mode. `--baud` is allowed but only changes
-the line speed; it never changes ASCII framing or timing. ASCII always uses 8N1, so `(parity ...)` and
-`(stop-bits ...)` are ignored there, and `(broadcast-execute on)` does not execute ASCII unit-0
-frames. ASCII flags cannot be combined with RTU flags, and there is no ASCII-over-TCP mode.
+| Entry | Meaning | Default | Allowed in |
+|---|---|---|---|
+| `(port N)` | TCP port, 1-65535 | `1502` | `tcp`, `rtu-tcp` |
+| `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` | `tcp`, `rtu-tcp` |
+| `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
+| `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp` |
+| `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
+| `(frame-gap-ms N)` | Explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) | `rtu-pty`, `rtu-device`, `rtu-tcp` |
+| `(strict-t15 on\|off)` | Opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Never applied to RTU-over-TCP | `off` | `rtu-pty`, `rtu-device` |
+| `(broadcast-execute on\|off)` | When on, unit-0 (broadcast) requests execute on every configured device and produce no response. Never applies to MBAP/TCP or ASCII | `off` | `rtu-pty`, `rtu-device`, `rtu-tcp` |
+| `(parity none\|even\|odd\|mark\|space)` | tty parity. `mark` and `space` require `CMSPAR` support | `none` | `rtu-pty`, `rtu-device` |
+| `(stop-bits 1\|2)` | Number of tty stop bits | `1` | `rtu-pty`, `rtu-device` |
+| `(path "PATH")` | Byte-stream device path; opened with `O_NONBLOCK` | none | `rtu-device`, `ascii-device` (required there) |
+
+Examples (each is a complete `(server ...)` block; a config file may contain only one):
+
+```scheme
+(server (mode tcp) (port 1502) (bind "127.0.0.1") (seed 1))
+```
+
+```scheme
+(server (mode rtu-pty) (baud 9600) (frame-gap-ms 20)
+        (parity even) (stop-bits 2) (strict-t15 on))
+(server (mode rtu-device) (path "/dev/ttyUSB0") (baud 19200) (broadcast-execute on))
+```
+
+```scheme
+(server (mode rtu-tcp) (port 1502) (bind "0.0.0.0") (baud 9600)
+        (idle-timeout-ms 5000) (broadcast-execute on))
+```
+
+```scheme
+(server (mode ascii-pty) (baud 9600))
+(server (mode ascii-device) (path "/dev/ttyUSB1"))
+```
+
+RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
+existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are
+`:` + hex `[addr][PDU][LRC]` + `CR LF`, delimited by `CR LF` rather than inter-frame silence, so
+RTU timing options are not allowed in ASCII modes. `(baud N)` in ASCII only changes the line speed.
+ASCII always uses 8N1, so parity and stop bits are fixed and there is no ASCII-over-TCP mode.
 
 ## `(device ...)`
 
@@ -106,9 +133,9 @@ served in ascending ID order. Configuring any extended object raises FC 43 Confo
 legacy alias (CANopen is not implemented). See [modbus-support.md](modbus-support.md) for response
 semantics.
 
-Unit ids must be different between devices. In RTU and ASCII modes, unit ids 0 and 248-255 are
-rejected at startup and by `--check` when RTU or ASCII flags are given because address 0 is
-broadcast and 248-255 are reserved by the Modbus serial specification.
+Unit ids must be different between devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty` and
+`ascii-device` modes, unit ids 0 and 248-255 are rejected at startup and by `--check` because address
+0 is broadcast and 248-255 are reserved by the Modbus serial specification.
 
 ## Data points
 
@@ -367,6 +394,8 @@ is wrong and show the entry. Common ones:
 | `ramp step must be greater than 0` | `step` is always positive; use `from` and `to` for the direction |
 | `ramp range is too large for the step` | The ramp would need 2^63 steps or more; increase `step` or narrow `from`/`to` |
 | `the file has more than one (server ...)` | Keep a single `(server ...)` block |
+| `server: parity is not valid in tcp mode` | The entry is not allowed by the selected mode; move it to a mode that supports it or remove it |
+| `server: (path ...) is required in rtu-device and ascii-device modes` | Add `(path "PATH")` |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
 | `device has more than one (fault ...)` | Only one fault per device |
 | `missing required option (code ...)` | `(kind exception)` needs `(code N)` |
@@ -379,7 +408,7 @@ is wrong and show the entry. Common ones:
 
 ```scheme
 ; boiler.scm
-(server (port 1502) (seed 1))
+(server (mode tcp) (port 1502) (seed 1))
 
 (device
   (name "Boiler controller")

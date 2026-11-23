@@ -15,7 +15,7 @@
 ;   coil 0      reset energy counter (writable)
 ;   discrete 0  phase-loss alarm
 
-(server (port 1502))
+(server (mode tcp) (port 1502))
 
 (device
   (name "Three-phase power meter")

@@ -5,6 +5,7 @@
 ;           holding register 1 counts 0, 10, 20 ... 100 and starts again, one step per second.
 
 (server
+  (mode tcp)
   (port 1502))
 
 (device

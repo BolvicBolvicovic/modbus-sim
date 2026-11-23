@@ -6,6 +6,7 @@
 ; Input register 0: temperature in 0.1 C (drifts between 20.0 and 25.0 C).
 
 (server
+  (mode tcp)
   (port 1502)
   (seed 7))     ; same seed = same sequence of late answers every run
 
