@@ -1628,25 +1628,17 @@ add_extended_id(device_t* dev, u8 id, const char* value)
 	strcpy(dev->extended_id[i].value, value);
 }
 
-TEST(ReadDeviceIdentificationLegacyMei13EchoesMei)
+TEST(ReadDeviceIdentificationMei13ReturnsIllegalFunction)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
-	u8		req13[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
-	u8		req14[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
-	u8		resp13[MODBUS_MAX_PDU];
-	u8		resp14[MODBUS_MAX_PDU];
-	u32		len13 = 0;
-	u32		len14 = 0;
+	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = run(dev, req, sizeof(req), resp);
 
-	len13 = run(dev, req13, sizeof(req13), resp13);
-	len14 = run(dev, req14, sizeof(req14), resp14);
-	ASSERT_EQ(len13 == len14);
-	ASSERT_EQ(resp13[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
-	ASSERT_EQ(resp13[1] == 0x0D);
-	ASSERT_EQ(resp14[1] == 0x0E);
-	ASSERT_EQ(memcmp(resp13 + 2, resp14 + 2, len13 - 2) == 0);
-	ASSERT_EQ(resp13[3] == 0x81 && resp13[6] == 0x03);
+	ASSERT_EQ(len == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
 	arena_release(arena);
 }
 
@@ -1921,8 +1913,8 @@ TEST(ReadDeviceIdentificationErrors)
 	device_t*	dev   = make_device(arena);
 	u8		bad_mei[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0F, 0x01, 0x00 };
 	u8		bad_mei_short[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0F, 0x01 };
-	u8		legacy_bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01 };
-	u8		legacy_bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x05, 0x00 };
+	u8		mei13_bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01 };
+	u8		mei13_bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x05, 0x00 };
 	u8		bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x05, 0x00 };
 	u8		bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01 };
 	u8		bad_spec[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
@@ -1935,11 +1927,11 @@ TEST(ReadDeviceIdentificationErrors)
 	/* MEI type is checked before request length so unsupported MEI always gets 01. */
 	run(dev, bad_mei_short, sizeof(bad_mei_short), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
-	/* The legacy MEI alias keeps the same length and read-code validation. */
-	run(dev, legacy_bad_len, sizeof(legacy_bad_len), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, legacy_bad_code, sizeof(legacy_bad_code), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	/* MEI 0x0D is CANopen, not device identification, even with a bad length. */
+	run(dev, mei13_bad_len, sizeof(mei13_bad_len), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	run(dev, mei13_bad_code, sizeof(mei13_bad_code), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
 	run(dev, bad_code, sizeof(bad_code), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_len, sizeof(bad_len), resp);

@@ -680,8 +680,7 @@ report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
 
 enum mei_type
 {
-	MEI_TYPE_READ_DEVICE_ID_LEGACY = 0x0D,
-	MEI_TYPE_READ_DEVICE_ID        = 0x0E,
+	MEI_TYPE_READ_DEVICE_ID = 0x0E,
 };
 
 enum read_device_id_code
@@ -752,8 +751,7 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 
 	if (req_len < 2)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-	if (req[1] != MEI_TYPE_READ_DEVICE_ID_LEGACY &&
-	    req[1] != MEI_TYPE_READ_DEVICE_ID)
+	if (req[1] != MEI_TYPE_READ_DEVICE_ID)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 	if (req_len != 4)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);

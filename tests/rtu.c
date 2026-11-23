@@ -136,8 +136,10 @@ TEST(RtuRequestLenSupportedFunctionCodes)
 		{ "fc18", { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, 3, true },
 		{ "fc2b", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01,
 			    0x00 }, 4, true },
-		{ "fc2b-mei13", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01,
-				  0x00 }, 4, true },
+		/* MEI 0x0D is rejected with exception 01 by PDU dispatch, but its
+		 * request still needs a fixed length so coalesced frames split. */
+		{ "fc2b-mei13-canopen", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D,
+					  0x01, 0x00 }, 4, true },
 	};
 	u8	frame[MODBUS_RTU_MAX_FRAME];
 	u32	i;
@@ -165,6 +167,33 @@ TEST(RtuRequestLenSupportedFunctionCodes)
 			ASSERT_FAILURE(modbus_rtu_request_len(frame, frame_len, &got));
 		}
 	}
+}
+
+TEST(RtuMei13FrameDispatchedAsIllegalFunction)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	const u8	pdu[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	const u8*	decoded = NULL;
+	u8		addr = 0;
+	u32		pdu_len = 0;
+	u32		frame_len = 0;
+	u32		expected = 0;
+
+	ASSERT_EQ(dev != NULL);
+	frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT_EQ(frame_len == 7);
+	ASSERT_SUCCESS(modbus_rtu_request_len(frame, frame_len, &expected));
+	ASSERT_EQ(expected == frame_len);
+	ASSERT_SUCCESS(modbus_rtu_decode(frame, frame_len, &addr, &decoded, &pdu_len));
+	ASSERT_EQ(addr == 1 && pdu_len == sizeof(pdu));
+	ASSERT_EQ(memcmp(decoded, pdu, sizeof(pdu)) == 0);
+	ASSERT_EQ(modbus_handle_pdu(dev, 0, decoded, pdu_len, resp) == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
+	arena_release(arena);
 }
 
 TEST(RtuRequestLenRejectsUnsupportedAndTruncated)

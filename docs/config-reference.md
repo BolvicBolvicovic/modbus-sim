@@ -129,9 +129,9 @@ Extended objects use this exact syntax and may be repeated in any order:
 `ID` must be a decimal integer from 128 to 255; text must be non-empty and at most 244 bytes.
 IDs must be unique and at most 32 extended objects may be configured per device; entries are
 served in ascending ID order. Configuring any extended object raises FC 43 Conformity Level to
-`0x83`. MEI `0x0E` is the current Read Device Identification type; MEI `0x0D` is accepted as a
-legacy alias (CANopen is not implemented). See [modbus-support.md](modbus-support.md) for response
-semantics.
+`0x83`. MEI `0x0E` is the only supported Read Device Identification type; MEI `0x0D`
+(CANopen General Reference) is not supported and returns exception 01. See
+[modbus-support.md](modbus-support.md) for response semantics.
 
 Unit ids must be different between devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty` and
 `ascii-device` modes, unit ids 0 and 248-255 are rejected at startup and by `--check` because address

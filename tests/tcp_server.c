@@ -2500,9 +2500,8 @@ TEST(NetReadDeviceIdentificationMeiTypes)
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len > 7 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
-		     resp[1] == 0x0D && resp[2] == 0x01 && resp[3] == 0x82 &&
-		     resp[4] == 0x00 && resp[6] == 0x03;
+		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT,
+				  EXC_ILLEGAL_FUNCTION);
 	}
 
 	client_close(&client);
@@ -2536,8 +2535,8 @@ TEST(NetReadDeviceIdentificationExtendedObjects)
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x03, 0x00 };
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 45 && resp[1] == 0x0D && resp[3] == 0x83 && resp[6] == 0x05 &&
-		     resp[30] == 0x80 && resp[37] == 0xA0;
+		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT,
+				  EXC_ILLEGAL_FUNCTION);
 	}
 	if (ok)
 	{

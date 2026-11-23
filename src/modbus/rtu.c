@@ -141,7 +141,8 @@ modbus_rtu_request_len(const u8* buf, u32 buf_len, u32* frame_len)
 	case FC_ENCAPSULATED_INTERFACE_TRANSPORT:
 		if (buf_len < 3)
 			return false;
-		/* Legacy (0x0D) and current (0x0E) Read Device Identification MEI types. */
+		/* MEI 0x0D (CANopen) and 0x0E (device ID) both have a fixed 4-byte
+		 * request PDU; 0x0D is framed here but rejected by PDU dispatch. */
 		if (buf[2] == 0x0D || buf[2] == 0x0E)
 			pdu_len = 4;
 		else
