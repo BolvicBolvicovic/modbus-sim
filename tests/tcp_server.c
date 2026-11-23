@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -193,6 +194,15 @@ exchange(client_t* client, u8 unit, const u8* req, u32 req_len, u8* resp, u32* r
 
 	return send_request(client, unit, tid, req, req_len) &&
 	       recv_reply(client, unit, tid, resp, resp_len);
+}
+
+static bool
+recv_none(client_t* client, int timeout_ms)
+{
+	struct pollfd	pfd = { .fd = client->fd, .events = POLLIN };
+	int		ready = poll(&pfd, 1, timeout_ms);
+
+	return ready == 0 || (ready > 0 && (pfd.revents & POLLIN) == 0);
 }
 
 static u32
@@ -704,6 +714,49 @@ TEST(NetExceptionsOverWire)
 		put_be16(req + 1, 0x0013);
 		ok = exchange(&client, 1, req, 5, resp, &len) &&
 		     exception_is(resp, len, FC_DIAGNOSTICS, EXC_ILLEGAL_FUNCTION);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetDiagnosticsListenOnlySilenceOverWire)
+{
+	client_t	client = { .fd = -1 };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	bool		ok  = server_start("", "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	ok = ok && client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, 0x0004);
+		put_be16(req + 3, 0x0000);
+		ok = send_request(&client, 1, next_tid(), req, 5) &&
+		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = send_request(&client, 1, next_tid(), req, 5) &&
+		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
+	}
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, 0x0001);
+		put_be16(req + 3, 0xFF00);
+		ok = send_request(&client, 1, next_tid(), req, 5) &&
+		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
+	}
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     register_value(resp, len, 0) == 0x1234;
 	}
 
 	client_close(&client);
