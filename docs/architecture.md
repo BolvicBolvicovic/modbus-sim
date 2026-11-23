@@ -3,11 +3,11 @@
 ## Data flow
 
 ```
- TCP client  ──MBAP+PDU───────► net/tcp_server  ──┐
-                                                 ├─► modbus/pdu ──► device/device ──► data tables
- RTU client  ──addr+PDU+CRC───► net/rtu_server  ──┤                 ▲
- ASCII client ──:hex+LRC+CRLF─► net/ascii_server ┘         device_tick()│ ramps → registers
-                      │                                      fault_decide()
+ TCP   client ──MBAP+PDU───────► net/tcp_server  ──┐
+                                                   ├─► modbus/pdu ──► device/device ──► data tables
+ RTU   client ──addr+PDU+CRC───► net/rtu_server  ──┤                        ▲
+ ASCII client ──:hex+LRC+CRLF──► net/ascii_server  ┘          device_tick() │ ramps → registers
+                      │                                       fault_decide()
                       ▼
                device/fault (drop / delay)
 
