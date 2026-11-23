@@ -583,8 +583,13 @@ diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
 
 		was_listen_only      = dev->listen_only;
 		clear_diagnostic_counters(dev);
+		dev->com_event_count = 0;
+		/* Modbus 6.8.1: only FF00 clears the communications event log. */
 		if (data == 0xFF00)
-			dev->com_event_count = 0;
+		{
+			dev->com_event_log_count = 0;
+			memset(dev->com_events, 0, sizeof(dev->com_events));
+		}
 		dev->listen_only = false;
 		/* Restart is processed in listen-only mode, but never answered there. */
 		if (was_listen_only)
@@ -969,7 +974,10 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 	/* Listen-only monitors the bus but takes no action except Restart
 	 * Communications, and no response is sent for those requests either. */
 	if (dev->listen_only && !is_restart_request(req, req_len))
+	{
+		dev->message_count = (u16)(dev->message_count + 1);
 		return 0;
+	}
 
 	if (req_len == 0)
 	{

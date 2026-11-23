@@ -680,7 +680,7 @@ TEST(DiagnosticsRestartCommunicationsClearsStateAndEchoes)
 	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
 	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
 	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
-	ASSERT_EQ(dev->com_event_count == 11);
+	ASSERT_EQ(dev->com_event_count == 0);
 	ASSERT_EQ(dev->ascii_delimiter == 'X');
 
 	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
@@ -700,6 +700,133 @@ TEST(DiagnosticsRestartCommunicationsClearsStateAndEchoes)
 	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
 	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
 	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsRestart0000ClearsCountersAndPreservesEventLog)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
+	static const u8	log[] = { 0x11, 0x22, 0x33 };
+
+	dev->com_event_count        = 11;
+	dev->com_event_log_count    = (u16)sizeof(log);
+	dev->diag_comm_error_count  = 7;
+	dev->diag_exception_count   = 8;
+	dev->diag_no_response_count = 9;
+	dev->diag_nak_count         = 4;
+	dev->diag_busy_count        = 5;
+	dev->diag_overrun_count     = 6;
+	dev->message_count          = 13;
+	memcpy(dev->com_events, log, sizeof(log));
+
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(dev->com_event_count == 0);
+	ASSERT_EQ(dev->message_count == 0);
+	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
+	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+	ASSERT_EQ(dev->com_event_log_count == sizeof(log));
+	ASSERT_EQ(memcmp(dev->com_events, log, sizeof(log)) == 0);
+
+	ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8 + sizeof(log));
+	ASSERT_EQ(resp[1] == 6 + sizeof(log));
+	ASSERT_EQ(resp[4] == 0 && resp[5] == 0);
+	ASSERT_EQ(resp[6] == 0 && resp[7] == 1);
+	ASSERT_EQ(memcmp(resp + 8, log, sizeof(log)) == 0);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsRestartFF00ClearsCountersAndEventLog)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
+	static const u8	log[] = { 0x11, 0x22, 0x33 };
+
+	dev->com_event_count        = 11;
+	dev->com_event_log_count    = (u16)sizeof(log);
+	dev->diag_comm_error_count  = 7;
+	dev->diag_exception_count   = 8;
+	dev->diag_no_response_count = 9;
+	dev->diag_nak_count         = 4;
+	dev->diag_busy_count        = 5;
+	dev->diag_overrun_count     = 6;
+	dev->message_count          = 13;
+	memcpy(dev->com_events, log, sizeof(log));
+
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0xFF00);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(dev->com_event_count == 0);
+	ASSERT_EQ(dev->message_count == 0);
+	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
+	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+	ASSERT_EQ(dev->com_event_log_count == 0);
+	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
+		ASSERT_EQ(dev->com_events[i] == 0);
+
+	ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8);
+	ASSERT_EQ(resp[1] == 6);
+	ASSERT_EQ(resp[4] == 0 && resp[5] == 0);
+	ASSERT_EQ(resp[6] == 0 && resp[7] == 1);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsListenOnlyMonitorsMessageCountWithoutResponses)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			req[5];
+	u8			resp[MODBUS_MAX_PDU];
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u16			count  = 0;
+
+	rng_seed(&rng, 1);
+	diagnostic_request(req, DIAG_SUB_LISTEN_ONLY_MODE, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->listen_only);
+	count = dev->message_count;
+
+	decision = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->message_count == (u16)(count + 1));
+	ASSERT_EQ(dev->com_event_count == 0);
+	ASSERT_EQ(dev->diag_exception_count == 0);
+
+	decision = (fault_decision_t){ 0 };
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_MESSAGE_COUNT, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->message_count == (u16)(count + 2));
+
+	decision = (fault_decision_t){ 0 };
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->message_count == (u16)(count + 3));
+	ASSERT_EQ(dev->diag_no_response_count == 4);
+
+	/* Read the counters only after leaving listen-only; a restart would reset them. */
+	dev->listen_only = false;
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_MESSAGE_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == (u16)(count + 4));
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == (u16)(count + 5));
 	arena_release(arena);
 }
 
@@ -727,7 +854,7 @@ TEST(DiagnosticsRestartFromListenOnlyIsProcessedWithoutResponse)
 	decision        = (fault_decision_t){ 0 };
 	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 0);
 	ASSERT_EQ(decision.drop);
-	ASSERT_EQ(dev->message_count == message_count);
+	ASSERT_EQ(dev->message_count == (u16)(message_count + 1));
 	ASSERT_EQ(dev->diag_exception_count == exception_count);
 	ASSERT_EQ(dev->diag_no_response_count == 2);
 
