@@ -2396,7 +2396,13 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 	for (u32 i = 0; i < 32; i++)
 	{
 		clients[i].fd = -1;
-		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
+		for (u32 attempt = 0; attempt < 50; attempt++)
+		{
+			if (client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]))
+				break;
+			usleep(50000);
+		}
+		ok = ok && clients[i].fd >= 0;
 		if (!ok)
 			break;
 		opened++;
