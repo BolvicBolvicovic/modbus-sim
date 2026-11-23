@@ -1257,6 +1257,37 @@ assert_mei_object(const u8* resp, u32* offset, u8 id, const char* value)
 	*offset += len;
 }
 
+static void
+add_extended_id(device_t* dev, u8 id, const char* value)
+{
+	u32 i = dev->extended_id_count++;
+
+	dev->extended_id[i].id = id;
+	strcpy(dev->extended_id[i].value, value);
+}
+
+TEST(ReadDeviceIdentificationLegacyMei13EchoesMei)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req13[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		req14[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+	u8		resp13[MODBUS_MAX_PDU];
+	u8		resp14[MODBUS_MAX_PDU];
+	u32		len13 = 0;
+	u32		len14 = 0;
+
+	len13 = run(dev, req13, sizeof(req13), resp13);
+	len14 = run(dev, req14, sizeof(req14), resp14);
+	ASSERT_EQ(len13 == len14);
+	ASSERT_EQ(resp13[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
+	ASSERT_EQ(resp13[1] == 0x0D);
+	ASSERT_EQ(resp14[1] == 0x0E);
+	ASSERT_EQ(memcmp(resp13 + 2, resp14 + 2, len13 - 2) == 0);
+	ASSERT_EQ(resp13[3] == 0x81 && resp13[6] == 0x03);
+	arena_release(arena);
+}
+
 TEST(ReadDeviceIdentificationBasicStream)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1362,6 +1393,121 @@ TEST(ReadDeviceIdentificationSpecificUnknownObjectIsAddressError)
 	arena_release(arena);
 }
 
+TEST(ReadDeviceIdentificationExtendedObjects)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		stream[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
+	u8		resume[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x90 };
+	u8		basic[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+	u8		regular[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x02, 0x00 };
+	u8		specific[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x90 };
+	u8		unknown[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x7F };
+	u8		absent[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x81 };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		off = 7;
+
+	strcpy(dev->device_id[DEVICE_ID_VENDOR_URL], "url");
+	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Sim");
+	add_extended_id(dev, 0xA0, "Zulu");
+	add_extended_id(dev, 0x80, "Alpha");
+	add_extended_id(dev, 0x90, "Mike");
+
+	run(dev, stream, sizeof(stream), resp);
+	ASSERT_EQ(resp[3] == 0x83); /* extended conformity takes precedence */
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x08);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x03, "url");
+	assert_mei_object(resp, &off, 0x04, "Sim");
+	assert_mei_object(resp, &off, 0x80, "Alpha");
+	assert_mei_object(resp, &off, 0x90, "Mike");
+	assert_mei_object(resp, &off, 0xA0, "Zulu");
+
+	off = 7;
+	run(dev, resume, sizeof(resume), resp);
+	ASSERT_EQ(resp[3] == 0x83 && resp[6] == 0x02);
+	assert_mei_object(resp, &off, 0x90, "Mike");
+	assert_mei_object(resp, &off, 0xA0, "Zulu");
+
+	off = 7;
+	run(dev, unknown, sizeof(unknown), resp);
+	ASSERT_EQ(resp[6] == 0x08 && resp[7] == 0x00);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x03, "url");
+	assert_mei_object(resp, &off, 0x04, "Sim");
+	assert_mei_object(resp, &off, 0x80, "Alpha");
+	assert_mei_object(resp, &off, 0x90, "Mike");
+	assert_mei_object(resp, &off, 0xA0, "Zulu");
+
+	off = 7;
+	run(dev, basic, sizeof(basic), resp);
+	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x03);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+
+	off = 7;
+	run(dev, regular, sizeof(regular), resp);
+	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x05);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x03, "url");
+	assert_mei_object(resp, &off, 0x04, "Sim");
+
+	off = 7;
+	run(dev, specific, sizeof(specific), resp);
+	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x01);
+	assert_mei_object(resp, &off, 0x90, "Mike");
+
+	run(dev, absent, sizeof(absent), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	arena_release(arena);
+}
+
+TEST(ReadDeviceIdentificationExtendedMoreFollows)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	char		value[131];
+	u32		len = 0;
+	u32		off = 7;
+
+	memset(value, 'E', 130);
+	value[130] = '\0';
+	add_extended_id(dev, 0x80, value);
+	add_extended_id(dev, 0x90, value);
+	add_extended_id(dev, 0xA0, value);
+
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(len <= MODBUS_MAX_PDU);
+	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0xFF && resp[5] == 0x90 && resp[6] == 0x04);
+	assert_mei_object(resp, &off, 0x00, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x02, "1.0");
+	assert_mei_object(resp, &off, 0x80, value);
+	ASSERT_EQ(len == off);
+
+	req[3] = resp[5];
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(len <= MODBUS_MAX_PDU);
+	ASSERT_EQ(resp[4] == 0xFF && resp[5] == 0xA0 && resp[6] == 0x01 && resp[7] == 0x90);
+	ASSERT_EQ(len == 7 + 2 + 130);
+
+	req[3] = resp[5];
+	len = run(dev, req, sizeof(req), resp);
+	ASSERT_EQ(len <= MODBUS_MAX_PDU);
+	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x01 && resp[7] == 0xA0);
+	ASSERT_EQ(len == 7 + 2 + 130);
+	arena_release(arena);
+}
+
 TEST(ReadDeviceIdentificationMoreFollows)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1411,8 +1557,10 @@ TEST(ReadDeviceIdentificationErrors)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
-	u8		bad_mei[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
-	u8		bad_mei_short[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01 };
+	u8		bad_mei[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0F, 0x01, 0x00 };
+	u8		bad_mei_short[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0F, 0x01 };
+	u8		legacy_bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01 };
+	u8		legacy_bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x05, 0x00 };
 	u8		bad_code[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x05, 0x00 };
 	u8		bad_len[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01 };
 	u8		bad_spec[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
@@ -1425,6 +1573,11 @@ TEST(ReadDeviceIdentificationErrors)
 	/* MEI type is checked before request length so unsupported MEI always gets 01. */
 	run(dev, bad_mei_short, sizeof(bad_mei_short), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	/* The legacy MEI alias keeps the same length and read-code validation. */
+	run(dev, legacy_bad_len, sizeof(legacy_bad_len), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	run(dev, legacy_bad_code, sizeof(legacy_bad_code), resp);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_code, sizeof(bad_code), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_len, sizeof(bad_len), resp);

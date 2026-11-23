@@ -391,6 +391,101 @@ TEST(ConfigDeviceIdentificationAcceptsMaxSize)
 	ASSERT_EQ(strlen(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME]) == 244);
 }
 
+TEST(ConfigDeviceIdObjectDefaultsAndAscendingOrder)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->extended_id_count == 0);
+
+	ASSERT_SUCCESS(load_text(
+		"(device (device-id-object 200 \"last\") (device-id-object 128 \"first\")"
+		"        (device-id-object 150 \"middle\") (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->extended_id_count == 3);
+	ASSERT_EQ(config.devices[0]->extended_id[0].id == 128);
+	ASSERT_EQ(strcmp(config.devices[0]->extended_id[0].value, "first") == 0);
+	ASSERT_EQ(config.devices[0]->extended_id[1].id == 150);
+	ASSERT_EQ(strcmp(config.devices[0]->extended_id[1].value, "middle") == 0);
+	ASSERT_EQ(config.devices[0]->extended_id[2].id == 200);
+	ASSERT_EQ(strcmp(config.devices[0]->extended_id[2].value, "last") == 0);
+}
+
+TEST(ConfigDeviceIdObjectMaxCount)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[2048];
+	u32		off = 0;
+	char		buf[80];
+
+	off += (u32)snprintf(text + off, sizeof(text) - off, "(device");
+	for (u32 i = 0; i < DEVICE_MAX_EXTENDED_IDS; i++)
+		off += (u32)snprintf(text + off, sizeof(text) - off,
+				    " (device-id-object %u \"v%u\")", 128 + i, i);
+	off += (u32)snprintf(text + off, sizeof(text) - off, " (holding 0))");
+	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->extended_id_count == DEVICE_MAX_EXTENDED_IDS);
+	ASSERT_EQ(config.devices[0]->extended_id[0].id == 128);
+	ASSERT_EQ(config.devices[0]->extended_id[DEVICE_MAX_EXTENDED_IDS - 1].id == 159);
+	snprintf(buf, sizeof(buf), "v%d", DEVICE_MAX_EXTENDED_IDS - 1);
+	ASSERT_EQ(strcmp(config.devices[0]->extended_id[DEVICE_MAX_EXTENDED_IDS - 1].value, buf) == 0);
+
+	config = (config_t){ 0 };
+	off = 0;
+	off += (u32)snprintf(text + off, sizeof(text) - off, "(device");
+	for (u32 i = 0; i <= DEVICE_MAX_EXTENDED_IDS; i++)
+		off += (u32)snprintf(text + off, sizeof(text) - off,
+				    " (device-id-object %u \"v%u\")", 128 + i, i);
+	off += (u32)snprintf(text + off, sizeof(text) - off, " (holding 0))");
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "too many device-id-object entries (max 32)") != NULL);
+}
+
+TEST(ConfigDeviceIdObjectRejectsInvalidIds)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(device (device-id-object 127 \"x\") (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "device-id-object ID must be between 128 and 255") != NULL);
+
+	ASSERT_FAILURE(load_text("(device (device-id-object 256 \"x\") (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "device-id-object ID must be between 128 and 255") != NULL);
+}
+
+TEST(ConfigDeviceIdObjectRejectsDuplicateIds)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text(
+		"(device (device-id-object 200 \"a\") (device-id-object 200 \"b\") (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "device-id-object 200 is configured more than once") != NULL);
+}
+
+TEST(ConfigDeviceIdObjectRejectsEmptyAndOverlongText)
+{
+	config_t	config = { 0 };
+	char		err[512] = "";
+	char		text[512];
+	char		longv[246];
+
+	ASSERT_FAILURE(load_text("(device (device-id-object 128 \"\") (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "device-id-object text must not be empty") != NULL);
+
+	memset(longv, 'x', 245);
+	longv[245] = '\0';
+	snprintf(text, sizeof(text), "(device (device-id-object 128 \"%s\") (holding 0))", longv);
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "device-id-object text is too long") != NULL);
+}
+
 TEST(ConfigErrorsAreReadable)
 {
 	EXPECT_ERROR("(device (holding 0 (static 1))", "syntax error");

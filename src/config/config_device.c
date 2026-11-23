@@ -30,7 +30,7 @@ parse_name(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 static bool
 parse_device_id_string(form_ctx_t* ctx, s7_pointer item, device_t* dev, u32 id)
 {
-	static const char* const names[DEVICE_ID_OBJECT_COUNT] = {
+	static const char* const names[DEVICE_ID_STANDARD_COUNT] = {
 		"vendor-name", "product-code", "major-minor-revision",
 		"vendor-url", "product-name", "model-name", "user-application-name",
 	};
@@ -55,6 +55,58 @@ static bool parse_vendor_url(form_ctx_t* ctx, s7_pointer item, device_t* dev) { 
 static bool parse_product_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_PRODUCT_NAME); }
 static bool parse_model_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_MODEL_NAME); }
 static bool parse_user_application_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_USER_APPLICATION_NAME); }
+
+/* Repeatable (device-id-object ID "Text"), stored in ascending ID order. */
+static bool
+parse_device_id_object(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	const char*	value = NULL;
+	s64		id    = 0;
+	u32		pos   = 0;
+
+	if (s7_list_length(ctx->sc, item) != 3)
+		return form_fail(ctx, "%s: expected (device-id-object ID \"Text\")",
+				 form_text(ctx, item));
+	if (!s7_is_integer(s7_cadr(item)))
+		return form_fail(ctx, "%s: device-id-object ID must be a whole number",
+				 form_text(ctx, item));
+
+	id = (s64)s7_integer(s7_cadr(item));
+	if (id < 0x80 || id > 0xFF)
+		return form_fail(ctx, "%s: device-id-object ID must be between 128 and 255",
+				 form_text(ctx, item));
+	if (!s7_is_string(s7_caddr(item)))
+		return form_fail(ctx, "%s: device-id-object text must be in double quotes",
+				 form_text(ctx, item));
+
+	value = s7_string(s7_caddr(item));
+	if (value[0] == '\0')
+		return form_fail(ctx, "%s: device-id-object text must not be empty",
+				 form_text(ctx, item));
+	if (strlen(value) > DEVICE_ID_OBJECT_MAX)
+		return form_fail(ctx, "%s: device-id-object text is too long (max %d bytes, "
+				 "limited by FC 43 / 0x2B MEI response size)",
+				 form_text(ctx, item), DEVICE_ID_OBJECT_MAX);
+	if (dev->extended_id_count >= DEVICE_MAX_EXTENDED_IDS)
+		return form_fail(ctx, "%s: too many device-id-object entries (max %d)",
+				 form_text(ctx, item), DEVICE_MAX_EXTENDED_IDS);
+
+	while (pos < dev->extended_id_count && dev->extended_id[pos].id < (u8)id)
+		pos++;
+	if (pos < dev->extended_id_count && dev->extended_id[pos].id == (u8)id)
+		return form_fail(ctx, "%s: device-id-object %d is configured more than once",
+				 form_text(ctx, item), (int)id);
+
+	if (pos < dev->extended_id_count)
+	{
+		memmove(dev->extended_id + pos + 1, dev->extended_id + pos,
+			(dev->extended_id_count - pos) * sizeof(dev->extended_id[0]));
+	}
+	dev->extended_id[pos].id = (u8)id;
+	strcpy(dev->extended_id[pos].value, value);
+	dev->extended_id_count++;
+	return true;
+}
 
 static bool
 parse_unit_id(form_ctx_t* ctx, s7_pointer item, device_t* dev)
@@ -574,6 +626,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "product-name",     parse_product_name     },
 	{ "model-name",       parse_model_name       },
 	{ "user-application-name", parse_user_application_name },
+	{ "device-id-object", parse_device_id_object  },
 	{ "fault",            parse_fault            },
 	{ "note",             parse_note             },
 	{ "coil",             parse_coil             },
@@ -609,7 +662,8 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
 				 "run-indicator, server-id-additional-data, com-status, com-event, vendor-name, "
 				 "product-code, major-minor-revision, vendor-url, product-name, model-name, "
-				 "user-application-name, fault, note, coil, discrete, input, holding, file or fifo", head);
+				 "user-application-name, device-id-object, fault, note, coil, discrete, input, "
+				 "holding, file or fifo", head);
 
 	return entry->parse(ctx, item, dev);
 }

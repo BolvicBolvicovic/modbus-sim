@@ -2313,7 +2313,7 @@ TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
 	ASSERT_EQ(ok);
 }
 
-TEST(NetReadDeviceIdentificationMei14)
+TEST(NetReadDeviceIdentificationMeiTypes)
 {
 	client_t client = { .fd = -1 };
 	u8	 resp[MODBUS_MAX_PDU];
@@ -2352,7 +2352,59 @@ TEST(NetReadDeviceIdentificationMei14)
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT, EXC_ILLEGAL_FUNCTION);
+		     len > 7 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
+		     resp[1] == 0x0D && resp[2] == 0x01 && resp[3] == 0x82 &&
+		     resp[4] == 0x00 && resp[6] == 0x03;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetReadDeviceIdentificationExtendedObjects)
+{
+	client_t client = { .fd = -1 };
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("",
+				    "(device (unit-id 1) (vendor-name \"Acme\")"
+				    "        (device-id-object 160 \"Second\")"
+				    "        (device-id-object 128 \"First\"))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     len == 45 && resp[1] == 0x0E && resp[3] == 0x83 &&
+		     resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x05 &&
+		     resp[30] == 0x80 && resp[31] == 5 && memcmp(resp + 32, "First", 5) == 0 &&
+		     resp[37] == 0xA0 && resp[38] == 6 && memcmp(resp + 39, "Second", 6) == 0;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x03, 0x00 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     len == 45 && resp[1] == 0x0D && resp[3] == 0x83 && resp[6] == 0x05 &&
+		     resp[30] == 0x80 && resp[37] == 0xA0;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0xA0 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     len == 15 && resp[1] == 0x0E && resp[3] == 0x83 && resp[6] == 0x01 &&
+		     resp[7] == 0xA0 && resp[8] == 6 && memcmp(resp + 9, "Second", 6) == 0;
+	}
+	if (ok)
+	{
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x81 };
+
+		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
+		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT, EXC_ILLEGAL_DATA_ADDRESS);
 	}
 
 	client_close(&client);
