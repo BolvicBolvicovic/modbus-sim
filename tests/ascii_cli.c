@@ -244,18 +244,17 @@ ascii_cli_start_with_args(char* const argv[])
 }
 
 static bool
-ascii_cli_start_device(const char* config_text)
+ascii_cli_start_device(const char* devices)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
-	char* argv[8];
+	char config[1024];
+	char* argv[4];
 	int slave = -1;
 	char name[128];
 	struct termios tio;
 
 	if (!bin)
 		bin = "./modbus-sim";
-	if (!ascii_cli_write_config(config_text) || !ascii_cli_capture_stderr())
-		return false;
 	if (openpty(&g_ascii_cli.master_fd, &slave, name, NULL, NULL) < 0)
 		return false;
 	if (tcgetattr(g_ascii_cli.master_fd, &tio) == 0)
@@ -264,12 +263,14 @@ ascii_cli_start_device(const char* config_text)
 		(void)tcsetattr(g_ascii_cli.master_fd, TCSANOW, &tio);
 	}
 	close(slave);
+	snprintf(config, sizeof(config), "(server (mode ascii-device) (path \"%s\"))\n%s\n",
+		 name, devices);
+	if (!ascii_cli_write_config(config) || !ascii_cli_capture_stderr())
+		return false;
 
 	argv[0] = (char*)bin;
-	argv[1] = "--ascii-device";
-	argv[2] = name;
-	argv[3] = g_ascii_cli.config;
-	argv[4] = NULL;
+	argv[1] = g_ascii_cli.config;
+	argv[2] = NULL;
 	return ascii_cli_start_with_args(argv);
 }
 
@@ -544,49 +545,35 @@ ascii_cli_run_check(const char* config_text, char* const argv[],
 	return true;
 }
 
-TEST(AsciiCliValidatesUnitIdsAndFlagExclusivity)
+TEST(AsciiCliConfigModeValidatesUnitIdsAndRejectsRemovedFlags)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* ascii_valid = "(server (mode ascii-pty))\n"
+				  "(device (unit-id 1) (holding 0 (static 1)))\n";
+	const char* ascii_reserved = "(server (mode ascii-pty))\n"
+				     "(device (unit-id 248) (holding 0))\n";
 	const char* valid = "(device (unit-id 1) (holding 0 (static 1)))\n";
-	const char* reserved = "(device (unit-id 248) (holding 0))\n";
 	bool ok = true;
 
 	if (!bin)
 		bin = "./modbus-sim";
 
 	{
-		char* argv[] = { (char*)bin, "--check", "--ascii-pty", g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(reserved, argv, 2, "not valid for RTU/ASCII");
+		char* argv[] = { (char*)bin, "--check", g_ascii_cli.config, NULL };
+
+		ok = ok && ascii_cli_run_check(ascii_reserved, argv, 1,
+					       "not valid for RTU/ASCII");
 	}
 	{
-		char* argv[] = { (char*)bin, "--check", "--ascii-pty", "--baud", "9600",
-				 g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(valid, argv, 0, NULL);
+		char* argv[] = { (char*)bin, "--check", g_ascii_cli.config, NULL };
+
+		ok = ok && ascii_cli_run_check(ascii_valid, argv, 0, NULL);
 	}
 	{
 		char* argv[] = { (char*)bin, "--ascii-pty", "--port", "1502",
 				 g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(valid, argv, 2, "--port is only valid");
-	}
-	{
-		char* argv[] = { (char*)bin, "--ascii-pty", "--rtu-tcp",
-				 g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(valid, argv, 2, "ASCII modes cannot be combined");
-	}
-	{
-		char* argv[] = { (char*)bin, "--ascii-pty", "--frame-gap-ms", "5",
-				 g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(valid, argv, 2, "--frame-gap-ms is only valid");
-	}
-	{
-		char* argv[] = { (char*)bin, "--ascii-pty", "--strict-t15",
-				 g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(valid, argv, 2, "--strict-t15 is only valid");
-	}
-	{
-		char* argv[] = { (char*)bin, "--ascii-pty", "--ascii-device", "/dev/null",
-				 g_ascii_cli.config, NULL };
-		ok = ok && ascii_cli_run_check(valid, argv, 2, "--ascii-pty and --ascii-device");
+
+		ok = ok && ascii_cli_run_check(valid, argv, 2, "unknown option");
 	}
 	ASSERT_EQ(ok);
 }

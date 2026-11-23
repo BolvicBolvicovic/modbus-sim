@@ -52,7 +52,7 @@ struct config_t
 	device_t*	devices[CONFIG_MAX_DEVICES];
 };
 
-/* Maps a parity name to its enum value (used by CLI parsing). */
+/* Maps a parity name to its enum value. */
 bool		config_parity_from_name(const char* name, parity_t* out);
 
 /* Name: config_load

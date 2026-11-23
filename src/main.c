@@ -22,7 +22,6 @@
 #include "net/rtu_tcp_server.h"
 #include "net/tcp_server.h"
 #include "util/baud.h"
-#include "util/ip.h"
 #include "util/log.h"
 #include "util/serial.h"
 #include <errno.h>
@@ -43,19 +42,6 @@ struct cli_t
 	bool		check_only;
 	bool		verbose;
 	bool		show_help;
-	bool		rtu_pty;
-	bool		rtu_tcp;
-	bool		ascii_pty;
-	bool		strict_t15;
-	bool		broadcast_execute;
-	s32		port_override;		/* -1 = use the config's port */
-	s32		frame_gap_override;	/* -1 = use config/auto */
-	s32		baud_override;		/* -1 = use config/tty/default */
-	s32		parity_override;	/* -1 = use the config's parity */
-	s32		stop_bits_override;	/* -1 = use the config's stop bits */
-	const char*	bind_override;		/* NULL = use the config's bind */
-	const char*	rtu_device;		/* NULL = TCP/RTU-TCP/ASCII mode */
-	const char*	ascii_device;
 };
 
 static inline void
@@ -66,109 +52,34 @@ print_usage(void)
 	     "Usage: modbus-sim [options] CONFIG.scm\n"
 	     "\n"
 	     "Options:\n"
-	     "  -p, --port N         TCP: listen on port N (overrides the config)\n"
-	     "  -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)\n"
-	     "      --rtu-pty        RTU: create a PTY and print its slave path\n"
-	     "      --rtu-device PATH RTU: serve RTU over an existing serial-like device\n"
-	     "      --ascii-pty      ASCII: create a PTY and print its slave path\n"
-	     "      --ascii-device PATH ASCII: serve Modbus ASCII over an existing serial-like device\n"
-	     "      --baud N         RTU/ASCII/RTU-over-TCP: standard termios baud (serial line speed;\n"
-	     "                       RTU timing only; overrides config/tty)\n"
-	     "      --frame-gap-ms N RTU: explicit inter-frame silence override in ms\n"
-	     "      --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)\n"
-	     "      --broadcast-execute RTU/RTU-over-TCP: run unit-0 requests on all devices (no response)\n"
-	     "      --parity NAME    RTU byte stream: none|even|odd|mark|space (overrides config)\n"
-	     "      --stop-bits N    RTU byte stream: 1 or 2 stop bits (overrides config)\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
 	     "  -h, --help           show this help\n"
 	     "\n"
+	     "Transport/server settings (mode, path, port, bind, serial options) are\n"
+	     "defined in (server ...) in the config file; there are no server CLI options.\n"
+	     "\n"
 	     "Exit status: 0 success, 1 runtime/config-load error, 2 invalid CLI or config option.\n"
 	     "\n"
-	     "RTU mode runs Modbus RTU over a bidirectional byte stream (PTY or device).\n"
-	     "ASCII mode runs Modbus ASCII over a byte stream (PTY or device) using 8N1 here,\n"
-	     "not the spec's traditional 7E1. ASCII is serial only: no ASCII-over-TCP mode,\n"
-	     "and it is not Modbus TCP. ASCII frames are ':' + hex + LRC + CRLF and are\n"
-	     "delimited by CRLF, not by inter-frame gaps. --port, --bind, --frame-gap-ms\n"
-	     "and --strict-t15 do not apply to ASCII; --baud only sets the line speed.\n"
+	     "RTU byte streams use a PTY or an existing serial-like device selected by\n"
+	     "(server (mode rtu-pty|rtu-device) ...). ASCII uses 8N1 over a byte stream\n"
+	     "(PTY or device) selected by (mode ascii-pty|ascii-device); it has no TCP form.\n"
+	     "ASCII frames are ':' + hex + LRC + CRLF, delimited by CRLF, not by timing.\n"
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
-	     "t1.5 discard is opt-in for RTU byte streams (--strict-t15/(strict-t15 on));\n"
-	     "it is never applied to RTU-over-TCP. Serial parity and stop bits apply only\n"
-	     "to RTU byte streams; the default is 8N1.\n"
-	     "Unit-0 (broadcast) requests are ignored by default. --broadcast-execute or\n"
-	     "(broadcast-execute on) runs them on every device without sending a response.\n"
+	     "t1.5 discard and unit-0 broadcast execution are opt-in via (server ...).\n"
 	     "\n"
 	     "Try:  modbus-sim profiles/minimal.scm\n"
 	     "Docs: README.md and docs/");
-}
-
-/* Parses a positive integer argument strictly: digits only, no trailing junk, no overflow. */
-static bool
-parse_u32_arg(const char* text, u32 min, u32 max, const char* name, u32* out)
-{
-	char*		end  = NULL;
-	unsigned long	value = 0;
-
-	errno = 0;
-	value = strtoul(text, &end, 10);
-	if (errno == ERANGE ||
-	    end == text ||
-	    *end != '\0' ||
-	    text[0] < '0' ||
-	    text[0] > '9' ||
-	    value < min ||
-	    value > max)
-	{
-		fprintf(stderr, "%s must be a whole number between %u and %u\n", name, min, max);
-		return false;
-	}
-
-	*out = (u32)value;
-	return true;
-}
-
-static bool
-parse_baud_arg(const char* text, u32* out)
-{
-	u32	baud = 0;
-
-	if (!parse_u32_arg(text, 1, 4000000, "baud", &baud))
-		return false;
-	if (!baud_is_standard(baud))
-	{
-		fprintf(stderr, "baud must be a standard termios rate (e.g. 9600, 19200, 38400, 115200)\n");
-		return false;
-	}
-	*out = baud;
-	return true;
-}
-
-static bool
-parse_parity_arg(const char* text, parity_t* out)
-{
-	if (!config_parity_from_name(text, out))
-	{
-		fprintf(stderr, "parity must be one of: none, even, odd, mark, space\n");
-		return false;
-	}
-	return true;
 }
 
 /* Returns false and prints a message when the arguments make no sense. */
 static bool
 parse_args(int argc, char** argv, cli_t* cli)
 {
-	cli->port_override      = -1;
-	cli->frame_gap_override = -1;
-	cli->baud_override      = -1;
-	cli->parity_override    = -1;
-	cli->stop_bits_override = -1;
-
 	for (int i = 1; i < argc; i++)
 	{
-		const char*	arg  = argv[i];
-		bool		more = (i + 1 < argc);
+		const char* arg = argv[i];
 
 		if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
 			cli->show_help = true;
@@ -176,155 +87,18 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->check_only = true;
 		else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0)
 			cli->verbose = true;
-		else if (strcmp(arg, "--rtu-pty") == 0)
-			cli->rtu_pty = true;
-		else if (strcmp(arg, "--rtu-tcp") == 0)
-			cli->rtu_tcp = true;
-		else if (strcmp(arg, "--ascii-pty") == 0)
-			cli->ascii_pty = true;
-		else if (strcmp(arg, "--ascii-device") == 0 && more)
-			cli->ascii_device = argv[++i];
-		else if (strcmp(arg, "--strict-t15") == 0)
-			cli->strict_t15 = true;
-		else if (strcmp(arg, "--broadcast-execute") == 0)
-			cli->broadcast_execute = true;
-		else if ((strcmp(arg, "-p") == 0 || strcmp(arg, "--port") == 0) && more)
+		else if (arg[0] == '-')
 		{
-			u32 port = 0;
-
-			if (!parse_u32_arg(argv[++i], 1, 65535, "port", &port))
-				return false;
-			cli->port_override = (s32)port;
+			fprintf(stderr, "unknown option '%s' (try --help)\n", arg);
+			return false;
 		}
-		else if ((strcmp(arg, "-b") == 0 || strcmp(arg, "--bind") == 0) && more)
-			cli->bind_override = argv[++i];
-		else if (strcmp(arg, "--rtu-device") == 0 && more)
-			cli->rtu_device = argv[++i];
-		else if ((strcmp(arg, "--baud") == 0 || strcmp(arg, "--rtu-baud") == 0) && more)
-		{
-			u32 baud = 0;
-
-			if (!parse_baud_arg(argv[++i], &baud))
-				return false;
-			cli->baud_override = (s32)baud;
-		}
-		else if (strcmp(arg, "--frame-gap-ms") == 0 && more)
-		{
-			u32 gap = 0;
-
-			if (!parse_u32_arg(argv[++i], 1, 60000, "frame-gap-ms", &gap))
-				return false;
-			cli->frame_gap_override = (s32)gap;
-		}
-		else if (strcmp(arg, "--parity") == 0 && more)
-		{
-			parity_t parity = PARITY_NONE;
-
-			if (!parse_parity_arg(argv[++i], &parity))
-				return false;
-			cli->parity_override = (s32)parity;
-		}
-		else if (strcmp(arg, "--stop-bits") == 0 && more)
-		{
-			u32 stop_bits = 0;
-
-			if (!parse_u32_arg(argv[++i], 1, 2, "stop-bits", &stop_bits))
-				return false;
-			cli->stop_bits_override = (s32)stop_bits;
-		}
-		else if (arg[0] != '-' && !cli->config_path)
+		else if (!cli->config_path)
 			cli->config_path = arg;
 		else
 		{
 			fprintf(stderr, "unexpected argument '%s' (try --help)\n", arg);
 			return false;
 		}
-	}
-
-	bool any_rtu   = cli->rtu_pty || cli->rtu_device || cli->rtu_tcp;
-	bool any_ascii = cli->ascii_pty || cli->ascii_device;
-
-	if (cli->rtu_pty && cli->rtu_device)
-	{
-		fprintf(stderr, "--rtu-pty and --rtu-device cannot be used together\n");
-		return false;
-	}
-	if (cli->ascii_pty && cli->ascii_device)
-	{
-		fprintf(stderr, "--ascii-pty and --ascii-device cannot be used together\n");
-		return false;
-	}
-	if (any_rtu && any_ascii)
-	{
-		fprintf(stderr, "ASCII modes cannot be combined with RTU modes\n");
-		return false;
-	}
-	if (cli->rtu_tcp && (cli->rtu_pty || cli->rtu_device))
-	{
-		fprintf(stderr, "--rtu-tcp cannot be used with --rtu-pty/--rtu-device\n");
-		return false;
-	}
-	if (cli->port_override != -1 &&
-	    (cli->rtu_pty || cli->rtu_device || cli->ascii_pty || cli->ascii_device))
-	{
-		fprintf(stderr, "--port is only valid in TCP/RTU-over-TCP mode\n");
-		return false;
-	}
-	if (cli->bind_override &&
-	    (cli->rtu_pty || cli->rtu_device || cli->ascii_pty || cli->ascii_device))
-	{
-		fprintf(stderr, "--bind is only valid in TCP/RTU-over-TCP mode\n");
-		return false;
-	}
-	if (cli->frame_gap_override != -1 &&
-	    !cli->rtu_pty &&
-	    !cli->rtu_device &&
-	    !cli->rtu_tcp)
-	{
-		fprintf(stderr, "--frame-gap-ms is only valid in RTU/RTU-over-TCP mode\n");
-		return false;
-	}
-	if (cli->baud_override != -1 &&
-	    !any_rtu &&
-	    !any_ascii)
-	{
-		fprintf(stderr, "--baud is only valid in RTU/ASCII/RTU-over-TCP mode\n");
-		return false;
-	}
-	if (cli->strict_t15 &&
-	    !cli->rtu_pty &&
-	    !cli->rtu_device &&
-	    !cli->rtu_tcp)
-	{
-		fprintf(stderr, "--strict-t15 is only valid in RTU/RTU-over-TCP mode\n");
-		return false;
-	}
-	if (cli->strict_t15 && cli->rtu_tcp)
-	{
-		fprintf(stderr, "--strict-t15 is not supported for RTU-over-TCP\n");
-		return false;
-	}
-	if (cli->broadcast_execute &&
-	    !cli->rtu_pty &&
-	    !cli->rtu_device &&
-	    !cli->rtu_tcp)
-	{
-		fprintf(stderr, "--broadcast-execute is only valid in RTU/RTU-over-TCP mode\n");
-		return false;
-	}
-	if (cli->parity_override != -1 &&
-	    !cli->rtu_pty &&
-	    !cli->rtu_device)
-	{
-		fprintf(stderr, "--parity is only valid in RTU byte-stream mode (--rtu-pty/--rtu-device)\n");
-		return false;
-	}
-	if (cli->stop_bits_override != -1 &&
-	    !cli->rtu_pty &&
-	    !cli->rtu_device)
-	{
-		fprintf(stderr, "--stop-bits is only valid in RTU byte-stream mode (--rtu-pty/--rtu-device)\n");
-		return false;
 	}
 	return true;
 }
@@ -338,25 +112,6 @@ count_points(const device_t* dev, space_kind_t space)
 		count += (dev->points[i].space == space);
 	return count;
 }
-
-static bool
-validate_serial_unit_ids(const config_t* config, char* err, u32 err_size)
-{
-	for (u32 i = 0; i < config->device_count; i++)
-	{
-		u8 id = config->devices[i]->unit_id;
-
-		if (id == 0 || id > 247)
-		{
-			snprintf(err, err_size,
-				 "device '%s': unit-id %u is not valid for RTU/ASCII (allowed: 1-247; 0 is broadcast, 248-255 reserved)",
-				 config->devices[i]->name, id);
-			return false;
-		}
-	}
-	return true;
-}
-
 
 static const char*
 fault_text(const fault_t* fault, char* buf, u32 size)
@@ -388,40 +143,48 @@ print_rtu_timing(const config_t* config)
 }
 
 static void
-print_summary(const config_t* config, bool rtu_mode, bool rtu_tcp_mode,
-	      bool ascii_mode, const char* serial_path)
+print_summary(const config_t* config)
 {
 	char	fault[96];
+	const char*	serial_path = "pty";
 
-	if (rtu_tcp_mode)
+	if (config->mode == SERVER_MODE_RTU_DEVICE ||
+	    config->mode == SERVER_MODE_ASCII_DEVICE)
+		serial_path = config->path;
+
+	switch (config->mode)
 	{
-		printf("%u device%s, RTU-over-TCP %s:%u",
-		       config->device_count, config->device_count == 1 ? "" : "s",
-		       config->bind_address, config->port);
-		print_rtu_timing(config);
-		if (config->broadcast_execute)
-			printf(", broadcast-execute on");
-		putchar('\n');
+		case SERVER_MODE_RTU_TCP:
+			printf("%u device%s, RTU-over-TCP %s:%u",
+			       config->device_count, config->device_count == 1 ? "" : "s",
+			       config->bind_address, config->port);
+			print_rtu_timing(config);
+			if (config->broadcast_execute)
+				printf(", broadcast-execute on");
+			putchar('\n');
+			break;
+		case SERVER_MODE_ASCII_PTY:
+		case SERVER_MODE_ASCII_DEVICE:
+			printf("%u device%s, ASCII %s\n",
+			       config->device_count, config->device_count == 1 ? "" : "s",
+			       serial_path);
+			break;
+		case SERVER_MODE_RTU_PTY:
+		case SERVER_MODE_RTU_DEVICE:
+			printf("%u device%s, RTU %s",
+			       config->device_count, config->device_count == 1 ? "" : "s",
+			       serial_path);
+			print_rtu_timing(config);
+			if (config->broadcast_execute)
+				printf(", broadcast-execute on");
+			putchar('\n');
+			break;
+		case SERVER_MODE_TCP:
+			printf("%u device%s on %s:%u\n", config->device_count,
+			       config->device_count == 1 ? "" : "s",
+			       config->bind_address, config->port);
+			break;
 	}
-	else if (ascii_mode)
-	{
-		printf("%u device%s, ASCII %s\n",
-		       config->device_count, config->device_count == 1 ? "" : "s",
-		       serial_path ? serial_path : "(fd)");
-	}
-	else if (rtu_mode)
-	{
-		printf("%u device%s, RTU %s",
-		       config->device_count, config->device_count == 1 ? "" : "s",
-		       serial_path ? serial_path : "(fd)");
-		print_rtu_timing(config);
-		if (config->broadcast_execute)
-			printf(", broadcast-execute on");
-		putchar('\n');
-	}
-	else
-		printf("%u device%s on %s:%u\n", config->device_count, config->device_count == 1 ? "" : "s",
-		       config->bind_address, config->port);
 
 	for (u32 i = 0; i < config->device_count; i++)
 	{
@@ -434,69 +197,6 @@ print_summary(const config_t* config, bool rtu_mode, bool rtu_tcp_mode,
 	}
 }
 
-static s32
-apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
-{
-	bool	rtu_mode  = cli->rtu_pty || cli->rtu_device || cli->rtu_tcp;
-	bool	ascii_mode = cli->ascii_pty || cli->ascii_device;
-	char	error[512];
-
-	if (cli->frame_gap_override != -1)
-		config->frame_gap_ms = (u32)cli->frame_gap_override;
-	if (cli->baud_override != -1)
-		config->baud = (u32)cli->baud_override;
-	if (cli->strict_t15)
-		config->strict_t15 = true;
-	if (cli->broadcast_execute)
-		config->broadcast_execute = true;
-	if (cli->parity_override != -1)
-		config->parity = (parity_t)cli->parity_override;
-	if (cli->stop_bits_override != -1)
-		config->stop_bits = (u32)cli->stop_bits_override;
-
-	if ((rtu_mode || ascii_mode) &&
-	    !validate_serial_unit_ids(config, error, sizeof(error)))
-	{
-		fprintf(stderr, "%s: %s\n", config_path, error);
-		return 2;
-	}
-	if (cli->rtu_tcp && config->strict_t15)
-	{
-		fprintf(stderr, "%s: strict-t15 is not supported for RTU-over-TCP\n", config_path);
-		return 2;
-	}
-	if (cli->rtu_tcp && config->parity != PARITY_NONE)
-	{
-		fprintf(stderr, "%s: parity is not supported for RTU-over-TCP\n", config_path);
-		return 2;
-	}
-	if (cli->rtu_tcp && config->stop_bits != 1)
-	{
-		fprintf(stderr, "%s: stop-bits are not supported for RTU-over-TCP\n", config_path);
-		return 2;
-	}
-
-	if (cli->port_override != -1)
-		config->port = (u16)cli->port_override;
-
-	if (!cli->bind_override)
-		return 0;
-
-	if (strlen(cli->bind_override) >= sizeof(config->bind_address))
-	{
-		fprintf(stderr, "bind address is too long (max %zu characters)\n",
-			sizeof(config->bind_address) - 1);
-		return 2;
-	}
-	if (!ip_is_ipv4_literal(cli->bind_override))
-	{
-		fprintf(stderr, "bind address '%s' is not an IPv4 address like 127.0.0.1\n",
-			cli->bind_override);
-		return 2;
-	}
-	strcpy(config->bind_address, cli->bind_override);
-	return 0;
-}
 
 static bool
 tty_is_pty(int fd)
@@ -603,13 +303,13 @@ set_tty_raw(int fd, u32 baud, parity_t parity, u32 stop_bits)
 }
 
 static s32
-run_rtu(const cli_t* cli, config_t* config)
+run_rtu(config_t* config)
 {
 	int	fd       = -1;
 	int	slave_fd = -1;
 	s32	status   = 1;
 
-	if (cli->rtu_pty)
+	if (config->mode == SERVER_MODE_RTU_PTY)
 	{
 #if defined(__linux__)
 		char	name[128];
@@ -630,17 +330,17 @@ run_rtu(const cli_t* cli, config_t* config)
 		printf("RTU PTY slave: %s\n", name);
 		fflush(stdout);
 #else
-		fprintf(stderr, "--rtu-pty is not supported on this platform\n");
+		fprintf(stderr, "RTU PTY mode is not supported on this platform\n");
 		return 2;
 #endif
 	}
 	else
 	{
-		fd = open(cli->rtu_device, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
+		fd = open(config->path, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
 		if (fd < 0)
 		{
 			fprintf(stderr, "cannot open RTU device '%s': %s\n",
-				cli->rtu_device, strerror(errno));
+				config->path, strerror(errno));
 			return 1;
 		}
 	}
@@ -648,7 +348,8 @@ run_rtu(const cli_t* cli, config_t* config)
 	if (!set_tty_raw(fd, config->baud, config->parity, config->stop_bits))
 	{
 		fprintf(stderr, "cannot configure RTU device '%s': %s\n",
-			cli->rtu_pty ? "pty" : cli->rtu_device, strerror(errno));
+			config->mode == SERVER_MODE_RTU_PTY ? "pty" : config->path,
+			strerror(errno));
 		goto cleanup;
 	}
 	{
@@ -661,7 +362,7 @@ run_rtu(const cli_t* cli, config_t* config)
 		}
 	}
 	/* PTY master/slave have no real UART baud; only auto-detect on real tty devices. */
-	if (config->baud == 0 && !cli->rtu_pty)
+	if (config->baud == 0 && config->mode == SERVER_MODE_RTU_DEVICE)
 		config->baud = tty_baud(fd);
 
 	{
@@ -688,13 +389,13 @@ cleanup:
 }
 
 static s32
-run_ascii(const cli_t* cli, config_t* config)
+run_ascii(config_t* config)
 {
 	int	fd       = -1;
 	int	slave_fd = -1;
 	s32	status   = 1;
 
-	if (cli->ascii_pty)
+	if (config->mode == SERVER_MODE_ASCII_PTY)
 	{
 #if defined(__linux__)
 		char	name[128];
@@ -714,17 +415,17 @@ run_ascii(const cli_t* cli, config_t* config)
 		printf("ASCII PTY slave: %s\n", name);
 		fflush(stdout);
 #else
-		fprintf(stderr, "--ascii-pty is not supported on this platform\n");
+		fprintf(stderr, "ASCII PTY mode is not supported on this platform\n");
 		return 2;
 #endif
 	}
 	else
 	{
-		fd = open(cli->ascii_device, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
+		fd = open(config->path, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
 		if (fd < 0)
 		{
 			fprintf(stderr, "cannot open ASCII device '%s': %s\n",
-				cli->ascii_device, strerror(errno));
+				config->path, strerror(errno));
 			return 1;
 		}
 	}
@@ -732,7 +433,8 @@ run_ascii(const cli_t* cli, config_t* config)
 	if (!set_tty_raw(fd, config->baud, PARITY_NONE, 1))
 	{
 		fprintf(stderr, "cannot configure ASCII device '%s': %s\n",
-			cli->ascii_pty ? "pty" : cli->ascii_device, strerror(errno));
+			config->mode == SERVER_MODE_ASCII_PTY ? "pty" : config->path,
+			strerror(errno));
 		goto cleanup;
 	}
 	{
@@ -800,15 +502,12 @@ run_tcp(config_t* config)
 int
 main(int argc, char** argv)
 {
-	cli_t		cli      = { 0 };
-	config_t	config   = { 0 };
+	cli_t		cli     = { 0 };
+	config_t	config  = { 0 };
 	char		error[512];
-	arena_t*	app      = NULL;
-	arena_t*	scratch    = NULL;
-	bool		rtu_mode   = false;
-	bool		ascii_mode = false;
-	const char*	serial_path = NULL;
-	s32		status     = 1;
+	arena_t*	app     = NULL;
+	arena_t*	scratch = NULL;
+	s32		status  = 1;
 
 	if (!parse_args(argc, argv, &cli))
 		return 2;
@@ -841,17 +540,7 @@ main(int argc, char** argv)
 	arena_release(scratch);
 	scratch = NULL;
 
-	status = apply_overrides(&cli, &config, cli.config_path);
-	if (status != 0)
-		goto cleanup;
-
-	rtu_mode   = cli.rtu_pty || cli.rtu_device;
-	ascii_mode = cli.ascii_pty || cli.ascii_device;
-	if (cli.ascii_device || cli.rtu_device)
-		serial_path = cli.ascii_device ? cli.ascii_device : cli.rtu_device;
-	else if (cli.ascii_pty || cli.rtu_pty)
-		serial_path = "pty";
-	print_summary(&config, rtu_mode, cli.rtu_tcp, ascii_mode, serial_path);
+	print_summary(&config);
 	if (cli.check_only)
 	{
 		puts("config OK");
@@ -859,12 +548,23 @@ main(int argc, char** argv)
 		goto cleanup;
 	}
 
-	if (cli.rtu_tcp)
-		status = run_rtu_tcp(&config);
-	else if (ascii_mode)
-		status = run_ascii(&cli, &config);
-	else
-		status = rtu_mode ? run_rtu(&cli, &config) : run_tcp(&config);
+	switch (config.mode)
+	{
+		case SERVER_MODE_TCP:
+			status = run_tcp(&config);
+			break;
+		case SERVER_MODE_RTU_TCP:
+			status = run_rtu_tcp(&config);
+			break;
+		case SERVER_MODE_RTU_PTY:
+		case SERVER_MODE_RTU_DEVICE:
+			status = run_rtu(&config);
+			break;
+		case SERVER_MODE_ASCII_PTY:
+		case SERVER_MODE_ASCII_DEVICE:
+			status = run_ascii(&config);
+			break;
+	}
 
 cleanup:
 	if (scratch)

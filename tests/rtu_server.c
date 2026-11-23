@@ -1067,7 +1067,7 @@ TEST(RtuServerBaudDerivedGapFragments)
 
 TEST(RtuServerBaudSplitFrameThreeMsIsAnswered)
 {
-	/* Acceptance: a frame sent in two writes 3 ms apart at --baud 115200 over a
+	/* Acceptance: a frame sent in two writes 3 ms apart at baud 115200 over a
 	 * byte stream/PTY-like fd must be answered. t1.5 discard is opt-in and must
 	 * not break valid frames at read() boundaries. */
 	arena_t*	arena = ARENA_ALLOC();
