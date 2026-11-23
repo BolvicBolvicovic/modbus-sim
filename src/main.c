@@ -17,6 +17,7 @@
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
 #include "net/rtu_server.h"
+#include "net/rtu_tcp_server.h"
 #include "net/tcp_server.h"
 #include "util/baud.h"
 #include "util/ip.h"
@@ -40,11 +41,12 @@ struct cli_t
 	bool		verbose;
 	bool		show_help;
 	bool		rtu_pty;
+	bool		rtu_tcp;
 	s32		port_override;		/* -1 = use the config's port */
 	s32		frame_gap_override;	/* -1 = use config/auto */
 	s32		baud_override;		/* -1 = use config/tty/default */
 	const char*	bind_override;		/* NULL = use the config's bind */
-	const char*	rtu_device;		/* NULL = TCP mode */
+	const char*	rtu_device;		/* NULL = TCP/RTU-TCP mode */
 };
 
 static inline void
@@ -68,6 +70,7 @@ print_usage(void)
 	     "Exit status: 0 success, 1 runtime/config-load error, 2 invalid CLI or config option.\n"
 	     "\n"
 	     "RTU mode runs Modbus RTU over a bidirectional byte stream (PTY or device).\n"
+	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
 	     "\n"
 	     "Try:  modbus-sim profiles/minimal.scm\n"
@@ -131,6 +134,8 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->verbose = true;
 		else if (strcmp(arg, "--rtu-pty") == 0)
 			cli->rtu_pty = true;
+		else if (strcmp(arg, "--rtu-tcp") == 0)
+			cli->rtu_tcp = true;
 		else if ((strcmp(arg, "-p") == 0 || strcmp(arg, "--port") == 0) && more)
 		{
 			u32 port = 0;
@@ -173,24 +178,29 @@ parse_args(int argc, char** argv, cli_t* cli)
 		fprintf(stderr, "--rtu-pty and --rtu-device cannot be used together\n");
 		return false;
 	}
+	if (cli->rtu_tcp && (cli->rtu_pty || cli->rtu_device))
+	{
+		fprintf(stderr, "--rtu-tcp cannot be used with --rtu-pty/--rtu-device\n");
+		return false;
+	}
 	if (cli->port_override != -1 && (cli->rtu_pty || cli->rtu_device))
 	{
-		fprintf(stderr, "--port is only valid in TCP mode\n");
+		fprintf(stderr, "--port is only valid in TCP/RTU-over-TCP mode\n");
 		return false;
 	}
 	if (cli->bind_override && (cli->rtu_pty || cli->rtu_device))
 	{
-		fprintf(stderr, "--bind is only valid in TCP mode\n");
+		fprintf(stderr, "--bind is only valid in TCP/RTU-over-TCP mode\n");
 		return false;
 	}
-	if (cli->frame_gap_override != -1 && !cli->rtu_pty && !cli->rtu_device)
+	if (cli->frame_gap_override != -1 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
 	{
-		fprintf(stderr, "--frame-gap-ms is only valid in RTU mode\n");
+		fprintf(stderr, "--frame-gap-ms is only valid in RTU/RTU-over-TCP mode\n");
 		return false;
 	}
-	if (cli->baud_override != -1 && !cli->rtu_pty && !cli->rtu_device)
+	if (cli->baud_override != -1 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
 	{
-		fprintf(stderr, "--baud is only valid in RTU mode\n");
+		fprintf(stderr, "--baud is only valid in RTU/RTU-over-TCP mode\n");
 		return false;
 	}
 	return true;
@@ -239,11 +249,17 @@ fault_text(const fault_t* fault, char* buf, u32 size)
 }
 
 static void
-print_summary(const config_t* config, bool rtu_mode, const char* rtu_path)
+print_summary(const config_t* config, bool rtu_mode, bool rtu_tcp_mode, const char* rtu_path)
 {
 	char	fault[96];
 
-	if (rtu_mode)
+	if (rtu_tcp_mode)
+	{
+		printf("%u device%s, RTU-over-TCP %s:%u\n",
+		       config->device_count, config->device_count == 1 ? "" : "s",
+		       config->bind_address, config->port);
+	}
+	else if (rtu_mode)
 	{
 		printf("%u device%s, RTU %s",
 		       config->device_count, config->device_count == 1 ? "" : "s",
@@ -276,7 +292,7 @@ print_summary(const config_t* config, bool rtu_mode, const char* rtu_path)
 static s32
 apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 {
-	bool	rtu_mode = cli->rtu_pty || cli->rtu_device;
+	bool	rtu_mode = cli->rtu_pty || cli->rtu_device || cli->rtu_tcp;
 	char	error[512];
 
 	if (cli->frame_gap_override != -1)
@@ -493,6 +509,23 @@ cleanup:
 }
 
 static s32
+run_rtu_tcp(config_t* config)
+{
+	rtu_tcp_server_options_t	options = {
+		.bind_address    = config->bind_address,
+		.port            = config->port,
+		.seed            = config->seed,
+		.idle_timeout_ms = config->idle_timeout_ms,
+		.frame_gap_ms    = config->frame_gap_ms,
+		.baud            = config->baud,
+		.devices         = config->devices,
+		.device_count    = config->device_count,
+	};
+
+	return rtu_tcp_server_run(&options);
+}
+
+static s32
 run_tcp(config_t* config)
 {
 	tcp_server_options_t	options = {
@@ -556,7 +589,7 @@ main(int argc, char** argv)
 
 	rtu_mode = cli.rtu_pty || cli.rtu_device;
 	rtu_path = cli.rtu_device ? cli.rtu_device : (cli.rtu_pty ? "pty" : NULL);
-	print_summary(&config, rtu_mode, rtu_path);
+	print_summary(&config, rtu_mode, cli.rtu_tcp, rtu_path);
 	if (cli.check_only)
 	{
 		puts("config OK");
@@ -564,7 +597,10 @@ main(int argc, char** argv)
 		goto cleanup;
 	}
 
-	status = rtu_mode ? run_rtu(&cli, &config) : run_tcp(&config);
+	if (cli.rtu_tcp)
+		status = run_rtu_tcp(&config);
+	else
+		status = rtu_mode ? run_rtu(&cli, &config) : run_tcp(&config);
 
 cleanup:
 	if (scratch)

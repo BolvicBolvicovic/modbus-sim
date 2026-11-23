@@ -71,12 +71,13 @@ See [docs/profiles.md](docs/profiles.md).
 ```
 modbus-sim [options] CONFIG.scm
 
-  -p, --port N         TCP: listen on port N (overrides the config)
-  -b, --bind ADDR      TCP: listen on IPv4 address ADDR (overrides the config)
+  -p, --port N         TCP/RTU-over-TCP: listen on port N (overrides the config)
+  -b, --bind ADDR      TCP/RTU-over-TCP: listen on IPv4 address ADDR (overrides the config)
       --rtu-pty        RTU: create a PTY and print its slave path
       --rtu-device PATH RTU: serve RTU over an existing serial-like device
-      --baud N         RTU: standard termios baud for t3.5 timing (overrides config/tty)
-      --frame-gap-ms N RTU: explicit inter-frame silence override in ms
+      --rtu-tcp        RTU-over-TCP: serve RTU frames over TCP
+      --baud N         RTU/RTU-over-TCP: baud for t3.5/t1.5 timing (overrides config/tty)
+      --frame-gap-ms N RTU/RTU-over-TCP: explicit inter-frame silence override in ms
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
   -h, --help           show help
@@ -97,8 +98,12 @@ or the tty's existing baud rate). In baud-derived auto mode (no `--frame-gap-ms`
 server also enforces t1.5 as a best-effort intra-frame read() boundary check. `--frame-gap-ms` is an
 explicit inter-frame silence override and takes precedence when set. For PTY/pipe streams with no
 known baud and no override, the default 20 ms fallback is used; read() boundaries do not expose true
-UART character timing. `--port`/`--bind` are TCP-only; `--baud`/`--frame-gap-ms` are RTU-only. RTU-over-TCP
-is not implemented.
+UART character timing.
+
+`--rtu-tcp` serves Modbus RTU frames (`[addr][PDU][CRC lo hi]`) on a TCP listen socket as a
+separate transport/framing choice. It is not Modbus TCP (MBAP) and does not change existing TCP or
+RTU byte-stream behavior. `--port`/`--bind` apply to TCP and RTU-over-TCP; `--baud`/`--frame-gap-ms`
+apply to RTU and RTU-over-TCP for RTU frame timing.
 
 ## Documentation
 
@@ -114,7 +119,7 @@ src/            the program, one folder per module (headers next to their .c fil
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, and PDU handlers
-  net/          TCP and RTU network loops
+  net/          TCP, RTU byte-stream, and RTU-over-TCP network loops
   util/         clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
