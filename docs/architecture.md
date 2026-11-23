@@ -30,8 +30,8 @@
 |---|---|---|
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
-| `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `rtu_server`, `rtu_tcp_server`, `net_common` | TCP sockets, RTU byte stream, RTU-over-TCP, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec and frame extraction, function codes, exceptions; knows nothing about sockets or Scheme |
+| `src/net` | `tcp_server`, `rtu_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, RTU byte stream, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU PTY/device open |
 
@@ -83,22 +83,24 @@ One thread, one `poll()` call. Per connection there is one receive buffer and on
 ### RTU (`net/rtu_server.c`)
 
 Also single-threaded `poll()` on one bidirectional fd (PTY master, existing device, or similar byte
-stream). RTU has no MBAP length field, so frame boundaries are detected by inter-frame silence. When a
-baud rate is known (config/CLI or tty) and no explicit `frame-gap-ms` override is set, Modbus t3.5 is
-derived from baud for inter-frame boundaries. Optional `strict_t15` enables a best-effort t1.5
-intra-frame discard heuristic in baud-derived auto mode for RTU byte streams. `frame-gap-ms` is an
-explicit inter-frame override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a
-practical approximation. After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown
-unit, and broadcast (unit 0) produce no response. Delayed fault responses use the same due-time poll
-pattern as TCP.
+stream). `net/rtu_framer` owns the rx buffer, frame extraction, gap/t1.5 handling, and PDU dispatch
+handoff; the server owns fd polling, EOF/hangup behavior, and delayed response writes. RTU has no MBAP
+length field, so frame boundaries are detected by inter-frame silence. When a baud rate is known
+(config/CLI or tty) and no explicit `frame-gap-ms` override is set, Modbus t3.5 is derived from baud
+for inter-frame boundaries. Optional `strict_t15` enables a best-effort t1.5 intra-frame discard
+heuristic in baud-derived auto mode for RTU byte streams. `frame-gap-ms` is an explicit inter-frame
+override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a practical approximation.
+After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0)
+produce no response. Delayed fault responses use the same due-time poll pattern as TCP.
 
 ### RTU-over-TCP (`net/rtu_tcp_server.c`)
 
 Single-threaded `poll()` TCP listen/server loop, similar to the TCP server, but each connection
-carries Modbus RTU frames instead of MBAP. It reuses the same RTU CRC/framing, t3.5 timing helpers,
-PDU dispatch, and fault handling. t1.5 discard is not enforced on RTU-over-TCP because TCP read()
-boundaries do not reflect UART character timing. This is an explicit separate transport selected by
-`--rtu-tcp`; it does not alter TCP MBAP behavior or RTU byte-stream behavior.
+carries Modbus RTU frames instead of MBAP. It reuses `net/rtu_framer` for shared RTU rx/framing,
+`modbus/rtu` for CRC/frame codec and t3.5 timing helpers, and the shared PDU/fault dispatch path.
+t1.5 discard is not enforced on RTU-over-TCP because TCP read() boundaries do not reflect UART
+character timing. This is an explicit separate transport selected by `--rtu-tcp`; it does not alter
+TCP MBAP behavior or RTU byte-stream behavior.
 
 ## Coding rules used here
 

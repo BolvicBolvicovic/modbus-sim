@@ -3,6 +3,7 @@
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
 #include "net/net_common.h"
+#include "net/rtu_framer.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
@@ -21,268 +22,35 @@
  * remains an explicit inter-frame override for compatibility and deterministic
  * testing. */
 
-typedef struct rtu_pending_t rtu_pending_t;
-struct rtu_pending_t
-{
-	bool	active;
-	u8	buf[MODBUS_RTU_MAX_FRAME];
-	u32	len;
-	u32	sent;
-	u64	due_ms;
-};
-
 typedef struct rtu_server_t rtu_server_t;
 struct rtu_server_t
 {
 	rtu_server_options_t	options;
 	rng_t			rng;
-	u8			rx[MODBUS_RTU_MAX_FRAME * 4];
-	u32			rx_len;
-	u64			last_rx_ms;
-	u64			last_rx_us;
-	bool			have_rx;
+	rtu_framer_t		framer;
 	bool			read_closed;
-	bool			gap_deferred;
-	rtu_pending_t		pending;
 };
 
 static volatile sig_atomic_t	g_rtu_stop = 0;
-
-static void
-pending_clear(rtu_pending_t* pending)
-{
-	pending->active = false;
-	pending->len    = 0;
-	pending->sent   = 0;
-	pending->due_ms = 0;
-}
-
-static void
-queue_response(rtu_server_t* server, u8 addr, const u8* pdu, u32 pdu_len, u64 due_ms)
-{
-	u32 len = modbus_rtu_encode(server->pending.buf, addr, pdu, pdu_len);
-
-	if (len == 0)
-		return;
-
-	server->pending.active = true;
-	server->pending.len    = len;
-	server->pending.sent   = 0;
-	server->pending.due_ms = due_ms;
-}
-
-static void
-handle_frame(rtu_server_t* server, const u8* frame, u32 len, u64 now_ms)
-{
-	u8			addr    = 0;
-	const u8*		pdu     = NULL;
-	u32			pdu_len = 0;
-	u8			resp[MODBUS_MAX_PDU];
-	u32			resp_len = 0;
-	device_t*		dev     = NULL;
-	fault_decision_t	decision = { 0 };
-
-	if (!modbus_rtu_decode(frame, len, &addr, &pdu, &pdu_len))
-		return;
-
-	/* Broadcast (0) intentionally ignored: no broadcast semantics in current
-	 * simulator model; RTU response behavior for broadcast is not modeled. */
-	if (addr == 0)
-		return;
-
-	dev = net_find_device(server->options.devices, server->options.device_count, addr);
-	if (!dev)
-		return; /* Unknown RTU unit: no response. */
-
-	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
-
-	LOG_DEBUG("rtu unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
-		  (resp[0] & 0x80) ? "exception" : "ok",
-		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
-
-	if (decision.drop)
-		return;
-
-	queue_response(server, addr, resp, resp_len, now_ms + decision.delay_ms);
-}
-
-static void
-consume_rx(rtu_server_t* server, u32 n)
-{
-	if (n >= server->rx_len)
-	{
-		server->rx_len = 0;
-		return;
-	}
-	memmove(server->rx, server->rx + n, server->rx_len - n);
-	server->rx_len -= n;
-}
-
-typedef enum rtu_frame_result_t rtu_frame_result_t;
-enum rtu_frame_result_t
-{
-	RTU_FRAME_NONE,    /* No frame at offset 0; discard buffered bytes. */
-	RTU_FRAME_FOUND,   /* Complete frame of *frame_len at offset 0. */
-	RTU_FRAME_DISCARD, /* Known request length exceeds buffer and buffer is not
-			    * a complete frame; discard buffered bytes. */
-};
-
-/* Locate a complete RTU frame at rx[0]. Prefer the function-code-derived
- * request length to avoid false CRC matches on a shorter prefix (issue #18).
- * For variable/unknown FCs, decode the full buffer as one frame. */
-static rtu_frame_result_t
-rtu_next_frame(const u8* rx, u32 rx_len, u32* frame_len)
-{
-	u8		addr    = 0;
-	const u8*	pdu     = NULL;
-	u32		pdu_len = 0;
-	u32		expected = 0;
-
-	if (modbus_rtu_request_len(rx, rx_len, &expected))
-	{
-		if (expected <= rx_len && modbus_rtu_decode(rx, expected, &addr, &pdu, &pdu_len))
-		{
-			*frame_len = expected;
-			return RTU_FRAME_FOUND;
-		}
-		if (expected > rx_len)
-		{
-			if (rx_len <= MODBUS_RTU_MAX_FRAME &&
-			    modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len))
-			{
-				*frame_len = rx_len;
-				return RTU_FRAME_FOUND;
-			}
-			return RTU_FRAME_DISCARD;
-		}
-	}
-
-	if (rx_len <= MODBUS_RTU_MAX_FRAME &&
-	    modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len))
-	{
-		*frame_len = rx_len;
-		return RTU_FRAME_FOUND;
-	}
-	return RTU_FRAME_NONE;
-}
-
-static bool
-process_rx_frames(rtu_server_t* server, u64 now_ms)
-{
-	bool keep_incomplete = (server->options.frame_gap_ms == 0 && server->options.baud != 0);
-
-	while (server->rx_len >= 4 && !server->pending.active)
-	{
-		u32			frame_len = 0;
-		rtu_frame_result_t	result;
-
-		result = rtu_next_frame(server->rx, server->rx_len, &frame_len);
-		if (result == RTU_FRAME_NONE)
-		{
-			server->rx_len = 0;
-			return false;
-		}
-		if (result == RTU_FRAME_DISCARD)
-		{
-			if (keep_incomplete)
-			{
-				/* Incomplete but plausible frame (known FC length not yet
-				 * fully received). In baud-derived auto mode, read()
-				 * boundaries do not reflect UART timing, so a t3.5 gap can
-				 * split a valid frame; keep bytes and wait for more data. */
-				return true;
-			}
-			server->rx_len = 0;
-			return false;
-		}
-
-		handle_frame(server, server->rx, frame_len, now_ms);
-		consume_rx(server, frame_len);
-		if (server->pending.active)
-			return false;
-	}
-
-	/* 1-3 bytes cannot form a valid RTU frame (addr+FC+CRC). After the gap
-	 * they are stray noise/truncated fragments; drop them so the main loop
-	 * can return to poll() instead of spinning. */
-	if (server->rx_len > 0 && server->rx_len < 4 && !server->pending.active)
-		server->rx_len = 0;
-
-	if (server->rx_len > MODBUS_RTU_MAX_FRAME)
-		consume_rx(server, server->rx_len - MODBUS_RTU_MAX_FRAME);
-	return false;
-}
-
-static void
-rtu_note_rx_gap(rtu_server_t* server, u64 now_ms, u64 now_us)
-{
-	u32	t35;
-
-	if (!server->have_rx || server->rx_len == 0 || server->pending.active)
-		return;
-	/* Enforce RTU timing checks only in baud-derived auto mode. Explicit
-	 * frame-gap-ms remains an inter-frame override for compatibility and
-	 * deterministic tests. */
-	if (server->options.frame_gap_ms > 0 || server->options.baud == 0)
-		return;
-	if (now_us < server->last_rx_us)
-		return;
-
-	t35 = rtu_t35_us(server->options.baud);
-	if (t35 == 0)
-		return;
-
-	{
-		u64	elapsed = now_us - server->last_rx_us;
-
-		if (elapsed >= t35)
-		{
-			bool incomplete = process_rx_frames(server, now_ms);
-			server->have_rx = server->rx_len > 0;
-			if (incomplete)
-			{
-				/* read() boundaries do not reflect UART timing. In baud-derived
-				 * auto mode, keep an incomplete known-length frame for one extra
-				 * t3.5 window so split valid frames can complete (issue #45). */
-				server->gap_deferred = true;
-				server->last_rx_ms = now_ms;
-			}
-			else
-				server->gap_deferred = false;
-			return;
-		}
-		if (server->options.strict_t15)
-		{
-			u32 t15 = rtu_t15_us(server->options.baud);
-
-			if (t15 > 0 && elapsed >= t15)
-			{
-				/* Opt-in intra-frame t1.5 check. read() boundaries do not
-				 * reflect true UART character timing, so this is a
-				 * best-effort heuristic for byte streams. */
-				server->rx_len = 0;
-				server->have_rx = false;
-			}
-		}
-	}
-}
 
 static bool
 read_available(rtu_server_t* server, u64 now_ms)
 {
 	ssize_t	got;
 	u64	now_us;
+	rtu_framer_t*	f = &server->framer;
 
 	if (server->read_closed)
 		return false;
-	if (server->rx_len >= sizeof(server->rx))
-		consume_rx(server, server->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
+	if (f->rx_len >= sizeof(f->rx))
+		rtu_framer_consume(f, f->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
 
 	now_us = clock_now_us();
-	rtu_note_rx_gap(server, now_ms, now_us);
+	rtu_framer_note_gap(f, server->options.devices, server->options.device_count,
+			    &server->rng, now_ms, now_us, server->options.frame_gap_ms,
+			    server->options.baud, server->options.strict_t15, NULL);
 
-	got = read(server->options.fd, server->rx + server->rx_len,
-		   sizeof(server->rx) - server->rx_len);
+	got = read(server->options.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
 	if (got == 0)
 	{
 		server->read_closed = true;
@@ -296,11 +64,11 @@ read_available(rtu_server_t* server, u64 now_ms)
 		return false;
 	}
 
-	server->rx_len      += (u32)got;
-	server->last_rx_ms   = now_ms;
-	server->last_rx_us   = now_us;
-	server->have_rx      = true;
-	server->gap_deferred = 0;
+	f->rx_len += (u32)got;
+	f->last_rx_ms = now_ms;
+	f->last_rx_us = now_us;
+	f->have_rx = true;
+	f->gap_deferred = false;
 	return true;
 }
 
@@ -308,14 +76,14 @@ static bool
 write_pending(rtu_server_t* server)
 {
 	ssize_t	sent = 0;
+	rtu_pending_t*	p = &server->framer.pending;
 
-	if (!server->pending.active)
+	if (!p->active)
 		return true;
-	if (server->pending.due_ms > clock_now_ms())
+	if (p->due_ms > clock_now_ms())
 		return true;
 
-	sent = write(server->options.fd, server->pending.buf + server->pending.sent,
-		     server->pending.len - server->pending.sent);
+	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
 		if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
@@ -323,9 +91,9 @@ write_pending(rtu_server_t* server)
 		return false;
 	}
 
-	server->pending.sent += (u32)sent;
-	if (server->pending.sent >= server->pending.len)
-		pending_clear(&server->pending);
+	p->sent += (u32)sent;
+	if (p->sent >= p->len)
+		rtu_pending_clear(p);
 	return true;
 }
 
@@ -384,8 +152,9 @@ rtu_gap_elapsed(u64 now_ms, u64 last_rx_ms, u32 gap_ms)
 static bool
 rtu_gap_due(rtu_server_t* server, u64 now_ms, u32 gap_ms)
 {
-	return !server->pending.active && server->have_rx && server->rx_len > 0 &&
-	       (server->read_closed || rtu_gap_elapsed(now_ms, server->last_rx_ms, gap_ms));
+	rtu_framer_t* f = &server->framer;
+	return !f->pending.active && f->have_rx && f->rx_len > 0 &&
+	       (server->read_closed || rtu_gap_elapsed(now_ms, f->last_rx_ms, gap_ms));
 }
 
 static void
@@ -394,17 +163,18 @@ rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
 {
 	u64	due = 0;
 
+	const rtu_framer_t* f = &server->framer;
 	*timeout = 1000;
 	*pfd = (struct pollfd){ .fd = server->options.fd, .events = 0 };
-	if (server->pending.active)
+	if (f->pending.active)
 	{
-		if (server->pending.due_ms <= now_ms)
+		if (f->pending.due_ms <= now_ms)
 		{
 			pfd->events |= POLLOUT;
 			*timeout = 0;
 		}
 		else
-			*timeout = (int)(server->pending.due_ms - now_ms);
+			*timeout = (int)(f->pending.due_ms - now_ms);
 		return;
 	}
 
@@ -415,10 +185,10 @@ rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
 	}
 
 	pfd->events |= POLLIN;
-	if (!server->have_rx || server->rx_len == 0)
+	if (!f->have_rx || f->rx_len == 0)
 		return;
 
-	due = server->last_rx_ms + gap_ms;
+	due = f->last_rx_ms + gap_ms;
 	if (due > now_ms)
 		*timeout = MIN(*timeout, (int)(due - now_ms));
 	else
@@ -448,20 +218,23 @@ rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
 		 * have not seen EOF/read-close yet, process buffered complete frames once
 		 * (issue #32), but if that queues a response, drop it and exit instead of
 		 * spinning on repeated POLLHUP (issue #40). */
-		if (server->pending.active)
+		rtu_framer_t* f = &server->framer;
+		if (f->pending.active)
 		{
-			pending_clear(&server->pending);
+			rtu_pending_clear(&f->pending);
 			return false;
 		}
 		if (!server->read_closed)
 		{
 			server->read_closed = true;
-			if (server->have_rx && server->rx_len > 0)
+			if (f->have_rx && f->rx_len > 0)
 			{
-				process_rx_frames(server, now_ms);
-				if (server->pending.active)
+				rtu_framer_process(f, server->options.devices, server->options.device_count,
+						   &server->rng, now_ms, server->options.frame_gap_ms,
+						   server->options.baud, NULL);
+				if (f->pending.active)
 				{
-					pending_clear(&server->pending);
+					rtu_pending_clear(&f->pending);
 					return false;
 				}
 			}
@@ -471,12 +244,15 @@ rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
 
 	if (server->read_closed)
 	{
-		if (server->pending.active)
+		rtu_framer_t* f = &server->framer;
+		if (f->pending.active)
 			return true;
-		if (server->have_rx && server->rx_len > 0)
+		if (f->have_rx && f->rx_len > 0)
 		{
-			process_rx_frames(server, now_ms);
-			if (server->pending.active)
+			rtu_framer_process(f, server->options.devices, server->options.device_count,
+					   &server->rng, now_ms, server->options.frame_gap_ms,
+					   server->options.baud, NULL);
+			if (f->pending.active)
 				return true;
 		}
 		return false;
@@ -494,7 +270,7 @@ rtu_server_run(const rtu_server_options_t* options)
 	memset(&server, 0, sizeof(server));
 	server.options = *options;
 	rng_seed(&server.rng, options->seed);
-	pending_clear(&server.pending);
+	rtu_framer_init(&server.framer);
 	g_rtu_stop = 0;
 	net_install_stop_handlers(&g_rtu_stop);
 
@@ -517,22 +293,25 @@ rtu_server_run(const rtu_server_options_t* options)
 
 		if (rtu_gap_due(&server, now_ms, gap_ms))
 		{
-			bool incomplete = process_rx_frames(&server, now_ms);
-			server.have_rx = server.rx_len > 0;
-			if (incomplete && !server.gap_deferred)
+			rtu_framer_t* f = &server.framer;
+			bool incomplete = rtu_framer_process(f, server.options.devices, server.options.device_count,
+							     &server.rng, now_ms, server.options.frame_gap_ms,
+							     server.options.baud, NULL);
+			f->have_rx = f->rx_len > 0;
+			if (incomplete && !f->gap_deferred)
 			{
-				server.gap_deferred = true;
-				server.last_rx_ms = now_ms;
+				f->gap_deferred = true;
+				f->last_rx_ms = now_ms;
 			}
 			else if (incomplete)
 			{
-				server.rx_len = 0;
-				server.have_rx = false;
-				server.gap_deferred = false;
+				f->rx_len = 0;
+				f->have_rx = false;
+				f->gap_deferred = false;
 			}
 			else
 			{
-				server.gap_deferred = 0;
+				f->gap_deferred = false;
 				continue;
 			}
 		}
@@ -552,21 +331,24 @@ rtu_server_run(const rtu_server_options_t* options)
 
 		if (rtu_gap_due(&server, now_ms, gap_ms))
 		{
-			bool incomplete = process_rx_frames(&server, now_ms);
-			server.have_rx = server.rx_len > 0;
-			if (incomplete && !server.gap_deferred)
+			rtu_framer_t* f = &server.framer;
+			bool incomplete = rtu_framer_process(f, server.options.devices, server.options.device_count,
+							     &server.rng, now_ms, server.options.frame_gap_ms,
+							     server.options.baud, NULL);
+			f->have_rx = f->rx_len > 0;
+			if (incomplete && !f->gap_deferred)
 			{
-				server.gap_deferred = true;
-				server.last_rx_ms = now_ms;
+				f->gap_deferred = true;
+				f->last_rx_ms = now_ms;
 			}
 			else if (incomplete)
 			{
-				server.rx_len = 0;
-				server.have_rx = false;
-				server.gap_deferred = false;
+				f->rx_len = 0;
+				f->have_rx = false;
+				f->gap_deferred = false;
 			}
 			else
-				server.gap_deferred = false;
+				f->gap_deferred = false;
 		}
 	}
 

@@ -20,4 +20,7 @@ u32		net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms,
 			       const u8* req, u32 req_len, u8* resp,
 			       fault_decision_t* decision);
 
+/* Opens, binds, and listens on a nonblocking IPv4 TCP socket. Returns fd or -1. */
+int		net_tcp_listen(const char* bind_address, u16 port, int backlog);
+
 #endif
