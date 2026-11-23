@@ -1527,6 +1527,109 @@ TEST(NetGetComEventLogUnknownUnitDoesNotCount)
 	ASSERT_EQ(ok);
 }
 
+TEST(NetComStatusAndEventsAreReported)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (com-status 65535) (com-event 1) (com-event 128) "
+						   "(com-event 255) (holding 0 (static 1)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		req[0] = FC_GET_COM_EVENT_COUNTER;
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
+		     resp[0] == FC_GET_COM_EVENT_COUNTER && resp[1] == 0xFF && resp[2] == 0xFF &&
+		     resp[3] == 0x00 && resp[4] == 0x00;
+	}
+	if (ok)
+	{
+		req[0] = FC_GET_COM_EVENT_LOG;
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 11 &&
+		     resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 9 &&
+		     resp[2] == 0xFF && resp[3] == 0xFF &&
+		     resp[4] == 0x00 && resp[5] == 0x00 &&
+		     resp[6] == 0x00 && resp[7] == 0x02 &&
+		     resp[8] == 0x01 && resp[9] == 0x80 && resp[10] == 0xFF;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetComEventLogMaxEventsAreReported)
+{
+	client_t client   = { .fd = -1 };
+	char	 devices[1024];
+	u32	 used     = 0;
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len      = 0;
+	bool	 ok;
+
+	used = (u32)snprintf(devices, sizeof(devices), "(device (unit-id 1) (holding 0)");
+	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
+		used += (u32)snprintf(devices + used, sizeof(devices) - used, " (com-event %u)", i);
+	snprintf(devices + used, sizeof(devices) - used, ")");
+
+	ok = server_start("", devices);
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		req[0] = FC_GET_COM_EVENT_LOG;
+		ok = exchange(&client, 1, req, 1, resp, &len) &&
+		     len == 8 + DEVICE_MAX_COM_EVENTS &&
+		     resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 6 + DEVICE_MAX_COM_EVENTS &&
+		     resp[2] == 0x00 && resp[3] == 0x00 &&
+		     resp[4] == 0x00 && resp[5] == 0x00 &&
+		     resp[6] == 0x00 && resp[7] == 0x01;
+		for (u32 i = 0; ok && i < DEVICE_MAX_COM_EVENTS; i++)
+			ok = resp[8 + i] == (u8)i;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetComStatusAndEventsRejectMalformedRequests)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len = 0;
+	bool	 ok  = server_start("", "(device (unit-id 1) (com-status 65535) (com-event 66) (holding 0))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		req[0] = FC_GET_COM_EVENT_COUNTER;
+		req[1] = 0x00;
+		ok = exchange(&client, 1, req, 2, resp, &len) &&
+		     exception_is(resp, len, FC_GET_COM_EVENT_COUNTER, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		req[0] = FC_GET_COM_EVENT_LOG;
+		ok = exchange(&client, 1, req, 2, resp, &len) &&
+		     exception_is(resp, len, FC_GET_COM_EVENT_LOG, EXC_ILLEGAL_DATA_VALUE);
+	}
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 9 &&
+		     resp[1] == 7 && resp[2] == 0xFF && resp[3] == 0xFF &&
+		     resp[4] == 0x00 && resp[5] == 0x00 &&
+		     resp[6] == 0x00 && resp[7] == 0x03 && resp[8] == 0x42;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
 TEST(NetReportServerIdReturnsConfiguredValues)
 {
 	client_t client = { .fd = -1 };
