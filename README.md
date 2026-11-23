@@ -80,6 +80,8 @@ modbus-sim [options] CONFIG.scm
       --baud N         RTU/RTU-over-TCP: baud for t3.5 timing (overrides config/tty)
       --frame-gap-ms N RTU/RTU-over-TCP: explicit inter-frame silence override in ms
       --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)
+      --parity NAME    RTU byte stream: none|even|odd|mark|space (overrides config)
+      --stop-bits N    RTU byte stream: 1 or 2 stop bits (overrides config)
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
   -h, --help           show help
@@ -91,9 +93,12 @@ In RTU mode, `--rtu-pty` creates a Linux PTY and prints `RTU PTY slave: /dev/pts
 RTU client to that path. `--rtu-device PATH` serves RTU on an existing bidirectional byte stream.
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC, unknown unit, and broadcast (unit 0) produce no
 response. Broadcast requests are not executed. `--rtu-device` opens with `O_NONBLOCK` so startup does not
-hang on FIFOs or similar paths; when the device is a tty, `modbus-sim` configures it as raw 8N1 and
-preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. Unit ids 0 and 248-255
-are rejected in RTU mode because 0 is broadcast and 248-255 are reserved.
+hang on FIFOs or similar paths; when the device is a tty, `modbus-sim` configures it as raw mode with
+the selected parity and stop bits (default 8N1) and preserves the existing baud rate unless
+`--baud`/config `(baud N)` is provided. Use `--parity none|even|odd|mark|space` or config
+`(server (parity NAME))`, and `--stop-bits 1|2` or `(server (stop-bits N))`, to change the tty line
+format; `mark` and `space` need `CMSPAR` support. These settings apply only to byte-stream RTU.
+Unit ids 0 and 248-255 are rejected in RTU mode because 0 is broadcast and 248-255 are reserved.
 
 RTU frame boundaries use Modbus t3.5 when a baud rate is known (explicit `--baud`/config `(baud N)`,
 or the tty's existing baud rate). `--frame-gap-ms` is an explicit inter-frame silence override and
@@ -106,7 +111,9 @@ heuristic for RTU byte streams in baud-derived auto mode. It is never applied to
 `--rtu-tcp` serves Modbus RTU frames (`[addr][PDU][CRC lo hi]`) on a TCP listen socket as a
 separate transport/framing choice. It is not Modbus TCP (MBAP) and does not change existing TCP or
 RTU byte-stream behavior. `--port`/`--bind` apply to TCP and RTU-over-TCP; `--baud`/`--frame-gap-ms`
-apply to RTU and RTU-over-TCP for RTU frame timing.
+apply to RTU and RTU-over-TCP for RTU frame timing. `--parity`/`--stop-bits` apply only to RTU byte
+streams; non-default config values are rejected with `--check --rtu-tcp`, while plain TCP ignores
+them.
 
 ## Documentation
 

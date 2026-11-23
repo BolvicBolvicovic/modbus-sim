@@ -19,8 +19,11 @@ Frame format: `[addr][PDU...][CRC lo][CRC hi]` (2-byte Modbus CRC-16, low byte f
 frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. `--rtu-device` is opened with
 `O_NONBLOCK` so startup does not hang on a blocking open (for example, a FIFO with no writer);
 `modbus-sim` keeps the fd non-blocking for the poll loop. When the fd is a tty, `modbus-sim`
-configures raw 8N1 mode (`CS8`, no parity, 1 stop bit, `CLOCAL|CREAD`, no flow control) and
-preserves the existing baud rate. Non-tty fds skip termios setup.
+configures raw mode (`CS8`, `CLOCAL|CREAD`, no flow control) with the selected parity and stop bits,
+and preserves the existing baud rate. The default is 8N1 (no parity, 1 stop bit); config
+`(server (parity even))` / `(server (stop-bits 2))` or CLI `--parity` / `--stop-bits` select
+`none|even|odd|mark|space` parity and 1 or 2 stop bits. `mark` and `space` require `CMSPAR` support
+on the host. These settings apply only to RTU byte-stream ttys; non-tty fds skip termios setup.
 
 Frame boundaries use Modbus RTU inter-frame timing when a baud rate is known: t3.5 is 1.750 ms for
 baud rates above 19200, otherwise `ceil(3.5 * 11 / baud * 1,000,000)` microseconds. The baud can be
@@ -61,7 +64,8 @@ used. Bad CRC, unknown unit, and broadcast (unit 0) produce no response, matchin
 timing: explicit `frame-gap-ms` takes precedence; otherwise baud-derived t3.5 is used when baud is
 known; otherwise the 20 ms default fallback is used. t1.5 discard is never applied to RTU-over-TCP,
 because TCP read() boundaries do not reflect UART character timing and can split valid pipelined
-requests.
+requests. Serial parity and stop bits do not apply either (no tty is configured); non-default values
+in the config are rejected when RTU-over-TCP is selected.
 
 RTU-over-TCP is not Modbus TCP and is not a transparent gateway/proxy implementation; it is an
 explicit listen mode selected with `--rtu-tcp`.

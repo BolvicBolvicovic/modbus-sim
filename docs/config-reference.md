@@ -38,11 +38,16 @@ produce an error message.
 | `(baud N)` | RTU/RTU-over-TCP: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). When known, Modbus RTU t3.5 inter-frame timing is derived from this baud | `0` (unknown) |
 | `(frame-gap-ms N)` | RTU/RTU-over-TCP: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) |
 | `(strict-t15 on\|off)` | RTU byte streams: opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Not supported for RTU-over-TCP | `off` |
+| `(parity none\|even\|odd\|mark\|space)` | RTU byte streams: tty parity. `mark` and `space` require `CMSPAR` support. Not supported for RTU-over-TCP | `none` |
+| `(stop-bits 1\|2)` | RTU byte streams: number of tty stop bits. Not supported for RTU-over-TCP | `1` |
 
 The command-line options `--port` and `--bind` override server listen settings for TCP and RTU-over-TCP. RTU timing can be
 overridden with `--baud` / `--rtu-baud`, `--frame-gap-ms`, and `--strict-t15`; `--frame-gap-ms` takes precedence over
 baud-derived timing when both are provided. `strict-t15` is never applied to RTU-over-TCP. For tty devices, if no
 explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t3.5 timing.
+`--parity` and `--stop-bits` override the tty line format for RTU byte streams only; they cannot be combined with TCP or
+RTU-over-TCP. Non-default parity/stop bits in the config are likewise rejected with `--check --rtu-tcp`; plain TCP
+ignores them.
 
 ## `(device ...)`
 
