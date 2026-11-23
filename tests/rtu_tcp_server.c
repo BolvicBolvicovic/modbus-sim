@@ -3,6 +3,7 @@
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "util/clock.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -290,6 +291,98 @@ TEST(RtuOverTcpBroadcastGetsNoResponse)
 	flen = modbus_rtu_encode(frame, 0, req_pdu, sizeof(req_pdu));
 	ASSERT_EQ(send_all_fd(fd, frame, flen));
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 250) == false);
+
+	close(fd);
+	kill(pid, SIGTERM);
+	waitpid(pid, NULL, 0);
+	unlink(cfg);
+}
+
+static bool
+wait_for_eof_fd(int fd, u32 timeout_ms)
+{
+	u8 b;
+	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
+			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	for (;;)
+	{
+		ssize_t got = recv(fd, &b, 1, 0);
+		if (got == 0)
+			return true;
+		if (got < 0 && errno == EINTR)
+			continue;
+		return false;
+	}
+}
+
+TEST(RtuOverTcpHalfCloseAfterRequestSendsResponse)
+{
+	char cfg[64];
+	pid_t pid;
+	int fd;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+	u16 port = find_free_port();
+
+	ASSERT(port != 0);
+	write_cfg(cfg, sizeof(cfg), "(device (unit-id 1) (holding 0 (static 4660)))\n");
+	pid = start_rtu_tcp(cfg, port);
+	ASSERT(pid > 0);
+	fd = connect_port(port, 100);
+	ASSERT(fd >= 0);
+
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT(flen > 0);
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(shutdown(fd, SHUT_WR) == 0);
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(plen == 4);
+	ASSERT_EQ(get_be16(resp + 2) == 4660);
+	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
+
+	close(fd);
+	kill(pid, SIGTERM);
+	waitpid(pid, NULL, 0);
+	unlink(cfg);
+}
+
+TEST(RtuOverTcpHalfCloseAfterDelayedRequestSendsResponse)
+{
+	char cfg[64];
+	pid_t pid;
+	int fd;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+	u16 port = find_free_port();
+	u64 start;
+
+	ASSERT(port != 0);
+	write_cfg(cfg, sizeof(cfg),
+		  "(device (unit-id 1)\n"
+		  "  (holding 0 (static 4660))\n"
+		  "  (fault (kind delay) (delay-ms 200) (percent 100)))\n");
+	pid = start_rtu_tcp(cfg, port);
+	ASSERT(pid > 0);
+	fd = connect_port(port, 100);
+	ASSERT(fd >= 0);
+
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT(flen > 0);
+	start = (u64)clock_now_ms();
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(shutdown(fd, SHUT_WR) == 0);
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(clock_now_ms() - start >= 180);
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(plen == 4);
+	ASSERT_EQ(get_be16(resp + 2) == 4660);
+	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
 
 	close(fd);
 	kill(pid, SIGTERM);
