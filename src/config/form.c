@@ -294,6 +294,17 @@ form_opt_string(form_ctx_t* ctx, s7_pointer options, const char* key, const char
 }
 
 bool
+form_opt_bool(form_ctx_t* ctx, s7_pointer options, const char* key, bool* out)
+{
+	s7_pointer	found = form_find(ctx, options, key);
+
+	if (form_is_absent(ctx, found))
+		return true;
+
+	return form_get_bool(ctx, found, out);
+}
+
+bool
 form_opt_choice(form_ctx_t* ctx, s7_pointer options, const char* key,
 		const char* const* choices, u32 count, u32* out)
 {

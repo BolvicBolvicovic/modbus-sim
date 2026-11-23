@@ -26,6 +26,7 @@ struct config_t
 	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
 	u32		frame_gap_ms;		/* RTU inter-frame silence override in ms; 0 = auto (baud-derived or default) */
 	u32		baud;			/* RTU serial baud rate; 0 = unknown */
+	bool		strict_t15;		/* RTU byte streams: opt-in t1.5 discard heuristic */
 	u32		device_count;
 	device_t*	devices[CONFIG_MAX_DEVICES];
 };

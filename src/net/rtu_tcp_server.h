@@ -9,6 +9,8 @@ typedef struct device_t device_t;
  * Description: Modbus RTU-over-TCP server options. Devices are borrowed, not copied.
  * RTU frames (addr+PDU+CRC) are transported over TCP connections.
  * frame_gap_ms/baud follow the same RTU timing rules as the byte-stream RTU server.
+ * strict_t15 is intentionally not supported for RTU-over-TCP: TCP read() boundaries
+ * do not reflect UART character timing.
  * */
 typedef struct rtu_tcp_server_options_t rtu_tcp_server_options_t;
 struct rtu_tcp_server_options_t
