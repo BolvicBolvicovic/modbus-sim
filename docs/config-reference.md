@@ -53,6 +53,7 @@ explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t
 | `(exception-status N)` | Byte returned by Read Exception Status (FC 07), 0-255 | `0` |
 | `(server-id N)` | Server ID byte returned by Report Server ID (FC 17), 0-255 | `0` |
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
+| `(server-id-additional-data "HEXBYTES")` | Additional Data returned by Report Server ID (FC 17): even-length hex string, empty allowed, 0-249 bytes (`""` = none) | `""` |
 | `(vendor-name "Text")` | MEI 14 Read Device Identification object 0x00, 0-244 bytes | `"modbus-sim"` |
 | `(product-code "Text")` | MEI 14 object 0x01, 0-244 bytes | `"modbus-sim"` |
 | `(major-minor-revision "Text")` | MEI 14 object 0x02, 0-244 bytes | `"1.0"` |

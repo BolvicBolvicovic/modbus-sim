@@ -1570,6 +1570,30 @@ TEST(NetReportServerIdDefaults)
 	ASSERT_EQ(ok);
 }
 
+TEST(NetReportServerIdReturnsConfiguredAdditionalData)
+{
+	client_t	client = { .fd = -1 };
+	u8		req[8] = { FC_REPORT_SERVER_ID };
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	bool		ok  = server_start("", "(device (unit-id 1) (server-id 42) (run-indicator 0) "
+					   "(server-id-additional-data \"DEADBEEF\") (holding 0 (static 1)))");
+	const u8	extra[] = { 0xDE, 0xAD, 0xBE, 0xEF };
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
+		     resp[0] == FC_REPORT_SERVER_ID && resp[1] == 6 &&
+		     resp[2] == 42 && resp[3] == 0x00 &&
+		     memcmp(resp + 4, extra, sizeof(extra)) == 0;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
 TEST(NetReportServerIdMalformedRequest)
 {
 	client_t client = { .fd = -1 };

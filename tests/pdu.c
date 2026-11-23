@@ -275,6 +275,46 @@ TEST(ReportServerIdRejectsMalformedRequest)
 	arena_release(arena);
 }
 
+TEST(ReportServerIdReturnsConfiguredAdditionalData)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = make_device(arena);
+	u8		req[]  = { FC_REPORT_SERVER_ID };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		extra[] = { 0xDE, 0xAD, 0xBE, 0xEF };
+
+	dev->server_id     = 0x2A;
+	dev->run_indicator = 0x00;
+	dev->server_id_additional_data_len = sizeof(extra);
+	memcpy(dev->server_id_additional_data, extra, sizeof(extra));
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 4 + sizeof(extra));
+	ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2 + sizeof(extra));
+	ASSERT_EQ(resp[2] == 0x2A && resp[3] == 0x00);
+	ASSERT_EQ(memcmp(resp + 4, extra, sizeof(extra)) == 0);
+	arena_release(arena);
+}
+
+TEST(ReportServerIdAcceptsMaxAdditionalData)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[] = { FC_REPORT_SERVER_ID };
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->server_id_additional_data_len = DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX;
+	for (u32 i = 0; i < DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX; i++)
+		dev->server_id_additional_data[i] = (u8)(0xA0 + i % 16);
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == MODBUS_MAX_PDU);
+	ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID);
+	ASSERT_EQ(resp[1] == 2 + DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX);
+	ASSERT_EQ(resp[2] == dev->server_id && resp[3] == dev->run_indicator);
+	ASSERT_EQ(memcmp(resp + 4, dev->server_id_additional_data,
+			 DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX) == 0);
+	arena_release(arena);
+}
+
 TEST(GetComEventCounterReturnsStatusAndCount)
 {
 	arena_t*	arena = ARENA_ALLOC();
