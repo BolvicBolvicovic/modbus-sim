@@ -231,8 +231,12 @@ Checks run in this order: function, request shape and quantity (03), then addres
 04-08 and 0A are never produced by the simulator's own validation: they exist only for fault
 injection (see [config-reference.md](config-reference.md)). An exception fault replaces the
 response that normal processing produced, including an exception response, and does not undo the
-request's effects. A corrupt fault instead flips the first payload byte of the normal response,
-so clients may see a malformed value; the request is still processed normally.
+request's effects. A corrupt fault instead flips `resp[1]` of the normal response, typically the
+byte count or the first data byte (XOR with `0xFF`, or the function code itself for a one-byte
+response). The transport computes CRC (RTU), LRC (ASCII), or the MBAP length (TCP) over the altered
+PDU, so receivers see a structurally valid frame carrying wrong data: it is never rejected for a
+CRC/LRC error and does not increment the FC08 `0x000C` communication-error counters. The request is
+still processed normally.
 
 ## Writes are all-or-nothing
 

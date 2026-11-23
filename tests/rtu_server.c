@@ -1322,6 +1322,48 @@ TEST(RtuServerDelayAndDropFaultsOverRtu)
 	ASSERT_EQ(ok);
 }
 
+TEST(RtuCorruptFaultSendsValidCrcWithWrongData)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		diag[] = { FC_DIAGNOSTICS, 0x00, 0x0C, 0x00, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	dev->fault.kind = FAULT_CORRUPT;
+	dev->fault.percent = 100;
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+	}
+
+	/* recv_rtu_resp accepts only frames whose CRC matches the returned PDU. */
+	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+	ok = ok && addr == 1 && len == 4 &&
+	     resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == (0x02 ^ 0xFF) &&
+	     get_be16(resp + 2) == 0x1234;
+
+	/* A corrupt response is a good frame, so it is not a communication error. */
+	if (ok)
+	{
+		ok = send_rtu_req(child.fd, 1, diag, sizeof(diag));
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+		ok = ok && addr == 1 && len == 5 && resp[0] == FC_DIAGNOSTICS &&
+		     resp[1] == 0xFF && resp[2] == DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT &&
+		     get_be16(resp + 3) == 0;
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
 static bool
 rtu_expect_fc03(rtu_child_t* child, u8 unit, u16 reg, u16 value)
 {
