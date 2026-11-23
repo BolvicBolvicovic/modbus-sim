@@ -51,7 +51,7 @@ net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms, const u8* req, u32 req_len
 }
 
 void
-net_record_rtu_comm_error(device_t** devices, u32 count)
+net_record_comm_error(device_t** devices, u32 count)
 {
 	for (u32 i = 0; i < count; i++)
 	{
@@ -59,6 +59,12 @@ net_record_rtu_comm_error(device_t** devices, u32 count)
 
 		dev->diag_comm_error_count = (u16)(dev->diag_comm_error_count + 1);
 	}
+}
+
+void
+net_record_rtu_comm_error(device_t** devices, u32 count)
+{
+	net_record_comm_error(devices, count);
 }
 
 void

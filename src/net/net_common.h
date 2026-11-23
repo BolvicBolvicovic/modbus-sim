@@ -35,7 +35,11 @@ u32		net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms,
 			       const u8* req, u32 req_len, u8* resp,
 			       fault_decision_t* decision);
 
-/* Counts one RTU bus communication error for every device on the bus. */
+/* Counts one bus communication error (FC 08 subfunction 0x000C) for every
+ * device on the bus. Used for bad frames on both RTU and ASCII byte streams. */
+void		net_record_comm_error(device_t** devices, u32 count);
+
+/* RTU name retained for the RTU framer; same counter as net_record_comm_error. */
 void		net_record_rtu_comm_error(device_t** devices, u32 count);
 
 /* Clears a queued response slot. */

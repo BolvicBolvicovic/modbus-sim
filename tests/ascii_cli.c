@@ -370,6 +370,26 @@ recv_ascii_frames_fd(int fd, u32 expected, u8* addrs,
 }
 
 static bool
+ascii_cli_comm_error_count(u16* out)
+{
+	u8	req[] = { FC_DIAGNOSTICS, 0x00, 0x0C, 0x00, 0x00 };
+	u8	addrs[1] = { 0 };
+	u8	pdus[1][MODBUS_MAX_PDU] = { { 0 } };
+	u32	lens[1] = { 0 };
+
+	if (!send_ascii_req_fd(g_ascii_cli.master_fd, 1, req, sizeof(req)))
+		return false;
+	if (!recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+				  ASCII_CLI_IO_TIMEOUT_MS))
+		return false;
+	if (addrs[0] != 1 || lens[0] != 5 || pdus[0][0] != FC_DIAGNOSTICS ||
+	    pdus[0][1] != 0 || pdus[0][2] != 0x0C)
+		return false;
+	*out = get_be16(pdus[0] + 3);
+	return true;
+}
+
+static bool
 expect_silence_fd(int fd, u32 timeout_ms)
 {
 	u64 deadline = clock_now_ms() + timeout_ms;
@@ -478,6 +498,42 @@ TEST(AsciiCliSilentOnBadLrc)
 	ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
 					ASCII_CLI_IO_TIMEOUT_MS);
 	ok = ok && addrs[0] == 1 && get_be16(pdus[0] + 2) == 0x1234;
+
+	ascii_cli_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiCliMalformedFramesCountCommErrors)
+{
+	const char	bad_lrc[] = ":010300000001FA\r\n";
+	const char	bad_framing[] = ":0103\n";
+	u8		bad_addr[] = { FC_READ_HOLDING_REGISTERS, 0x12, 0x34, 0x00, 0x01 };
+	u8		addrs[1] = { 0 };
+	u8		pdus[1][MODBUS_MAX_PDU] = { { 0 } };
+	u32		lens[1] = { 0 };
+	u16		count = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(ascii_cli_start_device("(device (unit-id 1) (holding 0 (static 4660)))\n"));
+
+	ok = send_all_fd(g_ascii_cli.master_fd, (const u8*)bad_lrc, sizeof(bad_lrc) - 1);
+	ok = ok && expect_silence_fd(g_ascii_cli.master_fd, 100);
+	if (ok) ok = ascii_cli_comm_error_count(&count) && count == 1;
+
+	/* A frame discarded by the scanner (lone LF) counts as one error too. */
+	if (ok) ok = send_all_fd(g_ascii_cli.master_fd, (const u8*)bad_framing,
+				 sizeof(bad_framing) - 1);
+	if (ok) ok = expect_silence_fd(g_ascii_cli.master_fd, 100);
+	if (ok) ok = ascii_cli_comm_error_count(&count) && count == 2;
+
+	/* A decoded request returning an exception is not a communication error. */
+	if (ok) ok = send_ascii_req_fd(g_ascii_cli.master_fd, 1, bad_addr, sizeof(bad_addr));
+	if (ok) ok = recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+					  ASCII_CLI_IO_TIMEOUT_MS);
+	if (ok)
+		ok = addrs[0] == 1 && lens[0] == 2 &&
+		     (pdus[0][0] & 0x80) != 0 && pdus[0][1] == EXC_ILLEGAL_DATA_ADDRESS;
+	if (ok) ok = ascii_cli_comm_error_count(&count) && count == 2;
 
 	ascii_cli_stop();
 	ASSERT_EQ(ok);

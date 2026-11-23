@@ -83,8 +83,11 @@ Examples (each is a complete `(server ...)` block; a config file may contain onl
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
 existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are
 `:` + hex `[addr][PDU][LRC]` + `CR LF`, delimited by `CR LF` rather than inter-frame silence, so
-RTU timing options are not allowed in ASCII modes. `(baud N)` in ASCII only changes the line speed.
-ASCII always uses 8N1, so parity and stop bits are fixed and there is no ASCII-over-TCP mode.
+RTU timing options are not allowed in ASCII modes. A second `:` before the terminator resynchronizes
+to that new frame, and a partial frame with no further bytes for 1 s is dropped. Discarded or
+undecodable ASCII frames increment the FC 08 bus communication error counter (`0x000C`) on every
+device. `(baud N)` in ASCII only changes the line speed. ASCII always uses 8N1, so parity and stop
+bits are fixed and there is no ASCII-over-TCP mode.
 
 ## `(device ...)`
 

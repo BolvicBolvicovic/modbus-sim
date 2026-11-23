@@ -222,6 +222,25 @@ TEST(AsciiScanDiscardsOversizedFrameAndResyncs)
 	ASSERT_EQ(len == sizeof(full) - 1);
 }
 
+TEST(AsciiScanResyncsAtSecondColon)
+{
+	const char	stale[] = ":010300000001";
+	const char	good[] = ":010300000001FB\r\n";
+	u8		buf[MODBUS_ASCII_MAX_FRAME * 2];
+	u32		stale_len = (u32)strlen(stale);
+	u32		good_len = (u32)strlen(good);
+	u32		len = 0;
+
+	memcpy(buf, stale, stale_len);
+	memcpy(buf + stale_len, good, good_len);
+	ASSERT_EQ(modbus_ascii_scan(buf, stale_len + good_len, &len) ==
+		  MODBUS_ASCII_SCAN_DISCARD);
+	ASSERT_EQ(len == stale_len);
+	ASSERT_EQ(modbus_ascii_scan(buf + stale_len, good_len, &len) ==
+		  MODBUS_ASCII_SCAN_FRAME);
+	ASSERT_EQ(len == good_len);
+}
+
 typedef struct ascii_child_t ascii_child_t;
 struct ascii_child_t
 {
@@ -267,6 +286,64 @@ recv_ascii_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 				return false;
 			memcpy(pdu, out, *pdu_len);
 			return true;
+		}
+		if (scan == MODBUS_ASCII_SCAN_DISCARD)
+		{
+			memmove(buf, buf + len, got - len);
+			got -= len;
+			continue;
+		}
+		{
+			u64		now = clock_now_ms();
+			struct pollfd	pfd = { .fd = fd, .events = POLLIN };
+			ssize_t		n;
+
+			if (now >= deadline)
+				return false;
+			if (poll(&pfd, 1, (int)(deadline - now)) <= 0)
+				continue;
+			if (pfd.revents & (POLLERR | POLLNVAL))
+				return false;
+			if (!(pfd.revents & POLLIN))
+				continue;
+			n = read(fd, buf + got, sizeof(buf) - got);
+			if (n < 0 && errno == EINTR)
+				continue;
+			if (n <= 0)
+				return false;
+			got += (u32)n;
+		}
+	}
+	return false;
+}
+
+static bool
+recv_ascii_resps(int fd, u32 expected, u8* addrs, u8 pdus[][MODBUS_MAX_PDU], u32* lens, u32 timeout_ms)
+{
+	u8		buf[MODBUS_ASCII_MAX_FRAME * 4];
+	u32		got = 0;
+	u32		frames = 0;
+	u64		deadline = clock_now_ms() + timeout_ms;
+
+	while (got < sizeof(buf))
+	{
+		u32			len = 0;
+		modbus_ascii_scan_t	scan = modbus_ascii_scan(buf, got, &len);
+
+		if (scan == MODBUS_ASCII_SCAN_FRAME)
+		{
+			u8 decoded[MODBUS_MAX_PDU + 2];
+			const u8* out = NULL;
+
+			if (!modbus_ascii_decode(buf, len, decoded, &addrs[frames], &out,
+						 &lens[frames]))
+				return false;
+			memcpy(pdus[frames], out, lens[frames]);
+			if (++frames == expected)
+				return true;
+			memmove(buf, buf + len, got - len);
+			got -= len;
+			continue;
 		}
 		if (scan == MODBUS_ASCII_SCAN_DISCARD)
 		{
@@ -531,6 +608,131 @@ TEST(AsciiServerEofAfterDelayedRequestSendsResponse)
 	if (ok)
 		ok = addr == 1 && pdu_len == 4 && pdu[0] == FC_READ_HOLDING_REGISTERS &&
 		     get_be16(pdu + 2) == 0x5678;
+
+	ASSERT_EQ(ascii_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiServerResyncsAfterTruncatedFrame)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = ascii_make_device(arena, 1, 0x3344);
+	ascii_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_ASCII_MAX_FRAME];
+	u8		both[MODBUS_ASCII_MAX_FRAME * 2];
+	u8		pdu[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		flen = 0;
+	u32		stale_len = 0;
+	u32		pdu_len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(ascii_child_start(&child, devices, 1));
+	}
+
+	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
+	stale_len = flen - 3; /* drop LRC and CRLF: no terminator */
+	memcpy(both, frame, stale_len);
+	memcpy(both + stale_len, frame, flen);
+	ok = send_all_fd(child.fd, both, stale_len + flen);
+	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
+	if (ok)
+		ok = addr == 1 && pdu_len == 4 && pdu[0] == FC_READ_HOLDING_REGISTERS &&
+		     get_be16(pdu + 2) == 0x3344;
+
+	ASSERT_EQ(ascii_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiServerStalePartialFrameTimesOut)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = ascii_make_device(arena, 1, 0x3344);
+	ascii_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_ASCII_MAX_FRAME];
+	u8		pdu[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		flen = 0;
+	u32		pdu_len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(ascii_child_start(&child, devices, 1));
+	}
+
+	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
+	ok = send_all_fd(child.fd, frame, flen - 3);
+	if (ok) usleep(1100000); /* beyond the 1 s inter-character timeout */
+	if (ok) ok = send_all_fd(child.fd, frame, flen);
+	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
+	if (ok)
+		ok = addr == 1 && pdu_len == 4 && pdu[0] == FC_READ_HOLDING_REGISTERS &&
+		     get_be16(pdu + 2) == 0x3344;
+
+	ASSERT_EQ(ascii_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiServerDelayedResponseKeepsQueuedRequest)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev1  = ascii_make_device(arena, 1, 0x3344);
+	device_t*	dev2  = ascii_make_device(arena, 2, 0xABCD);
+	ascii_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		diag[] = { FC_DIAGNOSTICS, 0x00, 0x0C, 0x00, 0x00 };
+	u8		frame[MODBUS_ASCII_MAX_FRAME];
+	u8		addrs[2] = { 0 };
+	u8		pdus[2][MODBUS_MAX_PDU] = { { 0 } };
+	u32		lens[2] = { 0 };
+	u32		flen = 0;
+	u64		queued_ms = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev1 != NULL && dev2 != NULL);
+	dev1->fault.kind     = FAULT_DELAY;
+	dev1->fault.delay_ms = 1200;
+	dev1->fault.percent  = 100;
+	{
+		device_t* devices[] = { dev1, dev2 };
+		ASSERT_EQ(ascii_child_start(&child, devices, 2));
+	}
+
+	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
+	ok = flen > 0 && send_all_fd(child.fd, frame, flen);
+	usleep(100000); /* first response is queued with a 1200 ms delay */
+	queued_ms = clock_now_ms();
+	flen = modbus_ascii_encode(frame, 2, req, sizeof(req));
+	if (ok) ok = send_all_fd(child.fd, frame, flen);
+
+	if (ok) ok = recv_ascii_resps(child.fd, 2, addrs, pdus, lens, 2000);
+	if (ok) ok = clock_now_ms() - queued_ms >= 1000; /* crossed the idle timeout */
+	if (ok)
+		ok = addrs[0] == 1 && lens[0] == 4 && pdus[0][0] == FC_READ_HOLDING_REGISTERS &&
+		     get_be16(pdus[0] + 2) == 0x3344 &&
+		     addrs[1] == 2 && lens[1] == 4 && pdus[1][0] == FC_READ_HOLDING_REGISTERS &&
+		     get_be16(pdus[1] + 2) == 0xABCD;
+
+	/* The buffered request must not be counted as a bad ASCII frame. */
+	if (ok)
+	{
+		flen = modbus_ascii_encode(frame, 2, diag, sizeof(diag));
+		ok = flen > 0 && send_all_fd(child.fd, frame, flen);
+	}
+	if (ok) ok = recv_ascii_resp(child.fd, &addrs[0], pdus[0], &lens[0], 1500);
+	if (ok)
+		ok = addrs[0] == 2 && lens[0] == 5 && pdus[0][0] == FC_DIAGNOSTICS &&
+		     get_be16(pdus[0] + 3) == 0;
 
 	ASSERT_EQ(ascii_child_stop(&child));
 	arena_release(arena);

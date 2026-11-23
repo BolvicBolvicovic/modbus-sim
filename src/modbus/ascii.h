@@ -42,10 +42,10 @@ enum modbus_ascii_scan_t
 
 /* Name: modbus_ascii_scan
  * Description: locates the next deliverable ASCII frame at rx[0]. Bytes before
- * a leading colon are reported as DISCARD so the caller can resynchronize.
- * A lone CR/LF inside a frame is reported as DISCARD through that byte.
- * An oversized frame with a terminator is discarded in full; one without a
- * terminator is trimmed back to the last colon to allow resynchronization.
+ * a leading colon, and a partial frame up to the next colon, are reported as
+ * DISCARD so the caller can resynchronize from that colon. A lone CR/LF inside
+ * a frame is reported as DISCARD through that byte. An oversized frame with or
+ * without a terminator is discarded in full.
  * */
 modbus_ascii_scan_t	modbus_ascii_scan(const u8* rx, u32 rx_len, u32* len);
 

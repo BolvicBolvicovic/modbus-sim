@@ -126,6 +126,13 @@ modbus_ascii_scan(const u8* rx, u32 rx_len, u32* len)
 
 	for (u32 i = 1; i < rx_len; i++)
 	{
+		if (rx[i] == ':')
+		{
+			/* A second start byte means the current prefix is a truncated
+			 * frame; drop it and rescan from the new colon. */
+			*len = i;
+			return MODBUS_ASCII_SCAN_DISCARD;
+		}
 		if (rx[i] != '\r' && rx[i] != '\n')
 			continue;
 
@@ -145,15 +152,6 @@ modbus_ascii_scan(const u8* rx, u32 rx_len, u32* len)
 	if (rx_len < MODBUS_ASCII_MAX_FRAME)
 		return MODBUS_ASCII_SCAN_NONE;
 
-	/* No terminator in a full buffer: trim back to the last colon. */
-	for (u32 i = rx_len - 1; i >= 1; i--)
-	{
-		if (rx[i] == ':')
-		{
-			*len = i;
-			return MODBUS_ASCII_SCAN_DISCARD;
-		}
-	}
 	*len = rx_len;
 	return MODBUS_ASCII_SCAN_DISCARD;
 }

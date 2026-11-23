@@ -14,7 +14,14 @@
 
 /* ASCII frames are delimited by CRLF, so unlike RTU there is no inter-frame
  * silence timing. Complete frames are dispatched as soon as the terminator
- * arrives, including several frames delivered in one read(). */
+ * arrives, including several frames delivered in one read(). A partial frame
+ * with no further bytes for one second is dropped so it cannot corrupt a later
+ * request. */
+
+enum
+{
+	ASCII_INTERCHAR_TIMEOUT_MS = 1000,
+};
 
 typedef struct ascii_server_t ascii_server_t;
 struct ascii_server_t
@@ -23,6 +30,7 @@ struct ascii_server_t
 	rng_t			rng;
 	u8			rx[MODBUS_ASCII_MAX_FRAME];
 	u32			rx_len;
+	u64			last_rx_ms;
 	pending_response_t	pending;
 	bool			read_closed;
 };
@@ -55,7 +63,10 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 	fault_decision_t	decision = { 0 };
 
 	if (!modbus_ascii_decode(frame, len, decoded, &addr, &pdu, &pdu_len))
+	{
+		net_record_comm_error(server->options.devices, server->options.device_count);
 		return;
+	}
 	if (addr == 0)
 		return; /* broadcast: no response */
 	dev = net_find_device(server->options.devices, server->options.device_count, addr);
@@ -81,6 +92,46 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 static void
 ascii_process(ascii_server_t* server, u64 now_ms)
 {
+	const u8*	rx = server->rx;
+	u32		remaining = server->rx_len;
+	bool		have_frame = false;
+
+	/* Bytes buffered behind a delayed response are not stale just because no
+	 * new byte arrived; only a partial frame may be expired. Look past
+	 * discardable prefixes so second-colon resync still works there too. */
+	while (remaining > 0)
+	{
+		u32			len = 0;
+		modbus_ascii_scan_t	scan = modbus_ascii_scan(rx, remaining, &len);
+
+		if (scan == MODBUS_ASCII_SCAN_FRAME)
+		{
+			have_frame = true;
+			break;
+		}
+		if (scan != MODBUS_ASCII_SCAN_DISCARD || len == 0)
+			break;
+		rx += len;
+		remaining -= len;
+	}
+
+	if (!have_frame &&
+	    server->rx_len > 0 &&
+	    server->last_rx_ms > 0)
+	{
+		u64 idle_ms = now_ms >= server->last_rx_ms ?
+			      now_ms - server->last_rx_ms : 0;
+
+		if (idle_ms >= ASCII_INTERCHAR_TIMEOUT_MS)
+		{
+			/* A stale partial frame would otherwise merge with the next
+			 * request; count it like any other discarded frame. */
+			server->rx_len = 0;
+			server->last_rx_ms = 0;
+			net_record_comm_error(server->options.devices, server->options.device_count);
+		}
+	}
+
 	while (server->rx_len > 0 && !server->pending.active)
 	{
 		u32			len = 0;
@@ -90,19 +141,21 @@ ascii_process(ascii_server_t* server, u64 now_ms)
 			break;
 		if (scan == MODBUS_ASCII_SCAN_FRAME)
 			ascii_handle_frame(server, now_ms, server->rx, len);
+		else
+			net_record_comm_error(server->options.devices, server->options.device_count);
 		ascii_consume(server, len);
 	}
 }
 
 static bool
-ascii_read_available(ascii_server_t* server)
+ascii_read_available(ascii_server_t* server, u64 now_ms)
 {
 	ssize_t got;
 
 	if (server->read_closed)
 		return false;
 	if (server->rx_len == sizeof(server->rx))
-		ascii_process(server, clock_now_ms());
+		ascii_process(server, now_ms);
 	if (server->rx_len == sizeof(server->rx))
 		server->rx_len = 0; /* cannot resync a full buffer without a colon */
 
@@ -123,6 +176,7 @@ ascii_read_available(ascii_server_t* server)
 		return false;
 	}
 	server->rx_len += (u32)got;
+	server->last_rx_ms = now_ms;
 	return true;
 }
 
@@ -180,10 +234,11 @@ ascii_handle_revents(ascii_server_t* server, short revents, u64 now_ms)
 {
 	if (revents & (POLLERR | POLLNVAL))
 		return false;
+	ascii_process(server, now_ms); /* expire stale bytes before adding new ones */
 	if ((revents & POLLOUT) && !ascii_write_pending(server))
 		return false;
 	if (revents & POLLIN)
-		(void)ascii_read_available(server);
+		(void)ascii_read_available(server, now_ms);
 	ascii_process(server, now_ms);
 	if (revents & POLLHUP)
 		return net_handle_hangup(&server->pending);

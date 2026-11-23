@@ -71,7 +71,15 @@ hex. The maximum encoded frame is `1 + 2 + 2*253 + 2 + 2 = 513` bytes.
 Framing is delimiter-based: a frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5,
 `frame-gap-ms`, or `strict-t15` behavior for ASCII; complete frames are dispatched immediately,
 including several complete frames delivered in one `read()`. A bounded RX buffer accumulates
-partial frames across reads.
+partial frames across reads. A second `:` before the terminator starts a new frame: bytes up to that
+colon are discarded and the rest is rescanned, so a truncated frame followed immediately by a valid
+request still delivers the request. Bytes before a first colon are discarded as before. If a
+buffered frame receives no new byte for 1 s, the partial frame is dropped so it cannot corrupt a
+later request.
+
+Every discarded or undecodable ASCII frame (bad framing, invalid hex, bad LRC, or a timed-out
+partial frame) increments the FC 08 bus communication error counter (`0x000C`) on every device.
+Successfully decoded frames do not, including those answered with a Modbus exception.
 
 No response is produced, and no PDU is dispatched, for:
 
@@ -147,7 +155,7 @@ Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: req
 | `0x0004` | Listen Only Mode | Enters per-device listen-only mode and returns no response. Until Restart Communications (`0x0000` or `0xFF00`) is received, all other requests to that device are ignored before PDU processing: the message count (`0x000B`/`0x000E`) still increments for each monitored request, while the event counter, device state, and responses do not change. The no-response counter (`0x000F`) increments for each ignored request and bad RTU frames still increment the bus communication-error counter (`0x000C`). |
 | `0x000A` | Clear Counters | Echoes the request and clears the FC 08 diagnostic counters and diagnostic register. It does not clear the FC 11/12 communication event counter or the FC 12 event log, and does not exit listen-only mode. Like every other request except restart, it is ignored while listen-only. |
 | `0x000B` | Return Bus Message Count | Returns the per-device `message_count` (also used by FC 12), including the counter-read request itself. |
-| `0x000C` | Return Bus Communication Error Count | Increments once for every device on an RTU bus when a bad-CRC/invalid RTU frame is discarded; TCP has no bus framing errors. Exception responses do not increment this counter. Starts at 0. |
+| `0x000C` | Return Bus Communication Error Count | Increments once for every device when a bad-CRC/invalid RTU frame or a malformed/bad-LRC/timed-out ASCII frame is discarded; TCP has no bus framing errors. Exception responses do not increment this counter. Starts at 0. |
 | `0x000D` | Return Bus Exception Error Count | Increments for every exception response, including address errors. Starts at 0. |
 | `0x000E` | Return Slave Message Count | Same per-device `message_count` as `0x000B`. |
 | `0x000F` | Return Slave No Response Count | Increments whenever a response is suppressed by listen-only mode or a configured drop fault, including the listen-only and silent-restart requests themselves. Starts at 0. |
@@ -265,7 +273,7 @@ MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 The previously tracked Modbus spec deviations have been resolved:
 
 - **FC 11/12 event counter:** counts successful message completions only; not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11/12). FC 12 message count still counts handled request PDUs, including exceptions.
-- **FC 08 Diagnostics:** public subfunctions `0x0000-0x0004`, `0x000A-0x0012`, and `0x0014` are supported with per-device state. Return Query Data (`0x0000`) accepts and echoes an N x 2-byte data field, and malformed odd-length data is rejected as illegal data value (03). `0x0003` only stores the `CHAR 00` delimiter and sets a diagnostic-register bit; it does not change the ASCII transport's `CR LF` framing. Listen-only mode suppresses all requests before processing except Restart Communications, which is processed and also silent; monitored requests still increment the bus/slave message count. RTU bad frames increment the bus communication-error counter for every device; exception responses do not. NAK, busy, and character-overrun counters are intentionally always 0.
+- **FC 08 Diagnostics:** public subfunctions `0x0000-0x0004`, `0x000A-0x0012`, and `0x0014` are supported with per-device state. Return Query Data (`0x0000`) accepts and echoes an N x 2-byte data field, and malformed odd-length data is rejected as illegal data value (03). `0x0003` only stores the `CHAR 00` delimiter and sets a diagnostic-register bit; it does not change the ASCII transport's `CR LF` framing. Listen-only mode suppresses all requests before processing except Restart Communications, which is processed and also silent; monitored requests still increment the bus/slave message count. RTU bad frames and malformed ASCII frames increment the bus communication-error counter for every device; exception responses do not. NAK, busy, and character-overrun counters are intentionally always 0.
 - **File number 0:** rejected; config and PDU validation accept file numbers `0x0001-0xFFFF`.
 - **FC 20/21 record range exceeding 0x270F:** rejected as illegal data value (03) for both FC 20 and FC 21.
 
