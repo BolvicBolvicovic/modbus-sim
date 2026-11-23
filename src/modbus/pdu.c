@@ -548,7 +548,8 @@ report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
 
 enum mei_type
 {
-	MEI_TYPE_READ_DEVICE_ID = 0x0E,
+	MEI_TYPE_READ_DEVICE_ID_LEGACY = 0x0D,
+	MEI_TYPE_READ_DEVICE_ID        = 0x0E,
 };
 
 enum read_device_id_code
@@ -559,32 +560,79 @@ enum read_device_id_code
 	READ_DEVICE_ID_SPECIFIC = 0x04,
 };
 
+static const char*
+extended_id_value(const device_t* dev, u8 id)
+{
+	for (u32 i = 0; i < dev->extended_id_count; i++)
+	{
+		if (dev->extended_id[i].id == id)
+			return dev->extended_id[i].value;
+	}
+	return NULL;
+}
+
+static bool
+next_extended_id(const device_t* dev, u32 from, u8* id, const char** value)
+{
+	u8		best = 0;
+	const char*	found = NULL;
+
+	for (u32 i = 0; i < dev->extended_id_count; i++)
+	{
+		u8 candidate = dev->extended_id[i].id;
+
+		if (candidate >= from && (!found || candidate < best))
+		{
+			best  = candidate;
+			found = dev->extended_id[i].value;
+		}
+	}
+	if (!found)
+		return false;
+
+	*id    = best;
+	*value = found;
+	return true;
+}
+
+static bool
+device_id_object_present(const device_t* dev, u8 id)
+{
+	if (id < DEVICE_ID_STANDARD_COUNT)
+		return dev->device_id[id][0] != '\0';
+	return extended_id_value(dev, id) != NULL;
+}
+
 static u32
 read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
-	u8	read_code = 0;
-	u8	object_id = 0;
-	u8	conformity = 0x81;
-	u32	first = 0;
-	u32	last = 0;
-	u32	count = 0;
-	u32	offset = 0;
-	bool	more = false;
-	u8	next = 0;
+	const char*	value = NULL;
+	u8		mei = 0;
+	u8		read_code = 0;
+	u8		object_id = 0;
+	u8		conformity = 0x81;
+	u32		id = 0;
+	u32		last = 0;
+	u32		count = 0;
+	u32		offset = 0;
+	bool		more = false;
+	u8		next = 0;
 
 	if (req_len < 2)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
-	if (req[1] != MEI_TYPE_READ_DEVICE_ID)
+	if (req[1] != MEI_TYPE_READ_DEVICE_ID_LEGACY &&
+	    req[1] != MEI_TYPE_READ_DEVICE_ID)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 	if (req_len != 4)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
+	mei       = req[1];
 	read_code = req[2];
 	object_id = req[3];
 	if (read_code < READ_DEVICE_ID_BASIC || read_code > READ_DEVICE_ID_SPECIFIC)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
-	for (u32 i = DEVICE_ID_VENDOR_URL; i < DEVICE_ID_OBJECT_COUNT; i++)
+	for (u32 i = DEVICE_ID_VENDOR_URL; i < DEVICE_ID_STANDARD_COUNT; i++)
 	{
 		if (dev->device_id[i][0] != '\0')
 		{
@@ -592,12 +640,24 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 			break;
 		}
 	}
+	if (dev->extended_id_count > 0)
+		conformity = 0x83;
 
 	if (read_code == READ_DEVICE_ID_SPECIFIC)
 	{
-		if (object_id >= DEVICE_ID_OBJECT_COUNT || dev->device_id[object_id][0] == '\0')
-			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-		first = object_id;
+		if (object_id < DEVICE_ID_STANDARD_COUNT)
+		{
+			if (dev->device_id[object_id][0] == '\0')
+				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+			value = dev->device_id[object_id];
+		}
+		else
+		{
+			value = extended_id_value(dev, object_id);
+			if (!value)
+				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+		}
+		id   = object_id;
 		last = object_id + 1;
 	}
 	else
@@ -609,17 +669,24 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 				object_id = 0;
 			last = DEVICE_ID_MAJOR_MINOR_REVISION + 1;
 		}
+		else if (read_code == READ_DEVICE_ID_REGULAR)
+		{
+			if (object_id >= DEVICE_ID_STANDARD_COUNT ||
+			    !device_id_object_present(dev, object_id))
+				object_id = 0;
+			last = DEVICE_ID_STANDARD_COUNT;
+		}
 		else
 		{
-			if (object_id >= DEVICE_ID_OBJECT_COUNT)
+			if (!device_id_object_present(dev, object_id))
 				object_id = 0;
-			last = DEVICE_ID_OBJECT_COUNT;
+			last = 0x100;
 		}
-		first = object_id;
+		id = object_id;
 	}
 
 	resp[0] = req[0];
-	resp[1] = MEI_TYPE_READ_DEVICE_ID;
+	resp[1] = mei;
 	resp[2] = read_code;
 	resp[3] = conformity;
 	resp[4] = 0x00; /* More Follows */
@@ -627,13 +694,31 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	resp[6] = 0x00; /* Number Of Objects */
 	offset = 7;
 
-	for (u32 i = first; i < last; i++)
+	while (id < last)
 	{
-		const char*	value = dev->device_id[i];
-		u32		len = 0;
+		u32	len     = 0;
+		u32	next_id = id + 1;
 
-		if (value[0] == '\0')
-			continue;
+		if (id < DEVICE_ID_STANDARD_COUNT)
+		{
+			value = dev->device_id[id];
+			if (value[0] == '\0')
+			{
+				id = next_id;
+				continue;
+			}
+		}
+		else
+		{
+			u8		found_id = 0;
+			const char*	found    = NULL;
+
+			if (!next_extended_id(dev, id, &found_id, &found))
+				break;
+			id      = found_id;
+			next_id = found_id + 1;
+			value   = found;
+		}
 
 		len = (u32)strlen(value);
 		if (len > DEVICE_ID_OBJECT_MAX)
@@ -641,15 +726,16 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		if (offset + 2 + len > MODBUS_MAX_PDU)
 		{
 			more = true;
-			next = (u8)i;
+			next = (u8)id;
 			break;
 		}
 
-		resp[offset++] = (u8)i;
+		resp[offset++] = (u8)id;
 		resp[offset++] = (u8)len;
 		memcpy(resp + offset, value, len);
 		offset += len;
 		count++;
+		id = next_id;
 	}
 
 	if (count == 0)

@@ -136,6 +136,8 @@ TEST(RtuRequestLenSupportedFunctionCodes)
 		{ "fc18", { FC_READ_FIFO_QUEUE, 0x00, 0x00 }, 3, true },
 		{ "fc2b", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01,
 			    0x00 }, 4, true },
+		{ "fc2b-mei13", { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01,
+				  0x00 }, 4, true },
 	};
 	u8	frame[MODBUS_RTU_MAX_FRAME];
 	u32	i;
@@ -174,7 +176,7 @@ TEST(RtuRequestLenRejectsUnsupportedAndTruncated)
 	u8	fc14_short[] = { 1, FC_READ_FILE_RECORD };
 	u8	fc15_short[] = { 1, FC_WRITE_FILE_RECORD };
 	u8	mei_short[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT };
-	u8	mei_wrong[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00 };
+	u8	mei_wrong[] = { 1, FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0F, 0x00 };
 	u8	fc0f_oversized[] = { 1, FC_WRITE_MULTIPLE_COILS, 0x00, 0x00,
 				     0x00, 0x01, 0xFF };
 	u32	len = 0;

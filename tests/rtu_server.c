@@ -1486,6 +1486,76 @@ TEST(RtuServerSupportedFunctionCodesFraming)
 	arena_release(arena);
 }
 
+TEST(RtuServerMei13AndExtendedDeviceIdObjects)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = device_new(arena, 0);
+	device_t*	devices[] = { dev };
+	rtu_child_t	child  = { 0 };
+	u8		pdu1[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		pdu2[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0xA0 };
+	u8		pdu3[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x03, 0x00 };
+	u8		pdu4[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x81 };
+	u8		frame1[MODBUS_RTU_MAX_FRAME];
+	u8		frame2[MODBUS_RTU_MAX_FRAME];
+	u8		both[MODBUS_RTU_MAX_FRAME * 2];
+	u8		buf[MODBUS_RTU_MAX_FRAME * 2] = { 0 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		f1 = 0;
+	u32		f2 = 0;
+	u32		got = 0;
+	u32		len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	dev->unit_id = 1;
+	strcpy(dev->name, "rtu-fc43-extra");
+	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "Acme");
+	dev->extended_id[0].id = 0xA0;
+	strcpy(dev->extended_id[0].value, "Second");
+	dev->extended_id[1].id = 0x80;
+	strcpy(dev->extended_id[1].value, "First");
+	dev->extended_id_count = 2;
+	ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+
+	/* Both frames in one write: the framer must know MEI 0x0D is a 4-byte PDU. */
+	f1 = modbus_rtu_encode(frame1, 1, pdu1, sizeof(pdu1));
+	f2 = modbus_rtu_encode(frame2, 1, pdu2, sizeof(pdu2));
+	ASSERT_EQ(f1 > 0 && f2 > 0);
+	memcpy(both, frame1, f1);
+	memcpy(both + f1, frame2, f2);
+	ASSERT_EQ(send_all_fd(child.fd, both, f1 + f2));
+
+	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 1200));
+	ASSERT_EQ(addr == 1 && len == 30);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0D);
+	ASSERT_EQ(resp[2] == 0x01 && resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x03);
+	ASSERT_EQ(resp[7] == 0x00 && resp[8] == 4 && memcmp(resp + 9, "Acme", 4) == 0);
+	ASSERT_EQ(resp[13] == 0x01 && resp[14] == 10);
+	ASSERT_EQ(resp[25] == 0x02 && resp[26] == 3 && memcmp(resp + 27, "1.0", 3) == 0);
+
+	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 1200));
+	ASSERT_EQ(addr == 1 && len == 15);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0E);
+	ASSERT_EQ(resp[2] == 0x04 && resp[3] == 0x83 && resp[6] == 0x01);
+	ASSERT_EQ(resp[7] == 0xA0 && resp[8] == 6 && memcmp(resp + 9, "Second", 6) == 0);
+
+	ASSERT_EQ(send_rtu_req(child.fd, 1, pdu3, sizeof(pdu3)));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+	ASSERT_EQ(addr == 1 && len == 45);
+	ASSERT_EQ(resp[1] == 0x0D && resp[3] == 0x83 && resp[6] == 0x05);
+	ASSERT_EQ(resp[30] == 0x80 && resp[37] == 0xA0);
+
+	ASSERT_EQ(send_rtu_req(child.fd, 1, pdu4, sizeof(pdu4)));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
+	ASSERT_EQ(addr == 1 && len == 2);
+	ASSERT_EQ(resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
+
 TEST(RtuServerUnitIdEdges)
 {
 	arena_t*	arena = ARENA_ALLOC();

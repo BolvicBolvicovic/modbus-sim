@@ -11,6 +11,7 @@
 
 #define DEVICE_NAME_MAX		64
 #define DEVICE_ID_OBJECT_MAX	244	/* 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
+#define DEVICE_MAX_EXTENDED_IDS	32
 #define DEVICE_MAX_POINTS	8192
 #define ADDRESS_SPACE_SIZE	65536
 
@@ -112,7 +113,7 @@ enum device_id_object
 	DEVICE_ID_PRODUCT_NAME         = 0x04,
 	DEVICE_ID_MODEL_NAME           = 0x05,
 	DEVICE_ID_USER_APPLICATION_NAME = 0x06,
-	DEVICE_ID_OBJECT_COUNT         = 0x07,
+	DEVICE_ID_STANDARD_COUNT       = 0x07,
 };
 
 /* Name: device_t
@@ -137,7 +138,13 @@ struct device_t
 	device_file_t*	files;			/* DEVICE_MAX_FILES entries */
 	u32		fifo_count;
 	device_fifo_t*	fifos;			/* DEVICE_MAX_FIFOS entries */
-	char		device_id[DEVICE_ID_OBJECT_COUNT][DEVICE_ID_OBJECT_MAX + 1];
+	char		device_id[DEVICE_ID_STANDARD_COUNT][DEVICE_ID_OBJECT_MAX + 1];
+	struct
+	{
+		u8	id;
+		char	value[DEVICE_ID_OBJECT_MAX + 1];
+	}		extended_id[DEVICE_MAX_EXTENDED_IDS];
+	u32		extended_id_count;
 	space_t		spaces[SPACE_COUNT];
 };
 

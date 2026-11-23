@@ -60,11 +60,33 @@ explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t
 | `(product-name "Text")` | MEI 14 object 0x04, 0-244 bytes | absent |
 | `(model-name "Text")` | MEI 14 object 0x05, 0-244 bytes | absent |
 | `(user-application-name "Text")` | MEI 14 object 0x06, 0-244 bytes | absent |
+| `(device-id-object ID "Text")` | Repeatable extended Read Device Identification object; `ID` is decimal 128-255 (`0x80-0xFF`), text is 1-244 bytes | none |
 | `(note "Text")` | A comment kept for humans. Can be repeated. Ignored by the program | - |
 | `(fault ...)` | One fault, see below | none |
 | `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |
 | `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
+
+### Read Device Identification (FC 43)
+
+The mandatory objects and optional regular objects use `(vendor-name "Text")`,
+`(product-code "Text")`, `(major-minor-revision "Text")`, `(vendor-url "Text")`,
+`(product-name "Text")`, `(model-name "Text")`, and `(user-application-name "Text")`.
+Extended objects use this exact syntax and may be repeated in any order:
+
+```scheme
+(device
+  (holding 0)
+  (device-id-object 128 "First extended object")
+  (device-id-object 255 "Last extended object"))
+```
+
+`ID` must be a decimal integer from 128 to 255; text must be non-empty and at most 244 bytes.
+IDs must be unique and at most 32 extended objects may be configured per device; entries are
+served in ascending ID order. Configuring any extended object raises FC 43 Conformity Level to
+`0x83`. MEI `0x0E` is the current Read Device Identification type; MEI `0x0D` is accepted as a
+legacy alias (CANopen is not implemented). See [modbus-support.md](modbus-support.md) for response
+semantics.
 
 Unit ids must be different between devices. In RTU mode, unit ids 0 and 248-255 are rejected at
 startup and by `--check` when RTU flags are given because address 0 is broadcast and 248-255 are
