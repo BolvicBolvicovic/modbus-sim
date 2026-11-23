@@ -1540,6 +1540,141 @@ TEST(RtuServerUnitIdEdges)
 	ASSERT_EQ(ok);
 }
 
+TEST(RtuDiagnosticsListenOnlySuppressesResponsesUntilRestart)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	rtu_child_t	child = { 0 };
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr  = 0;
+	u32		len   = 0;
+	bool		ok    = false;
+
+	ASSERT_EQ(dev != NULL);
+	ASSERT_EQ(rtu_child_start(&child, &dev, 1, 20));
+
+	req[0] = FC_READ_HOLDING_REGISTERS;
+	put_be16(req + 1, 0);
+	put_be16(req + 3, 1);
+	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+	ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+	ok = ok && addr == 1 && get_be16(resp + 2) == 0x1234;
+
+	/* Force Listen Only is itself answered with silence. */
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, DIAG_SUB_LISTEN_ONLY_MODE);
+		put_be16(req + 3, 0x0000);
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_none_fd(child.fd, 150);
+	}
+	if (ok)
+	{
+		req[0] = FC_READ_HOLDING_REGISTERS;
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_none_fd(child.fd, 150);
+	}
+
+	/* Restart is processed while listen-only, but is not answered either. */
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, DIAG_SUB_RESTART_COMMUNICATIONS);
+		put_be16(req + 3, 0x0000);
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_none_fd(child.fd, 150);
+	}
+	if (ok)
+	{
+		req[0] = FC_READ_HOLDING_REGISTERS;
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+		ok = ok && addr == 1 && get_be16(resp + 2) == 0x1234;
+	}
+
+	/* FF00 also exits listen-only and clears the counters. */
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, DIAG_SUB_LISTEN_ONLY_MODE);
+		put_be16(req + 3, 0x0000);
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_none_fd(child.fd, 150);
+	}
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, DIAG_SUB_RESTART_COMMUNICATIONS);
+		put_be16(req + 3, 0xFF00);
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_none_fd(child.fd, 150);
+	}
+	if (ok)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT);
+		put_be16(req + 3, 0x0000);
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+		ok = ok && addr == 1 && len == 5 && get_be16(resp + 3) == 1;
+	}
+	if (ok)
+	{
+		req[0] = FC_READ_HOLDING_REGISTERS;
+		put_be16(req + 1, 0);
+		put_be16(req + 3, 1);
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+		ok = ok && addr == 1 && get_be16(resp + 2) == 0x1234;
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuBadCrcIncrementsBusCommErrorForEveryDevice)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev1  = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	device_t*	dev2  = make_device(arena, 2, SPACE_HOLDING, 0, 0x5678);
+	device_t*	devices[] = { dev1, dev2 };
+	rtu_child_t	child = { 0 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr  = 0;
+	u32		frame_len = 0;
+	u32		len   = 0;
+	bool		ok    = false;
+
+	ASSERT_EQ(dev1 != NULL && dev2 != NULL);
+	ASSERT_EQ(rtu_child_start(&child, devices, 2, 20));
+
+	frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT_EQ(frame_len == sizeof(pdu) + 3);
+	frame[frame_len - 2] ^= 0xFF; /* CRC low byte: a complete but corrupt frame */
+	ok = send_all_fd(child.fd, frame, frame_len);
+	usleep(100000); /* let the server process the inter-frame gap */
+
+	for (u32 i = 0; ok && i < 2; i++)
+	{
+		req[0] = FC_DIAGNOSTICS;
+		put_be16(req + 1, DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT);
+		put_be16(req + 3, 0x0000);
+		ok = send_rtu_req(child.fd, (u8)(i + 1), req, sizeof(req));
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+		ok = ok && addr == (u8)(i + 1) && len == 5 && get_be16(resp + 3) == 1;
+	}
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
 TEST(RtuServerReadWriteMultipleRegistersResponseMatchesPduShape)
 {
 	/* Same request/response shape as PDU test ReadWriteMultipleRegistersSuccessAndReadback. */

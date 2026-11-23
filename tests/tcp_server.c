@@ -679,7 +679,7 @@ TEST(NetExceptionsOverWire)
 	}
 	if (ok)
 	{
-		/* Diagnostics subfunction 0x0000 echoes the request; others are unsupported. */
+		/* Diagnostics subfunction 0x0000 echoes the request; supported subfunctions work. */
 		req[0] = FC_DIAGNOSTICS;
 		put_be16(req + 1, 0x0000);
 		put_be16(req + 3, 0xBEEF);
@@ -689,6 +689,19 @@ TEST(NetExceptionsOverWire)
 	if (ok)
 	{
 		put_be16(req + 1, 0x0001);
+		put_be16(req + 3, 0x0000);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 5 &&
+		     memcmp(resp, req, 5) == 0;
+	}
+	if (ok)
+	{
+		put_be16(req + 1, 0x0002);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 5 &&
+		     get_be16(resp + 1) == 0x0002;
+	}
+	if (ok)
+	{
+		put_be16(req + 1, 0x0013);
 		ok = exchange(&client, 1, req, 5, resp, &len) &&
 		     exception_is(resp, len, FC_DIAGNOSTICS, EXC_ILLEGAL_FUNCTION);
 	}

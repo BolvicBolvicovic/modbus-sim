@@ -77,7 +77,7 @@ explicit listen mode selected with `--rtu-tcp`.
 | 05 | Write Single Coil | coils | 1 |
 | 06 | Write Single Register | holding registers | 1 |
 | 07 | Read Exception Status | - | 1 byte (status) |
-| 08 | Diagnostics | - | subfunction 0x0000 (echo) |
+| 08 | Diagnostics | - | public subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014 |
 | 11 (0x0B) | Get Com Event Counter | - | status + event count |
 | 12 (0x0C) | Get Com Event Log | - | status + event/message counts + 0-64 events |
 | 15 (0x0F) | Write Multiple Coils | coils | 1968 bits |
@@ -92,7 +92,27 @@ explicit listen mode selected with `--rtu-tcp`.
 
 Read Exception Status (FC 07) takes no request data (PDU is only the function code) and returns a single status byte configured per device (`exception-status`, default 0). A request with any extra data is rejected with exception 03 (illegal data value).
 
-Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: request PDU `[0x08, sub-hi, sub-lo, data...]`. This TCP simulator implements a minimal, stateless subset with no serial-line diagnostics counters/state: subfunction `0x0000` (Return Query Data) echoes the request PDU back to the client unchanged. A request shorter than 5 bytes, or with an odd-length data field, is rejected with exception 03 (illegal data value). Any diagnostics subfunction other than `0x0000` is not supported and is rejected with exception 01 (illegal function).
+Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: request PDU `[0x08, sub-hi, sub-lo, data...]`. Although the Modbus spec defines FC 08 as serial-line only, this simulator exposes it through TCP, RTU, and RTU-over-TCP. All subfunctions below are per-device and persist only while the simulator runs (no config fields). A request shorter than 3 bytes is rejected with exception 03 (illegal data value); an unknown subfunction in a longer request is rejected with exception 01 (illegal function), including vendor-specific subfunctions `0x0013-0x0015`. Every supported subfunction except `0x0000` requires exactly 5 bytes; other lengths are rejected with exception 03. For those subfunctions the data word is reserved and must be `0x0000` (exception 03 otherwise), except `0x0001` (accepts `0x0000` or `0xFF00`) and `0x0003` (`CHAR 00`: the delimiter is the high byte and the low byte must be 0). Counter responses are 5 bytes and fit the normal Modbus PDU buffer. Subfunctions `0x0004` and a Restart Communications request received while listen-only produce no response at all: the TCP/RTU transports suppress the response frame/MBAP message entirely.
+
+| Subfunction | Name | Behavior |
+|---|---|---|
+| `0x0000` | Return Query Data | Echoes the request PDU unchanged, as before. Requires at least 5 bytes and an even total PDU length; odd data fields get exception 03. |
+| `0x0001` | Restart Communications Option | Data must be `0x0000` or `0xFF00` (otherwise exception 03). Both values clear the FC 08 diagnostic counters and the diagnostic register and exit listen-only mode, then echo the request when not already listen-only. A restart received while listen-only is processed but answered with silence. `0xFF00` additionally clears the FC 11/12 communication event-log counter; `0x0000` leaves it unchanged. The `0xFF00` restart request itself is not counted as a successful completion in the freshly cleared event log. |
+| `0x0002` | Read Diagnostic Register | Returns the 16-bit diagnostic register in the count field. Default `0x0000`; only bit `0x0020` (ASCII delimiter changed) is set by `0x0003`. Bit `0x0001` (character overrun) is never set. |
+| `0x0003` | Change ASCII Delimiter | The high data byte is stored as the delimiter and the low byte must be `0` (otherwise exception 03), then the diagnostic register bit `0x0020` is set and the request is echoed. This state is stored for future use only; no ASCII framing is implemented. Default delimiter is LF (`0x0A`). |
+| `0x0004` | Listen Only Mode | Enters per-device listen-only mode and returns no response. Until Restart Communications (`0x0000` or `0xFF00`) is received, all other requests to that device are ignored before PDU processing: no counters, event counters, state, or responses change. |
+| `0x000A` | Clear Counters | Echoes the request and clears the FC 08 diagnostic counters and diagnostic register. It does not clear the FC 11/12 event-log counter and does not exit listen-only mode. Like every other request except restart, it is ignored while listen-only. |
+| `0x000B` | Return Bus Message Count | Returns the per-device `message_count` (also used by FC 12), including the counter-read request itself. |
+| `0x000C` | Return Bus Communication Error Count | Increments once for every device on an RTU bus when a bad-CRC/invalid RTU frame is discarded; TCP has no bus framing errors. Exception responses do not increment this counter. Starts at 0. |
+| `0x000D` | Return Bus Exception Error Count | Increments for every exception response, including address errors. Starts at 0. |
+| `0x000E` | Return Slave Message Count | Same per-device `message_count` as `0x000B`. |
+| `0x000F` | Return Slave No Response Count | Increments whenever a response is suppressed by listen-only mode or a configured drop fault, including the listen-only and silent-restart requests themselves. Starts at 0. |
+| `0x0010` | Return Slave NAK Count | Always 0; no NAK response is modeled. |
+| `0x0011` | Return Slave Busy Count | Always 0; no busy exception is modeled. |
+| `0x0012` | Return Bus Character Overrun Count | Always 0; there is no UART character stream in which an overrun can occur. |
+| `0x0014` | Clear Overrun Counter and Flag | Requires data `0x0000`, then clears the bus character-overrun counter and diagnostic register bit `0x0001`, and echoes the request. Other counters and bits are unchanged. |
+
+The shared `message_count` follows the FC 12 rule: it increments once for every handled request PDU, including exceptions and FC 08/11/12 requests, and wraps at 65536. Requests ignored in listen-only mode are not handled and do not increment it. FC 08 `0x0001` and `0x000A` reset it together with the other FC 08 diagnostic counters. The FC 11/12 `com_event_count` follows its own rule (successful completions only, excluding FC 11/12) and is reset only by a `0xFF00` restart. All FC 08 diagnostic counters start at 0 and wrap at 65536; they are separate from any configured fault behavior.
 
 Get Com Event Counter (FC 11 / 0x0B) is a serial-diagnostics function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x0B`, 1 byte). A normal response is `[FC 0x0B][Status Hi][Status Lo][Event Count Hi][Event Count Lo]` (5 bytes). In this simulator the status is always `0x0000` (device ready); busy/error status `0xFFFF` is not modeled. Each device keeps a 16-bit communication event counter that is incremented once for each successful message completion. It is not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11). The response returns the current counter value; the counter wraps to 0 after 65535. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value). (Note: exception code 0x0B in this project means Gateway Target Device Failed to Respond; it is unrelated to FC 11.)
 
@@ -187,7 +207,7 @@ executed and produce no response.
 The previously tracked Modbus spec deviations have been resolved:
 
 - **FC 11/12 event counter:** counts successful message completions only; not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11/12). FC 12 message count still counts handled request PDUs, including exceptions.
-- **FC 08 Diagnostics subfunction 0x0000:** Return Query Data accepts and echoes an N x 2-byte data field, matching the Modbus diagnostics data-field shape. Malformed requests with odd-length data are rejected as illegal data value (03).
+- **FC 08 Diagnostics:** public subfunctions `0x0000-0x0004`, `0x000A-0x0012`, and `0x0014` are supported with per-device state. Return Query Data (`0x0000`) accepts and echoes an N x 2-byte data field, and malformed odd-length data is rejected as illegal data value (03). ASCII framing is not implemented; `0x0003` only stores the `CHAR 00` delimiter and sets a diagnostic-register bit. Listen-only mode suppresses all requests before processing except Restart Communications, which is processed and also silent. RTU bad frames increment the bus communication-error counter for every device; exception responses do not. NAK, busy, and character-overrun counters are intentionally always 0.
 - **File number 0:** rejected; config and PDU validation accept file numbers `0x0001-0xFFFF`.
 - **FC 20/21 record range exceeding 0x270F:** rejected as illegal data value (03) for both FC 20 and FC 21.
 

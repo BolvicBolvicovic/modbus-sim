@@ -102,6 +102,14 @@ struct device_fifo_t
 	u16*	values;		/* count entries, arena-backed */
 };
 
+/* FC 08 diagnostic register bits. The simulator has no UART character stream,
+ * so the character-overrun flag/count are always clear; 0x0014 still resets them. */
+enum diagnostic_register_bit
+{
+	DIAG_REG_CHARACTER_OVERRUN       = 1u << 0,
+	DIAG_REG_ASCII_DELIMITER_CHANGED = 1u << 5,
+};
+
 /* MEI 14 (Read Device Identification) object ids. */
 enum device_id_object
 {
@@ -127,7 +135,16 @@ struct device_t
 	u8		server_id;		/* FC 17 (Report Server ID) server ID byte */
 	u8		run_indicator;		/* FC 17 Run Indicator Status (0xFF run, 0x00 off) */
 	u16		com_event_count;	/* FC 11/12 event counter, wraps modulo 65536 */
-	u16		message_count;		/* FC 12 message counter, wraps modulo 65536 */
+	u16		message_count;		/* FC 12 + FC 08 bus/slave message count */
+	u16		diagnostic_register;	/* FC 08 subfunction 0x0002 bitmask */
+	u16		diag_comm_error_count;	/* FC 08 subfunction 0x000C */
+	u16		diag_exception_count;	/* FC 08 subfunction 0x000D */
+	u16		diag_no_response_count;	/* FC 08 subfunction 0x000F */
+	u16		diag_nak_count;		/* FC 08 subfunction 0x0010 */
+	u16		diag_busy_count;	/* FC 08 subfunction 0x0011 */
+	u16		diag_overrun_count;	/* FC 08 subfunction 0x0012 */
+	u8		ascii_delimiter;	/* FC 08 subfunction 0x0003, default LF */
+	bool		listen_only;		/* FC 08 subfunction 0x0004 */
 	u64		start_ms;		/* ramps count their time from here */
 	fault_t		fault;
 	arena_t*	arena;			/* backing arena for dynamic config storage */

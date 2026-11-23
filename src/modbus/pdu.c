@@ -492,19 +492,144 @@ read_exception_status(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return 2;
 }
 
+static bool
+diagnostic_subfunction_supported(u16 subfunction)
+{
+	switch (subfunction)
+	{
+	case DIAG_SUB_RETURN_QUERY_DATA:
+	case DIAG_SUB_RESTART_COMMUNICATIONS:
+	case DIAG_SUB_READ_DIAGNOSTIC_REGISTER:
+	case DIAG_SUB_CHANGE_ASCII_DELIMITER:
+	case DIAG_SUB_LISTEN_ONLY_MODE:
+	case DIAG_SUB_CLEAR_COUNTERS:
+	case DIAG_SUB_RETURN_BUS_MESSAGE_COUNT:
+	case DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT:
+	case DIAG_SUB_RETURN_BUS_EXCEPTION_ERROR_COUNT:
+	case DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT:
+	case DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT:
+	case DIAG_SUB_RETURN_SLAVE_NAK_COUNT:
+	case DIAG_SUB_RETURN_SLAVE_BUSY_COUNT:
+	case DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT:
+	case DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static u32
+diagnostic_counter_response(u8* resp, u16 subfunction, u16 value)
+{
+	resp[0] = FC_DIAGNOSTICS;
+	put_be16(resp + 1, subfunction);
+	put_be16(resp + 3, value);
+	return 5;
+}
+
+/* Shared reset for 0x0001 and 0x000A; the ASCII delimiter and listen-only
+ * state are deliberately not part of it. */
+static void
+clear_diagnostic_counters(device_t* dev)
+{
+	dev->message_count          = 0;
+	dev->diagnostic_register    = 0;
+	dev->diag_comm_error_count  = 0;
+	dev->diag_exception_count   = 0;
+	dev->diag_no_response_count = 0;
+	dev->diag_nak_count         = 0;
+	dev->diag_busy_count        = 0;
+	dev->diag_overrun_count     = 0;
+}
+
 static u32
 diagnostics(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
-	(void)dev;
-	/* Subfunction 0x0000 (Return Query Data) echoes N x 2-byte data field. */
-	if (req_len < 5 || (req_len % 2) == 0)
+	u16	subfunction      = 0;
+	u16	data            = 0;
+	bool	was_listen_only = false;
+
+	if (req_len < 3)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
-	if (get_be16(req + 1) != 0x0000)
-		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+	subfunction = get_be16(req + 1);
+	/* Return Query Data keeps its original N x 2-byte echo shape. */
+	if (subfunction == DIAG_SUB_RETURN_QUERY_DATA)
+	{
+		if (req_len < 5 || (req_len % 2) == 0)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
-	memcpy(resp, req, req_len);
-	return req_len;
+		memcpy(resp, req, req_len);
+		return req_len;
+	}
+	if (!diagnostic_subfunction_supported(subfunction))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+	if (req_len != 5)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	data = get_be16(req + 3);
+	if (subfunction != DIAG_SUB_RESTART_COMMUNICATIONS &&
+	    subfunction != DIAG_SUB_CHANGE_ASCII_DELIMITER &&
+	    data != 0)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+	switch (subfunction)
+	{
+	case DIAG_SUB_RESTART_COMMUNICATIONS:
+		if (data != 0x0000 && data != 0xFF00)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+		was_listen_only      = dev->listen_only;
+		clear_diagnostic_counters(dev);
+		if (data == 0xFF00)
+			dev->com_event_count = 0;
+		dev->listen_only = false;
+		/* Restart is processed in listen-only mode, but never answered there. */
+		if (was_listen_only)
+			return 0;
+
+		memcpy(resp, req, 5);
+		return 5;
+	case DIAG_SUB_READ_DIAGNOSTIC_REGISTER:
+		return diagnostic_counter_response(resp, subfunction, dev->diagnostic_register);
+	case DIAG_SUB_CHANGE_ASCII_DELIMITER:
+		if ((data & 0x00FF) != 0)
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+
+		dev->ascii_delimiter = (u8)(data >> 8);
+		dev->diagnostic_register |= DIAG_REG_ASCII_DELIMITER_CHANGED;
+		memcpy(resp, req, 5);
+		return 5;
+	case DIAG_SUB_LISTEN_ONLY_MODE:
+		dev->listen_only = true;
+		return 0;
+	case DIAG_SUB_CLEAR_COUNTERS:
+		clear_diagnostic_counters(dev);
+		memcpy(resp, req, 5);
+		return 5;
+	case DIAG_SUB_RETURN_BUS_MESSAGE_COUNT:
+	case DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->message_count);
+	case DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->diag_comm_error_count);
+	case DIAG_SUB_RETURN_BUS_EXCEPTION_ERROR_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->diag_exception_count);
+	case DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->diag_no_response_count);
+	case DIAG_SUB_RETURN_SLAVE_NAK_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->diag_nak_count);
+	case DIAG_SUB_RETURN_SLAVE_BUSY_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->diag_busy_count);
+	case DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT:
+		return diagnostic_counter_response(resp, subfunction, dev->diag_overrun_count);
+	case DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG:
+		dev->diag_overrun_count = 0;
+		dev->diagnostic_register &= (u16)~DIAG_REG_CHARACTER_OVERRUN;
+		memcpy(resp, req, 5);
+		return 5;
+	default:
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+	}
 }
 
 static u32
@@ -729,6 +854,20 @@ find_pdu_handler(u8 fc)
 	return NULL;
 }
 
+static bool
+is_restart_request(const u8* req, u32 req_len)
+{
+	u16 data = 0;
+
+	if (req_len != 5 ||
+	    req[0] != FC_DIAGNOSTICS ||
+	    get_be16(req + 1) != DIAG_SUB_RESTART_COMMUNICATIONS)
+		return false;
+
+	data = get_be16(req + 3);
+	return data == 0x0000 || data == 0xFF00;
+}
+
 u32
 modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp)
 {
@@ -736,8 +875,16 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 	u32		resp_len = 0;
 	u8		fc       = 0;
 
+	/* Listen-only monitors the bus but takes no action except Restart
+	 * Communications, and no response is sent for those requests either. */
+	if (dev->listen_only && !is_restart_request(req, req_len))
+		return 0;
+
 	if (req_len == 0)
+	{
+		dev->diag_exception_count = (u16)(dev->diag_exception_count + 1);
 		return modbus_exception(resp, 0, EXC_ILLEGAL_FUNCTION);
+	}
 
 	fc = req[0];
 	dev->message_count = (u16)(dev->message_count + 1);
@@ -745,12 +892,25 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 
 	handler = find_pdu_handler(fc);
 	if (!handler)
+	{
+		dev->diag_exception_count = (u16)(dev->diag_exception_count + 1);
 		return modbus_exception(resp, fc, EXC_ILLEGAL_FUNCTION);
+	}
 
 	resp_len = handler(dev, req, req_len, resp);
-	if ((resp[0] & 0x80) == 0 &&
-	    fc != FC_GET_COM_EVENT_COUNTER &&
-	    fc != FC_GET_COM_EVENT_LOG)
+	if (resp_len == 0)
+		return 0;
+	if ((resp[0] & 0x80) != 0)
+	{
+		dev->diag_exception_count = (u16)(dev->diag_exception_count + 1);
+		if (resp[1] == EXC_DEVICE_BUSY)
+			dev->diag_busy_count = (u16)(dev->diag_busy_count + 1);
+		else if (resp[1] == EXC_DEVICE_NAK)
+			dev->diag_nak_count = (u16)(dev->diag_nak_count + 1);
+	}
+	else if (!is_restart_request(req, req_len) &&
+	         fc != FC_GET_COM_EVENT_COUNTER &&
+	         fc != FC_GET_COM_EVENT_LOG)
 		dev->com_event_count = (u16)(dev->com_event_count + 1);
 	return resp_len;
 }
@@ -766,5 +926,10 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 		*decision = fault_decide(&dev->fault, rng);
 	else
 		*decision = (fault_decision_t){ 0 };
+
+	if (len == 0 || (dev && dev->listen_only))
+		decision->drop = true;
+	if (dev && decision->drop)
+		dev->diag_no_response_count = (u16)(dev->diag_no_response_count + 1);
 	return len;
 }
