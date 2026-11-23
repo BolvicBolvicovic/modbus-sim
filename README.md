@@ -32,10 +32,11 @@ Check a config without starting the server:
 ./modbus-sim --check profiles/power-meter.scm
 ```
 
-Run the tests: `make tests`. Run them under AddressSanitizer and UBSan: `make asan`
-(the vendored s7 interpreter is excluded from instrumentation). The suite includes network
-integration tests that start the real server on loopback; set `MODBUS_SIM_BIN` to test a
-different binary.
+Run the tests: `make tests`. Independent suites run in parallel (3 workers by default; set
+`RUN_TESTS_JOBS=N` to change, capped by the number of suites); tests inside a suite stay sequential.
+Run them under AddressSanitizer and UBSan: `make asan` (the vendored s7 interpreter is excluded
+from instrumentation). The suite includes network integration tests that start the real server on
+loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 ## What it does today
 
