@@ -45,7 +45,23 @@ No response is produced for:
 - **Broadcast (unit 0)**: intentionally ignored; broadcast semantics are not modeled in this
   simulator.
 
-RTU-over-TCP is not implemented.
+### Modbus RTU over TCP
+
+`modbus-sim --rtu-tcp` serves Modbus RTU frames on a TCP listen socket. This is a separate
+transport/framing choice from Modbus TCP (MBAP) and from RTU byte streams: TCP mode still uses
+MBAP framing, RTU mode still uses byte-stream framing, and `--rtu-tcp` uses RTU frames
+(`[addr][PDU][CRC lo hi]`) carried over TCP connections.
+
+The same PDU handlers, device model, unit-id routing, fault injection, and RTU CRC validation are
+used. Bad CRC, unknown unit, and broadcast (unit 0) produce no response, matching RTU behavior.
+`--port` and `--bind` apply to RTU-over-TCP. `--baud` and `--frame-gap-ms` apply for RTU inter-frame
+timing: explicit `frame-gap-ms` takes precedence; otherwise baud-derived t3.5 is used when baud is
+known; otherwise the 20 ms default fallback is used. In baud-derived auto mode, t1.5 is enforced as
+a best-effort intra-frame read() boundary check at TCP read() granularity, not true UART character
+timing.
+
+RTU-over-TCP is not Modbus TCP and is not a transparent gateway/proxy implementation; it is an
+explicit listen mode selected with `--rtu-tcp`.
 
 ## Function codes
 

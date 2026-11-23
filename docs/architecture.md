@@ -17,8 +17,9 @@
 
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
-2. `net/tcp_server` (TCP, MBAP) or `net/rtu_server` (RTU, CRC-framed byte stream) finds the device by
-   unit/address and calls `modbus_handle_pdu`.
+2. `net/tcp_server` (Modbus TCP MBAP), `net/rtu_server` (RTU CRC-framed byte stream), or
+   `net/rtu_tcp_server` (RTU CRC-framed over TCP) finds the device by unit/address and calls
+   `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
 4. The transport asks `fault_decide` whether to drop or delay the response.
@@ -30,7 +31,7 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `rtu_server`, `net_common` | TCP sockets / RTU byte stream, `poll` loop, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `rtu_server`, `rtu_tcp_server`, `net_common` | TCP sockets, RTU byte stream, RTU-over-TCP, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU PTY/device open |
 
@@ -89,6 +90,13 @@ read() boundary check. `frame-gap-ms` is an explicit inter-frame override. With 
 `frame-gap-ms` or the 20 ms default is used as a practical approximation. After a gap, complete valid
 CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0) produce no response.
 Delayed fault responses use the same due-time poll pattern as TCP.
+
+### RTU-over-TCP (`net/rtu_tcp_server.c`)
+
+Single-threaded `poll()` TCP listen/server loop, similar to the TCP server, but each connection
+carries Modbus RTU frames instead of MBAP. It reuses the same RTU CRC/framing, t3.5/t1.5 timing
+helpers, PDU dispatch, and fault handling. This is an explicit separate transport selected by
+`--rtu-tcp`; it does not alter TCP MBAP behavior or RTU byte-stream behavior.
 
 ## Coding rules used here
 
