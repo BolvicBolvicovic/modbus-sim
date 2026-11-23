@@ -52,7 +52,7 @@ all: $(BIN)
 $(BIN): $(OBJS) $(S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $^ -o $@ $(LIBS)
 
-tests: $(TESTS)
+tests: $(TESTS) $(BIN)
 	./tools/run_tests.sh ./$(TESTS)
 
 $(TESTS): $(TEST_OBJS) $(S7_OBJ)

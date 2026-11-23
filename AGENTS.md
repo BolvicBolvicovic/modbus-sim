@@ -2,7 +2,7 @@
 
 ## Build & verification
 - `make` builds `./modbus-sim`.
-- `make tests` builds and runs `./modbus-sim-tests` through `tools/run_tests.sh`.
+- `make tests` builds `./modbus-sim` (needed by integration tests) and `./modbus-sim-tests`, then runs the tests through `tools/run_tests.sh`.
   - Do not trust a plain whole-suite run of the vtest binary for pass/fail: vtest exits 0 for whole suites even on failure. `tools/run_tests.sh` runs each test individually and fails correctly.
 - `make asan` builds/runs sanitizer tests (`ASAN_OPTIONS=detect_leaks=0` is intentional here; vendored `third_party/s7` is compiled without sanitizers). ASan builds include `float-cast-overflow`.
 - CI-equivalent checks: `make`, `make tests`, `for p in profiles/*.scm; do ./modbus-sim --check "$p"; done`, `make asan`. CI also runs clang build/tests and a gcc `-fanalyzer` build. Keep all profile checks passing when changing config parsing/validation or device behavior.
