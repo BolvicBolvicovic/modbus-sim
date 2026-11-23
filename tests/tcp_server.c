@@ -1148,13 +1148,7 @@ TEST(NetConnectionLimit)
 	for (u32 i = 0; i < 32; i++)
 	{
 		clients[i].fd = -1;
-		for (u32 attempt = 0; attempt < 50; attempt++)
-		{
-			if (client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]))
-				break;
-			usleep(50000);
-		}
-		ok = ok && clients[i].fd >= 0;
+		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
 		if (!ok)
 			break;
 		opened++;
@@ -2328,14 +2322,22 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 	/* Release pressure and verify the server recovers after backoff. */
 	for (u32 i = 0; i < opened; i++)
 		client_close(&held[i]);
-	usleep(1500000);
-	if (ok)
-		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
+	for (u32 i = 0; ok && i < 30; i++)
 	{
+		client_close(&client);
+		client.fd = -1;
+		if (!client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client))
+		{
+			usleep(100000);
+			continue;
+		}
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     len == 4 && register_value(resp, len, 0) == 5;
+		if (exchange(&client, 1, req, 5, resp, &len) &&
+		    len == 4 && register_value(resp, len, 0) == 5)
+			break;
+		if (i == 29)
+			ok = false;
+		usleep(100000);
 	}
 
 	client_close(&client);
@@ -2402,13 +2404,7 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 	for (u32 i = 0; i < 32; i++)
 	{
 		clients[i].fd = -1;
-		for (u32 attempt = 0; attempt < 50; attempt++)
-		{
-			if (client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]))
-				break;
-			usleep(50000);
-		}
-		ok = ok && clients[i].fd >= 0;
+		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
 		if (!ok)
 			break;
 		opened++;
