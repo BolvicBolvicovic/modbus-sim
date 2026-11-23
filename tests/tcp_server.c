@@ -25,6 +25,7 @@
 #define NET_RECV_TIMEOUT_MS	1000
 #define NET_SHORT_TIMEOUT_MS	100
 #define NET_START_ATTEMPTS	300
+#define NET_START_TIMEOUT_MS	5000
 #define NET_MAX_ATTEMPTS	24
 
 typedef struct client_t client_t;
@@ -370,6 +371,26 @@ done:
 	g_server_nofile = 0;
 }
 
+static bool
+file_contains(const char* path, const char* needle)
+{
+	FILE*	file = fopen(path, "r");
+	char	line[512];
+
+	if (!file)
+		return false;
+	while (fgets(line, sizeof(line), file))
+	{
+		if (strstr(line, needle))
+		{
+			fclose(file);
+			return true;
+		}
+	}
+	fclose(file);
+	return false;
+}
+
 /* `server_options` is appended inside (server ...); pass "" for defaults. */
 static bool
 server_start(const char* server_options, const char* devices)
@@ -458,17 +479,35 @@ server_start(const char* server_options, const char* devices)
 		return false;
 	}
 
-	for (u32 i = 0; i < NET_START_ATTEMPTS; i++)
+	if (g_server_stderr[0] && !server_verbose())
 	{
-		client_t probe = { .fd = -1 };
+		/* The server logs this just after listen(), before entering its poll loop.
+		 * Avoid a probe connection: it would occupy a client slot that capacity
+		 * tests need, and reaping it would require another blind sleep. */
+		u64 deadline = clock_now_ms() + NET_START_TIMEOUT_MS;
 
-		if (client_open(fx->port, 50, &probe))
+		while (clock_now_ms() < deadline)
 		{
-			client_close(&probe);
-			usleep(50000);	/* let the server reap the probe connection */
-			return true;
+			if (file_contains(g_server_stderr, "listening on"))
+				return true;
+			usleep(2000);
 		}
-		usleep(10000);
+	}
+	else
+	{
+		/* Verbose runs send stderr to the console; fall back to connect probing. */
+		for (u32 i = 0; i < NET_START_ATTEMPTS; i++)
+		{
+			client_t probe = { .fd = -1 };
+
+			if (client_open(fx->port, 50, &probe))
+			{
+				client_close(&probe);
+				usleep(50000);	/* let the server reap the probe connection */
+				return true;
+			}
+			usleep(10000);
+		}
 	}
 
 	{
@@ -2185,26 +2224,6 @@ TEST(NetReadDeviceIdentificationMei14)
 	client_close(&client);
 	server_stop();
 	ASSERT_EQ(ok);
-}
-
-static bool
-file_contains(const char* path, const char* needle)
-{
-	FILE*	file = fopen(path, "r");
-	char	line[512];
-
-	if (!file)
-		return false;
-	while (fgets(line, sizeof(line), file))
-	{
-		if (strstr(line, needle))
-		{
-			fclose(file);
-			return true;
-		}
-	}
-	fclose(file);
-	return false;
 }
 
 static bool

@@ -18,6 +18,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#define RTU_CLI_START_TIMEOUT_MS	5000
+
 typedef struct rtu_cli_t rtu_cli_t;
 struct rtu_cli_t
 {
@@ -147,19 +149,87 @@ rtu_cli_write_config(const char* text)
 }
 
 static bool
+rtu_cli_capture_stderr(void)
+{
+	int fd;
+
+	strcpy(g_rtu_cli.stderr_path, "/tmp/modbus-sim-rtuclierr-XXXXXX");
+	fd = mkstemp(g_rtu_cli.stderr_path);
+	if (fd < 0)
+	{
+		g_rtu_cli.stderr_path[0] = '\0';
+		return false;
+	}
+	close(fd);
+	return true;
+}
+
+static bool
+rtu_cli_file_contains(const char* path, const char* needle)
+{
+	FILE* file = fopen(path, "r");
+	char line[512];
+	bool found = false;
+
+	if (!file)
+		return false;
+	while (fgets(line, sizeof(line), file))
+	{
+		if (strstr(line, needle))
+		{
+			found = true;
+			break;
+		}
+	}
+	fclose(file);
+	return found;
+}
+
+/* WNOWAIT notices an early exit without reaping it: callers still waitpid(). */
+static bool
+rtu_cli_process_done(pid_t pid)
+{
+	siginfo_t info = { 0 };
+
+	return waitid(P_PID, (id_t)pid, &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+	       info.si_pid == pid;
+}
+
+/* A server logs "listening on" immediately before entering its poll loop; short-lived
+ * --check/invalid-flag runs are detected by their exit instead. */
+static bool
+rtu_cli_wait_startup(pid_t pid)
+{
+	bool have_log = g_rtu_cli.stderr_path[0] != '\0';
+	/* Without a log file (verbose runs, or callers not capturing stderr) there is
+	 * no readiness signal for a server, so keep the short historical startup wait. */
+	u64 deadline = clock_now_ms() + (have_log ? RTU_CLI_START_TIMEOUT_MS : 300);
+
+	for (;;)
+	{
+		if (have_log && rtu_cli_file_contains(g_rtu_cli.stderr_path, "listening on"))
+			return kill(pid, 0) == 0;
+		if (rtu_cli_process_done(pid))
+			return kill(pid, 0) == 0;
+		if (clock_now_ms() >= deadline)
+		{
+			if (!have_log)
+				return kill(pid, 0) == 0;
+			fprintf(stderr, "rtu cli: pid %d never became ready\n", (int)pid);
+			rtu_cli_dump_stderr();
+			return false;
+		}
+		usleep(2000);
+	}
+}
+
+static bool
 rtu_cli_start_with_args(char* const argv[], bool capture_stderr)
 {
 	rtu_cli_t* fx = &g_rtu_cli;
-	int fd;
 
-	if (capture_stderr && !rtu_cli_verbose())
-	{
-		strcpy(fx->stderr_path, "/tmp/modbus-sim-rtuclierr-XXXXXX");
-		fd = mkstemp(fx->stderr_path);
-		if (fd < 0)
-			return false;
-		close(fd);
-	}
+	if (capture_stderr && !rtu_cli_verbose() && !rtu_cli_capture_stderr())
+		return false;
 
 	fx->pid = fork();
 	if (fx->pid == 0)
@@ -179,9 +249,7 @@ rtu_cli_start_with_args(char* const argv[], bool capture_stderr)
 	}
 	if (fx->pid <= 0)
 		return false;
-	/* Give the server time to load config and enter the RTU loop. */
-	usleep(300000);
-	return kill(fx->pid, 0) == 0;
+	return rtu_cli_wait_startup(fx->pid);
 }
 
 static bool
@@ -190,14 +258,8 @@ rtu_cli_start_with_args_capture_stdout(char* const argv[])
 	rtu_cli_t* fx = &g_rtu_cli;
 	int fd;
 
-	if (!rtu_cli_verbose())
-	{
-		strcpy(fx->stderr_path, "/tmp/modbus-sim-rtuclierr-XXXXXX");
-		fd = mkstemp(fx->stderr_path);
-		if (fd < 0)
-			return false;
-		close(fd);
-	}
+	if (!rtu_cli_verbose() && !rtu_cli_capture_stderr())
+		return false;
 	strcpy(fx->stdout_path, "/tmp/modbus-sim-rtucliout-XXXXXX");
 	fd = mkstemp(fx->stdout_path);
 	if (fd < 0)
@@ -223,8 +285,7 @@ rtu_cli_start_with_args_capture_stdout(char* const argv[])
 	}
 	if (fx->pid <= 0)
 		return false;
-	usleep(300000);
-	return kill(fx->pid, 0) == 0;
+	return rtu_cli_wait_startup(fx->pid);
 }
 
 static bool
@@ -433,27 +494,6 @@ TEST(RtuCliRejectsTcpOnlyFlagsInRtuMode)
 	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
-}
-
-static bool
-rtu_cli_file_contains(const char* path, const char* needle)
-{
-	FILE* file = fopen(path, "r");
-	char line[512];
-	bool found = false;
-
-	if (!file)
-		return false;
-	while (fgets(line, sizeof(line), file))
-	{
-		if (strstr(line, needle))
-		{
-			found = true;
-			break;
-		}
-	}
-	fclose(file);
-	return found;
 }
 
 static bool
@@ -690,6 +730,8 @@ TEST(RtuCliDeviceOpenDoesNotBlockOnFifoWithoutWriter)
 	close(fd);
 	unlink(fifo_path);
 	ASSERT_EQ(mkfifo(fifo_path, 0600) == 0);
+	if (!rtu_cli_verbose())
+		ASSERT_EQ(rtu_cli_capture_stderr());
 
 	argv[argc++] = (char*)bin;
 	argv[argc++] = "--rtu-device";
@@ -704,18 +746,24 @@ TEST(RtuCliDeviceOpenDoesNotBlockOnFifoWithoutWriter)
 			_exit(127);
 		if (!freopen("/dev/null", "w", stdout))
 			_exit(127);
-		if (!freopen("/dev/null", "w", stderr))
+		if (g_rtu_cli.stderr_path[0] && !rtu_cli_verbose())
+		{
+			if (!freopen(g_rtu_cli.stderr_path, "w", stderr))
+				_exit(127);
+		}
+		else if (!freopen("/dev/null", "w", stderr))
 			_exit(127);
 		execv(argv[0], argv);
 		_exit(127);
 	}
 	ASSERT_EQ(pid > 0);
 
-	/* The process should enter the RTU poll loop promptly; a blocking open()
-	 * would hang here until a writer opens the FIFO. A FIFO opened O_RDWR has
-	 * no EOF on Linux, so terminate the process after confirming it started. */
-	usleep(300000);
-	ok = (kill(pid, 0) == 0);
+	/* A blocking open() would never reach the "listening" log line, which is
+	 * emitted just before the RTU poll loop. A FIFO opened O_RDWR has no EOF
+	 * on Linux, so terminate the process after confirming it started. */
+	ok = rtu_cli_wait_startup(pid);
+	if (ok && !rtu_cli_verbose())
+		ok = rtu_cli_stderr_contains("RTU listening on");
 	kill(pid, SIGTERM);
 	ok = ok && wait_for_process_exit(pid, &status, 3000);
 	if (!ok && waitpid(pid, &status, WNOHANG) != pid)
@@ -778,6 +826,8 @@ TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
 	tio.c_cflag |= CS7 | PARENB | CSTOPB | CRTSCTS;
 	tio.c_iflag |= IXON | IXOFF | IXANY;
 	ASSERT_EQ(tcsetattr(slave_fd, TCSANOW, &tio) == 0);
+	if (!rtu_cli_verbose())
+		ASSERT_EQ(rtu_cli_capture_stderr());
 
 	pid = fork();
 	if (pid == 0)
@@ -789,16 +839,23 @@ TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
 			_exit(127);
 		if (!freopen("/dev/null", "w", stdout))
 			_exit(127);
-		if (!freopen("/dev/null", "w", stderr))
+		if (g_rtu_cli.stderr_path[0] && !rtu_cli_verbose())
+		{
+			if (!freopen(g_rtu_cli.stderr_path, "w", stderr))
+				_exit(127);
+		}
+		else if (!freopen("/dev/null", "w", stderr))
 			_exit(127);
 		execv(argv[0], argv);
 		_exit(127);
 	}
 	ASSERT_EQ(pid > 0);
 
-	/* Give server time to open and configure the device. */
-	usleep(300000);
-	if (kill(pid, 0) == 0)
+	/* The startup log line is emitted after the device is opened and configured. */
+	ok = rtu_cli_wait_startup(pid);
+	if (ok && !rtu_cli_verbose())
+		ok = rtu_cli_stderr_contains("RTU listening on");
+	if (ok)
 	{
 		ASSERT_EQ(tcgetattr(slave_fd, &after) == 0);
 		ok = rtu_termios_is_8n1_raw(&after);
