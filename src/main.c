@@ -59,7 +59,7 @@ print_usage(void)
 	     "Transport/server settings (mode, path, port, bind, serial options) are\n"
 	     "defined in (server ...) in the config file; there are no server CLI options.\n"
 	     "\n"
-	     "Exit status: 0 success, 1 runtime/config-load error, 2 invalid CLI or config option.\n"
+	     "Exit status: 0 success, 1 config-load/runtime error, 2 invalid CLI arguments.\n"
 	     "\n"
 	     "RTU byte streams use a PTY or an existing serial-like device selected by\n"
 	     "(server (mode rtu-pty|rtu-device) ...). ASCII uses 8N1 over a byte stream\n"
