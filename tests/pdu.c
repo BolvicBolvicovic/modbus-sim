@@ -1355,3 +1355,80 @@ TEST(ReadDeviceIdentificationStreamRestartsAtObject0)
 	assert_mei_object(resp, &off, 0x04, "Simulator");
 	arena_release(arena);
 }
+
+TEST(ExceptionFaultReplacesResponseAfterProcessing)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			write[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0xAB, 0xCD };
+	u8			resp[MODBUS_MAX_PDU];
+	u16			value = 0;
+
+	dev->fault.kind           = FAULT_EXCEPTION;
+	dev->fault.exception_code = EXC_SLAVE_DEVICE_BUSY;
+	dev->fault.percent        = 100;
+	rng_seed(&rng, 1);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, write, sizeof(write), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_WRITE_SINGLE_REGISTER | 0x80) && resp[1] == EXC_SLAVE_DEVICE_BUSY);
+	ASSERT_EQ(decision.exception_code == EXC_SLAVE_DEVICE_BUSY && !decision.corrupt);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &value));
+	ASSERT_EQ(value == 0xABCD);
+	ASSERT_EQ(dev->message_count == 1 && dev->com_event_count == 1);
+
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, NULL, 0, resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == 0x80 && resp[1] == EXC_SLAVE_DEVICE_BUSY);
+	arena_release(arena);
+}
+
+TEST(CorruptFaultFlipsPayloadAfterProcessing)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x02 };
+	u8			write[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x11, 0x22 };
+	u8			resp[MODBUS_MAX_PDU];
+	u16			value = 0;
+
+	dev->fault.kind    = FAULT_CORRUPT;
+	dev->fault.percent = 100;
+	rng_seed(&rng, 2);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, read, sizeof(read), resp, &decision) == 6);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == (0x04 ^ 0xFF));
+	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x34 && resp[4] == 0x56 && resp[5] == 0x78);
+	ASSERT_EQ(decision.corrupt && decision.exception_code == 0);
+
+	rng_seed(&rng, 3);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, write, sizeof(write), resp, &decision) == 5);
+	ASSERT_EQ(resp[0] == FC_WRITE_SINGLE_REGISTER && resp[1] == (0x00 ^ 0xFF));
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &value));
+	ASSERT_EQ(value == 0x1122);
+	arena_release(arena);
+}
+
+TEST(FaultsAtZeroPercentLeaveResponsesUntouched)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+	u8			want[] = { FC_READ_HOLDING_REGISTERS, 0x02, 0x12, 0x34 };
+
+	rng_seed(&rng, 4);
+	dev->fault.kind           = FAULT_EXCEPTION;
+	dev->fault.exception_code = EXC_MEMORY_PARITY_ERROR;
+	dev->fault.percent        = 0;
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+
+	dev->fault.kind    = FAULT_CORRUPT;
+	dev->fault.percent = 0;
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}

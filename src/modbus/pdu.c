@@ -761,10 +761,17 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 		      fault_decision_t* decision)
 {
 	u32	len = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
+	u8	fc  = (req_len == 0) ? 0 : req[0];
 
 	if (dev)
 		*decision = fault_decide(&dev->fault, rng);
 	else
 		*decision = (fault_decision_t){ 0 };
+
+	/* The request was already processed above; faults only alter the response. */
+	if (decision->exception_code != 0)
+		len = modbus_exception(resp, fc, decision->exception_code);
+	if (decision->corrupt)
+		resp[len > 1 ? 1 : 0] ^= 0xFF;
 	return len;
 }

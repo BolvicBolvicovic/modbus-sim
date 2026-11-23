@@ -143,9 +143,21 @@ Any other function code gets exception 01.
 | 01 | Illegal Function | the function code is not in the table above |
 | 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535) |
 | 03 | Illegal Data Value | quantity is 0 or above the limit, the request has the wrong length or byte count, or a single-coil value is not `FF00` / `0000` |
-| 0B (11) | Gateway Target Device Failed to Respond | no device has the requested unit id |
+| 04 | Slave Device Failure | only via `(fault (kind exception) (code 4))` |
+| 05 | Acknowledge | only via `(fault (kind exception) (code 5))` |
+| 06 | Slave Device Busy | only via `(fault (kind exception) (code 6))` |
+| 07 | Negative Acknowledge | only via `(fault (kind exception) (code 7))` |
+| 08 | Memory Parity Error | only via `(fault (kind exception) (code 8))` |
+| 09 | reserved | never emitted and rejected by config |
+| 0A (10) | Gateway Path Unavailable | only via `(fault (kind exception) (code 10))` |
+| 0B (11) | Gateway Target Device Failed to Respond | no device has the requested unit id; also available via `(fault (kind exception) (code 11))` |
 
-Checks run in this order: function, request shape and quantity (03), then addresses (02).
+Checks run in this order: function, request shape and quantity (03), then addresses (02). Codes
+04-08 and 0A are never produced by the simulator's own validation: they exist only for fault
+injection (see [config-reference.md](config-reference.md)). An exception fault replaces the
+response that normal processing produced, including an exception response, and does not undo the
+request's effects. A corrupt fault instead flips the first payload byte of the normal response,
+so clients may see a malformed value; the request is still processed normally.
 
 ## Writes are all-or-nothing
 

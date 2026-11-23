@@ -2,6 +2,7 @@
 #include "device/device.h"
 #include "device/encode.h"
 #include "device/fault.h"
+#include "modbus/pdu.h"
 #include "util/rng.h"
 #include <math.h>
 #include <string.h>
@@ -160,7 +161,7 @@ TEST(FaultNoneNeverFires)
 	{
 		fault_decision_t	d = fault_decide(&fault, &rng);
 
-		ASSERT_EQ(!d.drop && d.delay_ms == 0);
+		ASSERT_EQ(!d.drop && d.delay_ms == 0 && d.exception_code == 0 && !d.corrupt);
 	}
 }
 
@@ -189,6 +190,77 @@ TEST(FaultDelayAlwaysAtHundredPercent)
 
 		ASSERT_EQ(!d.drop && d.delay_ms == 250);
 	}
+}
+
+TEST(FaultExceptionDecisionUsesCodeAtHundredPercent)
+{
+	rng_t		rng;
+	fault_t		fault = { .kind = FAULT_EXCEPTION, .exception_code = EXC_SLAVE_DEVICE_BUSY, .percent = 100 };
+
+	rng_seed(&rng, 5);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&fault, &rng);
+
+		ASSERT_EQ(d.exception_code == EXC_SLAVE_DEVICE_BUSY);
+		ASSERT_EQ(!d.drop && d.delay_ms == 0 && !d.corrupt);
+	}
+
+	fault.percent = 0;
+	rng_seed(&rng, 5);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&fault, &rng);
+
+		ASSERT_EQ(d.exception_code == 0 && !d.corrupt);
+	}
+}
+
+TEST(FaultCorruptDecisionUsesFlagAtHundredPercent)
+{
+	rng_t		rng;
+	fault_t		fault = { .kind = FAULT_CORRUPT, .percent = 100 };
+
+	rng_seed(&rng, 7);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&fault, &rng);
+
+		ASSERT_EQ(d.corrupt && d.exception_code == 0);
+		ASSERT_EQ(!d.drop && d.delay_ms == 0);
+	}
+
+	fault.percent = 0;
+	rng_seed(&rng, 7);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&fault, &rng);
+
+		ASSERT_EQ(!d.corrupt && d.exception_code == 0);
+	}
+}
+
+TEST(FaultDecisionsAreDeterministicForSeed)
+{
+	rng_t	first;
+	rng_t	second;
+	fault_t	fault = { .kind = FAULT_EXCEPTION, .exception_code = EXC_MEMORY_PARITY_ERROR, .percent = 40 };
+
+	rng_seed(&first, 1234);
+	rng_seed(&second, 1234);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	a = fault_decide(&fault, &first);
+		fault_decision_t	b = fault_decide(&fault, &second);
+
+		ASSERT_EQ(a.exception_code == b.exception_code);
+	}
+
+	fault.kind = FAULT_CORRUPT;
+	rng_seed(&first, 4321);
+	rng_seed(&second, 4321);
+	for (u32 i = 0; i < 100; i++)
+		ASSERT_EQ(fault_decide(&fault, &first).corrupt == fault_decide(&fault, &second).corrupt);
 }
 
 TEST(FileRecordStoreAndRead)

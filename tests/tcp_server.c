@@ -1182,6 +1182,55 @@ TEST(NetDropFaultStillAppliesWrites)
 	ASSERT_EQ(ok);
 }
 
+TEST(NetExceptionFaultReachesClient)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len  = 0;
+	bool	 ok   = server_start("(seed 1)",
+				     "(device (unit-id 1) (holding 0 (static 42))"
+				     "  (fault (kind exception) (code 6) (percent 100)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_SLAVE_DEVICE_BUSY);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetCorruptFaultReachesClient)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len  = 0;
+	bool	 ok   = server_start("(seed 2)",
+				     "(device (unit-id 1) (holding 0 (static 42))"
+				     "  (fault (kind corrupt) (percent 100)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) &&
+		     len == 4 &&
+		     resp[0] == FC_READ_HOLDING_REGISTERS &&
+		     resp[1] == (0x02 ^ 0xFF) &&
+		     register_value(resp, len, 0) == 42;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
 TEST(NetConnectionLimit)
 {
 	client_t clients[32];

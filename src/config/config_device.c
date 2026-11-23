@@ -7,7 +7,19 @@
 static const char* const TYPE_NAMES[]  = { "u16", "s16", "u32", "s32", "float32" };
 static const char* const ORDER_NAMES[] = { "high-first", "low-first" };
 static const char* const MODE_NAMES[]  = { "wrap", "bounce", "hold" };
-static const char* const KIND_NAMES[]  = { "delay", "drop" };
+/* Indexes shared by KIND_NAMES and KIND_VALUES. */
+enum fault_option
+{
+	FAULT_OPTION_DELAY,
+	FAULT_OPTION_DROP,
+	FAULT_OPTION_EXCEPTION,
+	FAULT_OPTION_CORRUPT,
+};
+
+static const char* const KIND_NAMES[]  = { "delay", "drop", "exception", "corrupt" };
+static const fault_kind_t KIND_VALUES[] = {
+	FAULT_DELAY, FAULT_DROP, FAULT_EXCEPTION, FAULT_CORRUPT,
+};
 
 /* --- simple device options --- */
 
@@ -117,11 +129,14 @@ parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 static bool
 parse_fault(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
-	static const char* const keys[] = { "kind", "delay-ms", "percent" };
-	s7_pointer	options = s7_cdr(item);
-	u32		kind    = 0;
-	s64		delay   = 0;
-	s64		percent = 100;
+	static const char* const keys[] = { "kind", "delay-ms", "code", "percent" };
+	s7_pointer	options   = s7_cdr(item);
+	s7_pointer	delay_f   = NULL;
+	s7_pointer	code_f    = NULL;
+	u32		kind      = 0;
+	s64		delay     = 0;
+	s64		code      = 0;
+	s64		percent   = 100;
 
 	if (dev->fault.kind != FAULT_NONE)
 		return form_fail(ctx, "device has more than one (fault ...); only one is allowed");
@@ -135,18 +150,35 @@ parse_fault(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	if (!form_opt_choice(ctx, options, "kind", KIND_NAMES, ARRAY_COUNT(KIND_NAMES), &kind))
 		return false;
 
-	if (kind == 0 && !form_need(ctx, options, "delay-ms", "fault with kind delay"))
+	delay_f = form_find(ctx, options, "delay-ms");
+	code_f  = form_find(ctx, options, "code");
+	if (kind == FAULT_OPTION_DELAY && !form_need(ctx, options, "delay-ms", "fault with kind delay"))
 		return false;
+	if (kind != FAULT_OPTION_DELAY && !form_is_absent(ctx, delay_f))
+		return form_fail(ctx, "%s: delay-ms is only valid for kind delay", form_text(ctx, delay_f));
+	if (kind == FAULT_OPTION_EXCEPTION && !form_need(ctx, options, "code", "fault with kind exception"))
+		return false;
+	if (kind != FAULT_OPTION_EXCEPTION && !form_is_absent(ctx, code_f))
+		return form_fail(ctx, "%s: code is only valid for kind exception", form_text(ctx, code_f));
 
-	if (!form_opt_int(ctx, options, "delay-ms", 1, 60000, &delay))
+	if (kind == FAULT_OPTION_DELAY && !form_get_int(ctx, delay_f, 1, 60000, &delay))
 		return false;
+	if (kind == FAULT_OPTION_EXCEPTION)
+	{
+		if (!form_get_int(ctx, code_f, 1, 11, &code))
+			return false;
+		/* Standard codes 01-08, 0A, 0B; 09 is reserved. */
+		if (code == 9)
+			return form_fail(ctx, "%s: code 9 is reserved", form_text(ctx, code_f));
+	}
 
 	if (!form_opt_int(ctx, options, "percent", 0, 100, &percent))
 		return false;
 
-	dev->fault.kind     = (kind == 0) ? FAULT_DELAY : FAULT_DROP;
-	dev->fault.delay_ms = (u32)delay;
-	dev->fault.percent  = (u32)percent;
+	dev->fault.kind           = KIND_VALUES[kind];
+	dev->fault.delay_ms       = (u32)delay;
+	dev->fault.exception_code = (u8)code;
+	dev->fault.percent        = (u32)percent;
 	return true;
 }
 

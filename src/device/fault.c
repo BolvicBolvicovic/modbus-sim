@@ -12,7 +12,9 @@ fault_decide(const fault_t* fault, rng_t* rng)
 		return none;
 
 	return (fault_decision_t){
-		.drop     = (fault->kind == FAULT_DROP),
-		.delay_ms = (fault->kind == FAULT_DELAY) ? fault->delay_ms : 0,
+		.drop           = (fault->kind == FAULT_DROP),
+		.delay_ms       = (fault->kind == FAULT_DELAY) ? fault->delay_ms : 0,
+		.exception_code = (fault->kind == FAULT_EXCEPTION) ? fault->exception_code : 0,
+		.corrupt        = (fault->kind == FAULT_CORRUPT),
 	};
 }

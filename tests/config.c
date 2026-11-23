@@ -131,6 +131,40 @@ TEST(ConfigFaultIsParsed)
 	ASSERT_EQ(config.devices[0]->fault.delay_ms == 300 && config.devices[0]->fault.percent == 40);
 }
 
+TEST(ConfigFaultExceptionAndCorruptAreParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (fault (kind exception) (code 4)) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->fault.kind == FAULT_EXCEPTION);
+	ASSERT_EQ(config.devices[0]->fault.exception_code == 4);
+	ASSERT_EQ(config.devices[0]->fault.percent == 100);
+
+	ASSERT_SUCCESS(load_text("(device (fault (kind corrupt) (percent 25)) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->fault.kind == FAULT_CORRUPT);
+	ASSERT_EQ(config.devices[0]->fault.exception_code == 0);
+	ASSERT_EQ(config.devices[0]->fault.percent == 25);
+}
+
+TEST(ConfigFaultAcceptsEveryStandardExceptionCode)
+{
+	static const u8 codes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 11 };
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[128];
+
+	for (u32 i = 0; i < sizeof(codes) / sizeof(codes[0]); i++)
+	{
+		snprintf(text, sizeof(text), "(device (fault (kind exception) (code %u)) (holding 0))",
+			 codes[i]);
+		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+		ASSERT_EQ(config.devices[0]->fault.exception_code == codes[i]);
+	}
+}
+
 TEST(ConfigExceptionStatusIsParsed)
 {
 	config_t	config = { 0 };
@@ -260,6 +294,21 @@ TEST(ConfigErrorsAreReadable)
 	EXPECT_ERROR("(server (port 1))", "no (device");
 	EXPECT_ERROR("(device (unit-id 1)) (device (unit-id 1))", "both use unit-id 1");
 	EXPECT_ERROR("(oops)", "unknown top-level form 'oops'");
+}
+
+TEST(ConfigFaultValidationErrorsAreReadable)
+{
+	EXPECT_ERROR("(device (fault (kind exception)) (holding 0))", "missing required option (code ...)");
+	EXPECT_ERROR("(device (fault (kind exception) (code 9)) (holding 0))", "code 9 is reserved");
+	EXPECT_ERROR("(device (fault (kind exception) (code 12)) (holding 0))", "must be between 1 and 11");
+	EXPECT_ERROR("(device (fault (kind exception) (code 0)) (holding 0))", "must be between 1 and 11");
+	EXPECT_ERROR("(device (fault (kind exception) (code \"4\")) (holding 0))", "expected a whole number");
+	EXPECT_ERROR("(device (fault (kind drop) (code 4)) (holding 0))", "code is only valid for kind exception");
+	EXPECT_ERROR("(device (fault (kind corrupt) (code 4)) (holding 0))", "code is only valid for kind exception");
+	EXPECT_ERROR("(device (fault (kind drop) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (fault (kind exception) (code 4) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (fault (kind corrupt) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (fault (kind exception) (code 4) (code 5)) (holding 0))", "given more than once");
 }
 
 TEST(ConfigMissingFileIsAnError)
