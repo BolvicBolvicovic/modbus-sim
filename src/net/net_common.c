@@ -50,6 +50,17 @@ net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms, const u8* req, u32 req_len
 	return modbus_handle_request(dev, rng, now_ms, req, req_len, resp, decision);
 }
 
+void
+net_record_rtu_comm_error(device_t** devices, u32 count)
+{
+	for (u32 i = 0; i < count; i++)
+	{
+		device_t* dev = devices[i];
+
+		dev->diag_comm_error_count = (u16)(dev->diag_comm_error_count + 1);
+	}
+}
+
 int
 net_tcp_listen(const char* bind_address, u16 port, int backlog)
 {

@@ -30,6 +30,26 @@ enum modbus_function_code
 	FC_ENCAPSULATED_INTERFACE_TRANSPORT = 0x2B,
 };
 
+/* Public FC 08 diagnostics subfunctions. */
+enum modbus_diagnostics_subfunction
+{
+	DIAG_SUB_RETURN_QUERY_DATA       = 0x0000,
+	DIAG_SUB_RESTART_COMMUNICATIONS  = 0x0001,
+	DIAG_SUB_READ_DIAGNOSTIC_REGISTER = 0x0002,
+	DIAG_SUB_CHANGE_ASCII_DELIMITER  = 0x0003,
+	DIAG_SUB_LISTEN_ONLY_MODE        = 0x0004,
+	DIAG_SUB_CLEAR_COUNTERS          = 0x000A,
+	DIAG_SUB_RETURN_BUS_MESSAGE_COUNT = 0x000B,
+	DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT = 0x000C,
+	DIAG_SUB_RETURN_BUS_EXCEPTION_ERROR_COUNT = 0x000D,
+	DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT = 0x000E,
+	DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT = 0x000F,
+	DIAG_SUB_RETURN_SLAVE_NAK_COUNT  = 0x0010,
+	DIAG_SUB_RETURN_SLAVE_BUSY_COUNT = 0x0011,
+	DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT = 0x0012,
+	DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG = 0x0014,
+};
+
 /* Exception codes. 0x09 is reserved by the Modbus specification. */
 enum modbus_exception_code
 {
@@ -39,7 +59,9 @@ enum modbus_exception_code
 	EXC_SLAVE_DEVICE_FAILURE       = 0x04,
 	EXC_ACKNOWLEDGE                = 0x05,
 	EXC_SLAVE_DEVICE_BUSY          = 0x06,
+	EXC_DEVICE_BUSY                = EXC_SLAVE_DEVICE_BUSY,
 	EXC_NEGATIVE_ACKNOWLEDGE       = 0x07,
+	EXC_DEVICE_NAK                 = EXC_NEGATIVE_ACKNOWLEDGE,
 	EXC_MEMORY_PARITY_ERROR        = 0x08,
 	EXC_GATEWAY_PATH_UNAVAILABLE   = 0x0A,
 	EXC_GATEWAY_TARGET_FAILED      = 0x0B,
@@ -53,7 +75,8 @@ enum modbus_exception_code
 
 /* Name: modbus_handle_pdu
  * Description: runs one request PDU against a device and writes the response PDU.
- * `resp` must hold MODBUS_MAX_PDU bytes. Returns the response length (always >= 2).
+ * `resp` must hold MODBUS_MAX_PDU bytes. Returns the response length: >= 2 for a
+ * normal or exception response, or 0 when the response must be suppressed.
  * Protocol problems become Modbus exception responses; this never fails.
  * */
 u32	modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp);

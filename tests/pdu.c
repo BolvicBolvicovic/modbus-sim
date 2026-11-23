@@ -37,6 +37,28 @@ run(device_t* dev, const u8* req, u32 len, u8* resp)
 	return modbus_handle_pdu(dev, 0, req, len, resp);
 }
 
+static u32
+run_request(device_t* dev, rng_t* rng, const u8* req, u32 len, u8* resp,
+	    fault_decision_t* decision)
+{
+	return modbus_handle_request(dev, rng, 0, req, len, resp, decision);
+}
+
+static bool
+exception_response_is(const u8* resp, u32 len, u8 code)
+{
+	return len == 2 && resp[0] == (u8)(FC_DIAGNOSTICS | 0x80) && resp[1] == code;
+}
+
+static u32
+diagnostic_request(u8* req, u16 subfunction, u16 data)
+{
+	req[0] = FC_DIAGNOSTICS;
+	put_be16(req + 1, subfunction);
+	put_be16(req + 3, data);
+	return 5;
+}
+
 TEST(ReadHoldingRegisters)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -572,9 +594,9 @@ TEST(DiagnosticsRejectsMalformedRequest)
 	u8		resp[MODBUS_MAX_PDU];
 
 	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
 	ASSERT_EQ(run(dev, odd_data, sizeof(odd_data), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
 	arena_release(arena);
 }
 
@@ -582,11 +604,351 @@ TEST(DiagnosticsUnsupportedSubfunctionIsIllegalFunction)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x01, 0x00, 0x00 };
+	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x13, 0x00, 0x00 };
+	u8		vendor[] = { FC_DIAGNOSTICS, 0x00, 0x15, 0x00, 0x00 };
+	u8		short_req[] = { FC_DIAGNOSTICS, 0x00, 0x13, 0x00 };
 	u8		resp[MODBUS_MAX_PDU];
 
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x88 && resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_FUNCTION));
+	ASSERT_EQ(run(dev, vendor, sizeof(vendor), resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_FUNCTION));
+	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_FUNCTION));
+	arena_release(arena);
+}
+
+TEST(DiagnosticsReservedDataWordMustBeZero)
+{
+	static const u16 subfunctions[] = {
+		DIAG_SUB_READ_DIAGNOSTIC_REGISTER,
+		DIAG_SUB_LISTEN_ONLY_MODE,
+		DIAG_SUB_CLEAR_COUNTERS,
+		DIAG_SUB_RETURN_BUS_MESSAGE_COUNT,
+		DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT,
+		DIAG_SUB_RETURN_BUS_EXCEPTION_ERROR_COUNT,
+		DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT,
+		DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT,
+		DIAG_SUB_RETURN_SLAVE_NAK_COUNT,
+		DIAG_SUB_RETURN_SLAVE_BUSY_COUNT,
+		DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT,
+		DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG,
+	};
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[6];
+	u8		resp[MODBUS_MAX_PDU];
+
+	for (u32 i = 0; i < ARRAY_COUNT(subfunctions); i++)
+	{
+		diagnostic_request(req, subfunctions[i], 0x0001);
+		ASSERT_EQ(run(dev, req, 5, resp) == 2);
+		ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	}
+	ASSERT_EQ(!dev->listen_only);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_MESSAGE_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, 4, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	ASSERT_EQ(run(dev, req, 6, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	arena_release(arena);
+}
+
+TEST(DiagnosticsRestartCommunicationsClearsStateAndEchoes)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->ascii_delimiter        = 'X';
+	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diag_comm_error_count  = 7;
+	dev->diag_exception_count   = 8;
+	dev->diag_no_response_count = 9;
+	dev->diag_nak_count         = 4;
+	dev->diag_busy_count        = 5;
+	dev->diag_overrun_count     = 6;
+	dev->com_event_count        = 11;
+
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(dev->diagnostic_register == 0);
+	ASSERT_EQ(dev->message_count == 0);
+	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
+	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+	ASSERT_EQ(dev->com_event_count == 11);
+	ASSERT_EQ(dev->ascii_delimiter == 'X');
+
+	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diag_comm_error_count  = 7;
+	dev->diag_exception_count   = 8;
+	dev->diag_no_response_count = 9;
+	dev->diag_nak_count         = 4;
+	dev->diag_busy_count        = 5;
+	dev->diag_overrun_count     = 6;
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0xFF00);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(!dev->listen_only);
+	ASSERT_EQ(dev->com_event_count == 0);
+	ASSERT_EQ(dev->diagnostic_register == 0);
+	ASSERT_EQ(dev->message_count == 0);
+	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
+	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsRestartFromListenOnlyIsProcessedWithoutResponse)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			req[5];
+	u8			resp[MODBUS_MAX_PDU];
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u16			message_count = 0;
+	u16			exception_count = 0;
+
+	rng_seed(&rng, 1);
+	diagnostic_request(req, DIAG_SUB_LISTEN_ONLY_MODE, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->listen_only);
+	ASSERT_EQ(dev->diag_no_response_count == 1);
+
+	message_count   = dev->message_count;
+	exception_count = dev->diag_exception_count;
+	decision        = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->message_count == message_count);
+	ASSERT_EQ(dev->diag_exception_count == exception_count);
+	ASSERT_EQ(dev->diag_no_response_count == 2);
+
+	decision = (fault_decision_t){ 0 };
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(!dev->listen_only);
+	ASSERT_EQ(dev->message_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 1);
+
+	decision = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.drop);
+	ASSERT_EQ(dev->diag_no_response_count == 1);
+
+	decision = (fault_decision_t){ 0 };
+	diagnostic_request(req, DIAG_SUB_LISTEN_ONLY_MODE, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(dev->diag_no_response_count == 2);
+
+	decision = (fault_decision_t){ 0 };
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0xFF00);
+	ASSERT_EQ(run_request(dev, &rng, req, sizeof(req), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(!dev->listen_only);
+	ASSERT_EQ(dev->com_event_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 1);
+
+	decision = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.drop);
+	arena_release(arena);
+}
+
+TEST(DiagnosticsRestartCommunicationsRejectsInvalidShapeAndValue)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[6];
+	u8		resp[MODBUS_MAX_PDU];
+
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x1234);
+	ASSERT_EQ(run(dev, req, 5, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	ASSERT_EQ(!dev->listen_only && dev->diagnostic_register == 0);
+
+	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
+	ASSERT_EQ(run(dev, req, 4, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	ASSERT_EQ(run(dev, req, 6, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	arena_release(arena);
+}
+
+TEST(DiagnosticsDiagnosticRegisterAndAsciiDelimiter)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[6];
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_EQ(dev->ascii_delimiter == '\n');
+	diagnostic_request(req, DIAG_SUB_READ_DIAGNOSTIC_REGISTER, 0x0000);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(get_be16(resp + 1) == DIAG_SUB_READ_DIAGNOSTIC_REGISTER);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+
+	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x2300);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(memcmp(resp, req, 5) == 0);
+	ASSERT_EQ(dev->ascii_delimiter == '#');
+	ASSERT_EQ(dev->diagnostic_register == DIAG_REG_ASCII_DELIMITER_CHANGED);
+
+	diagnostic_request(req, DIAG_SUB_READ_DIAGNOSTIC_REGISTER, 0x0000);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == DIAG_REG_ASCII_DELIMITER_CHANGED);
+
+	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x0023);
+	ASSERT_EQ(run(dev, req, 5, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	ASSERT_EQ(dev->ascii_delimiter == '#');
+	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x2323);
+	ASSERT_EQ(run(dev, req, 5, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	ASSERT_EQ(dev->ascii_delimiter == '#');
+
+	diagnostic_request(req, DIAG_SUB_CHANGE_ASCII_DELIMITER, 0x2300);
+	ASSERT_EQ(run(dev, req, 3, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	ASSERT_EQ(run(dev, req, 6, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	arena_release(arena);
+}
+
+TEST(DiagnosticsClearOverrunCounterAndFlag)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->diag_overrun_count  = 5;
+	dev->diagnostic_register = DIAG_REG_CHARACTER_OVERRUN | DIAG_REG_ASCII_DELIMITER_CHANGED;
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 5);
+
+	diagnostic_request(req, DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG, 0x0000);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(memcmp(resp, req, 5) == 0);
+	ASSERT_EQ(dev->diag_overrun_count == 0);
+	ASSERT_EQ(dev->diagnostic_register == DIAG_REG_ASCII_DELIMITER_CHANGED);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, 5, resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+
+	diagnostic_request(req, DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG, 0x0001);
+	ASSERT_EQ(run(dev, req, 5, resp) == 2);
+	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
+	arena_release(arena);
+}
+
+TEST(DiagnosticsClearCountersResetsAllDiagnostics)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+
+	dev->listen_only            = false;
+	dev->ascii_delimiter        = 'X';
+	dev->diagnostic_register    = DIAG_REG_ASCII_DELIMITER_CHANGED;
+	dev->diag_comm_error_count  = 7;
+	dev->diag_exception_count   = 8;
+	dev->diag_no_response_count = 9;
+	dev->diag_nak_count         = 4;
+	dev->diag_busy_count        = 5;
+	dev->diag_overrun_count     = 6;
+	dev->com_event_count        = 11;
+
+	diagnostic_request(req, DIAG_SUB_CLEAR_COUNTERS, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(!dev->listen_only);
+	ASSERT_EQ(dev->diagnostic_register == 0);
+	ASSERT_EQ(dev->message_count == 0);
+	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
+	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
+	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+	ASSERT_EQ(dev->com_event_count == 12);
+	ASSERT_EQ(dev->ascii_delimiter == 'X');
+	arena_release(arena);
+}
+
+TEST(DiagnosticsCounterSubfunctionsReflectRecordedEvents)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	rng_t		rng;
+	fault_decision_t	decision = { 0 };
+	u8		req[5];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		bad_fc[]    = { 0x99 };
+	u8		bad_sub[]   = { FC_DIAGNOSTICS, 0x00, 0x13, 0x00, 0x00 };
+	u8		bad_addr[]  = { FC_READ_HOLDING_REGISTERS, 0x7F, 0xFF, 0x00, 0x01 };
+	u16		expected    = 0;
+
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run(dev, bad_fc, sizeof(bad_fc), resp) == 2);
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(run(dev, bad_sub, sizeof(bad_sub), resp) == 2);
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(run(dev, bad_addr, sizeof(bad_addr), resp) == 2);
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	diagnostic_request(req, DIAG_SUB_READ_DIAGNOSTIC_REGISTER, 0x0000);
+	ASSERT_EQ(run(dev, req, 4, resp) == 2);
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
+
+	diagnostic_request(req, DIAG_SUB_LISTEN_ONLY_MODE, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, req, 5, resp, &decision) == 0);
+	ASSERT_EQ(decision.drop);
+	dev->listen_only = false; /* test-only: allow counter responses to be read */
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_MESSAGE_COUNT, 0x0000);
+	expected = (u16)(dev->message_count + 1);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 1) == DIAG_SUB_RETURN_BUS_MESSAGE_COUNT);
+	ASSERT_EQ(get_be16(resp + 3) == expected && dev->message_count == expected);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_COMM_ERROR_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_EXCEPTION_ERROR_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 4);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT, 0x0000);
+	expected = (u16)(dev->message_count + 1);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 1) == DIAG_SUB_RETURN_SLAVE_MESSAGE_COUNT);
+	ASSERT_EQ(get_be16(resp + 3) == expected && dev->message_count == expected);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 1);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_NAK_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_BUSY_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_CHAR_OVERRUN_COUNT, 0x0000);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
 	arena_release(arena);
 }
 

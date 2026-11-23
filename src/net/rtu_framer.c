@@ -36,6 +36,32 @@ clear_deferral(rtu_framer_t* framer)
 	framer->gap_deferred_len = 0;
 }
 
+/* A buffer rejected at a frame boundary counts as one bus communication error
+ * for every device: either the CRC is wrong or the declared length never arrived. */
+static bool
+rx_is_bad_frame(const u8* rx, u32 rx_len)
+{
+	u8		addr = 0;
+	const u8*	pdu = NULL;
+	u32		pdu_len = 0;
+	u32		expected = 0;
+
+	if (rx_len < 4 || rx_len > MODBUS_RTU_MAX_FRAME)
+		return false;
+	if (modbus_rtu_request_len(rx, rx_len, &expected) && expected > rx_len)
+		return true;
+	return !modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len);
+}
+
+static void
+discard_rx(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx)
+{
+	if (rx_is_bad_frame(framer->rx, framer->rx_len))
+		net_record_rtu_comm_error(ctx->devices, ctx->device_count);
+	framer->rx_len = 0;
+	clear_deferral(framer);
+}
+
 void
 rtu_framer_consume(rtu_framer_t* framer, u32 n)
 {
@@ -103,15 +129,20 @@ handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
 		return; /* unknown unit: no response */
 
 	resp_len = net_handle_pdu(dev, ctx->rng, now_ms, pdu, pdu_len, resp, &decision);
-	if (ctx->peer)
-		LOG_DEBUG("%s rtu unit=%u fc=0x%02X -> %s%s", ctx->peer, addr, pdu[0],
-			  (resp[0] & 0x80) ? "exception" : "ok",
-			  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
-	else
-		LOG_DEBUG("rtu unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
-			  (resp[0] & 0x80) ? "exception" : "ok",
-			  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
-	if (decision.drop)
+	{
+		const char* result = resp_len == 0 ? "no response" :
+				     (resp[0] & 0x80) ? "exception" : "ok";
+
+		if (ctx->peer)
+			LOG_DEBUG("%s rtu unit=%u fc=0x%02X -> %s%s", ctx->peer, addr, pdu[0],
+				  result, decision.drop ? " (dropped by fault)" :
+				  decision.delay_ms ? " (delayed by fault)" : "");
+		else
+			LOG_DEBUG("rtu unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
+				  result, decision.drop ? " (dropped by fault)" :
+				  decision.delay_ms ? " (delayed by fault)" : "");
+	}
+	if (decision.drop || resp_len == 0)
 		return;
 	(void)rtu_framer_queue(framer, addr, resp, resp_len, now_ms + decision.delay_ms);
 }
@@ -139,8 +170,7 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 
 		if (!keep_incomplete)
 		{
-			framer->rx_len = 0;
-			clear_deferral(framer);
+			discard_rx(framer, ctx);
 			return false;
 		}
 
@@ -164,7 +194,7 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 		else if (framer->rx_len <= MODBUS_RTU_MAX_FRAME)
 		{
 			/* Second gap with no new data: discard. */
-			framer->rx_len = 0;
+			discard_rx(framer, ctx);
 			return false;
 		}
 
@@ -195,10 +225,8 @@ rtu_framer_on_gap_due(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now
 	}
 	if (incomplete)
 	{
-		framer->rx_len = 0;
+		discard_rx(framer, ctx);
 		framer->have_rx = false;
-		framer->gap_deferred = false;
-		framer->gap_deferred_len = 0;
 		return;
 	}
 	framer->gap_deferred = false;
@@ -286,10 +314,8 @@ rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_m
 		u32 t15 = rtu_t15_us(ctx->baud);
 		if (t15 > 0 && elapsed >= t15)
 		{
-			framer->rx_len = 0;
+			discard_rx(framer, ctx);
 			framer->have_rx = false;
-			framer->gap_deferred = false;
-			framer->gap_deferred_len = 0;
 		}
 	}
 }

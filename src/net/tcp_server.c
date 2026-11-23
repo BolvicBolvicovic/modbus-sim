@@ -177,10 +177,11 @@ handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u6
 		pdu_len = net_handle_pdu(dev, &server->rng, now_ms, request, req_len, pdu, &decision);
 
 	LOG_DEBUG("%s tid=%u unit=%u fc=0x%02X -> %s%s", conn->peer, header->transaction,
-		  header->unit, request[0], (pdu[0] & 0x80) ? "exception" : "ok",
+		  header->unit, request[0], pdu_len == 0 ? "no response" :
+		  (pdu[0] & 0x80) ? "exception" : "ok",
 		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
 
-	if (decision.drop)
+	if (decision.drop || pdu_len == 0)
 	{
 		conn->last_activity_ms = now_ms;
 		return;
