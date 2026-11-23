@@ -42,6 +42,7 @@ struct rtu_tcp_conn_t
 	u64			last_rx_ms;
 	u64			last_rx_us;
 	bool			have_rx;
+	bool			read_closed;
 	rtu_tcp_pending_t	pending;
 	u64			last_activity_ms;
 	char			peer[INET_ADDRSTRLEN + 8];
@@ -335,12 +336,26 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	u64 now_ms = clock_now_ms();
 	u64 now_us = clock_now_us();
 
+	if (conn->read_closed)
+		return;
 	if (conn->rx_len >= sizeof(conn->rx))
 		consume_rx(conn, conn->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
 	note_rx_gap(server, conn, now_ms, now_us);
 
 	got = recv(conn->fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len, 0);
-	if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK))
+	if (got == 0)
+	{
+		conn->read_closed = true;
+		if (conn->rx_len > 0)
+		{
+			process_rx_frames(server, conn, now_ms);
+			conn->have_rx = conn->rx_len > 0;
+		}
+		if (!conn->pending.active)
+			conn_close(conn);
+		return;
+	}
+	if (got < 0 && errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK)
 	{
 		conn_close(conn);
 		return;
@@ -375,14 +390,18 @@ conn_write(rtu_tcp_conn_t* conn)
 	conn->pending.sent += (u32)sent;
 	conn->last_activity_ms = clock_now_ms();
 	if (conn->pending.sent >= conn->pending.len)
+	{
 		pending_clear(&conn->pending);
+		if (conn->read_closed)
+			conn_close(conn);
+	}
 }
 
 static bool
 gap_due(rtu_tcp_conn_t* conn, u64 now_ms, u32 gap_ms)
 {
 	return !conn->pending.active && conn->have_rx && conn->rx_len > 0 &&
-	       rtu_gap_elapsed(now_ms, conn->last_rx_ms, gap_ms);
+	       (conn->read_closed || rtu_gap_elapsed(now_ms, conn->last_rx_ms, gap_ms));
 }
 
 static void
@@ -438,6 +457,12 @@ build_poll_table(rtu_tcp_server_t* server, struct pollfd* fds, rtu_tcp_conn_t** 
 				fds[count - 1].events = 0;
 				*timeout = MIN(*timeout, (int)(conn->pending.due_ms - now_ms));
 			}
+			continue;
+		}
+
+		if (conn->read_closed)
+		{
+			*timeout = 0;
 			continue;
 		}
 
@@ -533,7 +558,7 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 			}
 			if (conn->fd < 0)
 				continue;
-			if (revents & (POLLERR | POLLNVAL | POLLHUP))
+			if (revents & (POLLERR | POLLNVAL))
 			{
 				conn_close(conn);
 				continue;
@@ -542,6 +567,38 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 				conn_read(&server, conn);
 			if (conn->fd >= 0 && (revents & POLLOUT))
 				conn_write(conn);
+			if (conn->fd >= 0 && (revents & POLLHUP))
+			{
+				/* Peer gone: drop any pending response and close. If EOF was not
+				 * observed as recv==0, process buffered complete frames once, but
+				 * a response queued here cannot be delivered on a hung-up peer.
+				 * When EOF was already observed, keep trying to deliver the queued
+				 * response; conn_write closes on send failure. */
+				if (conn->pending.active)
+				{
+					if (conn->read_closed)
+						continue;
+					pending_clear(&conn->pending);
+					conn_close(conn);
+					continue;
+				}
+				if (!conn->read_closed)
+				{
+					conn->read_closed = true;
+					if (conn->have_rx && conn->rx_len > 0)
+					{
+						process_rx_frames(&server, conn, clock_now_ms());
+						if (conn->pending.active)
+						{
+							pending_clear(&conn->pending);
+							conn_close(conn);
+							continue;
+						}
+					}
+				}
+				conn_close(conn);
+				continue;
+			}
 			if (conn->fd >= 0 && gap_due(conn, clock_now_ms(), gap_ms))
 			{
 				process_rx_frames(&server, conn, clock_now_ms());
