@@ -72,7 +72,7 @@ conn_find_free(rtu_tcp_server_t* server)
 static s32
 listen_open(rtu_tcp_server_t* server)
 {
-	int fd = net_tcp_listen(server->options.bind_address, server->options.port, 16);
+	int fd = net_tcp_listen(server->options.bind_address, server->options.port, 64);
 	if (fd < 0)
 		return -1;
 	server->listen_fd = fd;
