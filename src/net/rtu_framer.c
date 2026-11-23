@@ -29,6 +29,13 @@ rtu_framer_keep_incomplete(u32 frame_gap_ms, u32 baud)
 	return frame_gap_ms == 0 && baud != 0;
 }
 
+static void
+clear_deferral(rtu_framer_t* framer)
+{
+	framer->gap_deferred = false;
+	framer->gap_deferred_len = 0;
+}
+
 void
 rtu_framer_consume(rtu_framer_t* framer, u32 n)
 {
@@ -96,90 +103,59 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 
 	while (framer->rx_len > 0 && !framer->pending.active)
 	{
-		u32				frame_len = 0;
-		modbus_rtu_frame_result_t	result = modbus_rtu_next_frame(framer->rx, framer->rx_len, &frame_len);
+		u32	frame_len = 0;
+		u32	retry;
 
-		if (result == MODBUS_RTU_FRAME_FOUND)
+		if (modbus_rtu_next_frame(framer->rx, framer->rx_len, &frame_len) ==
+		    MODBUS_RTU_FRAME_FOUND)
 		{
 			handle_frame(framer, ctx, now_ms, framer->rx, frame_len);
 			rtu_framer_consume(framer, frame_len);
-			framer->gap_deferred = false;
-			framer->gap_deferred_len = 0;
+			clear_deferral(framer);
 			if (framer->pending.active)
 				return false;
 			continue;
 		}
 
-		if (keep_incomplete)
+		if (!keep_incomplete)
+		{
+			framer->rx_len = 0;
+			clear_deferral(framer);
+			return false;
+		}
+
+		if (!framer->gap_deferred)
 		{
 			if (framer->rx_len <= MODBUS_RTU_MAX_FRAME)
-			{
-				/* Issue #49: in baud-derived auto mode, keep any incomplete
-				 * buffer that is not already a valid frame until a second
-				 * t3.5 gap passes. This covers short first chunks and
-				 * variable/unknown-length requests (FC 08, MEI != 0x0E). */
-				if (framer->gap_deferred)
-				{
-					if (framer->gap_deferred_len < framer->rx_len)
-					{
-						/* Kept bytes plus new data did not form a frame at offset 0.
-						 * Retry from the first byte of new data so a valid request
-						 * arriving after a truncated frame is not lost (issue #49). */
-						u32 retry = framer->gap_deferred_len;
-						framer->gap_deferred = false;
-						framer->gap_deferred_len = 0;
-						if (retry > 0 && retry < framer->rx_len)
-						{
-							rtu_framer_consume(framer, retry);
-							if (framer->rx_len == 0)
-								return false;
-							continue;
-						}
-						framer->rx_len = 0;
-						return false;
-					}
-					/* Second gap with no new data: discard incomplete bytes. */
-					framer->rx_len = 0;
-					framer->gap_deferred = false;
-					framer->gap_deferred_len = 0;
-					return false;
-				}
 				return true;
-			}
-			/* Oversized buffer cannot become a single valid RTU frame.
-			 * Drop oldest bytes, but preserve any bytes received after the
-			 * deferred boundary when possible. */
-			if (framer->gap_deferred && framer->gap_deferred_len < framer->rx_len)
-			{
-				u32 retry = framer->gap_deferred_len;
-				framer->gap_deferred = false;
-				framer->gap_deferred_len = 0;
-				rtu_framer_consume(framer, retry);
-				if (framer->rx_len > MODBUS_RTU_MAX_FRAME)
-					rtu_framer_consume(framer, framer->rx_len - MODBUS_RTU_MAX_FRAME);
-				if (framer->rx_len == 0)
-					return false;
-				continue;
-			}
+
 			rtu_framer_consume(framer, framer->rx_len - MODBUS_RTU_MAX_FRAME);
-			framer->gap_deferred = false;
-			framer->gap_deferred_len = 0;
+			clear_deferral(framer);
 			if (framer->rx_len == 0)
 				return false;
 			continue;
 		}
 
-		framer->rx_len = 0;
-		framer->gap_deferred = false;
-		framer->gap_deferred_len = 0;
-		return false;
+		retry = framer->gap_deferred_len;
+		clear_deferral(framer);
+
+		if (retry > 0 && retry < framer->rx_len)
+			rtu_framer_consume(framer, retry);
+		else if (framer->rx_len <= MODBUS_RTU_MAX_FRAME)
+		{
+			/* Second gap with no new data: discard. */
+			framer->rx_len = 0;
+			return false;
+		}
+
+		if (framer->rx_len > MODBUS_RTU_MAX_FRAME)
+			rtu_framer_consume(framer, framer->rx_len - MODBUS_RTU_MAX_FRAME);
+		if (framer->rx_len == 0)
+			return false;
 	}
 
 	if (framer->rx_len == 0)
-	{
-		framer->gap_deferred = false;
-		framer->gap_deferred_len = 0;
-	}
+		clear_deferral(framer);
 	return false;
 }
 
