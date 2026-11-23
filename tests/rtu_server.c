@@ -1743,3 +1743,145 @@ TEST(RtuServerEofAfterDelayedRequestSendsResponse)
 	arena_release(arena);
 	ASSERT_EQ(ok);
 }
+
+static void
+assert_fc16_split_answered(u32 split_after)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	rtu_child_t	child = { 0 };
+	u8		pdu[6 + 8 * 2];
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		frame_len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	dev->unit_id = 1;
+	strcpy(dev->name, "rtu-fc16-split");
+	for (u32 i = 0; i < 8; i++)
+	{
+		point_t p = { 0 };
+		p.space = SPACE_HOLDING;
+		p.address = i;
+		p.type = VT_U16;
+		p.kind = POINT_STATIC;
+		p.static_value = (f64)i;
+		ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	}
+
+	pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+	put_be16(pdu + 1, 0);
+	put_be16(pdu + 3, 8);
+	pdu[5] = 16;
+	for (u32 i = 0; i < 8; i++)
+		put_be16(pdu + 6 + i * 2, (u16)(0x5000 + i));
+
+	{
+		device_t* devices[] = { dev };
+		/* baud-derived auto mode; t3.5 at 9600 is ~4ms. */
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
+	}
+
+	frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT(frame_len > split_after);
+	ASSERT_EQ(send_all_fd(child.fd, frame, split_after));
+	usleep(6000); /* cross one t3.5 gap, within two-gap window */
+	ASSERT_EQ(send_all_fd(child.fd, frame + split_after, frame_len - split_after));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == 5);
+	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 1) == 0);
+	ASSERT_EQ(get_be16(resp + 3) == 8);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
+
+TEST(RtuServerBaudIncompleteFc16SplitAfter5Answered)
+{
+	/* Issue #49: FC16 needs 7 bytes before length is known; a 5-byte first
+	 * chunk must still be kept in baud-derived auto mode. */
+	assert_fc16_split_answered(5);
+}
+
+TEST(RtuServerBaudIncompleteFc16SplitAfter7Answered)
+{
+	assert_fc16_split_answered(7);
+}
+
+TEST(RtuServerBaudIncompleteFc16SplitAfter20Answered)
+{
+	assert_fc16_split_answered(20);
+}
+
+TEST(RtuServerBaudIncompleteFc08SplitAnswered)
+{
+	/* Issue #49: FC 08 request length cannot be derived from header alone;
+	 * in baud-derived auto mode a split request must still be answered. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
+	rtu_child_t	child = { 0 };
+	u8		pdu[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		frame_len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
+	}
+
+	frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT(frame_len > 4);
+	ASSERT_EQ(send_all_fd(child.fd, frame, 4));
+	usleep(6000);
+	ASSERT_EQ(send_all_fd(child.fd, frame + 4, frame_len - 4));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == sizeof(pdu));
+	ASSERT_EQ(memcmp(resp, pdu, sizeof(pdu)) == 0);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
+
+TEST(RtuServerBaudTruncatedFrameDoesNotLoseValidRequest)
+{
+	/* Issue #49: a truncated frame followed by a valid request within two
+	 * t3.5 gaps must not lose the valid request. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0xBEEF);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		good[MODBUS_RTU_MAX_FRAME];
+	u8		trunc[] = { 0x01, FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		good_len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
+	}
+
+	good_len = modbus_rtu_encode(good, 1, req, sizeof(req));
+	ASSERT_EQ(send_all_fd(child.fd, trunc, sizeof(trunc)));
+	usleep(10000); /* within two gaps: keep truncated bytes */
+	ASSERT_EQ(send_all_fd(child.fd, good, good_len));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(len == 4);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 0xBEEF);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}

@@ -174,8 +174,19 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	f->last_rx_ms = now_ms;
 	f->last_rx_us = now_us;
 	f->have_rx = true;
-	f->gap_deferred = false;
 	conn->last_activity_ms = now_ms;
+	if (server->options.frame_gap_ms == 0 && server->options.baud != 0 && f->gap_deferred && f->rx_len > f->gap_deferred_len)
+	{
+		bool incomplete = rtu_framer_process(f, server->options.devices, server->options.device_count,
+						     &server->rng, now_ms, server->options.frame_gap_ms,
+						     server->options.baud, conn->peer);
+		f->have_rx = f->rx_len > 0;
+		if (!incomplete)
+		{
+			f->gap_deferred = false;
+			f->gap_deferred_len = 0;
+		}
+	}
 }
 
 static void
@@ -353,16 +364,22 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 				if (incomplete && !f->gap_deferred)
 				{
 					f->gap_deferred = true;
+					f->gap_deferred_len = f->rx_len;
 					f->last_rx_ms = now_ms;
+					f->last_rx_us = clock_now_us();
 				}
 				else if (incomplete)
 				{
 					f->rx_len = 0;
 					f->have_rx = false;
 					f->gap_deferred = false;
+					f->gap_deferred_len = 0;
 				}
 				else
+				{
 					f->gap_deferred = false;
+					f->gap_deferred_len = 0;
+				}
 			}
 		}
 
@@ -438,6 +455,7 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 				if (incomplete && !f->gap_deferred)
 				{
 					f->gap_deferred = true;
+					f->gap_deferred_len = f->rx_len;
 					f->last_rx_ms = clock_now_ms();
 				}
 				else if (incomplete)
@@ -445,9 +463,13 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 					f->rx_len = 0;
 					f->have_rx = false;
 					f->gap_deferred = false;
+					f->gap_deferred_len = 0;
 				}
 				else
+				{
 					f->gap_deferred = false;
+					f->gap_deferred_len = 0;
+				}
 			}
 		}
 	}
