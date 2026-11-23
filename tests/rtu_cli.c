@@ -903,6 +903,178 @@ TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
 }
 
 static bool
+rtu_cli_line_flags_match(const struct termios* tio, tcflag_t set)
+{
+	/* Linux PTYs strip PARENB from tcsetattr(); PARODD, CMSPAR and CSTOPB are
+	 * observable. tests/serial.c checks the requested PARENB bit directly. */
+	tcflag_t flags = PARODD | CSTOPB;
+
+#ifdef CMSPAR
+	flags |= CMSPAR;
+#endif
+	return (tio->c_cflag & CSIZE) == CS8 &&
+	       (tio->c_cflag & flags) == (set & flags) &&
+	       (tio->c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD) &&
+	       (tio->c_cflag & CRTSCTS) == 0;
+}
+
+/* Starts the server on a PTY slave preconfigured with non-default line flags,
+ * then returns the slave's termios so tests can inspect the applied flags. */
+static bool
+rtu_cli_pty_line_flags(const char* config_text, char* const extra[], u32 extra_count,
+		       struct termios* after)
+{
+	rtu_cli_t* fx = &g_rtu_cli;
+	char* argv[16];
+	int argc = 0;
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	int master_fd = -1;
+	int slave_fd = -1;
+	char name[128];
+	struct termios tio;
+	pid_t pid;
+	int status = 0;
+	bool ok = false;
+
+	if (!bin)
+		bin = "./modbus-sim";
+	if (extra_count > 8 || !rtu_cli_write_config(config_text))
+		return false;
+	if (openpty(&master_fd, &slave_fd, name, NULL, NULL) < 0)
+		goto done;
+	if (tcgetattr(slave_fd, &tio) != 0)
+		goto done;
+	cfmakeraw(&tio);
+	cfsetispeed(&tio, B19200);
+	cfsetospeed(&tio, B19200);
+	tio.c_cflag &= ~(CSIZE | PARENB | PARODD | CSTOPB | CRTSCTS);
+#ifdef CMSPAR
+	tio.c_cflag &= ~CMSPAR;
+#endif
+	tio.c_cflag |= CS7 | PARENB | PARODD | CSTOPB | CRTSCTS;
+	if (tcsetattr(slave_fd, TCSANOW, &tio) != 0)
+		goto done;
+	if (!rtu_cli_verbose() && !rtu_cli_capture_stderr())
+		goto done;
+
+	argv[argc++] = (char*)bin;
+	argv[argc++] = "--rtu-device";
+	argv[argc++] = name;
+	for (u32 i = 0; i < extra_count; i++)
+		argv[argc++] = extra[i];
+	argv[argc++] = fx->config;
+	argv[argc] = NULL;
+
+	pid = fork();
+	if (pid < 0)
+		goto done;
+	if (pid == 0)
+	{
+		close(master_fd);
+		close(slave_fd);
+		if (!freopen("/dev/null", "r", stdin))
+			_exit(127);
+		if (!freopen("/dev/null", "w", stdout))
+			_exit(127);
+		if (fx->stderr_path[0] && !rtu_cli_verbose())
+		{
+			if (!freopen(fx->stderr_path, "w", stderr))
+				_exit(127);
+			setvbuf(stderr, NULL, _IONBF, 0);
+		}
+		else if (!freopen("/dev/null", "w", stderr))
+			_exit(127);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	fx->pid = pid;
+	ok = rtu_cli_wait_startup(pid);
+	if (ok && !rtu_cli_verbose())
+		ok = rtu_cli_stderr_contains("RTU listening on");
+	if (ok)
+		ok = tcgetattr(slave_fd, after) == 0;
+	ok = ok && cfgetispeed(after) == B19200;
+	ok = ok && cfgetospeed(after) == B19200;
+
+	kill(pid, SIGTERM);
+	if (!wait_for_process_exit(pid, &status, 3000) &&
+	    waitpid(pid, &status, WNOHANG) != pid)
+	{
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+	}
+	fx->pid = -1;
+
+done:
+	if (master_fd >= 0)
+		close(master_fd);
+	if (slave_fd >= 0)
+		close(slave_fd);
+	rtu_cli_stop(); /* cleans config/stderr paths; the child was already reaped */
+	return ok;
+}
+
+TEST(RtuCliDefaultLineFlagsAre8N1)
+{
+	struct termios after;
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(device (unit-id 1) (holding 0))\n", NULL, 0, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, 0));
+}
+
+TEST(RtuCliEvenParityFromConfig)
+{
+	struct termios after;
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(server (parity even))\n"
+					 "(device (unit-id 1) (holding 0))\n", NULL, 0, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB));
+}
+
+TEST(RtuCliOddParityCliOverridesConfig)
+{
+	struct termios after;
+	char* extra[] = { "--parity", "odd" };
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(server (parity even))\n"
+					 "(device (unit-id 1) (holding 0))\n", extra, 2, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB | PARODD));
+}
+
+#ifdef CMSPAR
+TEST(RtuCliMarkAndSpaceParityFlags)
+{
+	struct termios after;
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(server (parity mark))\n"
+					 "(device (unit-id 1) (holding 0))\n", NULL, 0, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB | PARODD | CMSPAR));
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(server (parity space))\n"
+					 "(device (unit-id 1) (holding 0))\n", NULL, 0, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB | CMSPAR));
+}
+#endif
+
+TEST(RtuCliStopBitsFromConfigAndCli)
+{
+	struct termios after;
+	char* two[] = { "--stop-bits", "2" };
+	char* one[] = { "--stop-bits", "1" };
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(server (stop-bits 2))\n"
+					 "(device (unit-id 1) (holding 0))\n", NULL, 0, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, CSTOPB));
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(device (unit-id 1) (holding 0))\n", two, 2, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, CSTOPB));
+
+	ASSERT_EQ(rtu_cli_pty_line_flags("(server (stop-bits 2))\n"
+					 "(device (unit-id 1) (holding 0))\n", one, 2, &after));
+	ASSERT_EQ(rtu_cli_line_flags_match(&after, 0));
+}
+
+static bool
 rtu_cli_start_pty_extra(const char* config_text, char* const extra[], u32 extra_count)
 {
 	rtu_cli_t* fx = &g_rtu_cli;
@@ -1191,6 +1363,100 @@ TEST(RtuCliRejectsRtuTcpWithStrictT15)
 	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
 	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	ASSERT_EQ(rtu_cli_stderr_contains("strict-t15 is not supported for RTU-over-TCP"));
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+static bool
+rtu_cli_expect_cli_error(char* const argv[], const char* message)
+{
+	int status = 0;
+	bool ok = rtu_cli_start_with_args(argv, true);
+
+	ok = ok && wait_for_process_exit(g_rtu_cli.pid, &status, 2000);
+	ok = ok && WIFEXITED(status) && WEXITSTATUS(status) == 2;
+	ok = ok && rtu_cli_stderr_contains(message);
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+	return ok;
+}
+
+TEST(RtuCliCheckAcceptsParityAndStopBits)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-pty",
+			 "--parity", "even", "--stop-bits", "2", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+}
+
+TEST(RtuCliRejectsInvalidParityAndStopBits)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* parity[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-pty",
+			   "--parity", "bogus", g_rtu_cli.config, NULL };
+	char* bits[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-pty",
+			 "--stop-bits", "3", g_rtu_cli.config, NULL };
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(parity, "parity must be one of"));
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(bits, "between 1 and 2"));
+}
+
+TEST(RtuCliRejectsSerialLineFlagsOutsideByteStreamRtu)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* tcp_parity[] = { (char*)(bin ? bin : "./modbus-sim"), "--check",
+			       "--parity", "even", g_rtu_cli.config, NULL };
+	char* rtu_tcp_parity[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-tcp",
+				   "--parity", "even", g_rtu_cli.config, NULL };
+	char* rtu_tcp_bits[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-tcp",
+				 "--stop-bits", "2", g_rtu_cli.config, NULL };
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(tcp_parity, "--parity is only valid in RTU byte-stream mode"));
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(rtu_tcp_parity, "--parity is only valid in RTU byte-stream mode"));
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(rtu_tcp_bits, "--stop-bits is only valid in RTU byte-stream mode"));
+}
+
+TEST(RtuCliCheckRejectsRtuTcpWithSerialLineConfig)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", "--rtu-tcp",
+			 g_rtu_cli.config, NULL };
+
+	ASSERT_EQ(rtu_cli_write_config("(server (parity odd))\n"
+				       "(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(argv, "parity is not supported for RTU-over-TCP"));
+
+	ASSERT_EQ(rtu_cli_write_config("(server (stop-bits 2))\n"
+				       "(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(argv, "stop-bits are not supported for RTU-over-TCP"));
+}
+
+TEST(RtuCliCheckTcpIgnoresSerialLineConfig)
+{
+	const char* bin = getenv("MODBUS_SIM_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
+	int status = 0;
+
+	ASSERT_EQ(rtu_cli_write_config("(server (parity even) (stop-bits 2))\n"
+				       "(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(rtu_cli_start_with_args(argv, true));
+	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
 }

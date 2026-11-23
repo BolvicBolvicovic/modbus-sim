@@ -23,6 +23,21 @@ static const char READ_ALL_FORMS[] =
 	"                   (apply format #f info)"
 	"                   (object->string info))))))";
 
+static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "space" };
+
+bool
+config_parity_from_name(const char* name, parity_t* out)
+{
+	for (u32 i = 0; i < ARRAY_COUNT(PARITY_NAMES); i++)
+	{
+		if (strcmp(name, PARITY_NAMES[i]) != 0)
+			continue;
+		*out = (parity_t)i;
+		return true;
+	}
+	return false;
+}
+
 static void
 config_set_defaults(config_t* config)
 {
@@ -34,18 +49,22 @@ config_set_defaults(config_t* config)
 	config->baud              = CONFIG_DEFAULT_BAUD;
 	config->strict_t15        = false;
 	config->broadcast_execute = false;
+	config->parity            = PARITY_NONE;
+	config->stop_bits         = 1;
 }
 
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute" };
+	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
 	s7_pointer	options           = s7_cdr(form);
 	s64		port              = config->port;
 	s64		seed              = config->seed;
 	s64		idle              = config->idle_timeout_ms;
 	s64		frame             = config->frame_gap_ms;
 	s64		baud              = config->baud;
+	s64		stop_bits         = config->stop_bits;
+	u32		parity            = config->parity;
 	bool		strict_t15        = config->strict_t15;
 	bool		broadcast_execute = config->broadcast_execute;
 	const char*	bind              = NULL;
@@ -76,6 +95,12 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (!form_opt_bool(ctx, options, "broadcast-execute", &broadcast_execute))
 		return false;
 
+	if (!form_opt_choice(ctx, options, "parity", PARITY_NAMES, ARRAY_COUNT(PARITY_NAMES), &parity))
+		return false;
+
+	if (!form_opt_int(ctx, options, "stop-bits", 1, 2, &stop_bits))
+		return false;
+
 	if (!form_opt_string(ctx, options, "bind", &bind))
 		return false;
 
@@ -95,6 +120,8 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	config->baud              = (u32)baud;
 	config->strict_t15        = strict_t15;
 	config->broadcast_execute = broadcast_execute;
+	config->parity            = (parity_t)parity;
+	config->stop_bits         = (u32)stop_bits;
 	return true;
 }
 

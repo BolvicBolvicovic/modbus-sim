@@ -81,6 +81,8 @@ modbus-sim [options] CONFIG.scm
       --frame-gap-ms N RTU/RTU-over-TCP: explicit inter-frame silence override in ms
       --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)
       --broadcast-execute RTU/RTU-over-TCP: run unit-0 requests on all devices (no response)
+      --parity NAME    RTU byte stream: none|even|odd|mark|space (overrides config)
+      --stop-bits N    RTU byte stream: 1 or 2 stop bits (overrides config)
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
   -h, --help           show help
@@ -94,9 +96,12 @@ RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC and unknown unit produce no res
 (unit 0) requests are ignored by default. `--broadcast-execute` (or config
 `(server (broadcast-execute on))`) makes them execute on every configured device and never send a
 response. `--rtu-device` opens with `O_NONBLOCK` so startup does not hang on FIFOs or similar paths;
-when the device is a tty, `modbus-sim` configures it as raw 8N1 and
-preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. Unit ids 0 and 248-255
-are rejected in RTU mode because 0 is broadcast and 248-255 are reserved.
+when the device is a tty, `modbus-sim` configures it as raw mode with the selected parity and stop bits
+(default 8N1) and preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. Use
+`--parity none|even|odd|mark|space` or config `(server (parity NAME))`, and `--stop-bits 1|2` or
+`(server (stop-bits N))`, to change the tty line format; `mark` and `space` need `CMSPAR` support.
+These settings apply only to byte-stream RTU. Unit ids 0 and 248-255 are rejected in RTU mode because 0
+is broadcast and 248-255 are reserved.
 
 RTU frame boundaries use Modbus t3.5 when a baud rate is known (explicit `--baud`/config `(baud N)`,
 or the tty's existing baud rate). `--frame-gap-ms` is an explicit inter-frame silence override and
@@ -111,6 +116,8 @@ separate transport/framing choice. It is not Modbus TCP (MBAP) and does not chan
 RTU byte-stream behavior. `--port`/`--bind` apply to TCP and RTU-over-TCP; `--baud`/`--frame-gap-ms`
 apply to RTU and RTU-over-TCP for RTU frame timing. `--broadcast-execute` works here too, with the
 same all-devices/no-response semantics. MBAP/TCP unit 0 is never broadcast and is unaffected.
+`--parity`/`--stop-bits` apply only to RTU byte streams; non-default config values are rejected with
+`--check --rtu-tcp`, while plain TCP ignores them.
 
 ## Documentation
 

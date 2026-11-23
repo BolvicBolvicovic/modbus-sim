@@ -23,6 +23,7 @@
 #include "util/baud.h"
 #include "util/ip.h"
 #include "util/log.h"
+#include "util/serial.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -48,6 +49,8 @@ struct cli_t
 	s32		port_override;		/* -1 = use the config's port */
 	s32		frame_gap_override;	/* -1 = use config/auto */
 	s32		baud_override;		/* -1 = use config/tty/default */
+	s32		parity_override;	/* -1 = use the config's parity */
+	s32		stop_bits_override;	/* -1 = use the config's stop bits */
 	const char*	bind_override;		/* NULL = use the config's bind */
 	const char*	rtu_device;		/* NULL = TCP/RTU-TCP mode */
 };
@@ -68,6 +71,8 @@ print_usage(void)
 	     "      --frame-gap-ms N RTU: explicit inter-frame silence override in ms\n"
 	     "      --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)\n"
 	     "      --broadcast-execute RTU/RTU-over-TCP: run unit-0 requests on all devices (no response)\n"
+	     "      --parity NAME    RTU byte stream: none|even|odd|mark|space (overrides config)\n"
+	     "      --stop-bits N    RTU byte stream: 1 or 2 stop bits (overrides config)\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
 	     "  -h, --help           show this help\n"
@@ -78,7 +83,8 @@ print_usage(void)
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
 	     "t1.5 discard is opt-in for RTU byte streams (--strict-t15/(strict-t15 on));\n"
-	     "it is never applied to RTU-over-TCP.\n"
+	     "it is never applied to RTU-over-TCP. Serial parity and stop bits apply only\n"
+	     "to RTU byte streams; the default is 8N1.\n"
 	     "Unit-0 (broadcast) requests are ignored by default. --broadcast-execute or\n"
 	     "(broadcast-execute on) runs them on every device without sending a response.\n"
 	     "\n"
@@ -127,6 +133,17 @@ parse_baud_arg(const char* text, u32* out)
 	return true;
 }
 
+static bool
+parse_parity_arg(const char* text, parity_t* out)
+{
+	if (!config_parity_from_name(text, out))
+	{
+		fprintf(stderr, "parity must be one of: none, even, odd, mark, space\n");
+		return false;
+	}
+	return true;
+}
+
 /* Returns false and prints a message when the arguments make no sense. */
 static bool
 parse_args(int argc, char** argv, cli_t* cli)
@@ -134,6 +151,8 @@ parse_args(int argc, char** argv, cli_t* cli)
 	cli->port_override      = -1;
 	cli->frame_gap_override = -1;
 	cli->baud_override      = -1;
+	cli->parity_override    = -1;
+	cli->stop_bits_override = -1;
 
 	for (int i = 1; i < argc; i++)
 	{
@@ -181,6 +200,22 @@ parse_args(int argc, char** argv, cli_t* cli)
 			if (!parse_u32_arg(argv[++i], 1, 60000, "frame-gap-ms", &gap))
 				return false;
 			cli->frame_gap_override = (s32)gap;
+		}
+		else if (strcmp(arg, "--parity") == 0 && more)
+		{
+			parity_t parity = PARITY_NONE;
+
+			if (!parse_parity_arg(argv[++i], &parity))
+				return false;
+			cli->parity_override = (s32)parity;
+		}
+		else if (strcmp(arg, "--stop-bits") == 0 && more)
+		{
+			u32 stop_bits = 0;
+
+			if (!parse_u32_arg(argv[++i], 1, 2, "stop-bits", &stop_bits))
+				return false;
+			cli->stop_bits_override = (s32)stop_bits;
 		}
 		else if (arg[0] != '-' && !cli->config_path)
 			cli->config_path = arg;
@@ -246,6 +281,20 @@ parse_args(int argc, char** argv, cli_t* cli)
 	    !cli->rtu_tcp)
 	{
 		fprintf(stderr, "--broadcast-execute is only valid in RTU/RTU-over-TCP mode\n");
+		return false;
+	}
+	if (cli->parity_override != -1 &&
+	    !cli->rtu_pty &&
+	    !cli->rtu_device)
+	{
+		fprintf(stderr, "--parity is only valid in RTU byte-stream mode (--rtu-pty/--rtu-device)\n");
+		return false;
+	}
+	if (cli->stop_bits_override != -1 &&
+	    !cli->rtu_pty &&
+	    !cli->rtu_device)
+	{
+		fprintf(stderr, "--stop-bits is only valid in RTU byte-stream mode (--rtu-pty/--rtu-device)\n");
 		return false;
 	}
 	return true;
@@ -363,6 +412,10 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 		config->strict_t15 = true;
 	if (cli->broadcast_execute)
 		config->broadcast_execute = true;
+	if (cli->parity_override != -1)
+		config->parity = (parity_t)cli->parity_override;
+	if (cli->stop_bits_override != -1)
+		config->stop_bits = (u32)cli->stop_bits_override;
 
 	if (rtu_mode && !validate_rtu_unit_ids(config, error, sizeof(error)))
 	{
@@ -372,6 +425,16 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 	if (cli->rtu_tcp && config->strict_t15)
 	{
 		fprintf(stderr, "%s: strict-t15 is not supported for RTU-over-TCP\n", config_path);
+		return 2;
+	}
+	if (cli->rtu_tcp && config->parity != PARITY_NONE)
+	{
+		fprintf(stderr, "%s: parity is not supported for RTU-over-TCP\n", config_path);
+		return 2;
+	}
+	if (cli->rtu_tcp && config->stop_bits != 1)
+	{
+		fprintf(stderr, "%s: stop-bits are not supported for RTU-over-TCP\n", config_path);
 		return 2;
 	}
 
@@ -434,19 +497,26 @@ tty_baud(int fd)
 	return baud_from_speed(cfgetospeed(&tio));
 }
 
-/* Applies a known raw 8N1 serial configuration. When baud is 0, preserves the
- * existing baud rate so a configured serial line keeps its speed. Non-tty fds
- * are skipped. */
+/* Applies raw mode with the selected parity and stop bits. When baud is 0,
+ * preserves the existing baud rate so a configured serial line keeps its
+ * speed. Non-tty fds are skipped. */
 static bool
-set_tty_raw(int fd, u32 baud)
+set_tty_raw(int fd, u32 baud, parity_t parity, u32 stop_bits)
 {
 	struct termios	tio;
 	speed_t		ispeed;
 	speed_t		ospeed;
 	speed_t		requested = B9600;
+	tcflag_t	clear = 0;
+	tcflag_t	set = 0;
 
 	if (!isatty(fd))
 		return true;
+	if (!serial_line_flags(parity, stop_bits, &clear, &set))
+	{
+		errno = EOPNOTSUPP;
+		return false;
+	}
 	if (tcgetattr(fd, &tio) != 0)
 		return false;
 	if (baud > 0 && !baud_to_speed(baud, &requested))
@@ -465,8 +535,8 @@ set_tty_raw(int fd, u32 baud)
 	}
 	cfsetispeed(&tio, ispeed);
 	cfsetospeed(&tio, ospeed);
-	tio.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CRTSCTS);
-	tio.c_cflag |= CS8 | CLOCAL | CREAD;
+	tio.c_cflag &= ~(clear | CRTSCTS);
+	tio.c_cflag |= set | CLOCAL | CREAD;
 	tio.c_iflag &= ~(IXON | IXOFF | IXANY);
 #ifdef ECHOE
 	tio.c_lflag &= ~ECHOE;
@@ -511,7 +581,7 @@ run_rtu(const cli_t* cli, config_t* config)
 			fprintf(stderr, "cannot create PTY: %s\n", strerror(errno));
 			return 1;
 		}
-		if (!set_tty_raw(slave_fd, config->baud))
+		if (!set_tty_raw(slave_fd, config->baud, config->parity, config->stop_bits))
 		{
 			fprintf(stderr, "cannot configure RTU PTY slave: %s\n", strerror(errno));
 			close(slave_fd);
@@ -537,7 +607,7 @@ run_rtu(const cli_t* cli, config_t* config)
 		}
 	}
 
-	if (!set_tty_raw(fd, config->baud))
+	if (!set_tty_raw(fd, config->baud, config->parity, config->stop_bits))
 	{
 		fprintf(stderr, "cannot configure RTU device '%s': %s\n",
 			cli->rtu_pty ? "pty" : cli->rtu_device, strerror(errno));
