@@ -44,6 +44,19 @@ load_text(const char* text, config_t* config, char* err, u32 err_size)
 		ASSERT_EQ(strstr(e, (fragment)) != NULL);				\
 	} while (0)
 
+static const struct {
+	const char*	name;
+	server_mode_t	mode;
+	const char*	path_option;
+} SERVER_MODES[] = {
+	{ "tcp",          SERVER_MODE_TCP,          "" },
+	{ "rtu-pty",      SERVER_MODE_RTU_PTY,      "" },
+	{ "rtu-device",   SERVER_MODE_RTU_DEVICE,   " (path \"/dev/ttyS0\")" },
+	{ "rtu-tcp",      SERVER_MODE_RTU_TCP,      "" },
+	{ "ascii-pty",    SERVER_MODE_ASCII_PTY,    "" },
+	{ "ascii-device", SERVER_MODE_ASCII_DEVICE, " (path \"/dev/ttyS0\")" },
+};
+
 TEST(ConfigLoadsServerAndDevice)
 {
 	config_t	config = { 0 };
@@ -808,6 +821,209 @@ TEST(ConfigStopBitsRejectsInvalidValues)
 	EXPECT_ERROR("(server (stop-bits 0)) (device (holding 0))", "between 1 and 2");
 	EXPECT_ERROR("(server (stop-bits 3)) (device (holding 0))", "between 1 and 2");
 	EXPECT_ERROR("(server (stop-bits nope)) (device (holding 0))", "whole number");
+}
+
+TEST(ConfigServerModeNamesAreParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[256];
+
+	for (u32 i = 0; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		snprintf(text, sizeof(text), "(server (mode %s)%s) (device (holding 0))",
+			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
+		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+		ASSERT_EQ(config.mode == SERVER_MODES[i].mode);
+		if (*SERVER_MODES[i].path_option)
+			ASSERT_EQ(strcmp(config.path, "/dev/ttyS0") == 0);
+		else
+			ASSERT_EQ(config.path[0] == '\0');
+	}
+}
+
+TEST(ConfigServerModeDefaultsToTcp)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
+	ASSERT_EQ(config.path[0] == '\0');
+}
+
+TEST(ConfigServerModeRejectsUnknownNames)
+{
+	EXPECT_ERROR("(server (mode rtu)) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device");
+	EXPECT_ERROR("(server (mode \"tcp\")) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device");
+}
+
+TEST(ConfigServerPathIsParsedForDeviceModes)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyUSB0\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_RTU_DEVICE);
+	ASSERT_EQ(strcmp(config.path, "/dev/ttyUSB0") == 0);
+
+	ASSERT_SUCCESS(load_text("(server (mode ascii-device) (path \"/dev/ttyUSB1\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_DEVICE);
+	ASSERT_EQ(strcmp(config.path, "/dev/ttyUSB1") == 0);
+}
+
+TEST(ConfigServerPathIsRequiredForDeviceModes)
+{
+	EXPECT_ERROR("(server (mode rtu-device)) (device (holding 0))", "(path ...) is required");
+	EXPECT_ERROR("(server (mode ascii-device)) (device (holding 0))", "(path ...) is required");
+}
+
+TEST(ConfigServerPathIsForbiddenForOtherModes)
+{
+	EXPECT_ERROR("(server (mode tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode rtu-pty) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode rtu-tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode ascii-pty) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+}
+
+TEST(ConfigServerPathLengthIsValidated)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		path[CONFIG_PATH_MAX + 1];
+	char		text[CONFIG_PATH_MAX + 128];
+
+	memset(path, 'x', CONFIG_PATH_MAX - 1);
+	path[CONFIG_PATH_MAX - 1] = '\0';
+	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (holding 0))", path);
+	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strlen(config.path) == CONFIG_PATH_MAX - 1);
+
+	memset(path, 'x', CONFIG_PATH_MAX);
+	path[CONFIG_PATH_MAX] = '\0';
+	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (holding 0))", path);
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "path is too long") != NULL);
+	ASSERT_EQ(strstr(err, "255 characters") != NULL);
+}
+
+TEST(ConfigSerialModesRejectReservedUnitIds)
+{
+	config_t		config = { 0 };
+	char			err[256] = "";
+	char			text[256];
+	char			fragment[80];
+	static const u32	ids[] = { 0, 248, 255 };
+
+	for (u32 i = 1; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		for (u32 j = 0; j < ARRAY_COUNT(ids); j++)
+		{
+			snprintf(text, sizeof(text), "(server (mode %s)%s) (device (unit-id %u) (holding 0))",
+				 SERVER_MODES[i].name, SERVER_MODES[i].path_option, ids[j]);
+			ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+			snprintf(fragment, sizeof(fragment), "unit-id %u is not valid for RTU/ASCII", ids[j]);
+			ASSERT_EQ(strstr(err, fragment) != NULL);
+		}
+	}
+}
+
+TEST(ConfigSerialModesAcceptUnitIdBoundaries)
+{
+	config_t		config = { 0 };
+	char			err[256] = "";
+	char			text[256];
+	static const u32	ids[] = { 1, 247 };
+
+	for (u32 i = 1; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		for (u32 j = 0; j < ARRAY_COUNT(ids); j++)
+		{
+			snprintf(text, sizeof(text), "(server (mode %s)%s) (device (unit-id %u) (holding 0))",
+				 SERVER_MODES[i].name, SERVER_MODES[i].path_option, ids[j]);
+			ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+			ASSERT_EQ(config.devices[0]->unit_id == ids[j]);
+		}
+	}
+}
+
+TEST(ConfigTcpModeAcceptsFullUnitIdRange)
+{
+	config_t		config = { 0 };
+	char			err[256] = "";
+	char			text[192];
+	static const u32	ids[] = { 0, 255 };
+
+	for (u32 i = 0; i < ARRAY_COUNT(ids); i++)
+	{
+		snprintf(text, sizeof(text), "(server (mode tcp)) (device (unit-id %u) (holding 0))", ids[i]);
+		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+		ASSERT_EQ(config.mode == SERVER_MODE_TCP);
+		ASSERT_EQ(config.devices[0]->unit_id == ids[i]);
+	}
+}
+
+TEST(ConfigRtuTcpRejectsStrictT15)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 on)) (device (holding 0))",
+		     "strict-t15 is not supported for RTU-over-TCP");
+
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (strict-t15 off)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.strict_t15 == false);
+}
+
+TEST(ConfigRtuTcpRejectsNonNoneParity)
+{
+	config_t		config = { 0 };
+	char			err[256] = "";
+	char			text[160];
+	static const char* const names[] = { "even", "odd", "mark", "space" };
+
+	for (u32 i = 0; i < ARRAY_COUNT(names); i++)
+	{
+		snprintf(text, sizeof(text), "(server (mode rtu-tcp) (parity %s)) (device (holding 0))",
+			 names[i]);
+		ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+		ASSERT_EQ(strstr(err, "parity is not supported for RTU-over-TCP") != NULL);
+	}
+
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (parity none)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.parity == PARITY_NONE);
+}
+
+TEST(ConfigRtuTcpRejectsTwoStopBits)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 2)) (device (holding 0))",
+		     "stop-bits are not supported for RTU-over-TCP");
+
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (stop-bits 1)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.stop_bits == 1);
+}
+
+TEST(ConfigSerialModesAcceptSerialOptions)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-pty) (strict-t15 on) (parity even) (stop-bits 2) (baud 9600))"
+		" (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.strict_t15 == true);
+	ASSERT_EQ(config.parity == PARITY_EVEN);
+	ASSERT_EQ(config.stop_bits == 2);
+	ASSERT_EQ(config.baud == 9600);
 }
 
 TEST(ConfigFloat32StaticAcceptsNonFinite)

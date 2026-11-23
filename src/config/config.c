@@ -24,6 +24,9 @@ static const char READ_ALL_FORMS[] =
 	"                   (object->string info))))))";
 
 static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "space" };
+static const char* const MODE_NAMES[] = {
+	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device"
+};
 
 bool
 config_parity_from_name(const char* name, parity_t* out)
@@ -43,6 +46,7 @@ config_set_defaults(config_t* config)
 {
 	memset(config, 0, sizeof(*config));
 	strcpy(config->bind_address, "0.0.0.0");
+	config->mode              = SERVER_MODE_TCP;
 	config->port              = CONFIG_DEFAULT_PORT;
 	config->idle_timeout_ms   = CONFIG_DEFAULT_IDLE_TIMEOUT_MS;
 	config->frame_gap_ms      = 0; /* auto: derive from baud, else default gap */
@@ -56,7 +60,7 @@ config_set_defaults(config_t* config)
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
+	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
 	s7_pointer	options           = s7_cdr(form);
 	s64		port              = config->port;
 	s64		seed              = config->seed;
@@ -65,11 +69,16 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	s64		baud              = config->baud;
 	s64		stop_bits         = config->stop_bits;
 	u32		parity            = config->parity;
+	u32		mode              = config->mode;
 	bool		strict_t15        = config->strict_t15;
 	bool		broadcast_execute = config->broadcast_execute;
 	const char*	bind              = NULL;
+	const char*	path              = NULL;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "server"))
+		return false;
+
+	if (!form_opt_choice(ctx, options, "mode", MODE_NAMES, ARRAY_COUNT(MODE_NAMES), &mode))
 		return false;
 
 	if (!form_opt_int(ctx, options, "port", 1, 65535, &port))
@@ -104,15 +113,33 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (!form_opt_string(ctx, options, "bind", &bind))
 		return false;
 
+	if (!form_opt_string(ctx, options, "path", &path))
+		return false;
+
 	if (bind && strlen(bind) >= CONFIG_BIND_MAX)
 		return form_fail(ctx, "server: bind address is too long (max %d characters)", CONFIG_BIND_MAX - 1);
 
 	if (bind && !ip_is_ipv4_literal(bind))
 		return form_fail(ctx, "server: bind address '%s' is not an IPv4 address like 127.0.0.1", bind);
 
+	if ((mode == SERVER_MODE_RTU_DEVICE || mode == SERVER_MODE_ASCII_DEVICE) &&
+	    !path)
+		return form_fail(ctx, "server: (path ...) is required in rtu-device and ascii-device modes");
+
+	if (path &&
+	    mode != SERVER_MODE_RTU_DEVICE &&
+	    mode != SERVER_MODE_ASCII_DEVICE)
+		return form_fail(ctx, "server: (path ...) is only valid in rtu-device and ascii-device modes");
+
+	if (path && strlen(path) >= CONFIG_PATH_MAX)
+		return form_fail(ctx, "server: path is too long (max %d characters)", CONFIG_PATH_MAX - 1);
+
 	if (bind)
 		strcpy(config->bind_address, bind);
+	if (path)
+		strcpy(config->path, path);
 
+	config->mode              = (server_mode_t)mode;
 	config->port              = (u16)port;
 	config->seed              = (u32)seed;
 	config->idle_timeout_ms   = (u32)idle;
@@ -138,6 +165,33 @@ check_unit_ids_unique(form_ctx_t* ctx, const config_t* config)
 					 config->devices[i]->name, config->devices[j]->name,
 					 config->devices[i]->unit_id);
 		}
+	}
+	return true;
+}
+
+static bool
+check_mode_rules(form_ctx_t* ctx, const config_t* config)
+{
+	if (config->mode == SERVER_MODE_TCP)
+		return true;
+
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		u8 id = config->devices[i]->unit_id;
+
+		if (id == 0 || id > 247)
+			return form_fail(ctx, "device '%s': unit-id %u is not valid for RTU/ASCII (allowed: 1-247; 0 is broadcast, 248-255 reserved)",
+					 config->devices[i]->name, id);
+	}
+
+	if (config->mode == SERVER_MODE_RTU_TCP)
+	{
+		if (config->strict_t15)
+			return form_fail(ctx, "server: strict-t15 is not supported for RTU-over-TCP");
+		if (config->parity != PARITY_NONE)
+			return form_fail(ctx, "server: parity is not supported for RTU-over-TCP");
+		if (config->stop_bits != 1)
+			return form_fail(ctx, "server: stop-bits are not supported for RTU-over-TCP");
 	}
 	return true;
 }
@@ -184,7 +238,7 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 	if (config->device_count == 0)
 		return form_fail(ctx, "the file has no (device ...) form");
 
-	return check_unit_ids_unique(ctx, config);
+	return check_unit_ids_unique(ctx, config) && check_mode_rules(ctx, config);
 }
 
 /* Reads all forms of `text` with s7. Returns the list of forms, or false with ctx->err set. */

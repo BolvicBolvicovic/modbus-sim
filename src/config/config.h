@@ -13,6 +13,21 @@
 #define CONFIG_DEFAULT_FRAME_GAP_MS	20	/* fallback when baud is unknown and no explicit gap is set */
 #define CONFIG_DEFAULT_BAUD		0	/* 0 = unknown; derive RTU timing from tty when possible */
 #define CONFIG_BIND_MAX			64
+#define CONFIG_PATH_MAX			256
+
+/* Name: server_mode_t
+ * Description: transport selected by (server (mode NAME)).
+ * */
+typedef enum server_mode_t server_mode_t;
+enum server_mode_t
+{
+	SERVER_MODE_TCP,
+	SERVER_MODE_RTU_PTY,
+	SERVER_MODE_RTU_DEVICE,
+	SERVER_MODE_RTU_TCP,
+	SERVER_MODE_ASCII_PTY,
+	SERVER_MODE_ASCII_DEVICE,
+};
 
 /* Name: config_t
  * Description: everything read from a config file.
@@ -21,7 +36,9 @@
 typedef struct config_t config_t;
 struct config_t
 {
+	server_mode_t	mode;
 	char		bind_address[CONFIG_BIND_MAX];
+	char		path[CONFIG_PATH_MAX];
 	u16		port;
 	u32		seed;			/* seed for fault dice; 0 = fixed default */
 	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
