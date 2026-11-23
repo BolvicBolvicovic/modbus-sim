@@ -82,6 +82,47 @@ rtu_child_start_opts(rtu_child_t* child, device_t** devices, u32 device_count, u
 			.seed         = 1,
 			.frame_gap_ms = frame_gap_ms,
 			.baud         = baud,
+			.strict_t15   = false,
+			.devices      = devices,
+			.device_count = device_count,
+		};
+
+		close(fds[0]);
+		(void)rtu_server_run(&opts);
+		close(fds[1]);
+		_exit(0);
+	}
+
+	close(fds[1]);
+	child->fd = fds[0];
+	return true;
+}
+
+static bool
+rtu_child_start_opts_strict(rtu_child_t* child, device_t** devices, u32 device_count, u32 frame_gap_ms, u32 baud, bool strict_t15)
+{
+	int fds[2] = { -1, -1 };
+
+	child->pid = -1;
+	child->fd  = -1;
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0)
+		return false;
+
+	child->pid = fork();
+	if (child->pid < 0)
+	{
+		close(fds[0]);
+		close(fds[1]);
+		return false;
+	}
+	if (child->pid == 0)
+	{
+		rtu_server_options_t opts = {
+			.fd           = fds[1],
+			.seed         = 1,
+			.frame_gap_ms = frame_gap_ms,
+			.baud         = baud,
+			.strict_t15   = strict_t15,
 			.devices      = devices,
 			.device_count = device_count,
 		};
@@ -940,9 +981,10 @@ TEST(RtuServerFragmentedAcrossGapDoesNotFormValidFrame)
 
 TEST(RtuServerBaudDerivedGapFragments)
 {
-	/* 9600 baud -> t3.5 ~4.01ms, t1.5 ~1.72ms. Byte-stream read() boundaries
-	 * cannot model true UART char gaps, so this uses two-byte chunks to avoid
-	 * false t1.5 splits while still exercising baud-derived framing. */
+	/* 9600 baud -> t3.5 ~4.01ms. Byte-stream read() boundaries cannot model true
+	 * UART char gaps; t1.5 discard is opt-in and off by default, so fragmented
+	 * delivery within t3.5 should be accepted while still exercising baud-derived
+	 * inter-frame timing. */
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x55AA);
 	rtu_child_t	child = { 0 };
@@ -967,7 +1009,7 @@ TEST(RtuServerBaudDerivedGapFragments)
 
 		ok = send_all_fd(child.fd, frame + i, n);
 		if (ok && i + n < flen)
-			usleep(1000); /* < t1.5 */
+			usleep(1000); /* well within t3.5 */
 	}
 	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
 	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x55AA;
@@ -986,11 +1028,45 @@ TEST(RtuServerBaudDerivedGapFragments)
 	ASSERT_EQ(ok);
 }
 
+TEST(RtuServerBaudSplitFrameThreeMsIsAnswered)
+{
+	/* Acceptance: a frame sent in two writes 3 ms apart at --baud 115200 over a
+	 * byte stream/PTY-like fd must be answered. t1.5 discard is opt-in and must
+	 * not break valid frames at read() boundaries. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x66BB);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+	u32		flen = 0;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 115200));
+	}
+
+	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	ASSERT(flen > 4);
+	ASSERT_EQ(send_all_fd(child.fd, frame, flen / 2));
+	usleep(3000);
+	ASSERT_EQ(send_all_fd(child.fd, frame + flen / 2, flen - flen / 2));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(get_be16(resp + 2) == 0x66BB);
+
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}
+
 TEST(RtuServerBaudT15GapDiscardsPartialFrame)
 {
-	/* 1200 baud -> t1.5 ~13.75ms, t3.5 ~32.08ms. A gap between t1.5 and t3.5
-	 * inside an incomplete frame must discard it (no response), but the server
-	 * must recover on the next clean frame. */
+	/* 1200 baud -> t1.5 ~13.75ms, t3.5 ~32.08ms. With strict-t15 opt-in, a gap
+	 * between t1.5 and t3.5 inside an incomplete frame discards it, but the server
+	 * must recover on the next clean frame. Default behavior no longer enforces t1.5. */
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x7788);
 	rtu_child_t	child = { 0 };
@@ -1004,7 +1080,7 @@ TEST(RtuServerBaudT15GapDiscardsPartialFrame)
 	ASSERT_EQ(dev != NULL);
 	{
 		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 1200));
+		ASSERT_EQ(rtu_child_start_opts_strict(&child, devices, 1, 0, 1200, true));
 	}
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));

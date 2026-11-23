@@ -74,15 +74,28 @@ recv_rtu_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 }
 
 static pid_t
-start_rtu_tcp(const char* cfg, u16 port)
+start_rtu_tcp_args(const char* cfg, u16 port, const char* extra1, const char* extra2)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
 	char portbuf[16];
-	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--rtu-tcp", "--port", portbuf,
-			 "--bind", "127.0.0.1", (char*)cfg, NULL };
+	char* argv[12];
+	u32 argc = 0;
 	pid_t pid;
 
 	snprintf(portbuf, sizeof(portbuf), "%u", port);
+	argv[argc++] = (char*)(bin ? bin : "./modbus-sim");
+	argv[argc++] = "--rtu-tcp";
+	argv[argc++] = "--port";
+	argv[argc++] = portbuf;
+	argv[argc++] = "--bind";
+	argv[argc++] = "127.0.0.1";
+	if (extra1)
+		argv[argc++] = (char*)extra1;
+	if (extra2)
+		argv[argc++] = (char*)extra2;
+	argv[argc++] = (char*)cfg;
+	argv[argc] = NULL;
+
 	pid = fork();
 	if (pid == 0)
 	{
@@ -90,6 +103,12 @@ start_rtu_tcp(const char* cfg, u16 port)
 		_exit(127);
 	}
 	return pid;
+}
+
+static pid_t
+start_rtu_tcp(const char* cfg, u16 port)
+{
+	return start_rtu_tcp_args(cfg, port, NULL, NULL);
 }
 
 static int
@@ -383,6 +402,53 @@ TEST(RtuOverTcpHalfCloseAfterDelayedRequestSendsResponse)
 	ASSERT_EQ(plen == 4);
 	ASSERT_EQ(get_be16(resp + 2) == 4660);
 	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
+
+	close(fd);
+	kill(pid, SIGTERM);
+	waitpid(pid, NULL, 0);
+	unlink(cfg);
+}
+
+TEST(RtuOverTcpPipelinedRequestsWithBaudGetResponses)
+{
+	/* Acceptance: two pipelined requests 3 ms apart over RTU-over-TCP with
+	 * --baud 9600 are both answered. TCP read() boundaries must not trigger t1.5. */
+	char cfg[64];
+	pid_t pid;
+	int fd;
+	u8 req1[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 req2[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x01, 0x00, 0x01 };
+	u8 frame1[MODBUS_RTU_MAX_FRAME], frame2[MODBUS_RTU_MAX_FRAME];
+	u8 resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, len1, len2;
+	u16 port = find_free_port();
+
+	ASSERT(port != 0);
+	write_cfg(cfg, sizeof(cfg),
+		  "(device (unit-id 1)\n"
+		  "  (holding 0 (static 4660))\n"
+		  "  (holding 1 (static 22136)))\n");
+	pid = start_rtu_tcp_args(cfg, port, "--baud", "9600");
+	ASSERT(pid > 0);
+	fd = connect_port(port, 100);
+	ASSERT(fd >= 0);
+
+	len1 = modbus_rtu_encode(frame1, 1, req1, sizeof(req1));
+	len2 = modbus_rtu_encode(frame2, 1, req2, sizeof(req2));
+	ASSERT(len1 > 0 && len2 > 0);
+	ASSERT_EQ(send_all_fd(fd, frame1, len1));
+	usleep(3000);
+	ASSERT_EQ(send_all_fd(fd, frame2, len2));
+
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 4660);
+
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 22136);
 
 	close(fd);
 	kill(pid, SIGTERM);

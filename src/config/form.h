@@ -55,6 +55,7 @@ bool		form_opt_number(form_ctx_t* ctx, s7_pointer options, const char* key, f64*
 bool		form_opt_int(form_ctx_t* ctx, s7_pointer options, const char* key,
 			     s64 min, s64 max, s64* out);
 bool		form_opt_string(form_ctx_t* ctx, s7_pointer options, const char* key, const char** out);
+bool		form_opt_bool(form_ctx_t* ctx, s7_pointer options, const char* key, bool* out);
 bool		form_opt_choice(form_ctx_t* ctx, s7_pointer options, const char* key,
 				const char* const* choices, u32 count, u32* out);
 

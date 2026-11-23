@@ -42,6 +42,7 @@ struct rtu_server_t
 	u64			last_rx_us;
 	bool			have_rx;
 	bool			read_closed;
+	bool			gap_deferred;
 	rtu_pending_t		pending;
 };
 
@@ -165,25 +166,40 @@ rtu_next_frame(const u8* rx, u32 rx_len, u32* frame_len)
 	return RTU_FRAME_NONE;
 }
 
-static void
+static bool
 process_rx_frames(rtu_server_t* server, u64 now_ms)
 {
+	bool keep_incomplete = (server->options.frame_gap_ms == 0 && server->options.baud != 0);
+
 	while (server->rx_len >= 4 && !server->pending.active)
 	{
 		u32			frame_len = 0;
 		rtu_frame_result_t	result;
 
 		result = rtu_next_frame(server->rx, server->rx_len, &frame_len);
-		if (result != RTU_FRAME_FOUND)
+		if (result == RTU_FRAME_NONE)
 		{
 			server->rx_len = 0;
-			return;
+			return false;
+		}
+		if (result == RTU_FRAME_DISCARD)
+		{
+			if (keep_incomplete)
+			{
+				/* Incomplete but plausible frame (known FC length not yet
+				 * fully received). In baud-derived auto mode, read()
+				 * boundaries do not reflect UART timing, so a t3.5 gap can
+				 * split a valid frame; keep bytes and wait for more data. */
+				return true;
+			}
+			server->rx_len = 0;
+			return false;
 		}
 
 		handle_frame(server, server->rx, frame_len, now_ms);
 		consume_rx(server, frame_len);
 		if (server->pending.active)
-			return;
+			return false;
 	}
 
 	/* 1-3 bytes cannot form a valid RTU frame (addr+FC+CRC). After the gap
@@ -194,26 +210,26 @@ process_rx_frames(rtu_server_t* server, u64 now_ms)
 
 	if (server->rx_len > MODBUS_RTU_MAX_FRAME)
 		consume_rx(server, server->rx_len - MODBUS_RTU_MAX_FRAME);
+	return false;
 }
 
 static void
 rtu_note_rx_gap(rtu_server_t* server, u64 now_ms, u64 now_us)
 {
-	u32	t15;
 	u32	t35;
 
 	if (!server->have_rx || server->rx_len == 0 || server->pending.active)
 		return;
-	/* Enforce t1.5/t3.5 only in baud-derived auto mode. Explicit frame-gap-ms
-	 * remains an inter-frame override for compatibility/deterministic tests. */
+	/* Enforce RTU timing checks only in baud-derived auto mode. Explicit
+	 * frame-gap-ms remains an inter-frame override for compatibility and
+	 * deterministic tests. */
 	if (server->options.frame_gap_ms > 0 || server->options.baud == 0)
 		return;
 	if (now_us < server->last_rx_us)
 		return;
 
-	t15 = rtu_t15_us(server->options.baud);
 	t35 = rtu_t35_us(server->options.baud);
-	if (t15 == 0 || t35 == 0)
+	if (t35 == 0)
 		return;
 
 	{
@@ -221,15 +237,32 @@ rtu_note_rx_gap(rtu_server_t* server, u64 now_ms, u64 now_us)
 
 		if (elapsed >= t35)
 		{
-			process_rx_frames(server, now_ms);
+			bool incomplete = process_rx_frames(server, now_ms);
 			server->have_rx = server->rx_len > 0;
+			if (incomplete)
+			{
+				/* read() boundaries do not reflect UART timing. In baud-derived
+				 * auto mode, keep an incomplete known-length frame for one extra
+				 * t3.5 window so split valid frames can complete (issue #45). */
+				server->gap_deferred = true;
+				server->last_rx_ms = now_ms;
+			}
+			else
+				server->gap_deferred = false;
 			return;
 		}
-		if (elapsed >= t15)
+		if (server->options.strict_t15)
 		{
-			/* Intra-frame gap > t1.5: discard partial frame. */
-			server->rx_len = 0;
-			server->have_rx = false;
+			u32 t15 = rtu_t15_us(server->options.baud);
+
+			if (t15 > 0 && elapsed >= t15)
+			{
+				/* Opt-in intra-frame t1.5 check. read() boundaries do not
+				 * reflect true UART character timing, so this is a
+				 * best-effort heuristic for byte streams. */
+				server->rx_len = 0;
+				server->have_rx = false;
+			}
 		}
 	}
 }
@@ -263,10 +296,11 @@ read_available(rtu_server_t* server, u64 now_ms)
 		return false;
 	}
 
-	server->rx_len     += (u32)got;
-	server->last_rx_ms  = now_ms;
-	server->last_rx_us  = now_us;
-	server->have_rx     = true;
+	server->rx_len      += (u32)got;
+	server->last_rx_ms   = now_ms;
+	server->last_rx_us   = now_us;
+	server->have_rx      = true;
+	server->gap_deferred = 0;
 	return true;
 }
 
@@ -387,6 +421,8 @@ rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
 	due = server->last_rx_ms + gap_ms;
 	if (due > now_ms)
 		*timeout = MIN(*timeout, (int)(due - now_ms));
+	else
+		*timeout = 0;
 }
 
 static bool
@@ -481,9 +517,24 @@ rtu_server_run(const rtu_server_options_t* options)
 
 		if (rtu_gap_due(&server, now_ms, gap_ms))
 		{
-			process_rx_frames(&server, now_ms);
+			bool incomplete = process_rx_frames(&server, now_ms);
 			server.have_rx = server.rx_len > 0;
-			continue;
+			if (incomplete && !server.gap_deferred)
+			{
+				server.gap_deferred = true;
+				server.last_rx_ms = now_ms;
+			}
+			else if (incomplete)
+			{
+				server.rx_len = 0;
+				server.have_rx = false;
+				server.gap_deferred = false;
+			}
+			else
+			{
+				server.gap_deferred = 0;
+				continue;
+			}
 		}
 
 		rtu_build_poll(&server, &pfd, &timeout, now_ms, gap_ms);
@@ -501,8 +552,21 @@ rtu_server_run(const rtu_server_options_t* options)
 
 		if (rtu_gap_due(&server, now_ms, gap_ms))
 		{
-			process_rx_frames(&server, now_ms);
+			bool incomplete = process_rx_frames(&server, now_ms);
 			server.have_rx = server.rx_len > 0;
+			if (incomplete && !server.gap_deferred)
+			{
+				server.gap_deferred = true;
+				server.last_rx_ms = now_ms;
+			}
+			else if (incomplete)
+			{
+				server.rx_len = 0;
+				server.have_rx = false;
+				server.gap_deferred = false;
+			}
+			else
+				server.gap_deferred = false;
 		}
 	}
 

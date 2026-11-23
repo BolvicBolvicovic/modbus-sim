@@ -42,6 +42,7 @@ struct cli_t
 	bool		show_help;
 	bool		rtu_pty;
 	bool		rtu_tcp;
+	bool		strict_t15;
 	s32		port_override;		/* -1 = use the config's port */
 	s32		frame_gap_override;	/* -1 = use config/auto */
 	s32		baud_override;		/* -1 = use config/tty/default */
@@ -63,6 +64,7 @@ print_usage(void)
 	     "      --rtu-device PATH RTU: serve RTU over an existing serial-like device\n"
 	     "      --baud N         RTU: standard termios baud for t3.5 timing (overrides config/tty)\n"
 	     "      --frame-gap-ms N RTU: explicit inter-frame silence override in ms\n"
+	     "      --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
 	     "  -h, --help           show this help\n"
@@ -72,6 +74,8 @@ print_usage(void)
 	     "RTU mode runs Modbus RTU over a bidirectional byte stream (PTY or device).\n"
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
+	     "t1.5 discard is opt-in for RTU byte streams (--strict-t15/(strict-t15 on));\n"
+	     "it is never applied to RTU-over-TCP.\n"
 	     "\n"
 	     "Try:  modbus-sim profiles/minimal.scm\n"
 	     "Docs: README.md and docs/");
@@ -136,6 +140,8 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->rtu_pty = true;
 		else if (strcmp(arg, "--rtu-tcp") == 0)
 			cli->rtu_tcp = true;
+		else if (strcmp(arg, "--strict-t15") == 0)
+			cli->strict_t15 = true;
 		else if ((strcmp(arg, "-p") == 0 || strcmp(arg, "--port") == 0) && more)
 		{
 			u32 port = 0;
@@ -201,6 +207,16 @@ parse_args(int argc, char** argv, cli_t* cli)
 	if (cli->baud_override != -1 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
 	{
 		fprintf(stderr, "--baud is only valid in RTU/RTU-over-TCP mode\n");
+		return false;
+	}
+	if (cli->strict_t15 && !cli->rtu_pty && !cli->rtu_device && !cli->rtu_tcp)
+	{
+		fprintf(stderr, "--strict-t15 is only valid in RTU/RTU-over-TCP mode\n");
+		return false;
+	}
+	if (cli->strict_t15 && cli->rtu_tcp)
+	{
+		fprintf(stderr, "--strict-t15 is not supported for RTU-over-TCP\n");
 		return false;
 	}
 	return true;
@@ -299,10 +315,17 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 		config->frame_gap_ms = (u32)cli->frame_gap_override;
 	if (cli->baud_override != -1)
 		config->baud = (u32)cli->baud_override;
+	if (cli->strict_t15)
+		config->strict_t15 = true;
 
 	if (rtu_mode && !validate_rtu_unit_ids(config, error, sizeof(error)))
 	{
 		fprintf(stderr, "%s: %s\n", config_path, error);
+		return 2;
+	}
+	if (cli->rtu_tcp && config->strict_t15)
+	{
+		fprintf(stderr, "%s: strict-t15 is not supported for RTU-over-TCP\n", config_path);
 		return 2;
 	}
 
@@ -493,6 +516,7 @@ run_rtu(const cli_t* cli, config_t* config)
 			.seed         = config->seed,
 			.frame_gap_ms = config->frame_gap_ms,
 			.baud         = config->baud,
+			.strict_t15   = config->strict_t15,
 			.devices      = config->devices,
 			.device_count = config->device_count,
 		};

@@ -85,17 +85,19 @@ One thread, one `poll()` call. Per connection there is one receive buffer and on
 Also single-threaded `poll()` on one bidirectional fd (PTY master, existing device, or similar byte
 stream). RTU has no MBAP length field, so frame boundaries are detected by inter-frame silence. When a
 baud rate is known (config/CLI or tty) and no explicit `frame-gap-ms` override is set, Modbus t3.5 is
-derived from baud for inter-frame boundaries and t1.5 is enforced as a best-effort intra-frame
-read() boundary check. `frame-gap-ms` is an explicit inter-frame override. With no known baud,
-`frame-gap-ms` or the 20 ms default is used as a practical approximation. After a gap, complete valid
-CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0) produce no response.
-Delayed fault responses use the same due-time poll pattern as TCP.
+derived from baud for inter-frame boundaries. Optional `strict_t15` enables a best-effort t1.5
+intra-frame discard heuristic in baud-derived auto mode for RTU byte streams. `frame-gap-ms` is an
+explicit inter-frame override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a
+practical approximation. After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown
+unit, and broadcast (unit 0) produce no response. Delayed fault responses use the same due-time poll
+pattern as TCP.
 
 ### RTU-over-TCP (`net/rtu_tcp_server.c`)
 
 Single-threaded `poll()` TCP listen/server loop, similar to the TCP server, but each connection
-carries Modbus RTU frames instead of MBAP. It reuses the same RTU CRC/framing, t3.5/t1.5 timing
-helpers, PDU dispatch, and fault handling. This is an explicit separate transport selected by
+carries Modbus RTU frames instead of MBAP. It reuses the same RTU CRC/framing, t3.5 timing helpers,
+PDU dispatch, and fault handling. t1.5 discard is not enforced on RTU-over-TCP because TCP read()
+boundaries do not reflect UART character timing. This is an explicit separate transport selected by
 `--rtu-tcp`; it does not alter TCP MBAP behavior or RTU byte-stream behavior.
 
 ## Coding rules used here

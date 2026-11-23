@@ -31,12 +31,15 @@ inter-frame silence override and takes precedence over baud-derived timing for c
 
 For byte streams with no UART character timing (PTY/pipe) and no known baud, `modbus-sim` falls back
 to `frame-gap-ms` if configured, otherwise the default 20 ms. In that fallback mode the boundary is
-still a practical approximation because read() chunk boundaries do not expose true t1.5 character
-timing. When baud is known and no explicit `frame-gap-ms` override is set, the server derives both
-t3.5 (inter-frame) and t1.5 (intra-frame) from baud. A read() gap >= t3.5 is treated as an
-inter-frame boundary; a gap > t1.5 and < t3.5 inside an incomplete frame discards that partial frame.
-On PTY/pipe byte streams this is a best-effort boundary check at read() granularity, not true UART
-character timing.
+still a practical approximation because read() chunk boundaries do not expose true UART character
+timing. When baud is known and no explicit `frame-gap-ms` override is set, a read() gap >= t3.5 is
+treated as an inter-frame boundary.
+
+Optional strict t1.5: for RTU byte streams only, `--strict-t15` or config `(server (strict-t15 on))`
+enables a best-effort intra-frame t1.5 discard heuristic in baud-derived auto mode. A read() gap
+between t1.5 and t3.5 inside an incomplete frame discards that partial frame. It is opt-in because
+read() boundaries do not reflect true UART character timing and can split valid frames on PTYs, real
+serial ports, and other byte streams. It is never applied to RTU-over-TCP.
 
 No response is produced for:
 
@@ -56,9 +59,9 @@ The same PDU handlers, device model, unit-id routing, fault injection, and RTU C
 used. Bad CRC, unknown unit, and broadcast (unit 0) produce no response, matching RTU behavior.
 `--port` and `--bind` apply to RTU-over-TCP. `--baud` and `--frame-gap-ms` apply for RTU inter-frame
 timing: explicit `frame-gap-ms` takes precedence; otherwise baud-derived t3.5 is used when baud is
-known; otherwise the 20 ms default fallback is used. In baud-derived auto mode, t1.5 is enforced as
-a best-effort intra-frame read() boundary check at TCP read() granularity, not true UART character
-timing.
+known; otherwise the 20 ms default fallback is used. t1.5 discard is never applied to RTU-over-TCP,
+because TCP read() boundaries do not reflect UART character timing and can split valid pipelined
+requests.
 
 RTU-over-TCP is not Modbus TCP and is not a transparent gateway/proxy implementation; it is an
 explicit listen mode selected with `--rtu-tcp`.
@@ -192,7 +195,7 @@ Current intentional transport/behavior limits (not spec deviations in supported 
 
 ## Not supported (yet)
 
-- True UART character-level t1.5 timing on byte-stream transports (baud-derived t1.5 is enforced at read() boundary granularity when baud is known and no explicit frame-gap-ms override is set)
+- True UART character-level t1.5 timing on byte-stream transports. Optional `--strict-t15`/`(strict-t15 on)` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
 - RTU-over-TCP
 - IPv6
 - TLS (Modbus/TCP Security)

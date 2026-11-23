@@ -76,8 +76,9 @@ modbus-sim [options] CONFIG.scm
       --rtu-pty        RTU: create a PTY and print its slave path
       --rtu-device PATH RTU: serve RTU over an existing serial-like device
       --rtu-tcp        RTU-over-TCP: serve RTU frames over TCP
-      --baud N         RTU/RTU-over-TCP: baud for t3.5/t1.5 timing (overrides config/tty)
+      --baud N         RTU/RTU-over-TCP: baud for t3.5 timing (overrides config/tty)
       --frame-gap-ms N RTU/RTU-over-TCP: explicit inter-frame silence override in ms
+      --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
   -h, --help           show help
@@ -94,11 +95,12 @@ preserves the existing baud rate unless `--baud`/config `(baud N)` is provided. 
 are rejected in RTU mode because 0 is broadcast and 248-255 are reserved.
 
 RTU frame boundaries use Modbus t3.5 when a baud rate is known (explicit `--baud`/config `(baud N)`,
-or the tty's existing baud rate). In baud-derived auto mode (no `--frame-gap-ms` override), the
-server also enforces t1.5 as a best-effort intra-frame read() boundary check. `--frame-gap-ms` is an
-explicit inter-frame silence override and takes precedence when set. For PTY/pipe streams with no
-known baud and no override, the default 20 ms fallback is used; read() boundaries do not expose true
-UART character timing.
+or the tty's existing baud rate). `--frame-gap-ms` is an explicit inter-frame silence override and
+takes precedence when set. For PTY/pipe streams with no known baud and no override, the default 20 ms
+fallback is used; read() boundaries do not expose true UART character timing.
+
+`--strict-t15` (or config `(server (strict-t15 on))`) enables an opt-in best-effort t1.5 discard
+heuristic for RTU byte streams in baud-derived auto mode. It is never applied to RTU-over-TCP.
 
 `--rtu-tcp` serves Modbus RTU frames (`[addr][PDU][CRC lo hi]`) on a TCP listen socket as a
 separate transport/framing choice. It is not Modbus TCP (MBAP) and does not change existing TCP or

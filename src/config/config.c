@@ -32,19 +32,21 @@ config_set_defaults(config_t* config)
 	config->idle_timeout_ms = CONFIG_DEFAULT_IDLE_TIMEOUT_MS;
 	config->frame_gap_ms    = 0; /* auto: derive from baud, else default gap */
 	config->baud            = CONFIG_DEFAULT_BAUD;
+	config->strict_t15      = false;
 }
 
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud" };
-	s7_pointer	options = s7_cdr(form);
-	s64		port    = config->port;
-	s64		seed    = config->seed;
-	s64		idle    = config->idle_timeout_ms;
-	s64		frame   = config->frame_gap_ms;
-	s64		baud    = config->baud;
-	const char*	bind    = NULL;
+	static const char* const keys[] = { "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15" };
+	s7_pointer	options    = s7_cdr(form);
+	s64		port       = config->port;
+	s64		seed       = config->seed;
+	s64		idle       = config->idle_timeout_ms;
+	s64		frame      = config->frame_gap_ms;
+	s64		baud       = config->baud;
+	bool		strict_t15 = config->strict_t15;
+	const char*	bind       = NULL;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "server"))
 		return false;
@@ -66,6 +68,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (baud > 0 && !baud_is_standard((u32)baud))
 		return form_fail(ctx, "server: baud must be a standard termios rate (e.g. 9600, 19200, 38400, 115200)");
 
+	if (!form_opt_bool(ctx, options, "strict-t15", &strict_t15))
+		return false;
+
 	if (!form_opt_string(ctx, options, "bind", &bind))
 		return false;
 
@@ -83,6 +88,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	config->idle_timeout_ms = (u32)idle;
 	config->frame_gap_ms    = (u32)frame;
 	config->baud            = (u32)baud;
+	config->strict_t15      = strict_t15;
 	return true;
 }
 

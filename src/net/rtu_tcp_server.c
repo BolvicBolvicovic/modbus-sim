@@ -43,6 +43,7 @@ struct rtu_tcp_conn_t
 	u64			last_rx_us;
 	bool			have_rx;
 	bool			read_closed;
+	bool			gap_deferred;
 	rtu_tcp_pending_t	pending;
 	u64			last_activity_ms;
 	char			peer[INET_ADDRSTRLEN + 8];
@@ -272,36 +273,46 @@ rtu_next_frame(const u8* rx, u32 rx_len, u32* frame_len)
 	return RTU_FRAME_NONE;
 }
 
-static void
+static bool
 process_rx_frames(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms)
 {
+	bool keep_incomplete = (server->options.frame_gap_ms == 0 && server->options.baud != 0);
+
 	while (conn->rx_len >= 4 && !conn->pending.active)
 	{
 		u32			frame_len = 0;
 		rtu_frame_result_t	result = rtu_next_frame(conn->rx, conn->rx_len, &frame_len);
 
-		if (result != RTU_FRAME_FOUND)
+		if (result == RTU_FRAME_NONE)
 		{
 			conn->rx_len = 0;
-			return;
+			return false;
+		}
+		if (result == RTU_FRAME_DISCARD)
+		{
+			if (keep_incomplete)
+				return true;
+			conn->rx_len = 0;
+			return false;
 		}
 
 		handle_frame(server, conn, conn->rx, frame_len, now_ms);
 		consume_rx(conn, frame_len);
 		if (conn->pending.active)
-			return;
+			return false;
 	}
 
 	if (conn->rx_len > 0 && conn->rx_len < 4 && !conn->pending.active)
 		conn->rx_len = 0;
 	if (conn->rx_len > MODBUS_RTU_MAX_FRAME)
 		consume_rx(conn, conn->rx_len - MODBUS_RTU_MAX_FRAME);
+	return false;
 }
 
 static void
 note_rx_gap(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms, u64 now_us)
 {
-	u32 t15, t35;
+	u32 t35;
 
 	if (!conn->have_rx || conn->rx_len == 0 || conn->pending.active)
 		return;
@@ -309,23 +320,29 @@ note_rx_gap(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms, u64 now_
 		return;
 	if (now_us < conn->last_rx_us)
 		return;
-	t15 = rtu_t15_us(server->options.baud);
 	t35 = rtu_t35_us(server->options.baud);
-	if (t15 == 0 || t35 == 0)
+	if (t35 == 0)
 		return;
 	{
 		u64 elapsed = now_us - conn->last_rx_us;
 		if (elapsed >= t35)
 		{
-			process_rx_frames(server, conn, now_ms);
+			bool incomplete = process_rx_frames(server, conn, now_ms);
 			conn->have_rx = conn->rx_len > 0;
-			return;
+			if (incomplete)
+			{
+				/* recv() boundaries do not reflect UART timing. Keep an
+				 * incomplete known-length frame for one extra t3.5 window so
+				 * split/pipelined TCP segments can complete. */
+				conn->gap_deferred = true;
+				conn->last_rx_ms = now_ms;
+			}
+			else
+				conn->gap_deferred = false;
 		}
-		if (elapsed >= t15)
-		{
-			conn->rx_len = 0;
-			conn->have_rx = false;
-		}
+		/* Do not enforce t1.5 on RTU-over-TCP: TCP read() boundaries do not
+		 * reflect UART character timing and valid pipelined frames can arrive
+		 * in separate recv() calls a few ms apart. */
 	}
 }
 
@@ -366,6 +383,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	conn->last_rx_ms = now_ms;
 	conn->last_rx_us = now_us;
 	conn->have_rx = true;
+	conn->gap_deferred = 0;
 	conn->last_activity_ms = now_ms;
 }
 
@@ -535,8 +553,21 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 				continue;
 			if (gap_due(conn, now_ms, gap_ms))
 			{
-				process_rx_frames(&server, conn, now_ms);
+				bool incomplete = process_rx_frames(&server, conn, now_ms);
 				conn->have_rx = conn->rx_len > 0;
+				if (incomplete && !conn->gap_deferred)
+				{
+					conn->gap_deferred = true;
+					conn->last_rx_ms = now_ms;
+				}
+				else if (incomplete)
+				{
+					conn->rx_len = 0;
+					conn->have_rx = false;
+					conn->gap_deferred = false;
+				}
+				else
+					conn->gap_deferred = false;
 			}
 		}
 
@@ -601,8 +632,21 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 			}
 			if (conn->fd >= 0 && gap_due(conn, clock_now_ms(), gap_ms))
 			{
-				process_rx_frames(&server, conn, clock_now_ms());
+				bool incomplete = process_rx_frames(&server, conn, clock_now_ms());
 				conn->have_rx = conn->rx_len > 0;
+				if (incomplete && !conn->gap_deferred)
+				{
+					conn->gap_deferred = true;
+					conn->last_rx_ms = clock_now_ms();
+				}
+				else if (incomplete)
+				{
+					conn->rx_len = 0;
+					conn->have_rx = false;
+					conn->gap_deferred = false;
+				}
+				else
+					conn->gap_deferred = false;
 			}
 		}
 	}
