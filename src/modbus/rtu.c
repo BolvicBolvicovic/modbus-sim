@@ -156,3 +156,39 @@ modbus_rtu_request_len(const u8* buf, u32 buf_len, u32* frame_len)
 	*frame_len = 1 + pdu_len + 2;
 	return true;
 }
+
+modbus_rtu_frame_result_t
+modbus_rtu_next_frame(const u8* rx, u32 rx_len, u32* frame_len)
+{
+	u8		addr    = 0;
+	const u8*	pdu     = NULL;
+	u32		pdu_len = 0;
+	u32		expected = 0;
+
+	if (modbus_rtu_request_len(rx, rx_len, &expected))
+	{
+		if (expected <= rx_len && modbus_rtu_decode(rx, expected, &addr, &pdu, &pdu_len))
+		{
+			*frame_len = expected;
+			return MODBUS_RTU_FRAME_FOUND;
+		}
+		if (expected > rx_len)
+		{
+			if (rx_len <= MODBUS_RTU_MAX_FRAME &&
+			    modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len))
+			{
+				*frame_len = rx_len;
+				return MODBUS_RTU_FRAME_FOUND;
+			}
+			return MODBUS_RTU_FRAME_DISCARD;
+		}
+	}
+
+	if (rx_len <= MODBUS_RTU_MAX_FRAME &&
+	    modbus_rtu_decode(rx, rx_len, &addr, &pdu, &pdu_len))
+	{
+		*frame_len = rx_len;
+		return MODBUS_RTU_FRAME_FOUND;
+	}
+	return MODBUS_RTU_FRAME_NONE;
+}

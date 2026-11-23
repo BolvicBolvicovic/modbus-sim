@@ -35,4 +35,20 @@ bool	modbus_rtu_decode(const u8* buf, u32 len, u8* addr, const u8** pdu, u32* pd
  * */
 bool	modbus_rtu_request_len(const u8* buf, u32 buf_len, u32* frame_len);
 
+typedef enum modbus_rtu_frame_result_t modbus_rtu_frame_result_t;
+enum modbus_rtu_frame_result_t
+{
+	MODBUS_RTU_FRAME_NONE,    /* No frame at offset 0; discard buffered bytes. */
+	MODBUS_RTU_FRAME_FOUND,   /* Complete frame of *frame_len at offset 0. */
+	MODBUS_RTU_FRAME_DISCARD, /* Known request length exceeds buffer and buffer is not
+				   * a complete frame; discard buffered bytes. */
+};
+
+/* Name: modbus_rtu_next_frame
+ * Description: locates a complete RTU frame at rx[0]. Prefers the function-code-derived
+ * request length to avoid false CRC matches on a shorter prefix. For variable/unknown
+ * FCs, decodes the full buffer as one frame.
+ * */
+modbus_rtu_frame_result_t	modbus_rtu_next_frame(const u8* rx, u32 rx_len, u32* frame_len);
+
 #endif

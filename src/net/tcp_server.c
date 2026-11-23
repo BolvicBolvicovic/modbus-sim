@@ -59,31 +59,9 @@ static volatile sig_atomic_t	g_stop = 0;
 static s32
 listen_open(tcp_server_t* server)
 {
-	struct sockaddr_in	addr = { 0 };
-	int			yes  = 1;
-	int			fd   = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-
+	int fd = net_tcp_listen(server->options.bind_address, server->options.port, 16);
 	if (fd < 0)
 		return -1;
-
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-	addr.sin_family = AF_INET;
-	addr.sin_port   = htons(server->options.port);
-	if (inet_pton(AF_INET, server->options.bind_address, &addr.sin_addr) != 1)
-	{
-		LOG_WARN("bind address '%s' is not an IPv4 address", server->options.bind_address);
-		close(fd);
-		return -1;
-	}
-
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 || listen(fd, 16) < 0)
-	{
-		LOG_WARN("cannot listen on %s:%u: %s", server->options.bind_address,
-			 server->options.port, strerror(errno));
-		close(fd);
-		return -1;
-	}
-
 	server->listen_fd = fd;
 	return 0;
 }
