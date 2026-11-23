@@ -58,6 +58,7 @@ rtu_tcp_init_ctx(rtu_tcp_server_t* server)
 		.frame_gap_ms = server->options.frame_gap_ms,
 		.baud = server->options.baud,
 		.strict_t15 = false,
+		.broadcast_execute = server->options.broadcast_execute,
 		.peer = NULL,
 	};
 }

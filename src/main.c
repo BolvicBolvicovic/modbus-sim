@@ -44,6 +44,7 @@ struct cli_t
 	bool		rtu_pty;
 	bool		rtu_tcp;
 	bool		strict_t15;
+	bool		broadcast_execute;
 	s32		port_override;		/* -1 = use the config's port */
 	s32		frame_gap_override;	/* -1 = use config/auto */
 	s32		baud_override;		/* -1 = use config/tty/default */
@@ -66,6 +67,7 @@ print_usage(void)
 	     "      --baud N         RTU: standard termios baud for t3.5 timing (overrides config/tty)\n"
 	     "      --frame-gap-ms N RTU: explicit inter-frame silence override in ms\n"
 	     "      --strict-t15     RTU byte stream: opt-in t1.5 discard heuristic (never RTU-over-TCP)\n"
+	     "      --broadcast-execute RTU/RTU-over-TCP: run unit-0 requests on all devices (no response)\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
 	     "  -h, --help           show this help\n"
@@ -77,6 +79,8 @@ print_usage(void)
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
 	     "t1.5 discard is opt-in for RTU byte streams (--strict-t15/(strict-t15 on));\n"
 	     "it is never applied to RTU-over-TCP.\n"
+	     "Unit-0 (broadcast) requests are ignored by default. --broadcast-execute or\n"
+	     "(broadcast-execute on) runs them on every device without sending a response.\n"
 	     "\n"
 	     "Try:  modbus-sim profiles/minimal.scm\n"
 	     "Docs: README.md and docs/");
@@ -148,6 +152,8 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->rtu_tcp = true;
 		else if (strcmp(arg, "--strict-t15") == 0)
 			cli->strict_t15 = true;
+		else if (strcmp(arg, "--broadcast-execute") == 0)
+			cli->broadcast_execute = true;
 		else if ((strcmp(arg, "-p") == 0 || strcmp(arg, "--port") == 0) && more)
 		{
 			u32 port = 0;
@@ -234,6 +240,14 @@ parse_args(int argc, char** argv, cli_t* cli)
 		fprintf(stderr, "--strict-t15 is not supported for RTU-over-TCP\n");
 		return false;
 	}
+	if (cli->broadcast_execute &&
+	    !cli->rtu_pty &&
+	    !cli->rtu_device &&
+	    !cli->rtu_tcp)
+	{
+		fprintf(stderr, "--broadcast-execute is only valid in RTU/RTU-over-TCP mode\n");
+		return false;
+	}
 	return true;
 }
 
@@ -306,6 +320,8 @@ print_summary(const config_t* config, bool rtu_mode, bool rtu_tcp_mode, const ch
 		       config->device_count, config->device_count == 1 ? "" : "s",
 		       config->bind_address, config->port);
 		print_rtu_timing(config);
+		if (config->broadcast_execute)
+			printf(", broadcast-execute on");
 		putchar('\n');
 	}
 	else if (rtu_mode)
@@ -314,6 +330,8 @@ print_summary(const config_t* config, bool rtu_mode, bool rtu_tcp_mode, const ch
 		       config->device_count, config->device_count == 1 ? "" : "s",
 		       rtu_path ? rtu_path : "(fd)");
 		print_rtu_timing(config);
+		if (config->broadcast_execute)
+			printf(", broadcast-execute on");
 		putchar('\n');
 	}
 	else
@@ -343,6 +361,8 @@ apply_overrides(const cli_t* cli, config_t* config, const char* config_path)
 		config->baud = (u32)cli->baud_override;
 	if (cli->strict_t15)
 		config->strict_t15 = true;
+	if (cli->broadcast_execute)
+		config->broadcast_execute = true;
 
 	if (rtu_mode && !validate_rtu_unit_ids(config, error, sizeof(error)))
 	{
@@ -538,13 +558,14 @@ run_rtu(const cli_t* cli, config_t* config)
 
 	{
 		rtu_server_options_t	options = {
-			.fd           = fd,
-			.seed         = config->seed,
-			.frame_gap_ms = config->frame_gap_ms,
-			.baud         = config->baud,
-			.strict_t15   = config->strict_t15,
-			.devices      = config->devices,
-			.device_count = config->device_count,
+			.fd                = fd,
+			.seed              = config->seed,
+			.frame_gap_ms      = config->frame_gap_ms,
+			.baud              = config->baud,
+			.strict_t15        = config->strict_t15,
+			.broadcast_execute = config->broadcast_execute,
+			.devices           = config->devices,
+			.device_count      = config->device_count,
 		};
 
 		status = rtu_server_run(&options);
@@ -562,14 +583,15 @@ static s32
 run_rtu_tcp(config_t* config)
 {
 	rtu_tcp_server_options_t	options = {
-		.bind_address    = config->bind_address,
-		.port            = config->port,
-		.seed            = config->seed,
-		.idle_timeout_ms = config->idle_timeout_ms,
-		.frame_gap_ms    = config->frame_gap_ms,
-		.baud            = config->baud,
-		.devices         = config->devices,
-		.device_count    = config->device_count,
+		.bind_address      = config->bind_address,
+		.port              = config->port,
+		.seed              = config->seed,
+		.idle_timeout_ms   = config->idle_timeout_ms,
+		.frame_gap_ms      = config->frame_gap_ms,
+		.baud              = config->baud,
+		.broadcast_execute = config->broadcast_execute,
+		.devices           = config->devices,
+		.device_count      = config->device_count,
 	};
 
 	return rtu_tcp_server_run(&options);

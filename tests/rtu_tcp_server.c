@@ -403,6 +403,69 @@ TEST(RtuOverTcpBroadcastGetsNoResponse)
 	server_stop();
 }
 
+TEST(RtuOverTcpBroadcastExecuteWritesAllDevicesWithoutResponse)
+{
+	int fd;
+	u8 write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A };
+	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start("(server (broadcast-execute on))\n"
+		     "(device (unit-id 1) (holding 0 (static 0)))\n"
+		     "(device (unit-id 2) (holding 0 (static 0)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	flen = modbus_rtu_encode(frame, 0, write_pdu, sizeof(write_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 250) == false);
+
+	for (u8 unit = 1; unit <= 2; unit++)
+	{
+		flen = modbus_rtu_encode(frame, unit, read_pdu, sizeof(read_pdu));
+		ASSERT_EQ(send_all_fd(fd, frame, flen));
+		ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+		ASSERT_EQ(addr == unit);
+		ASSERT_EQ(get_be16(resp + 2) == 42);
+	}
+
+	close(fd);
+	server_stop();
+}
+
+TEST(RtuOverTcpCliBroadcastExecuteOverridesConfig)
+{
+	int fd;
+	u8 write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A };
+	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start_args("(server (broadcast-execute off))\n"
+			  "(device (unit-id 1) (holding 0 (static 0)))\n"
+			  "(device (unit-id 2) (holding 0 (static 0)))\n",
+			  "--broadcast-execute", NULL);
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	flen = modbus_rtu_encode(frame, 0, write_pdu, sizeof(write_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 250) == false);
+
+	for (u8 unit = 1; unit <= 2; unit++)
+	{
+		flen = modbus_rtu_encode(frame, unit, read_pdu, sizeof(read_pdu));
+		ASSERT_EQ(send_all_fd(fd, frame, flen));
+		ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+		ASSERT_EQ(addr == unit);
+		ASSERT_EQ(get_be16(resp + 2) == 42);
+	}
+
+	close(fd);
+	server_stop();
+}
+
 TEST(RtuOverTcpHalfCloseAfterRequestSendsResponse)
 {
 	int fd;

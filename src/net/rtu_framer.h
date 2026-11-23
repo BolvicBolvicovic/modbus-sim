@@ -39,7 +39,8 @@ struct rtu_framer_t
 /* Name: rtu_framer_ctx_t
  * Description: shared RTU frame processing context. Borrowed pointers; valid for the
  * duration of the server run. frame_gap_ms == 0 means baud-derived/auto timing.
- * strict_t15 is best-effort and only meaningful for RTU byte streams. */
+ * strict_t15 is best-effort and only meaningful for RTU byte streams.
+ * broadcast_execute runs unit-0 requests on all devices without a response. */
 typedef struct rtu_framer_ctx_t rtu_framer_ctx_t;
 struct rtu_framer_ctx_t
 {
@@ -49,6 +50,7 @@ struct rtu_framer_ctx_t
 	u32		frame_gap_ms;
 	u32		baud;
 	bool		strict_t15;
+	bool		broadcast_execute;
 	const char*	peer;
 };
 

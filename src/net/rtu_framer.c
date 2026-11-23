@@ -77,7 +77,27 @@ handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
 	if (!modbus_rtu_decode(frame, len, &addr, &pdu, &pdu_len))
 		return;
 	if (addr == 0)
-		return; /* broadcast: no response */
+	{
+		if (!ctx->broadcast_execute)
+			return; /* broadcast: no response */
+		/* Deliberately queue nothing: broadcasts execute on all devices but
+		 * never produce a response, so fault drop/delay is irrelevant here. */
+		for (u32 i = 0; i < ctx->device_count; i++)
+		{
+			fault_decision_t ignored = { 0 };
+
+			(void)net_handle_pdu(ctx->devices[i], ctx->rng, now_ms, pdu, pdu_len,
+					     resp, &ignored);
+		}
+		if (ctx->peer)
+			LOG_DEBUG("%s rtu broadcast fc=0x%02X -> executed on %u device%s (no response)",
+				  ctx->peer, pdu[0], ctx->device_count,
+				  ctx->device_count == 1 ? "" : "s");
+		else
+			LOG_DEBUG("rtu broadcast fc=0x%02X -> executed on %u device%s (no response)",
+				  pdu[0], ctx->device_count, ctx->device_count == 1 ? "" : "s");
+		return;
+	}
 	dev = net_find_device(ctx->devices, ctx->device_count, addr);
 	if (!dev)
 		return; /* unknown unit: no response */
