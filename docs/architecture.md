@@ -3,13 +3,13 @@
 ## Data flow
 
 ```
- TCP client ──MBAP+PDU──► net/tcp_server ──┐
-                                       ├─► modbus/pdu ──► device/device ──► data tables
- RTU client ──addr+PDU+CRC──► net/rtu_server ──┘                 ▲
-                     │                               device_tick()│ ramps → registers
-                     │ fault_decide()
-                     ▼
-              device/fault (drop / delay)
+ TCP client  ──MBAP+PDU───────► net/tcp_server  ──┐
+                                                 ├─► modbus/pdu ──► device/device ──► data tables
+ RTU client  ──addr+PDU+CRC───► net/rtu_server  ──┤                 ▲
+ ASCII client ──:hex+LRC+CRLF─► net/ascii_server ┘         device_tick()│ ramps → registers
+                      │                                      fault_decide()
+                      ▼
+               device/fault (drop / delay)
 
  config file ──► config/config ──► config/config_device ──► device/device
                   (s7 reads text)
@@ -17,9 +17,9 @@
 
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
-2. `net/tcp_server` (Modbus TCP MBAP), `net/rtu_server` (RTU CRC-framed byte stream), or
-   `net/rtu_tcp_server` (RTU CRC-framed over TCP) finds the device by unit/address and calls
-   `modbus_handle_pdu`.
+2. `net/tcp_server` (Modbus TCP MBAP), `net/rtu_server` (RTU CRC-framed byte stream),
+   `net/ascii_server` (ASCII hex/LRC-framed byte stream), or `net/rtu_tcp_server` (RTU CRC-framed
+   over TCP) finds the device by unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
 4. The transport asks `fault_decide` whether to drop or delay the response.
@@ -30,10 +30,10 @@
 |---|---|---|
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
-| `src/modbus` | `mbap`, `pdu`, `rtu`, `bytes.h` | TCP MBAP, RTU CRC/frame codec and frame extraction, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `rtu_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, RTU byte stream, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
+| `src/net` | `tcp_server`, `rtu_server`, `ascii_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, RTU byte stream, ASCII byte stream, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
-| `src/main.c` | | command line, wiring, RTU PTY/device open |
+| `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
 `device` and `modbus` can be tested alone, and are (see `tests/`).
@@ -92,6 +92,16 @@ heuristic in baud-derived auto mode for RTU byte streams. `frame-gap-ms` is an e
 override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a practical approximation.
 After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0)
 produce no response. Delayed fault responses use the same due-time poll pattern as TCP.
+
+### ASCII (`net/ascii_server.c`)
+
+Single-threaded `poll()` on one bidirectional byte stream (PTY master or existing device). It does
+not use `net/rtu_framer`: `modbus/ascii` owns the hex/LRC codec and a delimiter scanner, and the
+server owns the bounded RX buffer, fd polling, EOF/hangup behavior, and delayed response writes.
+A frame is complete at `CR LF`, so complete frames are dispatched immediately without RTU timing;
+several frames in one `read()` are handled in order. Malformed frames, bad LRC, broadcast, and
+unknown units never reach PDU dispatch and produce no response. Fault drop suppresses the response;
+delay faults reuse the due-time poll pattern. There is no ASCII-over-TCP server.
 
 ### RTU-over-TCP (`net/rtu_tcp_server.c`)
 

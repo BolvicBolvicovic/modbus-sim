@@ -48,6 +48,42 @@ No response is produced for:
 - **Broadcast (unit 0)**: intentionally ignored; broadcast semantics are not modeled in this
   simulator.
 
+### Modbus ASCII
+
+Modbus ASCII is served over a bidirectional byte stream (Linux PTY or an existing serial-like
+device path) via CLI `--ascii-pty` or `--ascii-device PATH`. It is a separate transport/framing
+choice: it uses the same PDU handlers and device model as TCP/RTU, but it is not Modbus TCP (MBAP)
+and there is no ASCII-over-TCP mode. No new Scheme config fields are added for ASCII; selecting the
+mode is CLI-only.
+
+Frame format on the wire is `:` + uppercase hex digits for `[addr][PDU...][LRC]` + `CR LF`.
+`addr` is one byte, the PDU is 1..253 bytes, and the LRC is one byte:
+`LRC = (u8)(0 - sum(addr through PDU))`, excluding the LRC itself. A valid frame therefore has an
+even number of hex digits. Responses use uppercase hex; received frames accept upper- or lowercase
+hex. The maximum encoded frame is `1 + 2 + 2*253 + 2 + 2 = 513` bytes.
+
+Framing is delimiter-based: a frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5,
+`--frame-gap-ms`, or `--strict-t15` behavior for ASCII; complete frames are dispatched immediately,
+including several complete frames delivered in one `read()`. A bounded RX buffer accumulates
+partial frames across reads.
+
+No response is produced, and no PDU is dispatched, for:
+
+- **Malformed framing**: missing leading `:`, missing/wrong `CR LF`, odd hex count, invalid hex
+  digit, overlong frame, or a lone `CR`/`LF` inside a frame.
+- **Bad LRC**: the decoded LRC does not match the sum of address and PDU bytes.
+- **Unknown unit**: no configured device has that unit id.
+- **Broadcast (unit 0)**: intentionally ignored, as in RTU.
+- **Fault drop**: the configured fault decision suppresses the response.
+
+Delay faults still hold the ASCII response until the configured delay has elapsed, without blocking
+other work in the poll loop. Unit ids must be 1-247 in ASCII mode, as in RTU; `--check` combined with
+ASCII flags applies the same check. `--baud N` (or config `(server (baud N))`) may set the serial
+line/PTY speed but never affects ASCII framing or timing. When the fd is a tty, `modbus-sim`
+configures raw 8N1 (`CS8`, no parity, 1 stop bit, no flow control), **not** the traditional Modbus
+ASCII 7E1 settings. `--port`, `--bind`, `--frame-gap-ms`, and `--strict-t15` are invalid with ASCII
+flags, and ASCII flags cannot be combined with RTU flags.
+
 ### Modbus RTU over TCP
 
 `modbus-sim --rtu-tcp` serves Modbus RTU frames on a TCP listen socket. This is a separate
@@ -166,11 +202,11 @@ Each `(device ...)` answers to its own `(unit-id N)`. There is no "any unit id" 
 using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set the device's
 `unit-id` to match.
 
-In RTU mode, unit ids must be in the range 1-247. Address 0 is Modbus broadcast and 248-255 are
-reserved by the Modbus serial specification; a device configured with one of these ids cannot be
-addressed by a normal RTU request. `modbus-sim` rejects these ids when starting in RTU mode and
-when `--check` is combined with RTU flags. RTU broadcast requests (address 0) are received but not
-executed and produce no response.
+In RTU and ASCII modes, unit ids must be in the range 1-247. Address 0 is Modbus broadcast and
+248-255 are reserved by the Modbus serial specification; a device configured with one of these ids
+cannot be addressed by a normal serial request. `modbus-sim` rejects these ids when starting in RTU
+or ASCII mode and when `--check` is combined with RTU or ASCII flags. RTU and ASCII broadcast
+requests (address 0) are received but not executed and produce no response.
 
 ## Timing
 
@@ -191,11 +227,11 @@ The previously tracked Modbus spec deviations have been resolved:
 - **File number 0:** rejected; config and PDU validation accept file numbers `0x0001-0xFFFF`.
 - **FC 20/21 record range exceeding 0x270F:** rejected as illegal data value (03) for both FC 20 and FC 21.
 
-Current intentional transport/behavior limits (not spec deviations in supported FC semantics) are documented in [Not supported (yet)](#not-supported-yet) and the RTU/TCP transport sections above.
+Current intentional transport/behavior limits (not spec deviations in supported FC semantics) are documented in [Not supported (yet)](#not-supported-yet) and the RTU/ASCII/TCP transport sections above.
 
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `--strict-t15`/`(strict-t15 on)` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
-- RTU-over-TCP
+- ASCII-over-TCP: not implemented; ASCII is a serial byte-stream transport only
 - IPv6
 - TLS (Modbus/TCP Security)

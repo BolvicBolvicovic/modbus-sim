@@ -35,21 +35,28 @@ produce an error message.
 | `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) |
-| `(baud N)` | RTU/RTU-over-TCP: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). When known, Modbus RTU t3.5 inter-frame timing is derived from this baud | `0` (unknown) |
-| `(frame-gap-ms N)` | RTU/RTU-over-TCP: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) |
-| `(strict-t15 on\|off)` | RTU byte streams: opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Not supported for RTU-over-TCP | `off` |
+| `(baud N)` | RTU/ASCII/RTU-over-TCP: standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) |
+| `(frame-gap-ms N)` | RTU/RTU-over-TCP: explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms. Ignored in ASCII mode | `0` (auto) |
+| `(strict-t15 on\|off)` | RTU byte streams: opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Not supported for RTU-over-TCP; ignored in ASCII mode | `off` |
 
 The command-line options `--port` and `--bind` override server listen settings for TCP and RTU-over-TCP. RTU timing can be
 overridden with `--baud` / `--rtu-baud`, `--frame-gap-ms`, and `--strict-t15`; `--frame-gap-ms` takes precedence over
 baud-derived timing when both are provided. `strict-t15` is never applied to RTU-over-TCP. For tty devices, if no
 explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t3.5 timing.
 
+Modbus ASCII is selected only on the command line with `--ascii-pty` or `--ascii-device PATH`; there
+are no ASCII-specific Scheme entries. ASCII frames are `:` + hex `[addr][PDU][LRC]` + `CR LF` and
+are delimited by `CR LF`, not inter-frame silence. `--port`, `--bind`, `--frame-gap-ms`, and
+`--strict-t15` are invalid command-line options in ASCII mode. `--baud` is allowed but only changes
+the line speed; it never changes ASCII framing or timing. ASCII flags cannot be combined with RTU
+flags, and there is no ASCII-over-TCP mode.
+
 ## `(device ...)`
 
 | Entry | Meaning | Default |
 |---|---|---|
 | `(name "Text")` | Name shown in logs and `--check`, up to 63 characters | `"unnamed"` |
-| `(unit-id N)` | Modbus unit id (slave address). TCP: 0-255. RTU: 1-247 (`0` is broadcast, `248-255` reserved by Modbus serial spec) | `1` |
+| `(unit-id N)` | Modbus unit id (slave address). TCP: 0-255. RTU/ASCII: 1-247 (`0` is broadcast, `248-255` reserved by Modbus serial spec) | `1` |
 | `(exception-status N)` | Byte returned by Read Exception Status (FC 07), 0-255 | `0` |
 | `(server-id N)` | Server ID byte returned by Report Server ID (FC 17), 0-255 | `0` |
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
@@ -66,9 +73,9 @@ explicit baud is configured, `modbus-sim` reads the existing tty baud rate for t
 | `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
 
-Unit ids must be different between devices. In RTU mode, unit ids 0 and 248-255 are rejected at
-startup and by `--check` when RTU flags are given because address 0 is broadcast and 248-255 are
-reserved by the Modbus serial specification.
+Unit ids must be different between devices. In RTU and ASCII modes, unit ids 0 and 248-255 are
+rejected at startup and by `--check` when RTU or ASCII flags are given because address 0 is
+broadcast and 248-255 are reserved by the Modbus serial specification.
 
 ## Data points
 
