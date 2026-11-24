@@ -185,6 +185,7 @@ ignored in all ASCII modes; `broadcast-execute` is rejected there at load time, 
 | `(fault ...)` | One fault, see below | none |
 | `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |
 | `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
+| `(canopen-object ...)` | Repeatable CANopen object used by FC 43 MEI `0x0D` SDO uploads/downloads, see below | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
 
 ### Read Device Identification (FC 43)
@@ -204,9 +205,31 @@ Extended objects use this exact syntax and may be repeated in any order:
 `ID` must be a decimal integer from 128 to 255; text must be non-empty and at most 244 bytes.
 IDs must be unique and at most 32 extended objects may be configured per device; entries are
 served in ascending ID order. Configuring any extended object raises FC 43 Conformity Level to
-`0x83`. MEI `0x0E` is the only supported Read Device Identification type; MEI `0x0D`
-(CANopen General Reference) is not supported and returns exception 01. See
-[modbus-support.md](modbus-support.md) for response semantics.
+`0x83`. MEI `0x0E` is the Read Device Identification type; FC 43 with MEI `0x0D` performs
+CANopen SDO uploads and downloads against the objects configured with `(canopen-object ...)`.
+See [modbus-support.md](modbus-support.md) for response semantics.
+
+### CANopen objects (FC 43 MEI `0x0D`)
+
+CANopen SDO uploads and downloads use objects configured with this repeatable form:
+
+```scheme
+(canopen-object NODE INDEX SUBINDEX "HEXBYTES")
+```
+
+- `NODE` is the CANopen node id, 1-127.
+- `INDEX` is 0-65535 and `SUBINDEX` is 0-255; both accept decimal or Scheme hex such as `#x6041`.
+- `HEXBYTES` is 2-476 hex digits (1-238 bytes), with upper- or lowercase digits.
+
+Each `(NODE, INDEX, SUBINDEX)` must be unique on a device, with at most 64 objects per device.
+Every configured object is readable and writable through MEI `0x0D` SDO transfers, at any byte
+offset within its configured data. Undefined objects and out-of-range transfers are rejected.
+
+```scheme
+(device
+  (canopen-object 5 #x6041 0 "17020000")
+  (canopen-object 5 #x6041 1 "AABB"))
+```
 
 Unit ids must be different between devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`,
 `ascii-device` and `ascii-tcp` modes, unit ids 0 and 248-255 are rejected at startup and by

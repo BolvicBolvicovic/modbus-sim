@@ -30,6 +30,13 @@ enum modbus_function_code
 	FC_ENCAPSULATED_INTERFACE_TRANSPORT = 0x2B,
 };
 
+/* Encapsulated Interface Transport MEI types. MEI 0x0D is declared in
+ * modbus/mei_canopen.h alongside its request helpers. */
+enum modbus_mei_type
+{
+	MEI_TYPE_READ_DEVICE_ID = 0x0E,
+};
+
 /* Public FC 08 diagnostics subfunctions. */
 enum modbus_diagnostics_subfunction
 {

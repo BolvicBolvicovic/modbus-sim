@@ -215,6 +215,67 @@ parse_server_id_additional_data(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+/* Repeatable (canopen-object NODE INDEX SUBINDEX "HEXBYTES"). */
+static bool
+parse_canopen_object(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	s7_pointer		hex_f = NULL;
+	const char*		text  = NULL;
+	const char*		error = NULL;
+	s64			node  = 0;
+	s64			index = 0;
+	s64			sub   = 0;
+	u8			bytes[DEVICE_MAX_CANOPEN_OBJECT_BYTES];
+	size_t			len   = 0;
+
+	if (s7_list_length(ctx->sc, item) != 5 ||
+	    !s7_is_integer(s7_list_ref(ctx->sc, item, 1)) ||
+	    !s7_is_integer(s7_list_ref(ctx->sc, item, 2)) ||
+	    !s7_is_integer(s7_list_ref(ctx->sc, item, 3)))
+		return form_fail(ctx, "%s: expected (canopen-object NODE INDEX SUBINDEX \"HEXBYTES\")",
+				 form_text(ctx, item));
+
+	node  = s7_integer(s7_list_ref(ctx->sc, item, 1));
+	index = s7_integer(s7_list_ref(ctx->sc, item, 2));
+	sub   = s7_integer(s7_list_ref(ctx->sc, item, 3));
+	if (node < 1 || node > 127)
+		return form_fail(ctx, "%s: CANopen node must be between 1 and 127", form_text(ctx, item));
+	if (index < 0 || index > 65535)
+		return form_fail(ctx, "%s: CANopen index must be between 0 and 65535", form_text(ctx, item));
+	if (sub < 0 || sub > 255)
+		return form_fail(ctx, "%s: CANopen subindex must be between 0 and 255", form_text(ctx, item));
+
+	hex_f = s7_list_ref(ctx->sc, item, 4);
+	if (!s7_is_string(hex_f))
+		return form_fail(ctx, "%s: HEXBYTES must be in double quotes", form_text(ctx, item));
+
+	text = s7_string(hex_f);
+	len  = strlen(text);
+	if (len < 2)
+		return form_fail(ctx, "%s: too few hex digits (at least 1 byte)", form_text(ctx, item));
+	if (len > 2u * DEVICE_MAX_CANOPEN_OBJECT_BYTES)
+		return form_fail(ctx, "%s: too many hex digits (max %u bytes of CANopen object data)",
+				 form_text(ctx, item), (u32)DEVICE_MAX_CANOPEN_OBJECT_BYTES);
+	if (len % 2 != 0)
+		return form_fail(ctx, "%s: expected an even number of hex digits", form_text(ctx, item));
+
+	for (size_t i = 0; i < len; i += 2)
+	{
+		int	hi = hex_digit(text[i]);
+		int	lo = hex_digit(text[i + 1]);
+
+		if (hi < 0 || lo < 0)
+			return form_fail(ctx, "%s: invalid hex digit at position %u (use 0-9, a-f or A-F)",
+					 form_text(ctx, item), (u32)(hi < 0 ? i : i + 1));
+		bytes[i / 2] = (u8)((hi << 4) | lo);
+	}
+
+	error = device_add_canopen_object(dev, (u8)node, (u16)index, (u8)sub, (u16)(len / 2), bytes);
+	if (error)
+		return form_fail(ctx, "%s: %s", form_text(ctx, item), error);
+	return true;
+}
+
 static bool
 parse_com_status(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
@@ -667,6 +728,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "holding",          parse_holding          },
 	{ "file",             parse_file             },
 	{ "fifo",             parse_fifo             },
+	{ "canopen-object",   parse_canopen_object   },
 };
 
 static const item_entry_t*
@@ -695,7 +757,7 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 				 "run-indicator, server-id-additional-data, com-status, com-event, vendor-name, "
 				 "product-code, major-minor-revision, vendor-url, product-name, model-name, "
 				 "user-application-name, device-id-object, fault, note, coil, discrete, input, "
-				 "holding, file or fifo", head);
+				 "holding, file, fifo or canopen-object", head);
 
 	return entry->parse(ctx, item, dev);
 }

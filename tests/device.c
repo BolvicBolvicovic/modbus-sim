@@ -450,6 +450,79 @@ TEST(FifoQueueRejectsDuplicateTooManyAndTooLarge)
 	arena_release(arena);
 }
 
+TEST(CanopenObjectStoreFindReadAndWrite)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = fresh_device(arena);
+	u8			data[] = { 0x11, 0x22, 0x33, 0x44 };
+	u8			out[4] = { 0, 0, 0, 0 };
+	u8			next[] = { 0xAA, 0xBB };
+	const device_canopen_object_t* obj = NULL;
+
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(data), data) == NULL);
+	ASSERT_EQ(dev->canopen_object_count == 1);
+	obj = device_find_canopen_object(dev, 5, 0x6041, 0);
+	ASSERT_SUCCESS(obj != NULL);
+	ASSERT_EQ(obj->node_id == 5 && obj->index == 0x6041 && obj->subindex == 0);
+	ASSERT_EQ(obj->length == sizeof(data));
+	ASSERT_EQ(memcmp(obj->data, data, sizeof(data)) == 0);
+	ASSERT_SUCCESS(device_find_canopen_object(dev, 5, 0x6041, 1) == NULL);
+	ASSERT_SUCCESS(device_find_canopen_object(dev, 6, 0x6041, 0) == NULL);
+
+	ASSERT_SUCCESS(device_canopen_read(dev, 5, 0x6041, 0, 1, 2, out));
+	ASSERT_EQ(out[0] == 0x22 && out[1] == 0x33 && out[2] == 0);
+	ASSERT_SUCCESS(device_canopen_write(dev, 5, 0x6041, 0, 2, 2, next));
+	ASSERT_SUCCESS(device_canopen_read(dev, 5, 0x6041, 0, 0, 4, out));
+	ASSERT_EQ(out[0] == 0x11 && out[1] == 0x22 && out[2] == 0xAA && out[3] == 0xBB);
+	arena_release(arena);
+}
+
+TEST(CanopenObjectReadWriteRejectOutOfRange)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u8		data[] = { 1, 2, 3 };
+	u8		in[]   = { 9, 9, 9 };
+	u8		out[3] = { 0, 0, 0 };
+
+	ASSERT_EQ(device_add_canopen_object(dev, 1, 0, 0, sizeof(data), data) == NULL);
+	ASSERT_FAILURE(device_canopen_read(dev, 2, 0, 0, 0, 1, out));
+	ASSERT_FAILURE(device_canopen_write(dev, 2, 0, 0, 0, 1, in));
+	ASSERT_FAILURE(device_canopen_read(dev, 1, 0, 0, 2, 2, out));
+	ASSERT_FAILURE(device_canopen_write(dev, 1, 0, 0, 2, 2, in));
+	ASSERT_FAILURE(device_canopen_read(dev, 1, 0, 0, 4, 0, out));
+	ASSERT_SUCCESS(device_canopen_read(dev, 1, 0, 0, 2, 1, out));
+	ASSERT_EQ(out[0] == 3);
+	ASSERT_SUCCESS(device_canopen_write(dev, 1, 0, 0, 3, 0, in));	/* empty range at the end */
+	ASSERT_SUCCESS(device_canopen_read(dev, 1, 0, 0, 0, 3, out));
+	ASSERT_EQ(out[0] == 1 && out[1] == 2 && out[2] == 3);
+	arena_release(arena);
+}
+
+TEST(CanopenObjectRejectsDuplicatesAndBounds)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	u8		data[DEVICE_MAX_CANOPEN_OBJECT_BYTES];
+	u8		one   = 1;
+
+	memset(data, 0x5A, sizeof(data));
+	ASSERT_FAILURE(device_add_canopen_object(dev, 0, 0, 0, 1, &one) == NULL);
+	ASSERT_FAILURE(device_add_canopen_object(dev, 128, 0, 0, 1, &one) == NULL);
+	ASSERT_FAILURE(device_add_canopen_object(dev, 1, 0, 0, 0, &one) == NULL);
+	ASSERT_FAILURE(device_add_canopen_object(dev, 1, 0, 0, DEVICE_MAX_CANOPEN_OBJECT_BYTES + 1, data) == NULL);
+	ASSERT_EQ(device_add_canopen_object(dev, 1, 0, 0, DEVICE_MAX_CANOPEN_OBJECT_BYTES, data) == NULL);
+	ASSERT_FAILURE(device_add_canopen_object(dev, 1, 0, 0, 1, &one) == NULL);	/* duplicate */
+	ASSERT_EQ(device_add_canopen_object(dev, 1, 0, 1, 1, &one) == NULL);
+	ASSERT_EQ(device_add_canopen_object(dev, 2, 0, 0, 1, &one) == NULL);
+
+	dev = fresh_device(arena);
+	for (u32 i = 0; i < DEVICE_MAX_CANOPEN_OBJECTS; i++)
+		ASSERT_EQ(device_add_canopen_object(dev, 1, (u16)i, 0, 1, &one) == NULL);
+	ASSERT_FAILURE(device_add_canopen_object(dev, 1, 1000, 0, 1, &one) == NULL);
+	arena_release(arena);
+}
+
 TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
 {
 	u16	w[2] = { 0, 0 };

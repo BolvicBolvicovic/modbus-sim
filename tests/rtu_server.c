@@ -1607,13 +1607,16 @@ TEST(RtuServerSupportedFunctionCodesFraming)
 
 TEST(RtuServerMei13AndExtendedDeviceIdObjects)
 {
+	static const u8	obj[] = { 0x11, 0x22, 0x33, 0x44 };
 	arena_t*	arena  = ARENA_ALLOC();
 	device_t*	dev    = device_new(arena, 0);
 	device_t*	devices[] = { dev };
 	rtu_child_t	child  = { 0 };
-	u8		pdu1[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		pdu1[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00,
+			   0x05, 0x60, 0x41, 0x00, 0x00, 0x00, 0x00, 0x02 };
 	u8		pdu2[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0xA0 };
-	u8		pdu3[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x03, 0x00 };
+	u8		pdu3[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00,
+			   0x05, 0x60, 0x41, 0x00, 0x00, 0x01, 0x00, 0x01, 0x77 };
 	u8		pdu4[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x81 };
 	u8		frame1[MODBUS_RTU_MAX_FRAME];
 	u8		frame2[MODBUS_RTU_MAX_FRAME];
@@ -1635,10 +1638,11 @@ TEST(RtuServerMei13AndExtendedDeviceIdObjects)
 	dev->extended_id[1].id = 0x80;
 	strcpy(dev->extended_id[1].value, "First");
 	dev->extended_id_count = 2;
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(obj), obj) == NULL);
 	ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
 
-	/* Both frames in one write: the framer must know MEI 0x0D is a 4-byte PDU,
-	 * even though PDU dispatch rejects it with exception 01. */
+	/* Both frames in one write: the framer derives the variable MEI 0x0D
+	 * length from the count field before splitting the coalesced write. */
 	f1 = modbus_rtu_encode(frame1, 1, pdu1, sizeof(pdu1));
 	f2 = modbus_rtu_encode(frame2, 1, pdu2, sizeof(pdu2));
 	ASSERT_EQ(f1 > 0 && f2 > 0);
@@ -1647,9 +1651,10 @@ TEST(RtuServerMei13AndExtendedDeviceIdObjects)
 	ASSERT_EQ(send_all_fd(child.fd, both, f1 + f2));
 
 	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 1200));
-	ASSERT_EQ(addr == 1 && len == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(addr == 1 && len == 14);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0D);
+	ASSERT_EQ(resp[10] == 0x00 && resp[11] == 0x02);
+	ASSERT_EQ(resp[12] == 0x11 && resp[13] == 0x22);
 
 	ASSERT_EQ(recv_rtu_resp_buf(child.fd, buf, &got, &addr, resp, &len, 1200));
 	ASSERT_EQ(addr == 1 && len == 15);
@@ -1659,9 +1664,9 @@ TEST(RtuServerMei13AndExtendedDeviceIdObjects)
 
 	ASSERT_EQ(send_rtu_req(child.fd, 1, pdu3, sizeof(pdu3)));
 	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-	ASSERT_EQ(addr == 1 && len == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(addr == 1 && len == 12);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0D);
+	ASSERT_EQ(resp[2] == 0x01 && resp[10] == 0x00 && resp[11] == 0x00);
 
 	ASSERT_EQ(send_rtu_req(child.fd, 1, pdu4, sizeof(pdu4)));
 	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));

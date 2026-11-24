@@ -661,6 +661,106 @@ TEST(ConfigFifoQueueErrors)
 	EXPECT_ERROR("(device (fifo 0 (values 1)) (fifo 0 (values 2)))", "already defined");
 }
 
+TEST(ConfigCanopenObjectsAreParsed)
+{
+	config_t			config = { 0 };
+	char				err[256] = "";
+	const device_canopen_object_t*	obj = NULL;
+	u8				out[4] = { 0, 0, 0, 0 };
+
+	ASSERT_SUCCESS(load_text("(device"
+				 "  (canopen-object 5 #x6041 0 \"00fFa510\")"
+				 "  (canopen-object 127 0 255 \"aB\"))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->canopen_object_count == 2);
+	obj = device_find_canopen_object(config.devices[0], 5, 0x6041, 0);
+	ASSERT_SUCCESS(obj != NULL);
+	ASSERT_EQ(obj->node_id == 5 && obj->index == 0x6041 && obj->subindex == 0);
+	ASSERT_EQ(obj->length == 4);
+	ASSERT_EQ(obj->data[0] == 0x00 && obj->data[1] == 0xFF && obj->data[2] == 0xA5 && obj->data[3] == 0x10);
+	ASSERT_SUCCESS(device_canopen_read(config.devices[0], 5, 0x6041, 0, 1, 2, out));
+	ASSERT_EQ(out[0] == 0xFF && out[1] == 0xA5);
+
+	obj = device_find_canopen_object(config.devices[0], 127, 0, 255);
+	ASSERT_SUCCESS(obj != NULL);
+	ASSERT_EQ(obj->length == 1 && obj->data[0] == 0xAB);
+	ASSERT_SUCCESS(device_find_canopen_object(config.devices[0], 5, 0x6041, 1) == NULL);
+}
+
+TEST(ConfigCanopenObjectAcceptsMaxLength)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		hex[2 * DEVICE_MAX_CANOPEN_OBJECT_BYTES + 1];
+	char		text[sizeof(hex) + 64];
+	const device_canopen_object_t* obj = NULL;
+
+	for (u32 i = 0; i < 2 * DEVICE_MAX_CANOPEN_OBJECT_BYTES; i++)
+		hex[i] = (i % 2 == 0) ? 'A' : (char)('0' + (i / 2) % 10);
+	hex[2 * DEVICE_MAX_CANOPEN_OBJECT_BYTES] = '\0';
+	snprintf(text, sizeof(text), "(device (canopen-object 1 0 0 \"%s\"))", hex);
+
+	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+	obj = device_find_canopen_object(config.devices[0], 1, 0, 0);
+	ASSERT_SUCCESS(obj != NULL);
+	ASSERT_EQ(obj->length == DEVICE_MAX_CANOPEN_OBJECT_BYTES);
+	ASSERT_EQ(obj->data[0] == 0xA0);
+	ASSERT_EQ(obj->data[DEVICE_MAX_CANOPEN_OBJECT_BYTES - 1] == 0xA7);
+}
+
+TEST(ConfigCanopenObjectErrors)
+{
+	EXPECT_ERROR("(device (canopen-object 1 0 0))", "expected (canopen-object NODE INDEX");
+	EXPECT_ERROR("(device (canopen-object \"1\" 0 0 \"00\"))", "expected (canopen-object NODE INDEX");
+	EXPECT_ERROR("(device (canopen-object 0 0 0 \"00\"))", "node must be between 1 and 127");
+	EXPECT_ERROR("(device (canopen-object 128 0 0 \"00\"))", "node must be between 1 and 127");
+	EXPECT_ERROR("(device (canopen-object 1 -1 0 \"00\"))", "index must be between 0 and 65535");
+	EXPECT_ERROR("(device (canopen-object 1 65536 0 \"00\"))", "index must be between 0 and 65535");
+	EXPECT_ERROR("(device (canopen-object 1 0 -1 \"00\"))", "subindex must be between 0 and 255");
+	EXPECT_ERROR("(device (canopen-object 1 0 256 \"00\"))", "subindex must be between 0 and 255");
+	EXPECT_ERROR("(device (canopen-object 1 0 0 1234))", "HEXBYTES must be in double quotes");
+	EXPECT_ERROR("(device (canopen-object 1 0 0 \"\"))", "too few hex digits");
+	EXPECT_ERROR("(device (canopen-object 1 0 0 \"abc\"))", "even number of hex digits");
+	EXPECT_ERROR("(device (canopen-object 1 0 0 \"00gg\"))", "invalid hex digit");
+	EXPECT_ERROR("(device (canopen-object 1 0 0 \"00\") (canopen-object 1 0 0 \"11\"))",
+		     "already configured");
+}
+
+TEST(ConfigCanopenObjectRejectsOverLength)
+{
+	config_t	config = { 0 };
+	char		err[1024] = "";
+	char		hex[2 * (DEVICE_MAX_CANOPEN_OBJECT_BYTES + 1) + 1];
+	char		text[sizeof(hex) + 64];
+
+	memset(hex, '0', sizeof(hex) - 1);
+	hex[sizeof(hex) - 1] = '\0';
+	snprintf(text, sizeof(text), "(device (canopen-object 1 0 0 \"%s\"))", hex);
+
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "too many hex digits") != NULL);
+	ASSERT_EQ(strstr(err, "238 bytes") != NULL);
+}
+
+TEST(ConfigCanopenObjectRejectsOverMaxCount)
+{
+	config_t	config = { 0 };
+	char		err[512] = "";
+	char		text[4096] = "(device";
+	char		entry[80];
+
+	for (u32 i = 0; i < DEVICE_MAX_CANOPEN_OBJECTS; i++)
+	{
+		snprintf(entry, sizeof(entry), " (canopen-object %u 0 0 \"00\")", i + 1);
+		strcat(text, entry);
+	}
+	snprintf(entry, sizeof(entry), " (canopen-object %u 0 0 \"00\"))", DEVICE_MAX_CANOPEN_OBJECTS + 1);
+	strcat(text, entry);
+
+	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "too many CANopen objects") != NULL);
+}
+
 TEST(ConfigBindAcceptsValidIpv4)
 {
 	config_t	config = { 0 };
