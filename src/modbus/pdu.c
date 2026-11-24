@@ -1,6 +1,7 @@
 #include "modbus/pdu.h"
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
+#include "modbus/mei_canopen.h"
 #include "vlib/macros.h"
 #include <string.h>
 
@@ -677,9 +678,10 @@ report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return 4 + additional_len;
 }
 
-enum mei_type
+enum canopen_command_address
 {
-	MEI_TYPE_READ_DEVICE_ID = 0x0E,
+	CANOPEN_COMMAND_NODE  = 0x7F,
+	CANOPEN_COMMAND_INDEX = 0xFFFF,
 };
 
 enum read_device_id_code
@@ -875,6 +877,84 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return offset;
 }
 
+static u32
+canopen_service(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	const device_canopen_object_t* obj = NULL;
+	canopen_request_t	r = { 0 };
+	u32			resp_len = 0;
+	u32			off      = 0;
+	u32			end      = 0;
+
+	if (!canopen_parse_header(req, req_len, &r))
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+	if (r.control & CANOPEN_CTRL_UNSUPPORTED)
+		return canopen_unsupported_option_exception(
+			resp, (u8)(r.control & (CANOPEN_CTRL_NETWORK_ID | CANOPEN_CTRL_ACCESS)));
+	if (r.reserved != 0)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+	if (!canopen_parse_request(req, req_len, &r))
+		return canopen_service_exception(resp, CANOPEN_ERR_INVALID_COUNT);
+
+	/* Gateway/command addressing needs services this simulator does not have. */
+	if (r.node == CANOPEN_COMMAND_NODE && r.index == CANOPEN_COMMAND_INDEX)
+		return canopen_service_exception(resp, CANOPEN_ERR_SERVICE_NOT_SUPPORTED);
+	if (r.count == 0)
+		return canopen_service_exception(resp, CANOPEN_ERR_INVALID_COUNT);
+	if (!r.write && 12 + (r.has_network_id ? 1u : 0u) + r.count > MODBUS_MAX_PDU)
+		return canopen_service_exception(resp, CANOPEN_ERR_RESPONSE_TOO_LARGE);
+
+	obj = device_find_canopen_object(dev, r.node, r.index, r.subindex);
+	if (!obj)
+		return canopen_service_exception(resp, CANOPEN_ERR_OBJECT_NOT_FOUND);
+
+	end = (u32)r.start + r.count;
+	if (end > obj->length)
+		return canopen_service_exception(resp, CANOPEN_ERR_LENGTH_TOO_HIGH);
+
+	resp_len = 12 + (r.has_network_id ? 1 : 0);
+	if (r.write)
+	{
+		if (!device_canopen_write(dev, r.node, r.index, r.subindex,
+			     r.start, r.count, req + r.data_offset))
+			return canopen_service_exception(resp, CANOPEN_ERR_LENGTH_TOO_HIGH);
+	}
+	else
+	{
+		if (!device_canopen_read(dev, r.node, r.index, r.subindex,
+			    r.start, r.count, resp + resp_len))
+			return canopen_service_exception(resp, CANOPEN_ERR_LENGTH_TOO_HIGH);
+		resp_len += r.count;
+	}
+
+	resp[off++] = req[0];
+	resp[off++] = MEI_TYPE_CANOPEN;
+	resp[off++] = r.control;
+	resp[off++] = 0;
+	if (r.has_network_id)
+		resp[off++] = r.network_id;
+	resp[off++] = r.node;
+	put_be16(resp + off, r.index);
+	off += 2;
+	resp[off++] = r.subindex;
+	put_be16(resp + off, r.start);
+	off += 2;
+	put_be16(resp + off, r.write ? 0 : r.count);
+	return resp_len;
+}
+
+static u32
+encapsulated_interface_transport(device_t* dev, const u8* req, u32 req_len, u8* resp)
+{
+	if (req_len < 2)
+		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
+	if (req[1] == MEI_TYPE_READ_DEVICE_ID)
+		return read_device_identification(dev, req, req_len, resp);
+	if (req[1] == MEI_TYPE_CANOPEN)
+		return canopen_service(dev, req, req_len, resp);
+	return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
+}
+
 /* --- dispatch --- */
 
 static u32
@@ -929,7 +1009,7 @@ static const pdu_entry_t PDU_HANDLERS[] = {
 	{ FC_WRITE_FILE_RECORD,              write_file_record              },
 	{ FC_MASK_WRITE_REGISTER,            mask_write_register            },
 	{ FC_READ_FIFO_QUEUE,                read_fifo_queue                },
-	{ FC_ENCAPSULATED_INTERFACE_TRANSPORT, read_device_identification   },
+	{ FC_ENCAPSULATED_INTERFACE_TRANSPORT, encapsulated_interface_transport },
 };
 
 static pdu_handler_t

@@ -36,6 +36,11 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev->fifos)
 		return NULL;
 
+	dev->canopen_objects = ARENA_PUSH_ARRAY(arena, device_canopen_object_t,
+						DEVICE_MAX_CANOPEN_OBJECTS);
+	if (!dev->canopen_objects)
+		return NULL;
+
 	dev->arena            = arena;
 	dev->unit_id          = 1;
 	dev->exception_status = 0;
@@ -401,5 +406,77 @@ device_read_fifo(const device_t* dev, u16 address, u16* count, u16* out)
 	*count = fifo->count;
 	for (u32 i = 0; i < fifo->count; i++)
 		out[i] = fifo->values[i];
+	return true;
+}
+
+static device_canopen_object_t*
+find_canopen_object(const device_t* dev, u8 node_id, u16 index, u8 subindex)
+{
+	for (u32 i = 0; i < dev->canopen_object_count; i++)
+	{
+		device_canopen_object_t* obj = &dev->canopen_objects[i];
+
+		if (obj->node_id == node_id && obj->index == index && obj->subindex == subindex)
+			return obj;
+	}
+	return NULL;
+}
+
+const char*
+device_add_canopen_object(device_t* dev, u8 node_id, u16 index, u8 subindex,
+			  u16 length, const u8* data)
+{
+	device_canopen_object_t* obj = NULL;
+
+	if (node_id < 1 || node_id > 127)
+		return "CANopen node id must be between 1 and 127";
+
+	if (length == 0 || length > DEVICE_MAX_CANOPEN_OBJECT_BYTES)
+		return "CANopen object length must be between 1 and 238 bytes";
+
+	if (find_canopen_object(dev, node_id, index, subindex))
+		return "CANopen object is already configured for this node, index and subindex";
+
+	if (dev->canopen_object_count >= DEVICE_MAX_CANOPEN_OBJECTS)
+		return "too many CANopen objects on one device (max 64)";
+
+	obj = &dev->canopen_objects[dev->canopen_object_count++];
+	obj->node_id  = node_id;
+	obj->index    = index;
+	obj->subindex = subindex;
+	obj->length   = length;
+	memcpy(obj->data, data, length);
+	return NULL;
+}
+
+const device_canopen_object_t*
+device_find_canopen_object(const device_t* dev, u8 node_id, u16 index, u8 subindex)
+{
+	return find_canopen_object(dev, node_id, index, subindex);
+}
+
+bool
+device_canopen_read(const device_t* dev, u8 node_id, u16 index, u8 subindex,
+		    u16 offset, u16 count, u8* out)
+{
+	const device_canopen_object_t* obj = device_find_canopen_object(dev, node_id, index, subindex);
+
+	if (!obj || (u32)offset + count > obj->length)
+		return false;
+
+	memcpy(out, obj->data + offset, count);
+	return true;
+}
+
+bool
+device_canopen_write(device_t* dev, u8 node_id, u16 index, u8 subindex,
+		     u16 offset, u16 count, const u8* in)
+{
+	device_canopen_object_t* obj = find_canopen_object(dev, node_id, index, subindex);
+
+	if (!obj || (u32)offset + count > obj->length)
+		return false;
+
+	memcpy(obj->data + offset, in, count);
 	return true;
 }

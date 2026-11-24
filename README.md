@@ -86,7 +86,7 @@ when checking a no-TLS binary.
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP (optionally TLS-wrapped), Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
+| Protocol | Modbus TCP (optionally TLS-wrapped), Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
 | Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |

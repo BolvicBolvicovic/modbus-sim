@@ -1,5 +1,6 @@
 #include "modbus/rtu.h"
 #include "modbus/pdu.h"
+#include "modbus/mei_canopen.h"
 
 /* Reflected CRC-16/Modbus table (polynomial 0xA001). */
 static const u16 crc16_table[256] = {
@@ -141,11 +142,11 @@ modbus_rtu_request_len(const u8* buf, u32 buf_len, u32* frame_len)
 	case FC_ENCAPSULATED_INTERFACE_TRANSPORT:
 		if (buf_len < 3)
 			return false;
-		/* MEI 0x0D (CANopen) and 0x0E (device ID) both have a fixed 4-byte
-		 * request PDU; 0x0D is framed here but rejected by PDU dispatch. */
-		if (buf[2] == 0x0D || buf[2] == 0x0E)
+		/* MEI 0x0E (device ID) is a fixed 4-byte PDU; MEI 0x0D (CANopen)
+		 * carries a variable-length address/data field. */
+		if (buf[2] == MEI_TYPE_READ_DEVICE_ID)
 			pdu_len = 4;
-		else
+		else if (!canopen_expected_pdu_len(buf + 1, buf_len - 1, &pdu_len))
 			return false;
 		break;
 	default:

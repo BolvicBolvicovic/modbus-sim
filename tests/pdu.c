@@ -2,6 +2,7 @@
 #include "modbus/pdu.h"
 #include "modbus/mbap.h"
 #include "modbus/bytes.h"
+#include "modbus/mei_canopen.h"
 #include "vlib/macros.h"
 #include <string.h>
 
@@ -1744,17 +1745,198 @@ add_extended_id(device_t* dev, u8 id, const char* value)
 	strcpy(dev->extended_id[i].value, value);
 }
 
-TEST(ReadDeviceIdentificationMei13ReturnsIllegalFunction)
+static u32
+canopen_req(u8* req, u8 control, u8 network_id, u8 node, u16 index, u8 sub,
+	    u16 start, u16 count, const u8* data)
 {
+	u32 off = 0;
+
+	req[off++] = FC_ENCAPSULATED_INTERFACE_TRANSPORT;
+	req[off++] = MEI_TYPE_CANOPEN;
+	req[off++] = control;
+	req[off++] = 0;
+	if (control & CANOPEN_CTRL_NETWORK_ID)
+		req[off++] = network_id;
+	if (control & CANOPEN_CTRL_ENCODED_DATA)
+		req[off++] = 0x00; /* Unsigned8: still rejected with AE */
+	req[off++] = node;
+	put_be16(req + off, index);
+	off += 2;
+	req[off++] = sub;
+	put_be16(req + off, start);
+	off += 2;
+	put_be16(req + off, count);
+	off += 2;
+	if (data)
+	{
+		memcpy(req + off, data, count);
+		off += count;
+	}
+	return off;
+}
+
+static bool
+canopen_ae(const u8* resp, u32 len, u8 supported)
+{
+	return len == 7 &&
+	       resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80) &&
+	       resp[1] == 0xFF && resp[2] == 0x00 && resp[3] == 0x03 &&
+	       resp[4] == MEI_TYPE_CANOPEN && resp[5] == 0xAE &&
+	       resp[6] == supported;
+}
+
+static bool
+canopen_ce(const u8* resp, u32 len, u32 code)
+{
+	return len == 10 &&
+	       resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80) &&
+	       resp[1] == 0xFF && resp[2] == 0x00 && resp[3] == 0x06 &&
+	       resp[4] == MEI_TYPE_CANOPEN && resp[5] == 0xCE &&
+	       resp[6] == (u8)(code) && resp[7] == (u8)(code >> 8) &&
+	       resp[8] == (u8)(code >> 16) && resp[9] == (u8)(code >> 24);
+}
+
+TEST(CanopenUpload)
+{
+	static const u8 obj[] = { 0x11, 0x22, 0x33, 0x44 };
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+	u8		req[MODBUS_MAX_PDU];
 	u8		resp[MODBUS_MAX_PDU];
-	u32		len = run(dev, req, sizeof(req), resp);
+	u8		want[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, MEI_TYPE_CANOPEN,
+			   0x00, 0x00, 0x05, 0x60, 0x41, 0x00,
+			   0x00, 0x00, 0x00, 0x02, 0x11, 0x22 };
+	u32		len = 0;
 
-	ASSERT_EQ(len == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(obj), obj) == NULL);
+	len = canopen_req(req, 0, 0, 5, 0x6041, 0, 0, 2, NULL);
+	ASSERT_EQ(len == 12);
+	ASSERT_EQ(run(dev, req, len, resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}
+
+TEST(CanopenDownloadAndReadback)
+{
+	static const u8 obj[]  = { 0x11, 0x22, 0x33, 0x44 };
+	static const u8 data[] = { 0xAA, 0xBB, 0xCC };
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[MODBUS_MAX_PDU];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		want[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, MEI_TYPE_CANOPEN,
+			   0x00, 0x00, 0x05, 0x60, 0x41, 0x00,
+			   0x00, 0x01, 0x00, 0x03, 0xAA, 0xBB, 0xCC };
+	u32		len = 0;
+
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(obj), obj) == NULL);
+	len = canopen_req(req, CANOPEN_CTRL_ACCESS, 0, 5, 0x6041, 0, 1, 3, data);
+	ASSERT_EQ(len == 15);
+	ASSERT_EQ(run(dev, req, len, resp) == 12);
+	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == MEI_TYPE_CANOPEN);
+	ASSERT_EQ(resp[2] == CANOPEN_CTRL_ACCESS && resp[3] == 0);
+	ASSERT_EQ(resp[10] == 0x00 && resp[11] == 0x00); /* count echoed as zero */
+
+	len = canopen_req(req, 0, 0, 5, 0x6041, 0, 1, 3, NULL);
+	ASSERT_EQ(run(dev, req, len, resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}
+
+TEST(CanopenErrors)
+{
+	static const u8 obj[] = { 0x11, 0x22, 0x33, 0x44 };
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[MODBUS_MAX_PDU];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(obj), obj) == NULL);
+
+	len = canopen_req(req, 0, 0, 6, 0x6041, 0, 0, 1, NULL);
+	ASSERT_EQ(canopen_ce(resp, run(dev, req, len, resp), CANOPEN_ERR_OBJECT_NOT_FOUND));
+
+	len = canopen_req(req, 0, 0, 5, 0x6041, 0, 3, 2, NULL);
+	ASSERT_EQ(canopen_ce(resp, run(dev, req, len, resp), CANOPEN_ERR_LENGTH_TOO_HIGH));
+
+	len = canopen_req(req, 0, 0, 5, 0x6041, 0, 0, 0, NULL);
+	ASSERT_EQ(canopen_ce(resp, run(dev, req, len, resp), CANOPEN_ERR_INVALID_COUNT));
+
+	len = canopen_req(req, 0, 0, 5, 0x6041, 0, 0, 0xF2, NULL);
+	ASSERT_EQ(canopen_ce(resp, run(dev, req, len, resp), CANOPEN_ERR_RESPONSE_TOO_LARGE));
+
+	len = canopen_req(req, CANOPEN_CTRL_ACCESS, 0, 5, 0x6041, 0, 0, 2, obj);
+	req[len - 1] = 0; /* one data byte short */
+	ASSERT_EQ(canopen_ce(resp, run(dev, req, len - 1, resp), CANOPEN_ERR_INVALID_COUNT));
+
+	len = canopen_req(req, 0, 0, 0x7F, 0xFFFF, 0, 0, 1, NULL);
+	ASSERT_EQ(canopen_ce(resp, run(dev, req, len, resp), CANOPEN_ERR_SERVICE_NOT_SUPPORTED));
+
+	len = canopen_req(req, 0, 0, 5, 0x6041, 0, 0, 1, NULL);
+	req[3] = 0x01;
+	ASSERT_EQ(run(dev, req, len, resp) == 2);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+
+	ASSERT_EQ(run(dev, req, 2, resp) == 2);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(CanopenUnsupportedOptions)
+{
+	static const u8 obj[] = { 0x11, 0x22, 0x33, 0x44 };
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[MODBUS_MAX_PDU];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(obj), obj) == NULL);
+
+	len = canopen_req(req, CANOPEN_CTRL_ENCODED_DATA, 0, 5, 0x6041, 0, 0, 2, NULL);
+	ASSERT_EQ(canopen_ae(resp, run(dev, req, len, resp), 0x00));
+
+	len = canopen_req(req, CANOPEN_CTRL_ACCESS | CANOPEN_CTRL_NETWORK_ID |
+			  CANOPEN_CTRL_ENCODED_DATA, 9, 5, 0x6041, 0, 0, 2, obj);
+	ASSERT_EQ(canopen_ae(resp, run(dev, req, len, resp),
+			    CANOPEN_CTRL_ACCESS | CANOPEN_CTRL_NETWORK_ID));
+
+	/* Extend, counter and a second control byte are rejected too, but the
+	 * shared framing parser still accounts for their bytes. */
+	len = 0;
+	req[len++] = FC_ENCAPSULATED_INTERFACE_TRANSPORT;
+	req[len++] = MEI_TYPE_CANOPEN;
+	req[len++] = CANOPEN_CTRL_EXTEND | CANOPEN_CTRL_COUNTER | CANOPEN_CTRL_EXTENDED_CTRL;
+	req[len++] = 0x00; /* second control byte */
+	req[len++] = 0x00; /* reserved */
+	req[len++] = 0x00; /* counter */
+	req[len++] = 5;
+	put_be16(req + len, 0x6041); len += 2;
+	req[len++] = 0;
+	put_be16(req + len, 0); len += 2;
+	put_be16(req + len, 1); len += 2;
+	ASSERT_EQ(canopen_ae(resp, run(dev, req, len, resp), 0x00));
+	arena_release(arena);
+}
+
+TEST(CanopenNetworkIdEcho)
+{
+	static const u8 obj[] = { 0x11, 0x22, 0x33, 0x44 };
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	u8		req[MODBUS_MAX_PDU];
+	u8		resp[MODBUS_MAX_PDU];
+	u8		want[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, MEI_TYPE_CANOPEN,
+			   CANOPEN_CTRL_NETWORK_ID, 0x00, 0x09, 0x05, 0x60, 0x41,
+			   0x00, 0x00, 0x00, 0x00, 0x02, 0x11, 0x22 };
+	u32		len = 0;
+
+	ASSERT_EQ(device_add_canopen_object(dev, 5, 0x6041, 0, sizeof(obj), obj) == NULL);
+	len = canopen_req(req, CANOPEN_CTRL_NETWORK_ID, 9, 5, 0x6041, 0, 0, 2, NULL);
+	ASSERT_EQ(len == 13);
+	ASSERT_EQ(run(dev, req, len, resp) == sizeof(want));
+	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
 	arena_release(arena);
 }
 
@@ -2043,11 +2225,11 @@ TEST(ReadDeviceIdentificationErrors)
 	/* MEI type is checked before request length so unsupported MEI always gets 01. */
 	run(dev, bad_mei_short, sizeof(bad_mei_short), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
-	/* MEI 0x0D is CANopen, not device identification, even with a bad length. */
+	/* MEI 0x0D is CANopen: a truncated header is an illegal data value. */
 	run(dev, mei13_bad_len, sizeof(mei13_bad_len), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, mei13_bad_code, sizeof(mei13_bad_code), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_code, sizeof(bad_code), resp);
 	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	run(dev, bad_len, sizeof(bad_len), resp);

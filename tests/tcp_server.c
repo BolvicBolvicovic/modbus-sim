@@ -2609,7 +2609,8 @@ TEST(NetReadDeviceIdentificationMeiTypes)
 	u32	 len = 0;
 	bool	 ok  = server_start("",
 				    "(device (unit-id 1) (vendor-name \"Acme\") (product-code \"P\") "
-				    "(major-minor-revision \"1.2\") (product-name \"Sim\"))");
+				    "(major-minor-revision \"1.2\") (product-name \"Sim\")"
+				    "        (canopen-object 5 24641 0 \"11223344\"))");
 
 	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
@@ -2638,11 +2639,13 @@ TEST(NetReadDeviceIdentificationMeiTypes)
 	}
 	if (ok)
 	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00 };
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00,
+			     0x05, 0x60, 0x41, 0x00, 0x00, 0x00, 0x00, 0x02 };
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT,
-				  EXC_ILLEGAL_FUNCTION);
+		     len == 14 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
+		     resp[1] == 0x0D && resp[10] == 0x00 && resp[11] == 0x02 &&
+		     resp[12] == 0x11 && resp[13] == 0x22;
 	}
 
 	client_close(&client);
@@ -2658,7 +2661,8 @@ TEST(NetReadDeviceIdentificationExtendedObjects)
 	bool	 ok  = server_start("",
 				    "(device (unit-id 1) (vendor-name \"Acme\")"
 				    "        (device-id-object 160 \"Second\")"
-				    "        (device-id-object 128 \"First\"))");
+				    "        (device-id-object 128 \"First\")"
+				    "        (canopen-object 5 24641 0 \"11223344\"))");
 
 	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
@@ -2673,11 +2677,13 @@ TEST(NetReadDeviceIdentificationExtendedObjects)
 	}
 	if (ok)
 	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x03, 0x00 };
+		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00,
+			     0x06, 0x60, 0x41, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT,
-				  EXC_ILLEGAL_FUNCTION);
+		     len == 10 && resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80) &&
+		     resp[1] == 0xFF && resp[3] == 0x06 && resp[4] == 0x0D &&
+		     resp[5] == 0xCE && resp[6] == 0x0B && resp[9] == 0xFF;
 	}
 	if (ok)
 	{

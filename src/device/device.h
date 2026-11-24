@@ -70,6 +70,8 @@ struct space_t
 #define DEVICE_MAX_FIFOS		16
 #define DEVICE_MAX_FIFO_VALUES		31
 #define DEVICE_MAX_COM_EVENTS		64
+#define DEVICE_MAX_CANOPEN_OBJECTS	64
+#define DEVICE_MAX_CANOPEN_OBJECT_BYTES	238
 
 /* Name: file_segment_t
  * Description: one contiguous block of 16-bit register values in a file,
@@ -104,6 +106,19 @@ struct device_fifo_t
 	u16	address;	/* FIFO pointer address */
 	u16	count;		/* 0..DEVICE_MAX_FIFO_VALUES */
 	u16*	values;		/* count entries, arena-backed */
+};
+
+/* Name: device_canopen_object_t
+ * Description: one CANopen object served by FC 43 MEI 0x0D SDO transfers.
+ * */
+typedef struct device_canopen_object_t device_canopen_object_t;
+struct device_canopen_object_t
+{
+	u8	node_id;
+	u16	index;
+	u8	subindex;
+	u16	length;
+	u8	data[DEVICE_MAX_CANOPEN_OBJECT_BYTES];
 };
 
 /* FC 08 diagnostic register bits. The simulator has no UART character stream,
@@ -161,6 +176,8 @@ struct device_t
 	device_file_t*	files;			/* DEVICE_MAX_FILES entries */
 	u32		fifo_count;
 	device_fifo_t*	fifos;			/* DEVICE_MAX_FIFOS entries */
+	u32		canopen_object_count;
+	device_canopen_object_t* canopen_objects; /* DEVICE_MAX_CANOPEN_OBJECTS entries */
 	char		device_id[DEVICE_ID_STANDARD_COUNT][DEVICE_ID_OBJECT_MAX + 1];
 	struct
 	{
@@ -217,6 +234,24 @@ const char*	device_add_fifo(device_t* dev, u16 address, u16 count, const u16* va
  * `*count` (0..DEVICE_MAX_FIFO_VALUES) and copies values into `out`.
  * Fails if the FIFO is not defined. */
 bool		device_read_fifo(const device_t* dev, u16 address, u16* count, u16* out);
+
+/* Adds a CANopen object. Returns NULL on success, or a static error message.
+ * Node ids are 1..127, length is 1..DEVICE_MAX_CANOPEN_OBJECT_BYTES, and each
+ * (node, index, subindex) triple may be configured only once per device. */
+const char*	device_add_canopen_object(device_t* dev, u8 node_id, u16 index, u8 subindex,
+					  u16 length, const u8* data);
+
+/* Finds a configured CANopen object, or NULL if there is none. */
+const device_canopen_object_t* device_find_canopen_object(const device_t* dev, u8 node_id,
+							   u16 index, u8 subindex);
+
+/* Reads/writes `count` bytes at `offset` in a configured object. Fails if the
+ * object is absent or the range is outside its stored data. All configured
+ * objects are writable. */
+bool		device_canopen_read(const device_t* dev, u8 node_id, u16 index, u8 subindex,
+				    u16 offset, u16 count, u8* out);
+bool		device_canopen_write(device_t* dev, u8 node_id, u16 index, u8 subindex,
+				     u16 offset, u16 count, const u8* in);
 
 /* True for SPACE_COIL and SPACE_DISCRETE. */
 bool		space_is_bit(space_kind_t space);
