@@ -3,207 +3,59 @@
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "tests/tests_utils/test_support.h"
 #include "util/clock.h"
-#include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 /* Integration tests for RTU-over-TCP. Each test starts a real server on a dynamic
  * loopback port and the fixture guarantees cleanup on failure (PRE_TEST/atexit),
- * so a failing ASSERT cannot leave an orphan server or temp config behind. */
+ * so a failing ASSERT cannot leave an orphan server or temp config behind.
+ * Readiness comes from stderr log polling: no probe client consumes a slot. */
 
-typedef struct fixture_t fixture_t;
-struct fixture_t
-{
-	pid_t	pid;
-	u16	port;
-	char	cfg[80];
+static ts_server_t g_fx = {
+	.pid		= -1,
+	.master_fd	= -1,
+	.probe_family	= AF_INET,
+	.flags		= TS_CAPTURE_STDERR | TS_DEATH_SIGNAL | TS_CLEAN_EXIT,
+	.label		= "rtu-tcp test",
+	.ready_needle	= "listening on"
 };
-
-static fixture_t g_fx = { .pid = -1 };
 
 static bool
 send_all_fd(int fd, const u8* buf, u32 len)
 {
-	while (len > 0)
-	{
-		ssize_t sent = send(fd, buf, len, MSG_NOSIGNAL);
-		if (sent < 0 && errno == EINTR)
-			continue;
-		if (sent <= 0)
-			return false;
-		buf += sent;
-		len -= (u32)sent;
-	}
-	return true;
-}
-
-static bool
-recv_exact_fd(int fd, u8* buf, u32 len, u32 timeout_ms)
-{
-	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
-			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	while (len > 0)
-	{
-		ssize_t got = recv(fd, buf, len, 0);
-		if (got < 0 && errno == EINTR)
-			continue;
-		if (got <= 0)
-			return false;
-		buf += got;
-		len -= (u32)got;
-	}
-	return true;
+	return ts_send_socket(fd, buf, len);
 }
 
 static bool
 recv_rtu_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 {
-	u8 frame[MODBUS_RTU_MAX_FRAME];
-	u32 got = 0;
-
-	while (got < MODBUS_RTU_MAX_FRAME)
-	{
-		const u8* p = NULL;
-		u32 l = 0;
-		if (!recv_exact_fd(fd, frame + got, 1, timeout_ms))
-		return false;
-		got++;
-		if (got >= 4 && modbus_rtu_decode(frame, got, addr, &p, &l))
-		{
-			memcpy(pdu, p, l);
-			*pdu_len = l;
-			return true;
-		}
-	}
-	return false;
+	return ts_rtu_recv(fd, addr, pdu, pdu_len, timeout_ms, true);
 }
 
 static bool
 wait_for_eof_fd(int fd, u32 timeout_ms)
 {
-	u8 b;
-	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
-			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	for (;;)
-	{
-		ssize_t got = recv(fd, &b, 1, 0);
-		if (got == 0)
-			return true;
-		if (got < 0 && errno == EINTR)
-			continue;
-		return false;
-	}
-}
-
-static u16
-find_free_port(void)
-{
-	struct sockaddr_in addr = { 0 };
-	socklen_t len = sizeof(addr);
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	u16 port = 0;
-	if (fd < 0)
-		return 0;
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 &&
-	    getsockname(fd, (struct sockaddr*)&addr, &len) == 0)
-		port = ntohs(addr.sin_port);
-	close(fd);
-	return port;
-}
-
-static void
-server_stop(void)
-{
-	int status = 0;
-	pid_t pid = g_fx.pid;
-	bool ok = true;
-
-	g_fx.pid = -1;
-	if (pid > 0)
-	{
-		kill(pid, SIGTERM);
-		for (u32 i = 0; i < 200; i++)
-		{
-			pid_t done = waitpid(pid, &status, WNOHANG);
-			if (done == pid)
-				goto reaped;
-			if (done < 0 && errno == ECHILD)
-			{
-				ok = false;
-				break;
-			}
-			usleep(10000);
-		}
-		kill(pid, SIGKILL);
-		ok = waitpid(pid, &status, 0) == pid;
-reaped:
-		if (ok)
-			ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-	}
-	if (g_fx.cfg[0])
-	{
-		unlink(g_fx.cfg);
-		g_fx.cfg[0] = '\0';
-	}
-	g_fx.port = 0;
-	ASSERT_EQ(ok);
-}
-
-static void
-server_cleanup(void)
-{
-	pid_t pid = g_fx.pid;
-	g_fx.pid = -1;
-	if (pid > 0)
-	{
-		kill(pid, SIGTERM);
-		for (u32 i = 0; i < 200; i++)
-		{
-			int st = 0;
-			pid_t done = waitpid(pid, &st, WNOHANG);
-			if (done == pid || (done < 0 && errno == ECHILD))
-				goto done;
-			usleep(10000);
-		}
-		kill(pid, SIGKILL);
-		waitpid(pid, NULL, 0);
-	}
-done:
-	if (g_fx.cfg[0])
-	{
-		unlink(g_fx.cfg);
-		g_fx.cfg[0] = '\0';
-	}
-	g_fx.port = 0;
+	return ts_wait_eof(fd, timeout_ms);
 }
 
 static void
 write_cfg_with_bind(const char* bind, const char* server_options, const char* devices)
 {
-	int cfd;
-	FILE* f;
-	snprintf(g_fx.cfg, sizeof(g_fx.cfg), "/tmp/modbus-sim-rtutcp-XXXXXX");
-	cfd = mkstemp(g_fx.cfg);
-	ASSERT(cfd >= 0);
-	f = fdopen(cfd, "w");
-	ASSERT(f != NULL);
-	fprintf(f, "(server (mode rtu-tcp) (port %u) (bind \"%s\") %s)\n%s\n",
-		g_fx.port, bind ? bind : "127.0.0.1", server_options ? server_options : "", devices);
-	fclose(f);
+	char config[2048];
+	int  n;
+
+	n = snprintf(config, sizeof(config),
+		     "(server (mode rtu-tcp) (port %u) (bind \"%s\") %s)\n%s\n",
+		     g_fx.probe_port, bind ? bind : "127.0.0.1",
+		     server_options ? server_options : "", devices);
+	ASSERT(n > 0 && (size_t)n < sizeof(config));
+	ASSERT_EQ(ts_write_config(&g_fx, "/tmp/modbus-sim-rtutcp-XXXXXX", config));
 }
 
 static void
@@ -212,120 +64,61 @@ write_cfg(const char* server_options, const char* devices)
 	write_cfg_with_bind("127.0.0.1", server_options, devices);
 }
 
-static pid_t
-start_rtu_tcp(void)
+static void
+server_start_with_bind(const char* bind, int family, const char* server_options,
+		       const char* devices)
 {
 	const char* bin = getenv("MODBUS_SIM_BIN");
-	char* argv[4];
-	u32 argc = 0;
-	pid_t pid;
+	char*       argv[3];
 
-	argv[argc++] = (char*)(bin ? bin : "./modbus-sim");
-	argv[argc++] = g_fx.cfg;
-	argv[argc] = NULL;
+	g_fx.probe_port   = ts_free_port();
+	g_fx.probe_family = family;
+	ASSERT(g_fx.probe_port != 0);
+	write_cfg_with_bind(bind, server_options, devices);
 
-	pid = fork();
-	if (pid == 0)
-	{
-		prctl(PR_SET_PDEATHSIG, SIGTERM);
-		if (getppid() == 1)
-			_exit(0);
-		execv(argv[0], argv);
-		_exit(127);
-	}
-	return pid;
+	argv[0] = (char*)(bin ? bin : "./modbus-sim");
+	argv[1] = g_fx.config;
+	argv[2] = NULL;
+	ASSERT_EQ(ts_server_start(&g_fx, argv));
 }
 
 static void
 server_start(const char* server_options, const char* devices)
 {
-	g_fx.port = find_free_port();
-	ASSERT(g_fx.port != 0);
-	write_cfg(server_options, devices);
-	g_fx.pid = start_rtu_tcp();
-	ASSERT(g_fx.pid > 0);
-}
-
-static bool
-ipv6_loopback_available(void)
-{
-	struct sockaddr_in6 addr = { 0 };
-	int fd = socket(AF_INET6, SOCK_STREAM, 0);
-
-	if (fd < 0)
-		return false;
-	addr.sin6_family = AF_INET6;
-	addr.sin6_port = 0;
-	if (inet_pton(AF_INET6, "::1", &addr.sin6_addr) != 1 ||
-	    bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
-	{
-		close(fd);
-		return false;
-	}
-	close(fd);
-	return true;
+	server_start_with_bind("127.0.0.1", AF_INET, server_options, devices);
 }
 
 static void
 server_start_v6(const char* server_options, const char* devices)
 {
-	g_fx.port = find_free_port();
-	ASSERT(g_fx.port != 0);
-	write_cfg_with_bind("::1", server_options, devices);
-	g_fx.pid = start_rtu_tcp();
-	ASSERT(g_fx.pid > 0);
+	server_start_with_bind("::1", AF_INET6, server_options, devices);
 }
 
 static int
 connect_port(u32 tries, u32 timeout_ms)
 {
-	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
-			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	for (u32 i = 0; i < tries; i++)
-	{
-		int fd = socket(AF_INET, SOCK_STREAM, 0);
-		struct sockaddr_in a = { 0 };
-		if (fd < 0)
-			return -1;
-		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-		a.sin_family = AF_INET;
-		a.sin_port = htons(g_fx.port);
-		inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-		if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0)
-			return fd;
-		close(fd);
-		usleep(20000);
-	}
-	return -1;
+	(void)tries;	/* readiness is established by stderr polling at startup */
+	return ts_connect_loopback(g_fx.probe_port, AF_INET, timeout_ms);
 }
 
 static int
 connect_port_v6(u32 tries, u32 timeout_ms)
 {
-	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
-			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	for (u32 i = 0; i < tries; i++)
-	{
-		int fd = socket(AF_INET6, SOCK_STREAM, 0);
-		struct sockaddr_in6 a = { 0 };
-		if (fd < 0)
-			return -1;
-		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-		a.sin6_family = AF_INET6;
-		a.sin6_port = htons(g_fx.port);
-		if (inet_pton(AF_INET6, "::1", &a.sin6_addr) != 1)
-		{
-			close(fd);
-			return -1;
-		}
-		if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0)
-			return fd;
-		close(fd);
-		usleep(20000);
-	}
-	return -1;
+	(void)tries;
+	return ts_connect_loopback(g_fx.probe_port, AF_INET6, timeout_ms);
+}
+
+static void
+server_stop(void)
+{
+	ASSERT_EQ(ts_server_stop(&g_fx));
+	g_fx.probe_port = 0;
+}
+
+static void
+server_cleanup(void)
+{
+	ts_server_cleanup(&g_fx);
 }
 
 SETUP_SUITE()
@@ -932,7 +725,7 @@ TEST(RtuOverTcpIpv6LoopbackServesRequest)
 	u32 plen = 0, flen;
 	int fd;
 
-	if (!ipv6_loopback_available())
+	if (!ts_ipv6_loopback_available())
 	{
 		fprintf(stderr, "SKIP: IPv6 loopback unavailable\n");
 		return;

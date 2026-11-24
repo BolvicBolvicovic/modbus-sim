@@ -34,7 +34,7 @@ MAIN        = $(SRC_DIR)/main.c
 OBJS        = $(SRCS:.c=$(OBJEXT)) $(MAIN:.c=$(OBJEXT))
 
 TEST_MAIN   = vlib/vtest.c
-TEST_SRCS   = $(wildcard tests/*.c)
+TEST_SRCS   = $(wildcard tests/*.c tests/tests_utils/*.c)
 TEST_OBJS   = $(SRCS:.c=$(OBJEXT)) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OBJEXT))
 
 # s7 is third-party code: built with its own relaxed flags, without sanitizers.

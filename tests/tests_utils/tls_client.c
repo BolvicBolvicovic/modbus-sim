@@ -1,4 +1,4 @@
-#include "tests/tls_client.h"
+#include "tests/tests_utils/tls_client.h"
 #include "util/clock.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -123,6 +123,8 @@ tls_client_open_timeout(u16 port, const char* cert, const char* key, const char*
 	if (connect(out->fd, (struct sockaddr*)&addr, sizeof(addr)) != 0)
 	{
 		save_error();
+		close(out->fd);
+		out->fd = -1;
 		goto done;
 	}
 

@@ -1,33 +1,26 @@
 /* Network integration tests: run the real server binary and talk to it over loopback.
  * Each test starts a server on a private port and stops it before asserting, so a failed
- * assertion cannot leave a child behind. PRE_TEST/atexit clean up leftovers from failures. */
+ * assertion cannot leave a child behind. PRE_TEST/atexit clean up leftovers from failures.
+ * Readiness comes from stderr log polling, so capacity tests never need a probe client. */
 #include "vtest.h"
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
-#include "tests/tls_client.h"
+#include "tests/tests_utils/test_support.h"
+#include "tests/tests_utils/tls_client.h"
 #include "util/clock.h"
-#include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <poll.h>
-#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
 #include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #define NET_RECV_TIMEOUT_MS	1000
 #define NET_SHORT_TIMEOUT_MS	100
-#define NET_START_ATTEMPTS	300
-#define NET_START_TIMEOUT_MS	5000
 #define NET_MAX_ATTEMPTS	24
 
 typedef struct client_t client_t;
@@ -36,127 +29,36 @@ struct client_t
 	int	fd;
 };
 
-typedef struct fixture_t fixture_t;
-struct fixture_t
-{
-	pid_t	pid;
-	u16	port;
-	char	config[80];
+static ts_server_t g_server = {
+	.pid		= -1,
+	.master_fd	= -1,
+	.probe_family	= AF_INET,
+	.flags		= TS_CAPTURE_STDERR | TS_NULL_STDOUT | TS_CLEAN_EXIT,
+	.label		= "net test",
+	.ready_needle	= "listening on"
 };
-
-static fixture_t	g_server = { .pid = -1 };
-static u32		g_server_nofile = 0;
-static char		g_server_stderr[80];
-
-static bool
-server_verbose(void)
-{
-	const char* v = getenv("MODBUS_SIM_TEST_VERBOSE");
-
-	return v && v[0] && strcmp(v, "0") != 0;
-}
-
-static void
-server_dump_stderr(void)
-{
-	FILE*	file;
-	char	line[512];
-
-	if (!g_server_stderr[0])
-		return;
-
-	file = fopen(g_server_stderr, "r");
-	if (!file)
-		return;
-
-	fprintf(stderr, "--- server stderr (%s) ---\n", g_server_stderr);
-	while (fgets(line, sizeof(line), file))
-		fputs(line, stderr);
-	fprintf(stderr, "--- end server stderr ---\n");
-	fclose(file);
-}
-
-static void
-server_stop(void);
-
-static void
-server_cleanup(void);
+static u32 g_server_nofile = 0;
 
 /* --- socket helpers --- */
 
 static bool
 client_open(u16 port, int timeout_ms, client_t* out)
 {
-	struct sockaddr_in	addr = { 0 };
-	struct timeval		tv   = { .tv_sec = timeout_ms / 1000,
-					 .tv_usec = (timeout_ms % 1000) * 1000 };
-	int			fd   = socket(AF_INET, SOCK_STREAM, 0);
+	int fd = ts_connect_loopback(port, AF_INET, (u32)timeout_ms);
 
 	if (fd < 0)
 		return false;
-
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-	addr.sin_family      = AF_INET;
-	addr.sin_port        = htons(port);
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
-	{
-		close(fd);
-		return false;
-	}
-
 	out->fd = fd;
-	return true;
-}
-
-static bool
-ipv6_loopback_available(void)
-{
-	struct sockaddr_in6	addr = { 0 };
-	int			fd   = socket(AF_INET6, SOCK_STREAM, 0);
-
-	if (fd < 0)
-		return false;
-
-	addr.sin6_family = AF_INET6;
-	addr.sin6_port = 0;
-	if (inet_pton(AF_INET6, "::1", &addr.sin6_addr) != 1)
-	{
-		close(fd);
-		return false;
-	}
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
-	{
-		close(fd);
-		return false;
-	}
-	close(fd);
 	return true;
 }
 
 static bool
 client_open_v6(u16 port, int timeout_ms, client_t* out)
 {
-	struct sockaddr_in6	addr = { 0 };
-	struct timeval		tv   = { .tv_sec = timeout_ms / 1000,
-					 .tv_usec = (timeout_ms % 1000) * 1000 };
-	int			fd   = socket(AF_INET6, SOCK_STREAM, 0);
+	int fd = ts_connect_loopback(port, AF_INET6, (u32)timeout_ms);
 
 	if (fd < 0)
 		return false;
-
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-	addr.sin6_family = AF_INET6;
-	addr.sin6_port = htons(port);
-	if (inet_pton(AF_INET6, "::1", &addr.sin6_addr) != 1 ||
-	    connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
-	{
-		close(fd);
-		return false;
-	}
-
 	out->fd = fd;
 	return true;
 }
@@ -174,75 +76,25 @@ client_close(client_t* client)
 static bool
 send_all(int fd, const u8* buf, u32 len)
 {
-	while (len > 0)
-	{
-		ssize_t sent = send(fd, buf, len, MSG_NOSIGNAL);
-
-		if (sent <= 0)
-			return false;
-		buf += sent;
-		len -= (u32)sent;
-	}
-	return true;
-}
-
-static bool
-recv_exact(int fd, u8* buf, u32 len)
-{
-	while (len > 0)
-	{
-		ssize_t got = recv(fd, buf, len, 0);
-
-		if (got <= 0)
-			return false;
-		buf += got;
-		len -= (u32)got;
-	}
-	return true;
-}
-
-static u16
-next_tid(void)
-{
-	static u16 tid = 0;
-
-	return ++tid;
+	return ts_send_socket(fd, buf, len);
 }
 
 static bool
 send_request(client_t* client, u8 unit, u16 tid, const u8* pdu, u32 pdu_len)
 {
-	u8		frame[MBAP_MAX_FRAME];
-	mbap_header_t	header = { .transaction = tid, .length = (u16)(pdu_len + 1), .unit = unit };
-
-	mbap_encode(frame, &header);
-	memcpy(frame + MBAP_HEADER_SIZE, pdu, pdu_len);
-	return send_all(client->fd, frame, MBAP_HEADER_SIZE + pdu_len);
+	return ts_mbap_send(client->fd, unit, tid, pdu, pdu_len);
 }
 
 static bool
 recv_reply(client_t* client, u8 unit, u16 tid, u8* pdu, u32* pdu_len)
 {
-	u8		raw[MBAP_HEADER_SIZE];
-	mbap_header_t	header = { 0 };
-
-	if (!recv_exact(client->fd, raw, sizeof(raw)))
-		return false;
-
-	mbap_decode(raw, &header);
-	if (!mbap_is_valid(&header) ||
-	    header.transaction != tid ||
-	    header.unit != unit)
-		return false;
-
-	*pdu_len = header.length - 1;
-	return recv_exact(client->fd, pdu, *pdu_len);
+	return ts_mbap_recv(client->fd, unit, tid, pdu, pdu_len, NET_RECV_TIMEOUT_MS);
 }
 
 static bool
 exchange(client_t* client, u8 unit, const u8* req, u32 req_len, u8* resp, u32* resp_len)
 {
-	u16 tid = next_tid();
+	u16 tid = ts_next_tid();
 
 	return send_request(client, unit, tid, req, req_len) &&
 	       recv_reply(client, unit, tid, resp, resp_len);
@@ -273,40 +125,28 @@ _Static_assert(TLS_PIPELINE_BYTES > MBAP_MAX_FRAME,
 static bool
 tls_send_request(tls_client_t* client, u8 unit, u16 tid, const u8* pdu, u32 pdu_len)
 {
-	u8		frame[MBAP_MAX_FRAME];
-	mbap_header_t	header = { .transaction = tid, .length = (u16)(pdu_len + 1), .unit = unit };
+	u8 frame[MBAP_MAX_FRAME];
 
-	mbap_encode(frame, &header);
-	memcpy(frame + MBAP_HEADER_SIZE, pdu, pdu_len);
-	return tls_client_write_all(client, frame, MBAP_HEADER_SIZE + pdu_len);
+	return tls_client_write_all(client, frame,
+				    ts_mbap_encode(frame, unit, tid, pdu, pdu_len));
 }
 
 static bool
 tls_recv_reply(tls_client_t* client, u8 unit, u16 tid, u8* pdu, u32* pdu_len)
 {
-	u8		raw[MBAP_HEADER_SIZE];
-	mbap_header_t	header = { 0 };
+	u8 raw[MBAP_HEADER_SIZE];
 
 	if (!tls_client_read_exact(client, raw, sizeof(raw)))
 		return false;
-
-	mbap_decode(raw, &header);
-	if (!mbap_is_valid(&header) ||
-	    header.transaction != tid ||
-	    header.unit != unit)
+	if (!ts_mbap_reply_header(raw, unit, tid, pdu_len))
 		return false;
-
-	*pdu_len = header.length - 1;
 	return tls_client_read_exact(client, pdu, *pdu_len);
 }
 
 static bool
 recv_none(client_t* client, int timeout_ms)
 {
-	struct pollfd	pfd = { .fd = client->fd, .events = POLLIN };
-	int		ready = poll(&pfd, 1, timeout_ms);
-
-	return ready == 0 || (ready > 0 && (pfd.revents & POLLIN) == 0);
+	return ts_no_data(client->fd, (u32)timeout_ms);
 }
 
 static u32
@@ -322,12 +162,8 @@ static void
 tls_build_pipeline(u8 (*frames)[TLS_PIPELINE_FRAME_LEN], u16* tids)
 {
 	for (u32 i = 0; i < TLS_PIPELINE_COUNT; i++)
-	{
-		mbap_header_t header = { .transaction = tids[i], .length = 6, .unit = 1 };
-
-		mbap_encode(frames[i], &header);
-		read_pdu(frames[i] + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
-	}
+		ts_mbap_encode(frames[i], 1, tids[i],
+			       (const u8[]){ FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 }, 5);
 }
 
 static u32
@@ -360,306 +196,62 @@ set_small_send_buffer(int fd, int size)
 static bool
 wait_for_server_close(client_t* client, u32 timeout_ms)
 {
-	u64	start = clock_now_ms();
-
-	while (clock_now_ms() - start < timeout_ms)
-	{
-		char	byte = 0;
-		ssize_t	got  = recv(client->fd, &byte, 1, MSG_DONTWAIT);
-
-		if (got == 0)
-			return true;
-		if (got < 0 &&
-		    errno != EAGAIN &&
-		    errno != EWOULDBLOCK &&
-		    errno != EINTR)
-			return true;
-		usleep(10000);
-	}
-	return false;
+	return ts_wait_eof(client->fd, timeout_ms);
 }
 
 /* --- server fixture --- */
-
-/* Asks the kernel for an unused loopback port. There is a small race before the child
- * binds it, but it keeps tests independent of a hard-coded port number. */
-static u16
-find_free_port(void)
-{
-	struct sockaddr_in	addr = { 0 };
-	socklen_t		len  = sizeof(addr);
-	int			fd   = socket(AF_INET, SOCK_STREAM, 0);
-	u16			port = 0;
-
-	if (fd < 0)
-		return 0;
-
-	addr.sin_family      = AF_INET;
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 &&
-	    getsockname(fd, (struct sockaddr*)&addr, &len) == 0)
-		port = ntohs(addr.sin_port);
-
-	close(fd);
-	return port;
-}
-
-static void
-server_stop(void)
-{
-	fixture_t* fx     = &g_server;
-	pid_t	   pid    = fx->pid;
-	int	   status = 0;
-	bool	   reaped = false;
-	bool	   ok     = true;
-
-	fx->pid = -1;
-	if (pid > 0)
-	{
-		kill(pid, SIGTERM);
-		for (u32 i = 0; i < 200; i++)
-		{
-			pid_t done = waitpid(pid, &status, WNOHANG);
-
-			if (done == pid)
-			{
-				reaped = true;
-				break;
-			}
-			if (done < 0 && errno == ECHILD)
-			{
-				ok = false;
-				fprintf(stderr, "net test: server pid %d already reaped\n", (int)pid);
-				break;
-			}
-			usleep(10000);
-		}
-		if (!reaped &&
-		    ok &&
-		    waitpid(pid, &status, WNOHANG) != pid)
-		{
-			kill(pid, SIGKILL);
-			reaped = waitpid(pid, &status, 0) == pid;
-		}
-		if (reaped)
-			ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-	}
-
-	if (!ok)
-	{
-		server_dump_stderr();
-		fprintf(stderr, "net test: server pid %d exited=%d status=%d signal=%d\n",
-			(int)pid, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-			WIFSIGNALED(status) ? WTERMSIG(status) : -1);
-	}
-
-	if (fx->config[0])
-	{
-		unlink(fx->config);
-		fx->config[0] = '\0';
-	}
-	if (g_server_stderr[0])
-	{
-		unlink(g_server_stderr);
-		g_server_stderr[0] = '\0';
-	}
-	g_server_nofile = 0;
-	ASSERT_EQ(ok);
-}
-
-static void
-server_cleanup(void)
-{
-	/* atexit cleanup: best-effort stop without asserting test context. */
-	fixture_t* fx = &g_server;
-	pid_t	   pid = fx->pid;
-
-	fx->pid = -1;
-	if (pid > 0)
-	{
-		kill(pid, SIGTERM);
-		for (u32 i = 0; i < 200; i++)
-		{
-			int   st   = 0;
-			pid_t done = waitpid(pid, &st, WNOHANG);
-
-			if (done == pid || (done < 0 && errno == ECHILD))
-				goto done;
-			usleep(10000);
-		}
-		kill(pid, SIGKILL);
-		waitpid(pid, NULL, 0);
-	}
-done:
-	if (fx->config[0])
-	{
-		unlink(fx->config);
-		fx->config[0] = '\0';
-	}
-	if (g_server_stderr[0])
-	{
-		unlink(g_server_stderr);
-		g_server_stderr[0] = '\0';
-	}
-	g_server_nofile = 0;
-}
-
-static bool
-file_contains(const char* path, const char* needle)
-{
-	FILE*	file = fopen(path, "r");
-	char	line[512];
-
-	if (!file)
-		return false;
-	while (fgets(line, sizeof(line), file))
-	{
-		if (strstr(line, needle))
-		{
-			fclose(file);
-			return true;
-		}
-	}
-	fclose(file);
-	return false;
-}
 
 /* `server_options` is appended inside (server ...); pass "" for defaults. */
 static bool
 server_start_with_bind(const char* bind, const char* server_options, const char* devices)
 {
-	fixture_t*	fx       = &g_server;
-	char		config[2048];
-	const char*	bin      = NULL;
-	FILE*		file     = NULL;
-	int		fd       = -1;
+	char config[2048];
+	int  n;
 
-	fx->port = find_free_port();
-	if (!fx->port)
+	if (!bind)
+		return false;
+	g_server.probe_port   = ts_free_port();
+	g_server.probe_family = strcmp(bind, "::1") == 0 ? AF_INET6 : AF_INET;
+	g_server.nofile       = g_server_nofile;
+	if (!g_server.probe_port)
 	{
 		fprintf(stderr, "net test: no free port\n");
 		return false;
 	}
 
-	snprintf(config, sizeof(config), "(server (mode tcp) (port %u) (bind \"%s\") %s)\n%s\n",
-		 fx->port, bind ? bind : "127.0.0.1", server_options ? server_options : "", devices);
-
-	strcpy(fx->config, "/tmp/modbus-sim-net-XXXXXX");
-	fd = mkstemp(fx->config);
-	if (fd < 0)
-	{
-		fprintf(stderr, "net test: mkstemp failed: %s\n", strerror(errno));
+	n = snprintf(config, sizeof(config), "(server (mode tcp) (port %u) (bind \"%s\") %s)\n%s\n",
+		     g_server.probe_port, bind,
+		     server_options ? server_options : "", devices);
+	if (n <= 0 || (size_t)n >= sizeof(config) ||
+	    !ts_write_config(&g_server, "/tmp/modbus-sim-net-XXXXXX", config))
 		return false;
-	}
-
-	file = fdopen(fd, "w");
-	if (!file)
-	{
-		close(fd);
-		unlink(fx->config);
-		fx->config[0] = '\0';
-		return false;
-	}
-	fputs(config, file);
-	fclose(file);
-
-	if (!server_verbose())
-	{
-		strcpy(g_server_stderr, "/tmp/modbus-sim-neterr-XXXXXX");
-		fd = mkstemp(g_server_stderr);
-		if (fd < 0)
-		{
-			fprintf(stderr, "net test: mkstemp stderr failed: %s\n", strerror(errno));
-			unlink(fx->config);
-			fx->config[0] = '\0';
-			g_server_stderr[0] = '\0';
-			g_server_nofile = 0;
-			return false;
-		}
-		close(fd);
-	}
-
-	bin = getenv("MODBUS_SIM_BIN");
-	if (!bin)
-		bin = "./modbus-sim";
-
-	fx->pid = fork();
-	if (fx->pid == 0)
-	{
-		if (!freopen("/dev/null", "w", stdout))
-			_exit(127);
-		if (g_server_stderr[0] && !server_verbose())
-		{
-			if (!freopen(g_server_stderr, "w", stderr))
-				_exit(127);
-			setvbuf(stderr, NULL, _IONBF, 0);
-		}
-		if (g_server_nofile > 0)
-		{
-			struct rlimit lim = { .rlim_cur = g_server_nofile, .rlim_max = g_server_nofile };
-
-			if (setrlimit(RLIMIT_NOFILE, &lim) < 0)
-				_exit(126);
-		}
-		execl(bin, bin, fx->config, (char*)NULL);
-		_exit(127);
-	}
-	if (fx->pid < 0)
-	{
-		fprintf(stderr, "net test: fork failed: %s\n", strerror(errno));
-		unlink(fx->config);
-		fx->config[0] = '\0';
-		return false;
-	}
-
-	if (g_server_stderr[0] && !server_verbose())
-	{
-		/* The server logs this just after listen(), before entering its poll loop.
-		 * Avoid a probe connection: it would occupy a client slot that capacity
-		 * tests need, and reaping it would require another blind sleep. */
-		u64 deadline = clock_now_ms() + NET_START_TIMEOUT_MS;
-
-		while (clock_now_ms() < deadline)
-		{
-			if (file_contains(g_server_stderr, "listening on"))
-				return true;
-			usleep(2000);
-		}
-	}
-	else
-	{
-		/* Verbose runs send stderr to the console; fall back to connect probing. */
-		for (u32 i = 0; i < NET_START_ATTEMPTS; i++)
-		{
-			client_t probe = { .fd = -1 };
-
-			if (client_open(fx->port, 50, &probe))
-			{
-				client_close(&probe);
-				usleep(50000);	/* let the server reap the probe connection */
-				return true;
-			}
-			usleep(10000);
-		}
-	}
 
 	{
-		int status = 0;
+		const char* bin = getenv("MODBUS_SIM_BIN");
+		char*       argv[] = { (char*)(bin ? bin : "./modbus-sim"), g_server.config, NULL };
 
-		fprintf(stderr, "net test: server %u never accepted on %s\n", fx->port, fx->config);
-		pid_t done = waitpid(fx->pid, &status, WNOHANG);
-		fprintf(stderr, "net test: child waitpid=%d exited=%d status=%d\n", (int)done,
-			WIFEXITED(status), WEXITSTATUS(status));
-		server_dump_stderr();
+		return ts_server_start(&g_server, argv);
 	}
-	server_stop();
-	return false;
 }
 
 static bool
 server_start(const char* server_options, const char* devices)
 {
 	return server_start_with_bind("127.0.0.1", server_options, devices);
+}
+
+static void
+server_stop(void)
+{
+	ASSERT_EQ(ts_server_stop(&g_server));
+	g_server.probe_port = 0;
+	g_server_nofile = 0;
+}
+
+static void
+server_cleanup(void)
+{
+	ts_server_cleanup(&g_server);
 }
 
 SETUP_SUITE()
@@ -687,7 +279,7 @@ TEST(NetPersistentConnectionServesRequestsInOrder)
 				     "  (input 0 (static 7))\n"
 				     "  (coil 0 (static on)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -719,12 +311,12 @@ TEST(NetPipelinedRequestsGetAnswersInOrder)
 	u8	 req[8];
 	u8	 resp[MODBUS_MAX_PDU];
 	u32	 len    = 0;
-	u16	 first  = next_tid();
-	u16	 second = next_tid();
+	u16	 first  = ts_next_tid();
+	u16	 second = ts_next_tid();
 	bool	 ok     = server_start("",
 				      "(device (unit-id 1) (holding 0 (static 11)) (holding 1 (static 22)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -751,12 +343,12 @@ TEST(NetTlsMutualAuthServesMbapRead)
 	u8		req[8];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len  = 0;
-	u16		tid  = next_tid();
+	u16		tid  = ts_next_tid();
 	bool		ok   = server_start(TLS_SERVER_OPTIONS,
 					    "(device (unit-id 1) (holding 0 (static 4660)) "
 					    "(holding 1 (static 7)))");
 
-	ok = ok && tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+	ok = ok && tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
 				   TLS_CA_PATH, &client);
 	if (ok)
 	{
@@ -782,11 +374,11 @@ TEST(NetTlsRejectsPlaintextClient)
 	u8		req[8];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len  = 0;
-	u16		tid  = next_tid();
+	u16		tid  = ts_next_tid();
 	bool		ok   = server_start(TLS_SERVER_OPTIONS,
 					    "(device (unit-id 1) (holding 0 (static 4660)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -805,7 +397,7 @@ TEST(NetTlsRejectsClientWithoutCertificate)
 	u8		req[8];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len      = 0;
-	u16		tid      = next_tid();
+	u16		tid      = ts_next_tid();
 	bool		rejected = false;
 	bool		ok       = server_start(TLS_SERVER_OPTIONS,
 					       "(device (unit-id 1) (holding 0 (static 4660)))");
@@ -814,7 +406,7 @@ TEST(NetTlsRejectsClientWithoutCertificate)
 	 * failure), or complete the handshake and then close without serving MBAP. */
 	if (ok)
 	{
-		rejected = !tls_client_open(g_server.port, NULL, NULL, TLS_CA_PATH, &client);
+		rejected = !tls_client_open(g_server.probe_port, NULL, NULL, TLS_CA_PATH, &client);
 		if (!rejected)
 		{
 			read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -840,12 +432,12 @@ TEST(NetTlsPipelinedRequestsBeyondRxBuffer)
 					    "(device (unit-id 1) (holding 0 (static 4660)))");
 
 	if (ok)
-		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
 				     TLS_CA_PATH, &client);
 	if (ok)
 	{
 		for (u32 i = 0; i < TLS_PIPELINE_COUNT; i++)
-			tids[i] = next_tid();
+			tids[i] = ts_next_tid();
 		tls_build_pipeline(frames, tids);
 		ok = tls_client_write_record(&client, &frames[0][0], TLS_PIPELINE_BYTES);
 	}
@@ -881,13 +473,13 @@ TEST(NetTlsDelayedFaultHonoredWithBufferedRequests)
 					       " (fault (kind delay) (delay-ms 400) (percent 100)))");
 
 	if (ok)
-		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
 				     TLS_CA_PATH, &client);
 	if (ok)
 	{
 		for (u32 i = 0; i < TLS_PIPELINE_COUNT; i++)
-			tids[i] = next_tid();
-		extra_tid = next_tid();
+			tids[i] = ts_next_tid();
+		extra_tid = ts_next_tid();
 		tls_build_pipeline(frames, tids);
 		start = clock_now_ms();
 		ok = tls_client_write_record(&client, &frames[0][0], TLS_PIPELINE_BYTES);
@@ -926,7 +518,7 @@ TEST(NetTlsClientDisconnectDuringDelayedResponse)
 	u8		req[8];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len     = 0;
-	u16		tid     = next_tid();
+	u16		tid     = ts_next_tid();
 	u16		probe_tid;
 	bool		ok      = server_start(TLS_SERVER_OPTIONS,
 					       "(device (unit-id 1) (holding 0 (static 4660)) "
@@ -938,13 +530,13 @@ TEST(NetTlsClientDisconnectDuringDelayedResponse)
 	/* Occupy every slot but one before the delayed client connects. */
 	for (u32 i = 0; ok && i < TLS_DISCONNECT_FILLERS; i++)
 	{
-		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
 				     TLS_CA_PATH, &fillers[i]);
 		if (ok)
 			opened++;
 	}
 	if (ok)
-		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
 				     TLS_CA_PATH, &client);
 	if (ok)
 	{
@@ -960,12 +552,12 @@ TEST(NetTlsClientDisconnectDuringDelayedResponse)
 		usleep(50000);
 	}
 	if (ok)
-		ok = tls_client_open_timeout(g_server.port, TLS_CLIENT_CERT_PATH,
+		ok = tls_client_open_timeout(g_server.probe_port, TLS_CLIENT_CERT_PATH,
 					     TLS_CLIENT_KEY_PATH, TLS_CA_PATH,
 					     TLS_PROBE_TIMEOUT_MS, &probe);
 	if (ok)
 	{
-		probe_tid = next_tid();
+		probe_tid = ts_next_tid();
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 		ok = tls_send_request(&probe, 1, probe_tid, req, 5) &&
 		     tls_recv_reply(&probe, 1, probe_tid, resp, &len) &&
@@ -992,7 +584,7 @@ TEST(NetUnitIdRoutingAndGatewayException)
 				    "(device (unit-id 1) (holding 0 (static 4369)))\n"
 				    "(device (unit-id 2) (holding 0 (static 8738)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1023,7 +615,7 @@ TEST(NetTcpUnitZeroIsNotBroadcast)
 				     "(device (unit-id 1) (holding 0 (static 11)))\n"
 				     "(device (unit-id 2) (holding 0 (static 22)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1053,7 +645,7 @@ TEST(NetExceptionsOverWire)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 1) (input 0))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1121,19 +713,19 @@ TEST(NetDiagnosticsListenOnlySilenceOverWire)
 	u32		len = 0;
 	bool		ok  = server_start("", "(device (unit-id 1) (holding 0 (static 4660)))");
 
-	ok = ok && client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_SHORT_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_DIAGNOSTICS;
 		put_be16(req + 1, 0x0004);
 		put_be16(req + 3, 0x0000);
-		ok = send_request(&client, 1, next_tid(), req, 5) &&
+		ok = send_request(&client, 1, ts_next_tid(), req, 5) &&
 		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
 	}
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = send_request(&client, 1, next_tid(), req, 5) &&
+		ok = send_request(&client, 1, ts_next_tid(), req, 5) &&
 		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
 	}
 	if (ok)
@@ -1141,7 +733,7 @@ TEST(NetDiagnosticsListenOnlySilenceOverWire)
 		req[0] = FC_DIAGNOSTICS;
 		put_be16(req + 1, 0x0001);
 		put_be16(req + 3, 0xFF00);
-		ok = send_request(&client, 1, next_tid(), req, 5) &&
+		ok = send_request(&client, 1, ts_next_tid(), req, 5) &&
 		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
 	}
 	if (ok)
@@ -1178,7 +770,7 @@ TEST(NetBadMbapHeaderClosesConnection)
 			header.length = 255;
 		mbap_encode(bad, &header);
 
-		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 		if (!ok)
 			break;
 
@@ -1229,7 +821,7 @@ TEST(NetMbapLengthBoundariesOverWire)
 			frame_len = MBAP_HEADER_SIZE + pdu_len;
 		}
 
-		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 		if (ok)
 			ok = send_all(client.fd, frame, frame_len);
 		if (ok)
@@ -1257,12 +849,12 @@ TEST(NetFragmentedAndCoalescedRequests)
 	u8		req2[MBAP_HEADER_SIZE + 5];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
-	u16		tid1 = next_tid();
-	u16		tid2 = next_tid();
+	u16		tid1 = ts_next_tid();
+	u16		tid2 = ts_next_tid();
 	bool		ok = server_start("",
 					 "(device (unit-id 1) (holding 0 (static 4369)) (holding 1 (static 8738)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1339,12 +931,12 @@ TEST(NetMaxSizePduBothDirections)
 					 "  (coil 0 (count 2000) (static on))"
 					 "  (holding 0 (count 125) (static 4660)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	/* FC 01: 2000 bits -> response PDU is 252 bytes (max read bits). */
 	if (ok)
 	{
-		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+		mbap_header_t	h = { .transaction = ts_next_tid(), .length = 6, .unit = 1 };
 
 		mbap_encode(req, &h);
 		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_COILS, 0, 2000);
@@ -1358,7 +950,7 @@ TEST(NetMaxSizePduBothDirections)
 	/* FC 03: 125 registers -> response PDU is 252 bytes (max read registers). */
 	if (ok)
 	{
-		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+		mbap_header_t	h = { .transaction = ts_next_tid(), .length = 6, .unit = 1 };
 
 		mbap_encode(req, &h);
 		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 125);
@@ -1373,7 +965,7 @@ TEST(NetMaxSizePduBothDirections)
 	/* FC 16: 123 registers -> request PDU is 252 bytes (max write registers). */
 	if (ok)
 	{
-		mbap_header_t	h = { .transaction = next_tid(), .length = 253, .unit = 1 };
+		mbap_header_t	h = { .transaction = ts_next_tid(), .length = 253, .unit = 1 };
 
 		mbap_encode(req, &h);
 		req[MBAP_HEADER_SIZE + 0] = FC_WRITE_MULTIPLE_REGISTERS;
@@ -1389,7 +981,7 @@ TEST(NetMaxSizePduBothDirections)
 	}
 	if (ok)
 	{
-		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+		mbap_header_t	h = { .transaction = ts_next_tid(), .length = 6, .unit = 1 };
 
 		mbap_encode(req, &h);
 		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 122, 1);
@@ -1401,7 +993,7 @@ TEST(NetMaxSizePduBothDirections)
 	/* FC 15: 1968 bits -> request PDU is 252 bytes (max write bits). */
 	if (ok)
 	{
-		mbap_header_t	h = { .transaction = next_tid(), .length = 253, .unit = 1 };
+		mbap_header_t	h = { .transaction = ts_next_tid(), .length = 253, .unit = 1 };
 
 		mbap_encode(req, &h);
 		req[MBAP_HEADER_SIZE + 0] = FC_WRITE_MULTIPLE_COILS;
@@ -1416,7 +1008,7 @@ TEST(NetMaxSizePduBothDirections)
 	}
 	if (ok)
 	{
-		mbap_header_t	h = { .transaction = next_tid(), .length = 6, .unit = 1 };
+		mbap_header_t	h = { .transaction = ts_next_tid(), .length = 6, .unit = 1 };
 
 		mbap_encode(req, &h);
 		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_COILS, 0, 8);
@@ -1436,11 +1028,11 @@ TEST(NetPartialSendLargeResponse)
 	u8		req[MBAP_HEADER_SIZE + 5];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
-	u16		tid = next_tid();
+	u16		tid = ts_next_tid();
 	bool		ok = server_start("",
 					 "(device (unit-id 1) (holding 0 (count 125) (static 13124)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 		ok = set_small_send_buffer(client.fd, 1024);
 	if (ok)
@@ -1470,12 +1062,12 @@ TEST(NetClientDisconnectDuringDelayedResponse)
 	u8		req[MBAP_HEADER_SIZE + 5];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
-	u16		tid = next_tid();
+	u16		tid = ts_next_tid();
 	bool		ok = server_start("",
 					 "(device (unit-id 1) (holding 0 (static 9))"
 					 "  (fault (kind delay) (delay-ms 300) (percent 100)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		mbap_header_t	h = { .transaction = tid, .length = 6, .unit = 1 };
@@ -1493,7 +1085,7 @@ TEST(NetClientDisconnectDuringDelayedResponse)
 
 	/* Server should remain healthy and serve other clients. */
 	if (ok)
-		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &probe);
+		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &probe);
 	if (ok)
 	{
 		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -1513,12 +1105,12 @@ TEST(NetClientHalfCloseDuringDelayedResponse)
 	u8		req[MBAP_HEADER_SIZE + 5];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
-	u16		tid = next_tid();
+	u16		tid = ts_next_tid();
 	bool		ok = server_start("",
 					 "(device (unit-id 1) (holding 0 (static 9))"
 					 "  (fault (kind delay) (delay-ms 300) (percent 100)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		mbap_header_t	h = { .transaction = tid, .length = 6, .unit = 1 };
@@ -1540,7 +1132,7 @@ TEST(NetClientHalfCloseDuringDelayedResponse)
 	if (ok)
 		ok = wait_for_server_close(&client, 1500);
 	if (ok)
-		ok = client_open(g_server.port, NET_RECV_TIMEOUT_MS, &probe);
+		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &probe);
 	if (ok)
 	{
 		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -1571,13 +1163,13 @@ TEST(NetDelayFaultDoesNotBlockOtherClients)
 						"  (fault (kind delay) (delay-ms 600) (percent 100)))\n"
 						"(device (unit-id 2) (holding 0 (static 22)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &delayed);
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &fast);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &delayed);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &fast);
 
 	if (ok)
 	{
-		delayed_tid = next_tid();
-		fast_tid    = next_tid();
+		delayed_tid = ts_next_tid();
+		fast_tid    = ts_next_tid();
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 		start = clock_now_ms();
 		ok = send_request(&delayed, 1, delayed_tid, req, 5);
@@ -1614,7 +1206,7 @@ TEST(NetDropFaultStillAppliesWrites)
 					"(device (unit-id 1) (holding 0 (static 0))\n"
 					"  (fault (kind drop) (percent 50)))");
 
-	ok = ok && client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_SHORT_TIMEOUT_MS, &client);
 
 	/* A dropped request makes exchange() time out. Repeat until one is dropped. */
 	for (u32 i = 0; ok && i < NET_MAX_ATTEMPTS && !dropped; i++)
@@ -1650,7 +1242,7 @@ TEST(NetExceptionFaultReachesClient)
 				     "(device (unit-id 1) (holding 0 (static 42))"
 				     "  (fault (kind exception) (code 6) (percent 100)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -1673,7 +1265,7 @@ TEST(NetCorruptFaultReachesClient)
 				     "(device (unit-id 1) (holding 0 (static 42))"
 				     "  (fault (kind corrupt) (percent 100)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -1701,7 +1293,7 @@ TEST(NetConnectionLimit)
 	for (u32 i = 0; i < 32; i++)
 	{
 		clients[i].fd = -1;
-		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
+		ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &clients[i]);
 		if (!ok)
 			break;
 		opened++;
@@ -1719,7 +1311,7 @@ TEST(NetConnectionLimit)
 	if (ok)
 	{
 		client_t extra = { .fd = -1 };
-		bool	 open  = client_open(g_server.port, NET_SHORT_TIMEOUT_MS, &extra);
+		bool	 open  = client_open(g_server.probe_port, NET_SHORT_TIMEOUT_MS, &extra);
 
 		if (open)
 		{
@@ -1751,7 +1343,7 @@ TEST(NetWritesAreAllOrNothing)
 				    "  (coil 0 (static off)) (coil 1 (static off)) (coil 2 (static off))\n"
 				    "  (input 0 (static 9)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	/* Write multiple registers, then read them back. */
 	if (ok)
@@ -1832,7 +1424,7 @@ TEST(NetGetComEventCounterReturnsStatusAndCount)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1860,7 +1452,7 @@ TEST(NetGetComEventCounterMalformedRequest)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 2, resp, &len) &&
@@ -1886,7 +1478,7 @@ TEST(NetGetComEventCounterUnknownUnitDoesNotCount)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
@@ -1912,7 +1504,7 @@ TEST(NetGetComEventLogReturnsCountsAndEmptyLog)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1942,7 +1534,7 @@ TEST(NetGetComEventLogMatchesComEventCounter)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -1988,7 +1580,7 @@ TEST(NetGetComEventLogMalformedRequest)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 2, resp, &len) &&
@@ -2015,7 +1607,7 @@ TEST(NetGetComEventLogUnknownUnitDoesNotCount)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_GET_COM_EVENT_LOG;
@@ -2043,7 +1635,7 @@ TEST(NetComStatusAndEventsAreReported)
 	bool	 ok  = server_start("", "(device (unit-id 1) (com-status 65535) (com-event 1) (com-event 128) "
 						   "(com-event 255) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
@@ -2083,7 +1675,7 @@ TEST(NetComEventLogMaxEventsAreReported)
 	snprintf(devices + used, sizeof(devices) - used, ")");
 
 	ok = server_start("", devices);
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_GET_COM_EVENT_LOG;
@@ -2110,7 +1702,7 @@ TEST(NetComStatusAndEventsRejectMalformedRequests)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (com-status 65535) (com-event 66) (holding 0))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_GET_COM_EVENT_COUNTER;
@@ -2145,7 +1737,7 @@ TEST(NetReportServerIdReturnsConfiguredValues)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (server-id 42) (run-indicator 0) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		req[0] = FC_REPORT_SERVER_ID;
@@ -2167,7 +1759,7 @@ TEST(NetReportServerIdDefaults)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
@@ -2190,7 +1782,7 @@ TEST(NetReportServerIdReturnsConfiguredAdditionalData)
 					   "(server-id-additional-data \"DEADBEEF\") (holding 0 (static 1)))");
 	const u8	extra[] = { 0xDE, 0xAD, 0xBE, 0xEF };
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
@@ -2212,7 +1804,7 @@ TEST(NetReportServerIdMalformedRequest)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, 2, resp, &len) &&
@@ -2238,7 +1830,7 @@ TEST(NetReportServerIdUnknownUnitDoesNotCount)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 3, req, 1, resp, &len) &&
@@ -2271,7 +1863,7 @@ TEST(NetReadFileRecordSuccessAndErrors)
 				    "  (file 1 (record 0 4660 22136) (record 10 7))"
 				    "  (file 4 (record 2 255)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2327,7 +1919,7 @@ TEST(NetReadFileRecordUnknownUnit)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (file 1 (record 0 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
@@ -2347,7 +1939,7 @@ TEST(NetReadFileRecordUnavailableWhenNoFileRecordsConfigured)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
@@ -2368,7 +1960,7 @@ TEST(NetWriteFileRecordSuccessAndReadBack)
 				    "(device (unit-id 1)"
 				    "  (file 1 (record 0 4660 22136) (record 10 7)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2423,7 +2015,7 @@ TEST(NetWriteFileRecordErrorsAndAllOrNothing)
 				    "(device (unit-id 1)"
 				    "  (file 1 (record 0 4660 22136)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2472,7 +2064,7 @@ TEST(NetWriteFileRecordUnknownUnitAndUnconfigured)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (file 1 (record 0 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02 };
@@ -2487,7 +2079,7 @@ TEST(NetWriteFileRecordUnknownUnitAndUnconfigured)
 	{
 		ok = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 		client.fd = -1;
-		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+		ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	}
 	if (ok)
 	{
@@ -2512,7 +2104,7 @@ TEST(NetMaskWriteRegisterSuccessMalformedAndUnknownUnit)
 				    "  (holding 0 (static 4660))"
 				    "  (input 0 (static 7)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2576,7 +2168,7 @@ TEST(NetReadWriteMultipleRegistersSuccessAndOverlap)
 				    "  (holding 2 (static 3))"
 				    "  (input 0 (static 7)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2630,7 +2222,7 @@ TEST(NetReadWriteMultipleRegistersErrorsAndAllOrNothing)
 				    "  (holding 1 (static 20))"
 				    "  (input 0 (static 7)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2694,7 +2286,7 @@ TEST(NetReadWriteMultipleRegistersUnknownUnitAndNonHoldingTarget)
 				    "  (holding 1 (static 10))"
 				    "  (input 0 (static 7)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2734,7 +2326,7 @@ TEST(NetReadFifoQueueSuccessMalformedUnknownUnitAndUnavailable)
 				    "  (fifo 10 (values 4660 22136 3))"
 				    "  (fifo 20 (values)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 
 	if (ok)
 	{
@@ -2808,7 +2400,7 @@ TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
 	u32	 len = 0;
 	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
@@ -2829,7 +2421,7 @@ TEST(NetReadDeviceIdentificationMeiTypes)
 				    "(device (unit-id 1) (vendor-name \"Acme\") (product-code \"P\") "
 				    "(major-minor-revision \"1.2\") (product-name \"Sim\"))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
@@ -2878,7 +2470,7 @@ TEST(NetReadDeviceIdentificationExtendedObjects)
 				    "        (device-id-object 160 \"Second\")"
 				    "        (device-id-object 128 \"First\"))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
@@ -2954,14 +2546,14 @@ TEST(NetPipelinedRequestsAreAnsweredPromptly)
 	u8	 req[8];
 	u8	 resp[MODBUS_MAX_PDU];
 	u32	 len      = 0;
-	u16	 first    = next_tid();
-	u16	 second   = next_tid();
+	u16	 first    = ts_next_tid();
+	u16	 second   = ts_next_tid();
 	u64	 start_ms = 0;
 	u64	 elapsed  = 0;
 	bool	 ok       = server_start("",
 					"(device (unit-id 1) (holding 0 (static 11)) (holding 1 (static 22)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		int yes = 1;
@@ -3011,7 +2603,7 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 
 	for (u32 i = 0; ok && i < (u32)(sizeof(held) / sizeof(held[0])); i++)
 	{
-		if (!client_open(g_server.port, 200, &held[i]))
+		if (!client_open(g_server.probe_port, 200, &held[i]))
 		{
 			held[i].fd = -1;
 			break;
@@ -3028,7 +2620,7 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 		 * Allow generous headroom for slow CI/schedulers. */
 		ok = ok && (utime1 - utime0) < 150;
 	}
-	ok = ok && file_contains(g_server_stderr, "accept failed");
+	ok = ok && ts_file_contains(g_server.stderr_path, "accept failed");
 
 	/* Release pressure and verify the server recovers after backoff. */
 	for (u32 i = 0; i < opened; i++)
@@ -3037,7 +2629,7 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 	{
 		client_close(&client);
 		client.fd = -1;
-		if (!client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client))
+		if (!client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client))
 		{
 			usleep(100000);
 			continue;
@@ -3066,7 +2658,7 @@ TEST(NetIdleTimeoutClosesIdleClient)
 	bool	 ok     = server_start("(idle-timeout-ms 100)",
 				      "(device (unit-id 1) (holding 0 (static 7)))");
 
-	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	ok = ok && wait_for_server_close(&client, 1500);
 
 	client_close(&client);
@@ -3086,7 +2678,7 @@ TEST(NetIdleTimeoutDoesNotCloseDelayedResponseClient)
 				      "(device (unit-id 1) (holding 0 (static 11))"
 				      "  (fault (kind delay) (delay-ms 500) (percent 100)))");
 
-	ok = ok && client_open(g_server.port, 2000, &client);
+	ok = ok && client_open(g_server.probe_port, 2000, &client);
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
@@ -3116,7 +2708,7 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 	for (u32 i = 0; i < 32; i++)
 	{
 		clients[i].fd = -1;
-		ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &clients[i]);
+		ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &clients[i]);
 		if (!ok)
 			break;
 		opened++;
@@ -3130,7 +2722,7 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 	{
 		client_close(&extra);
 		extra.fd = -1;
-		if (!client_open(g_server.port, NET_RECV_TIMEOUT_MS, &extra))
+		if (!client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &extra))
 		{
 			usleep(50000);
 			continue;
@@ -3160,14 +2752,14 @@ TEST(NetTcpIpv6LoopbackServesRequest)
 	u32		len = 0;
 	bool		ok;
 
-	if (!ipv6_loopback_available())
+	if (!ts_ipv6_loopback_available())
 	{
 		fprintf(stderr, "SKIP: IPv6 loopback unavailable\n");
 		return;
 	}
 
 	ok = server_start_with_bind("::1", "", "(device (unit-id 1) (holding 0 (static 42)))");
-	ok = ok && client_open_v6(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	ok = ok && client_open_v6(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);

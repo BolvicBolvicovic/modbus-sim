@@ -3,6 +3,7 @@
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "tests/tests_utils/test_support.h"
 #include "util/clock.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -18,370 +19,123 @@
 #include <termios.h>
 #include <unistd.h>
 
-#define RTU_CLI_START_TIMEOUT_MS	5000
+typedef ts_server_t rtu_cli_t;
 
-typedef struct rtu_cli_t rtu_cli_t;
-struct rtu_cli_t
-{
-	pid_t	pid;
-	int	master_fd;
-	char	config[80];
-	char	stderr_path[80];
-	char	stdout_path[80];
+static ts_server_t g_rtu_cli = {
+	.pid		= -1,
+	.master_fd	= -1,
+	.flags		= TS_CAPTURE_STDERR | TS_NULL_STDIN | TS_NULL_STDOUT | TS_EXIT_IS_READY,
+	.label		= "rtu cli",
+	.ready_needle	= "RTU listening on"
 };
-
-static rtu_cli_t g_rtu_cli = { .pid = -1, .master_fd = -1 };
 
 static bool
 rtu_cli_verbose(void)
 {
-	const char* v = getenv("MODBUS_SIM_TEST_VERBOSE");
-
-	return v && v[0] && strcmp(v, "0") != 0;
+	return ts_verbose();
 }
 
 static void
 rtu_cli_dump_stderr(void)
 {
-	FILE* file;
-	char  line[512];
-
-	if (!g_rtu_cli.stderr_path[0])
-		return;
-	file = fopen(g_rtu_cli.stderr_path, "r");
-	if (!file)
-		return;
-	fprintf(stderr, "--- rtu cli stderr (%s) ---\n", g_rtu_cli.stderr_path);
-	while (fgets(line, sizeof(line), file))
-		fputs(line, stderr);
-	fprintf(stderr, "--- end rtu cli stderr ---\n");
-	fclose(file);
+	ts_dump_stderr(&g_rtu_cli);
 }
 
 static void
 rtu_cli_stop(void)
 {
-	rtu_cli_t* fx = &g_rtu_cli;
-	pid_t pid = fx->pid;
-	int status = 0;
-	bool reaped = false;
-	bool ok = true;
-
-	fx->pid = -1;
-	if (fx->master_fd >= 0)
-	{
-		close(fx->master_fd);
-		fx->master_fd = -1;
-	}
-	if (pid > 0)
-	{
-		kill(pid, SIGTERM);
-		for (u32 i = 0; i < 200; i++)
-		{
-			pid_t done = waitpid(pid, &status, WNOHANG);
-			if (done == pid)
-			{
-				reaped = true;
-				break;
-			}
-			if (done < 0 && errno == ECHILD)
-			{
-				ok = false;
-				break;
-			}
-			usleep(10000);
-		}
-		if (!reaped &&
-		    ok &&
-		    waitpid(pid, &status, WNOHANG) != pid)
-		{
-			kill(pid, SIGKILL);
-			reaped = waitpid(pid, &status, 0) == pid;
-		}
-		if (reaped)
-			ok = WIFEXITED(status) ? WEXITSTATUS(status) == 0 : WIFSIGNALED(status);
-	}
-	if (!ok)
-	{
-		rtu_cli_dump_stderr();
-		fprintf(stderr, "rtu cli: pid %d exited=%d status=%d signal=%d\n",
-			(int)pid, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-			WIFSIGNALED(status) ? WTERMSIG(status) : -1);
-	}
-	if (fx->config[0])
-	{
-		unlink(fx->config);
-		fx->config[0] = '\0';
-	}
-	if (fx->stderr_path[0])
-	{
-		unlink(fx->stderr_path);
-		fx->stderr_path[0] = '\0';
-	}
-	if (fx->stdout_path[0])
-	{
-		unlink(fx->stdout_path);
-		fx->stdout_path[0] = '\0';
-	}
-	ASSERT_EQ(ok);
+	g_rtu_cli.flags &= ~(u32)TS_CAPTURE_STDOUT;
+	ASSERT_EQ(ts_server_stop(&g_rtu_cli));
 }
 
 static bool
 rtu_cli_write_config(const char* text)
 {
-	int fd;
-	FILE* file;
-	rtu_cli_t* fx = &g_rtu_cli;
-
-	strcpy(fx->config, "/tmp/modbus-sim-rtucli-XXXXXX");
-	fd = mkstemp(fx->config);
-	if (fd < 0)
-		return false;
-	file = fdopen(fd, "w");
-	if (!file)
-	{
-		close(fd);
-		unlink(fx->config);
-		fx->config[0] = '\0';
-		return false;
-	}
-	fputs(text, file);
-	fclose(file);
-	return true;
+	return ts_write_config(&g_rtu_cli, "/tmp/modbus-sim-rtucli-XXXXXX", text);
 }
 
 static bool
 rtu_cli_capture_stderr(void)
 {
-	int fd;
-
-	strcpy(g_rtu_cli.stderr_path, "/tmp/modbus-sim-rtuclierr-XXXXXX");
-	fd = mkstemp(g_rtu_cli.stderr_path);
-	if (fd < 0)
-	{
-		g_rtu_cli.stderr_path[0] = '\0';
-		return false;
-	}
-	close(fd);
-	return true;
+	return ts_temp_file(g_rtu_cli.stderr_path, sizeof(g_rtu_cli.stderr_path),
+			    "/tmp/modbus-sim-rtuclierr-XXXXXX");
 }
 
 static bool
 rtu_cli_file_contains(const char* path, const char* needle)
 {
-	FILE* file = fopen(path, "r");
-	char line[512];
-	bool found = false;
-
-	if (!file)
-		return false;
-	while (fgets(line, sizeof(line), file))
-	{
-		if (strstr(line, needle))
-		{
-			found = true;
-			break;
-		}
-	}
-	fclose(file);
-	return found;
+	return ts_file_contains(path, needle);
 }
 
-/* WNOWAIT notices an early exit without reaping it: callers still waitpid(). */
 static bool
-rtu_cli_process_done(pid_t pid)
+rtu_cli_stderr_contains(const char* needle)
 {
-	siginfo_t info = { 0 };
-
-	return waitid(P_PID, (id_t)pid, &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-	       info.si_pid == pid;
+	return ts_file_contains(g_rtu_cli.stderr_path, needle);
 }
 
-/* A server logs "listening on" immediately before entering its poll loop; short-lived
- * --check/invalid-flag runs are detected by their exit instead. */
 static bool
 rtu_cli_wait_startup(pid_t pid)
 {
-	bool have_log = g_rtu_cli.stderr_path[0] != '\0';
-	/* Without a log file (verbose runs, or callers not capturing stderr) there is
-	 * no readiness signal for a server, so keep the short historical startup wait. */
-	u64 deadline = clock_now_ms() + (have_log ? RTU_CLI_START_TIMEOUT_MS : 300);
-
-	for (;;)
-	{
-		if (have_log && rtu_cli_file_contains(g_rtu_cli.stderr_path, "listening on"))
-			return kill(pid, 0) == 0;
-		if (rtu_cli_process_done(pid))
-			return kill(pid, 0) == 0;
-		if (clock_now_ms() >= deadline)
-		{
-			if (!have_log)
-				return kill(pid, 0) == 0;
-			fprintf(stderr, "rtu cli: pid %d never became ready\n", (int)pid);
-			rtu_cli_dump_stderr();
-			return false;
-		}
-		usleep(2000);
-	}
+	return ts_wait_startup(&g_rtu_cli, pid);
 }
 
 static bool
 rtu_cli_start_with_args(char* const argv[], bool capture_stderr)
 {
-	rtu_cli_t* fx = &g_rtu_cli;
-
-	if (capture_stderr &&
-	    !rtu_cli_verbose() &&
+	if (capture_stderr)
+		g_rtu_cli.flags |= TS_CAPTURE_STDERR;
+	else
+		g_rtu_cli.flags &= ~(u32)TS_CAPTURE_STDERR;
+	if (capture_stderr && !ts_verbose() && !g_rtu_cli.stderr_path[0] &&
 	    !rtu_cli_capture_stderr())
 		return false;
-
-	fx->pid = fork();
-	if (fx->pid == 0)
-	{
-		if (!freopen("/dev/null", "r", stdin))
-			_exit(127);
-		if (!freopen("/dev/null", "w", stdout))
-			_exit(127);
-		if (capture_stderr &&
-		    fx->stderr_path[0] &&
-		    !rtu_cli_verbose())
-		{
-			if (!freopen(fx->stderr_path, "w", stderr))
-				_exit(127);
-			setvbuf(stderr, NULL, _IONBF, 0);
-		}
-		execv(argv[0], argv);
-		_exit(127);
-	}
-	if (fx->pid <= 0)
-		return false;
-	return rtu_cli_wait_startup(fx->pid);
+	return ts_server_start(&g_rtu_cli, argv);
 }
 
 static bool
 rtu_cli_start_with_args_capture_stdout(char* const argv[])
 {
-	rtu_cli_t* fx = &g_rtu_cli;
-	int fd;
+	bool ok;
 
-	if (!rtu_cli_verbose() && !rtu_cli_capture_stderr())
+	if (!ts_verbose() && !g_rtu_cli.stderr_path[0] && !rtu_cli_capture_stderr())
 		return false;
-	strcpy(fx->stdout_path, "/tmp/modbus-sim-rtucliout-XXXXXX");
-	fd = mkstemp(fx->stdout_path);
-	if (fd < 0)
+	if (!ts_temp_file(g_rtu_cli.stdout_path, sizeof(g_rtu_cli.stdout_path),
+			  "/tmp/modbus-sim-rtucliout-XXXXXX"))
 		return false;
-	close(fd);
-
-	fx->pid = fork();
-	if (fx->pid == 0)
-	{
-		if (!freopen("/dev/null", "r", stdin))
-			_exit(127);
-		if (!freopen(fx->stdout_path, "w", stdout))
-			_exit(127);
-		setvbuf(stdout, NULL, _IONBF, 0);
-		if (fx->stderr_path[0] && !rtu_cli_verbose())
-		{
-			if (!freopen(fx->stderr_path, "w", stderr))
-				_exit(127);
-			setvbuf(stderr, NULL, _IONBF, 0);
-		}
-		execv(argv[0], argv);
-		_exit(127);
-	}
-	if (fx->pid <= 0)
-		return false;
-	return rtu_cli_wait_startup(fx->pid);
+	g_rtu_cli.flags |= TS_CAPTURE_STDOUT;
+	ok = ts_server_start(&g_rtu_cli, argv);
+	g_rtu_cli.flags &= ~(u32)TS_CAPTURE_STDOUT;
+	return ok;
 }
 
 static bool
 send_all_fd(int fd, const u8* buf, u32 len)
 {
-	while (len > 0)
-	{
-		ssize_t sent = write(fd, buf, len);
-		if (sent < 0 && errno == EINTR)
-			continue;
-		if (sent <= 0)
-			return false;
-		buf += sent;
-		len -= (u32)sent;
-	}
-	return true;
+	return ts_send_fd(fd, buf, len);
 }
 
 static bool
 recv_rtu_resp_fd(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 {
-	u8 buf[MODBUS_RTU_MAX_FRAME];
-	u32 got = 0;
-	u64 deadline = clock_now_ms() + timeout_ms;
-
-	while (got < sizeof(buf))
-	{
-		struct pollfd pfd = { .fd = fd, .events = POLLIN };
-		u64 now = clock_now_ms();
-		int wait_ms;
-		ssize_t n;
-		const u8* out_pdu = NULL;
-		u32 out_len = 0;
-		u8 out_addr = 0;
-
-		if (now >= deadline)
-			return false;
-		wait_ms = (int)(deadline - now);
-		if (poll(&pfd, 1, wait_ms) <= 0)
-			continue;
-		if (!(pfd.revents & POLLIN))
-		{
-			if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL))
-				return false;
-			continue;
-		}
-		n = read(fd, buf + got, sizeof(buf) - got);
-		if (n < 0 && errno == EINTR)
-			continue;
-		if (n <= 0)
-			return false;
-		got += (u32)n;
-		if (got >= 4 && modbus_rtu_decode(buf, got, &out_addr, &out_pdu, &out_len))
-		{
-			*addr = out_addr;
-			*pdu_len = out_len;
-			memcpy(pdu, out_pdu, out_len);
-			return true;
-		}
-	}
-	return false;
+	return ts_rtu_recv(fd, addr, pdu, pdu_len, timeout_ms, false);
 }
 
 static bool
 recv_none_fd(int fd, u32 timeout_ms)
 {
-	struct pollfd pfd = { .fd = fd, .events = POLLIN };
-	int rc = poll(&pfd, 1, (int)timeout_ms);
-
-	if (rc <= 0)
-		return true;
-	if (pfd.revents & POLLIN)
-	{
-		u8	buf[16];
-		ssize_t	got = read(fd, buf, sizeof(buf));
-
-		return got <= 0;
-	}
-	return true;
+	return ts_no_data(fd, timeout_ms);
 }
 
 static bool
 send_rtu_req_fd(int fd, u8 addr, const u8* pdu, u32 pdu_len)
 {
-	u8 frame[MODBUS_RTU_MAX_FRAME];
-	u32 len = modbus_rtu_encode(frame, addr, pdu, pdu_len);
+	return ts_rtu_send(fd, addr, pdu, pdu_len, false);
+}
 
-	if (len == 0)
-		return false;
-	return send_all_fd(fd, frame, len);
+static bool
+wait_for_process_exit(pid_t pid, int* status, u32 timeout_ms)
+{
+	return ts_wait_pid(pid, status, timeout_ms);
 }
 
 static bool
@@ -402,55 +156,30 @@ rtu_cli_write_server_config(const char* mode, const char* path, const char* opti
 static bool
 rtu_cli_start_pty(const char* options, const char* devices)
 {
-	rtu_cli_t* fx = &g_rtu_cli;
-	char* argv[8];
-	int argc = 0;
 	const char* bin = getenv("MODBUS_SIM_BIN");
-	int slave = -1;
-	char name[128];
+	char* argv[3];
+	int   slave = -1;
+	char  name[128];
 
 	if (!bin)
 		bin = "./modbus-sim";
-	if (openpty(&fx->master_fd, &slave, name, NULL, NULL) < 0)
+	if (openpty(&g_rtu_cli.master_fd, &slave, name, NULL, NULL) < 0)
 		return false;
 	{
 		struct termios tio;
-		if (tcgetattr(fx->master_fd, &tio) == 0)
+		if (tcgetattr(g_rtu_cli.master_fd, &tio) == 0)
 		{
 			cfmakeraw(&tio);
-			(void)tcsetattr(fx->master_fd, TCSANOW, &tio);
+			(void)tcsetattr(g_rtu_cli.master_fd, TCSANOW, &tio);
 		}
 	}
 	close(slave);
 	if (!rtu_cli_write_server_config("rtu-device", name, options, devices))
 		return false;
-	argv[argc++] = (char*)bin;
-	argv[argc++] = fx->config;
-	argv[argc] = NULL;
+	argv[0] = (char*)bin;
+	argv[1] = g_rtu_cli.config;
+	argv[2] = NULL;
 	return rtu_cli_start_with_args(argv, true);
-}
-
-static bool
-wait_for_process_exit(pid_t pid, int* status, u32 timeout_ms)
-{
-	u64 deadline = clock_now_ms() + timeout_ms;
-
-	while (clock_now_ms() < deadline)
-	{
-		pid_t done = waitpid(pid, status, WNOHANG);
-		if (done == pid)
-			return true;
-		if (done < 0 && errno == ECHILD)
-			return true;
-		usleep(10000);
-	}
-	return false;
-}
-
-static bool
-rtu_cli_stderr_contains(const char* needle)
-{
-	return rtu_cli_file_contains(g_rtu_cli.stderr_path, needle);
 }
 
 TEST(RtuCliServesRtuOverPtyDevice)
