@@ -57,9 +57,17 @@ bool	rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
  * false for RTU-over-TCP. */
 void	rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us);
 
+/* True when a non-empty frame is waiting for its inter-frame gap (or for the
+ * read side to close). read_closed is owned by the transport, not the framer. */
+bool	rtu_framer_gap_due(const rtu_framer_t* framer, bool read_closed, u64 now_ms, u32 gap_ms);
+
 /* Handles a due inter-frame gap: process, then defer once or discard incomplete
  * bytes. Updates framer timing/deferred state. */
 void	rtu_framer_on_gap_due(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us);
+
+/* Retries a deferred incomplete frame after new bytes arrive (baud-derived auto
+ * mode only). No-op unless the new bytes can advance the deferral. */
+void	rtu_framer_on_new_data(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms);
 
 /* Name: rtu_t35_us
  * Description: Modbus RTU t3.5 inter-frame gap in microseconds for `baud`.

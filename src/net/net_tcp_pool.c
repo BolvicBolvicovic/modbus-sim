@@ -166,6 +166,18 @@ net_tcp_pool_close_idle(net_tcp_pool_t* pool, u64 now_ms)
 	}
 }
 
+void
+net_tcp_pool_close_all(net_tcp_pool_t* pool)
+{
+	for (u32 i = 0; i < pool->conn_count; i++)
+		net_tcp_pool_close_conn(pool, conn_at(pool, i));
+	if (pool->listen_fd >= 0)
+	{
+		close(pool->listen_fd);
+		pool->listen_fd = -1;
+	}
+}
+
 u32
 net_tcp_pool_build_poll(net_tcp_pool_t* pool, struct pollfd* fds, net_tcp_conn_t** owners,
 			u64 now_ms, int* timeout)

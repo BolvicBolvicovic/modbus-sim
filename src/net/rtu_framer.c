@@ -210,6 +210,13 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 	return false;
 }
 
+bool
+rtu_framer_gap_due(const rtu_framer_t* framer, bool read_closed, u64 now_ms, u32 gap_ms)
+{
+	return !framer->pending.active && framer->have_rx && framer->rx_len > 0 &&
+	       (read_closed || rtu_gap_elapsed(now_ms, framer->last_rx_ms, gap_ms));
+}
+
 void
 rtu_framer_on_gap_due(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us)
 {
@@ -230,8 +237,22 @@ rtu_framer_on_gap_due(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now
 		framer->have_rx = false;
 		return;
 	}
-	framer->gap_deferred = false;
-	framer->gap_deferred_len = 0;
+	clear_deferral(framer);
+}
+
+void
+rtu_framer_on_new_data(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms)
+{
+	bool incomplete;
+
+	if (!rtu_framer_keep_incomplete(ctx->frame_gap_ms, ctx->baud) ||
+	    !framer->gap_deferred ||
+	    framer->rx_len <= framer->gap_deferred_len)
+		return;
+	incomplete = rtu_framer_process(framer, ctx, now_ms);
+	framer->have_rx = framer->rx_len > 0;
+	if (!incomplete)
+		clear_deferral(framer);
 }
 
 static u32
