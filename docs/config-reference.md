@@ -1,7 +1,7 @@
 # Config reference
 
 A config file describes the simulator: which transport and server options to use, and which devices
-exist. Save it with any name, for example `my-device.scm`, and run `./modbus-sim my-device.scm`.
+exist. Save it with any name, for example `my-device.scm`, and run `./mogbus my-device.scm`.
 
 ## Scheme in one minute
 
@@ -173,8 +173,8 @@ ignored in all ASCII modes; `broadcast-execute` is rejected there at load time, 
 | `(server-id-additional-data "HEXBYTES")` | Additional Data returned by Report Server ID (FC 17): even-length hex string, empty allowed, 0-249 bytes (`""` = none) | `""` |
 | `(com-status N)` | Status returned by Get Com Event Counter (FC 11) and Get Com Event Log (FC 12), `0` (ready) or `65535` (busy) | `0` |
 | `(com-event N)` | One FC 12 event byte, 0-255. Repeatable up to 64 entries; reported in configuration order | none (empty log) |
-| `(vendor-name "Text")` | MEI 14 Read Device Identification object 0x00, 0-244 bytes | `"modbus-sim"` |
-| `(product-code "Text")` | MEI 14 object 0x01, 0-244 bytes | `"modbus-sim"` |
+| `(vendor-name "Text")` | MEI 14 Read Device Identification object 0x00, 0-244 bytes | `"mogbus"` |
+| `(product-code "Text")` | MEI 14 object 0x01, 0-244 bytes | `"mogbus"` |
 | `(major-minor-revision "Text")` | MEI 14 object 0x02, 0-244 bytes | `"1.0"` |
 | `(vendor-url "Text")` | MEI 14 object 0x03, 0-244 bytes; setting any regular object reports regular conformity (0x82) | absent |
 | `(product-name "Text")` | MEI 14 object 0x04, 0-244 bytes | absent |
@@ -494,7 +494,7 @@ with data `0xFF00`; data `0x0000` leaves it unchanged.
 
 ## Error messages
 
-`modbus-sim --check FILE` reads the file, reports the first problem and exits. Messages say what
+`mogbus --check FILE` reads the file, reports the first problem and exits. Messages say what
 is wrong and show the entry. Common ones:
 
 | Message | Meaning |

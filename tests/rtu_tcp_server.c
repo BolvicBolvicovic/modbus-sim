@@ -55,7 +55,7 @@ write_cfg_with_bind(const char* bind, const char* server_options, const char* de
 		     g_fx.probe_port, bind ? bind : "127.0.0.1",
 		     server_options ? server_options : "", devices);
 	ASSERT(n > 0 && (size_t)n < sizeof(config));
-	ASSERT_EQ(ts_write_config(&g_fx, "/tmp/modbus-sim-rtutcp-XXXXXX", config));
+	ASSERT_EQ(ts_write_config(&g_fx, "/tmp/mogbus-rtutcp-XXXXXX", config));
 }
 
 static void
@@ -68,7 +68,7 @@ static void
 server_start_with_bind(const char* bind, int family, const char* server_options,
 		       const char* devices)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	char*       argv[3];
 
 	g_fx.probe_port   = ts_free_port();
@@ -76,7 +76,7 @@ server_start_with_bind(const char* bind, int family, const char* server_options,
 	ASSERT(g_fx.probe_port != 0);
 	write_cfg_with_bind(bind, server_options, devices);
 
-	argv[0] = (char*)(bin ? bin : "./modbus-sim");
+	argv[0] = (char*)(bin ? bin : "./mogbus");
 	argv[1] = g_fx.config;
 	argv[2] = NULL;
 	ASSERT_EQ(ts_server_start(&g_fx, argv));

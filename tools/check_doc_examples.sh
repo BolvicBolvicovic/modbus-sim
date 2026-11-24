@@ -3,8 +3,8 @@
 # that look like complete configs (contain a top-level (device ...) form).
 set -eu
 
-bin=${1:-./modbus-sim}
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/modbus-sim-doccheck.XXXXXX")
+bin=${1:-./mogbus}
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mogbus-doccheck.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 status="$tmpdir/status"

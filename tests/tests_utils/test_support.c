@@ -23,7 +23,7 @@
 bool
 ts_verbose(void)
 {
-	const char* v = getenv("MODBUS_SIM_TEST_VERBOSE");
+	const char* v = getenv("MOGBUS_TEST_VERBOSE");
 
 	return v && v[0] && strcmp(v, "0") != 0;
 }
@@ -220,10 +220,10 @@ ts_server_start(ts_server_t* s, char* const argv[])
 
 	/* Callers that need the log path before starting (CLI checks) create it themselves. */
 	if (capture_err && !s->stderr_path[0] &&
-	    !ts_temp_file(s->stderr_path, sizeof(s->stderr_path), "/tmp/modbus-sim-stderr-XXXXXX"))
+	    !ts_temp_file(s->stderr_path, sizeof(s->stderr_path), "/tmp/mogbus-stderr-XXXXXX"))
 		return false;
 	if (capture_out && !s->stdout_path[0] &&
-	    !ts_temp_file(s->stdout_path, sizeof(s->stdout_path), "/tmp/modbus-sim-stdout-XXXXXX"))
+	    !ts_temp_file(s->stdout_path, sizeof(s->stdout_path), "/tmp/mogbus-stdout-XXXXXX"))
 		goto fail;
 
 	s->pid = fork();

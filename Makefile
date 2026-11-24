@@ -1,10 +1,10 @@
-# modbus-sim build. Modeled on the Makefile vlib/gen_makefile.py generates, but the
+# mogbus build. Modeled on the Makefile vlib/gen_makefile.py generates, but the
 # source tree has sub-folders (one per module), so sources are found recursively.
 
-BIN         = modbus-sim
+BIN         = mogbus
 TESTS       = $(BIN)-tests
-ASAN_BIN    = modbus-sim-asan
-ASAN_TESTS  = modbus-sim-asan-tests
+ASAN_BIN    = mogbus-asan
+ASAN_TESTS  = mogbus-asan-tests
 
 # ccache, clang and mold are optional speed-ups: prefer the fast toolchain only
 # when all three are installed, otherwise use cc and the default linker.
@@ -177,7 +177,7 @@ vlib/vtest$(OBJEXT): vlib/vtest.c
 # the parsed config points into them. UBSan failures abort (-fno-sanitize-recover).
 asan:
 	$(MAKE) SAN=1 $(ASAN_BIN) $(ASAN_TESTS)
-	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MODBUS_SIM_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MOGBUS_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
 
 clean:
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS)

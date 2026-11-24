@@ -1,4 +1,4 @@
-/* modbus-sim: a Modbus TCP device simulator configured with a Scheme file.
+/* mogbus: a Modbus TCP device simulator configured with a Scheme file.
  * The vlib arena implementation lives in this file only. */
 #include "device/fault.h"
 #define ARENA_IMPL
@@ -42,9 +42,9 @@ struct cli_t
 static inline void
 print_usage(void)
 {
-	puts("modbus-sim - Modbus TCP/RTU/ASCII device simulator\n"
+	puts("mogbus - Modbus TCP/RTU/ASCII device simulator\n"
 	     "\n"
-	     "Usage: modbus-sim [options] CONFIG.scm\n"
+	     "Usage: mogbus [options] CONFIG.scm\n"
 	     "\n"
 	     "Options:\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
@@ -68,7 +68,7 @@ print_usage(void)
 	     "Modbus TCP may be TLS-wrapped with (server (mode tcp) (tls ...)); it then\n"
 	     "defaults to port 802 unless (port N) is given, and requires OpenSSL at build time.\n"
 	     "\n"
-	     "Try:  modbus-sim profiles/minimal.scm\n"
+	     "Try:  mogbus profiles/minimal.scm\n"
 	     "Docs: README.md and docs/");
 }
 

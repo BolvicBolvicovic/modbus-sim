@@ -7,7 +7,7 @@ register map; adapt the addresses and units to the device you want to imitate.
 ## Use a profile
 
 ```bash
-./modbus-sim profiles/power-meter.scm
+./mogbus profiles/power-meter.scm
 ./tools/modbus_probe.py input 0 2 --as float32      # -> [228.0]
 ```
 
@@ -42,7 +42,7 @@ instead of a manual.
 ./tools/modbus_probe.py --unit 2 input 0 2 --as float32
 
 # see every request the server gets
-./modbus-sim -v profiles/slow-sensor.scm
+./mogbus -v profiles/slow-sensor.scm
 ```
 
 ## Write your own profile
@@ -53,7 +53,7 @@ instead of a manual.
    - the address as sent on the wire (see [config-reference](config-reference.md#data-points))
    - the `type` and `word-order` if it is not a plain 16-bit unsigned value
    - the behaviour: `(static ...)` or `(ramp ...)`
-3. Check it: `./modbus-sim --check my-meter.scm`.
+3. Check it: `./mogbus --check my-meter.scm`.
 4. Run it and read the values with `tools/modbus_probe.py` or your own client.
 
 Tips:

@@ -61,8 +61,8 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->diag_overrun_count     = 0;
 	dev->listen_only            = false;
 	dev->start_ms               = start_ms;
-	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "modbus-sim");
-	strcpy(dev->device_id[DEVICE_ID_PRODUCT_CODE], "modbus-sim");
+	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "mogbus");
+	strcpy(dev->device_id[DEVICE_ID_PRODUCT_CODE], "mogbus");
 	strcpy(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "1.0");
 	return dev;
 }

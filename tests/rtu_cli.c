@@ -51,14 +51,14 @@ rtu_cli_stop(void)
 static bool
 rtu_cli_write_config(const char* text)
 {
-	return ts_write_config(&g_rtu_cli, "/tmp/modbus-sim-rtucli-XXXXXX", text);
+	return ts_write_config(&g_rtu_cli, "/tmp/mogbus-rtucli-XXXXXX", text);
 }
 
 static bool
 rtu_cli_capture_stderr(void)
 {
 	return ts_temp_file(g_rtu_cli.stderr_path, sizeof(g_rtu_cli.stderr_path),
-			    "/tmp/modbus-sim-rtuclierr-XXXXXX");
+			    "/tmp/mogbus-rtuclierr-XXXXXX");
 }
 
 static bool
@@ -100,7 +100,7 @@ rtu_cli_start_with_args_capture_stdout(char* const argv[])
 	if (!ts_verbose() && !g_rtu_cli.stderr_path[0] && !rtu_cli_capture_stderr())
 		return false;
 	if (!ts_temp_file(g_rtu_cli.stdout_path, sizeof(g_rtu_cli.stdout_path),
-			  "/tmp/modbus-sim-rtucliout-XXXXXX"))
+			  "/tmp/mogbus-rtucliout-XXXXXX"))
 		return false;
 	g_rtu_cli.flags |= TS_CAPTURE_STDOUT;
 	ok = ts_server_start(&g_rtu_cli, argv);
@@ -156,13 +156,13 @@ rtu_cli_write_server_config(const char* mode, const char* path, const char* opti
 static bool
 rtu_cli_start_pty(const char* options, const char* devices)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	char* argv[3];
 	int   slave = -1;
 	char  name[128];
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	if (openpty(&g_rtu_cli.master_fd, &slave, name, NULL, NULL) < 0)
 		return false;
 	{
@@ -243,8 +243,8 @@ TEST(RtuCliConfigFrameGapAffectsResponseTiming)
 
 TEST(RtuCliCheckSkipsReservedUnitIdWarningWithoutSerialMode)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
-	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
+	const char* bin = getenv("MOGBUS_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
 	int status = 0;
 	bool ok;
 
@@ -261,7 +261,7 @@ TEST(RtuCliCheckSkipsReservedUnitIdWarningWithoutSerialMode)
 
 TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	int outpipe[2] = { -1, -1 };
 	pid_t pid;
 	int status = 0;
@@ -276,7 +276,7 @@ TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
 	int slave_fd = -1;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	ASSERT_EQ(rtu_cli_write_server_config("rtu-pty", NULL, "(frame-gap-ms 5)",
 					      "(device (unit-id 1) (holding 0 (static 4660)))\n"));
 	ASSERT_EQ(pipe(outpipe) == 0);
@@ -369,8 +369,8 @@ got_path:
 
 TEST(RtuCliDeviceOpenDoesNotBlockOnFifoWithoutWriter)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
-	char fifo_path[] = "/tmp/modbus-sim-rtu-fifo-XXXXXX";
+	const char* bin = getenv("MOGBUS_BIN");
+	char fifo_path[] = "/tmp/mogbus-rtu-fifo-XXXXXX";
 	char* argv[8];
 	int argc = 0;
 	int fd;
@@ -379,7 +379,7 @@ TEST(RtuCliDeviceOpenDoesNotBlockOnFifoWithoutWriter)
 	bool ok;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	fd = mkstemp(fifo_path);
 	ASSERT_EQ(fd >= 0);
 	close(fd);
@@ -456,7 +456,7 @@ rtu_termios_is_8n1_raw(const struct termios* tio)
 
 TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	int master_fd = -1;
 	int slave_fd = -1;
 	char name[128];
@@ -467,7 +467,7 @@ TEST(RtuCliRtuDeviceSets8N1RawTermiosAndPreservesBaud)
 	bool ok = false;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	ASSERT_EQ(openpty(&master_fd, &slave_fd, name, NULL, NULL) == 0);
 
 	/* Preconfigure a weird/non-8N1 state with a known baud rate. The server
@@ -558,7 +558,7 @@ rtu_cli_pty_line_flags(const char* options, const char* devices, struct termios*
 	rtu_cli_t* fx = &g_rtu_cli;
 	char* argv[8];
 	int argc = 0;
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	int master_fd = -1;
 	int slave_fd = -1;
 	char name[128];
@@ -568,7 +568,7 @@ rtu_cli_pty_line_flags(const char* options, const char* devices, struct termios*
 	bool ok = false;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	if (openpty(&master_fd, &slave_fd, name, NULL, NULL) < 0)
 		goto done;
 	if (tcgetattr(slave_fd, &tio) != 0)
@@ -775,10 +775,10 @@ rtu_cli_start_real_pty(const char* options)
 	rtu_cli_t* fx = &g_rtu_cli;
 	char* argv[8];
 	int argc = 0;
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	if (!rtu_cli_write_server_config("rtu-pty", NULL, options,
 					 "(device (unit-id 1) (holding 0 (static 4660)))\n"))
 		return false;
@@ -851,8 +851,8 @@ TEST(RtuCliConfigBaudOnPtyLogsDerivedTiming)
 
 TEST(RtuCliCheckRtuTcpPrintsTimingSummary)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
-	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
+	const char* bin = getenv("MOGBUS_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
 	int status = 0;
 	bool ok;
 
@@ -898,8 +898,8 @@ TEST(RtuCliBroadcastExecuteFromConfigEnablesExecution)
 
 TEST(RtuCliCheckRtuTcpBroadcastExecutePrintsSummary)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
-	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
+	const char* bin = getenv("MOGBUS_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
 	int status = 0;
 
 	ASSERT_EQ(rtu_cli_write_server_config("rtu-tcp", NULL, "(broadcast-execute on)",
@@ -915,8 +915,8 @@ TEST(RtuCliCheckRtuTcpBroadcastExecutePrintsSummary)
 
 TEST(RtuCliCheckTcpRejectsSerialLineConfig)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
-	char* argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check", g_rtu_cli.config, NULL };
+	const char* bin = getenv("MOGBUS_BIN");
+	char* argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
 	int status = 0;
 
 	ASSERT_EQ(rtu_cli_write_config("(server (mode tcp) (parity even) (stop-bits 2))\n"
@@ -959,12 +959,12 @@ rtu_cli_expect_cli_success(char* const argv[], const char* stdout_needle)
 
 TEST(RtuCliCheckSummarizesConfiguredModes)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	const char devices[] = "(device (unit-id 1) (holding 0 (static 1)))\n";
 	bool ok = true;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 
 	{
 		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
@@ -989,7 +989,7 @@ TEST(RtuCliCheckSummarizesConfiguredModes)
 
 TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	static const char* const removed_flags[] = {
 		"-p", "--port", "-b", "--bind", "--rtu-pty", "--rtu-device",
 		"--rtu-tcp", "--ascii-pty", "--ascii-device", "--baud", "--rtu-baud",
@@ -1000,7 +1000,7 @@ TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
 	bool ok = true;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 
 	for (u32 i = 0; i < sizeof(removed_flags) / sizeof(removed_flags[0]); i++)
 	{
@@ -1019,7 +1019,7 @@ TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
 	{
 		char* argv[] = { (char*)bin, "-h", NULL };
 
-		ok = ok && rtu_cli_expect_cli_success(argv, "Usage: modbus-sim");
+		ok = ok && rtu_cli_expect_cli_success(argv, "Usage: mogbus");
 	}
 	{
 		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };

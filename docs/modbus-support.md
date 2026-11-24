@@ -55,7 +55,7 @@ framing/transport differ.
 Frame format: `[addr][PDU...][CRC lo][CRC hi]` (2-byte Modbus CRC-16, low byte first). A valid
 frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. Device-mode paths are opened with
 `O_NONBLOCK` so startup does not hang on a blocking open (for example, a FIFO with no writer);
-`modbus-sim` keeps the fd non-blocking for the poll loop. When the fd is a tty, `modbus-sim`
+`mogbus` keeps the fd non-blocking for the poll loop. When the fd is a tty, `mogbus`
 configures raw mode (`CS8`, `CLOCAL|CREAD`, no flow control) with the selected parity and stop bits,
 and preserves the existing baud rate. The default is 8N1 (no parity, 1 stop bit); config
 `(server (parity even))` / `(server (stop-bits 2))` select `none|even|odd|mark|space` parity and 1 or
@@ -65,11 +65,11 @@ RTU byte-stream ttys; non-tty fds skip termios setup.
 Frame boundaries use Modbus RTU inter-frame timing when a baud rate is known: t3.5 is 1.750 ms for
 baud rates above 19200, otherwise `ceil(3.5 * 11 / baud * 1,000,000)` microseconds. The baud can be
 set explicitly with `(server (baud N))`; baud values must be standard termios rates. For tty
-devices, when no explicit baud is configured, `modbus-sim` reads the tty's current output baud and
+devices, when no explicit baud is configured, `mogbus` reads the tty's current output baud and
 derives t3.5 from it. `(server (frame-gap-ms N))` remains an explicit inter-frame silence override
 and takes precedence over baud-derived timing.
 
-For byte streams with no UART character timing (PTY/pipe) and no known baud, `modbus-sim` falls back
+For byte streams with no UART character timing (PTY/pipe) and no known baud, `mogbus` falls back
 to `frame-gap-ms` if configured, otherwise the default 20 ms. In that fallback mode the boundary is
 still a practical approximation because read() chunk boundaries do not expose true UART character
 timing. When baud is known and no explicit `frame-gap-ms` override is set, a read() gap >= t3.5 is
@@ -134,7 +134,7 @@ No response is produced, and no PDU is dispatched, for:
 Delay faults still hold the ASCII response until the configured delay has elapsed, without blocking
 other work in the poll loop. Unit ids must be 1-247 in ASCII modes, as in RTU; `--check` with an ASCII
 mode applies the same check. `(server (baud N))` may set the serial line/PTY speed but never affects
-ASCII framing or timing. When the fd is a tty, `modbus-sim` configures raw 8N1 by default (8 data
+ASCII framing or timing. When the fd is a tty, `mogbus` configures raw 8N1 by default (8 data
 bits, no parity, 1 stop bit, no flow control). The traditional Modbus ASCII 7E1 line format is opt-in:
 `(server (data-bits 7) (parity even) (stop-bits 1))` sets `CS7`, even parity and 1 stop bit. Each
 config selects exactly one mode; RTU timing and broadcast entries are rejected in ASCII modes, and
@@ -263,7 +263,7 @@ The request must be exactly 3 bytes; any other length or shape (short, extra dat
 
 Read Device Identification (FC 43 / 0x2B) reads device identification objects. MEI type `0x0E` (14) is Read Device Identification; MEI `0x0D` (13) is CANopen General Reference (see below). The request must be exactly `[0x2B][0x0E][ReadDevId code][Object Id]` (4 bytes); the response echoes MEI `0x0E`. The normal response PDU is `[0x2B][0x0E][ReadDevId code][Conformity Level][More Follows][Next Object Id][Number Of Objects][Object list...]`. Each object in the list is `[Object Id][Object Length][Object Value...]`, where `Object Value` is ASCII bytes and `Object Length` is 1..244. The 244-byte maximum keeps any single object readable in one MEI response (7-byte header + 2-byte object header + 244 = 253 = `MODBUS_MAX_PDU`). FC 43 uses the same PDU and validation over TCP, RTU, and RTU-over-TCP. In RTU, MEI `0x0E` has a fixed 4-byte request PDU, while MEI `0x0D` is variable-length and framed from its count field.
 
-Supported ReadDevId codes are `01` basic, `02` regular, `03` extended, and `04` specific. Object ids `0x00` VendorName, `0x01` ProductCode, and `0x02` MajorMinorRevision are basic/mandatory and default to `modbus-sim`, `modbus-sim`, and `1.0`. Optional regular objects `0x03` VendorUrl, `0x04` ProductName, `0x05` ModelName, and `0x06` UserApplicationName are returned only when configured. Extended identification objects `0x80-0xFF` can be configured per device (at most 32; see [config-reference.md](config-reference.md)). Conformity Level is `0x81` with only mandatory objects, `0x82` if any regular object `0x03-0x06` is configured, and `0x83` if any extended object is configured (extended takes precedence). Number Of Objects is the count returned in the current response.
+Supported ReadDevId codes are `01` basic, `02` regular, `03` extended, and `04` specific. Object ids `0x00` VendorName, `0x01` ProductCode, and `0x02` MajorMinorRevision are basic/mandatory and default to `mogbus`, `mogbus`, and `1.0`. Optional regular objects `0x03` VendorUrl, `0x04` ProductName, `0x05` ModelName, and `0x06` UserApplicationName are returned only when configured. Extended identification objects `0x80-0xFF` can be configured per device (at most 32; see [config-reference.md](config-reference.md)). Conformity Level is `0x81` with only mandatory objects, `0x82` if any regular object `0x03-0x06` is configured, and `0x83` if any extended object is configured (extended takes precedence). Number Of Objects is the count returned in the current response.
 
 Read code `01` (basic) returns only objects `0x00-0x02`. Read code `02` (regular) streams objects `0x00-0x06` only and never includes extended objects. Read code `03` (extended) streams objects `0x00-0x06` first, then configured extended objects `0x80-0xFF` in ascending id order, skipping unconfigured optional objects. For stream access, an object id that is not a configured/present object (including `0x07-0x7F`) restarts at object 0; a configured extended object id starts there. Read code `04` (specific) returns one configured object; extended ids `0x80-0xFF` work when configured, while unconfigured extended ids and `0x07-0x7F` return exception 02. If a stream does not fit in a Modbus PDU, the response sets `More Follows=0xFF` and `Next Object Id` to the first object not included; the client resumes with another stream request using that id. A response with zero objects is exception 02. Unsupported MEI types (anything other than `0x0D` and `0x0E`) return exception 01 (checked before request length, so an unsupported MEI returns 01 even when the request length is malformed); an invalid ReadDevId code, invalid request length, or other malformed request data returns exception 03. FC 43 participates in normal handled-request processing (diagnostic counters/tick/routing) like other supported FCs.
 
@@ -329,7 +329,7 @@ using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set
 
 In RTU and ASCII modes, unit ids must be in the range 1-247. Address 0 is Modbus broadcast and
 248-255 are reserved by the Modbus serial specification; a device configured with one of these ids
-cannot be addressed by a normal serial request. `modbus-sim` rejects these ids when starting in an
+cannot be addressed by a normal serial request. `mogbus` rejects these ids when starting in an
 RTU or ASCII mode and when `--check` reads such a mode. RTU broadcast requests (address 0) are
 received but are ignored unless `(server (broadcast-execute on))` is set; when enabled they execute
 on all devices and still produce no response. ASCII broadcast frames are received but never executed,

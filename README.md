@@ -1,6 +1,6 @@
-# modbus-sim
+# mogbus
 
-A Modbus TCP/RTU/ASCII device simulator. You describe a device in a small text file; `modbus-sim`
+A Modbus TCP/RTU/ASCII device simulator. You describe a device in a small text file; `mogbus`
 pretends to be that device on the network or on a serial byte stream. Point your SCADA, PLC,
 gateway or test script at it.
 
@@ -20,8 +20,8 @@ there are ready-made profiles you can copy.
 ## Quick start
 
 ```bash
-make                                   # builds ./modbus-sim (TLS enabled when OpenSSL headers are found)
-./modbus-sim profiles/minimal.scm      # start the simulator on port 1502
+make                                   # builds ./mogbus (TLS enabled when OpenSSL headers are found)
+./mogbus profiles/minimal.scm          # start the simulator on port 1502
 
 # in another terminal:
 ./tools/modbus_probe.py holding 0 2    # -> [42, <a value that moves>]
@@ -32,14 +32,14 @@ Use `make -j$(nproc)` for a faster clean build; compilation is safe to paralleli
 Check a config without starting the server:
 
 ```bash
-./modbus-sim --check profiles/power-meter.scm
+./mogbus --check profiles/power-meter.scm
 ```
 
 Run the tests: `make tests`. Independent suites run in parallel (3 workers by default; set
 `RUN_TESTS_JOBS=N` to change, capped by the number of suites); tests inside a suite stay sequential.
 Run them under AddressSanitizer and UBSan: `make asan` (the vendored s7 interpreter is excluded
 from instrumentation). The suite includes network integration tests that start the real server on
-loopback; set `MODBUS_SIM_BIN` to test a different binary.
+loopback; set `MOGBUS_BIN` to test a different binary.
 
 ### Build options
 
@@ -114,7 +114,7 @@ See [docs/profiles.md](docs/profiles.md).
 ## Command line
 
 ```
-modbus-sim [options] CONFIG.scm
+mogbus [options] CONFIG.scm
 
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
