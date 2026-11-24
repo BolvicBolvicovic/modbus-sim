@@ -3,6 +3,7 @@
 
 #include "build_config.h"
 #include "vlib/c_types.h"
+#include <poll.h>
 #include <stdbool.h>
 
 /* TLS API for TLS-wrapped Modbus TCP. The build selects either the OpenSSL
@@ -12,7 +13,6 @@
  * (both headers define __counted_by). */
 
 typedef struct ssl_ctx_st SSL_CTX;
-typedef struct ssl_st SSL;
 
 typedef enum net_tls_version_t net_tls_version_t;
 enum net_tls_version_t
@@ -47,22 +47,34 @@ struct net_tls_config_t
 
 typedef SSL_CTX net_tls_ctx_t;
 
+/* Opaque per-connection state: SSL object, handshake/want flags and deadline. */
+typedef struct net_tls_conn_t net_tls_conn_t;
+
 /* Returns NULL and fills `err` when OpenSSL cannot set up the server context. */
 net_tls_ctx_t*	net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size);
 void		net_tls_ctx_destroy(net_tls_ctx_t* ctx);
 
-/* Creates an accept-side SSL object on a nonblocking socket. */
-SSL*		net_tls_session_new(net_tls_ctx_t* ctx, int fd, char* err, u32 err_size);
-/* Copies the peer certificate subject in RFC2253 form; false when there is no peer
- * certificate or it cannot be rendered. */
-bool		net_tls_peer_subject(SSL* ssl, char* buf, u32 size);
-/* Sends a best-effort close_notify, waiting at most a few tens of ms, then frees the session. */
-void		net_tls_session_close(SSL* ssl);
+/* Creates an accept-side session on a nonblocking socket. The handshake deadline
+ * is measured from accept; 0 disables it. NULL and `err` on failure. */
+net_tls_conn_t*	net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms,
+				 char* err, u32 err_size);
+/* Sends a best-effort close_notify, then frees the session. */
+void		net_tls_conn_close(net_tls_conn_t* conn);
 
-/* Nonblocking TLS operations. For read/write, `len` receives the byte count on OK. */
-net_tls_status_t net_tls_handshake(SSL* ssl, char* err, u32 err_size);
-net_tls_status_t net_tls_read(SSL* ssl, void* buf, int size, int* len, char* err, u32 err_size);
-net_tls_status_t net_tls_write(SSL* ssl, const void* buf, int size, int* len, char* err, u32 err_size);
-int		net_tls_pending(SSL* ssl);
+bool		net_tls_conn_handshake_done(const net_tls_conn_t* conn);
+u64		net_tls_conn_handshake_deadline(const net_tls_conn_t* conn);
+/* POLLIN/POLLOUT bits requested by OpenSSL; 0 when none. */
+short		net_tls_conn_poll_events(const net_tls_conn_t* conn);
+int		net_tls_conn_pending(const net_tls_conn_t* conn);
+/* Copies the peer certificate subject in RFC2253 form; false when unavailable. */
+bool		net_tls_conn_peer_subject(const net_tls_conn_t* conn, char* buf, u32 size);
+
+/* Nonblocking TLS operations. Read/write update the want flags and place the
+ * byte count in `len`; callers never touch the flags directly. */
+net_tls_status_t net_tls_conn_handshake(net_tls_conn_t* conn, char* err, u32 err_size);
+net_tls_status_t net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len,
+				   char* err, u32 err_size);
+net_tls_status_t net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len,
+				    char* err, u32 err_size);
 
 #endif

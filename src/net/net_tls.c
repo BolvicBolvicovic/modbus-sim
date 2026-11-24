@@ -12,6 +12,19 @@
 #define TLS_SHUTDOWN_WAIT_MS	50
 #define TLS_SHUTDOWN_POLL_MS	5
 #define TLS_SHUTDOWN_ATTEMPTS	(TLS_SHUTDOWN_WAIT_MS / TLS_SHUTDOWN_POLL_MS)
+#define NET_TLS_MAX_SESSIONS	32
+
+struct net_tls_conn_t
+{
+	SSL*	ssl;
+	bool	handshake_done;
+	bool	want_read;
+	bool	want_write;
+	u64	handshake_deadline_ms;
+};
+
+/* No per-session allocation: the TCP server owns at most 32 connection slots. */
+static net_tls_conn_t g_conns[NET_TLS_MAX_SESSIONS];
 
 static void
 copy_last_error(char* out, u32 size)
@@ -129,11 +142,26 @@ net_tls_ctx_destroy(net_tls_ctx_t* ctx)
 		SSL_CTX_free(ctx);
 }
 
-SSL*
-net_tls_session_new(net_tls_ctx_t* ctx, int fd, char* err, u32 err_size)
+net_tls_conn_t*
+net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, char* err, u32 err_size)
 {
-	SSL* ssl = SSL_new(ctx);
+	net_tls_conn_t* conn = NULL;
+	SSL*		ssl;
 
+	for (u32 i = 0; i < NET_TLS_MAX_SESSIONS; i++)
+	{
+		if (!g_conns[i].ssl)
+		{
+			conn = &g_conns[i];
+			break;
+		}
+	}
+	if (!conn)
+	{
+		snprintf(err, err_size, "too many TLS sessions");
+		return NULL;
+	}
+	ssl = SSL_new(ctx);
 	if (!ssl)
 	{
 		copy_last_error(err, err_size);
@@ -146,11 +174,82 @@ net_tls_session_new(net_tls_ctx_t* ctx, int fd, char* err, u32 err_size)
 		return NULL;
 	}
 	SSL_set_accept_state(ssl);
-	return ssl;
+	conn->ssl                   = ssl;
+	conn->handshake_done        = false;
+	conn->want_read             = true;
+	conn->want_write            = false;
+	conn->handshake_deadline_ms = handshake_deadline_ms;
+	return conn;
+}
+
+static void
+ssl_close(SSL* ssl)
+{
+	/* The socket is nonblocking: keep trying while shutdown needs I/O, but never
+	 * wait for a peer that is not reading or sending. */
+	for (int i = 0; i < TLS_SHUTDOWN_ATTEMPTS; i++)
+	{
+		struct pollfd	pfd = { .fd = SSL_get_fd(ssl) };
+		int		rc;
+		int		err;
+		int		ready;
+
+		ERR_clear_error();
+		rc = SSL_shutdown(ssl);
+		if (rc >= 0)
+			break;
+		err = SSL_get_error(ssl, rc);
+		if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)
+			break;
+		pfd.events = err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT;
+		ready = poll(&pfd, 1, TLS_SHUTDOWN_POLL_MS);
+		if (ready < 0 && errno != EINTR)
+			break;
+	}
+	SSL_free(ssl);
+}
+
+void
+net_tls_conn_close(net_tls_conn_t* conn)
+{
+	if (!conn || !conn->ssl)
+		return;
+	ssl_close(conn->ssl);
+	memset(conn, 0, sizeof(*conn));
 }
 
 bool
-net_tls_peer_subject(SSL* ssl, char* buf, u32 size)
+net_tls_conn_handshake_done(const net_tls_conn_t* conn)
+{
+	return conn && conn->handshake_done;
+}
+
+u64
+net_tls_conn_handshake_deadline(const net_tls_conn_t* conn)
+{
+	return conn ? conn->handshake_deadline_ms : 0;
+}
+
+short
+net_tls_conn_poll_events(const net_tls_conn_t* conn)
+{
+	short events = 0;
+
+	if (conn && conn->want_read)
+		events |= POLLIN;
+	if (conn && conn->want_write)
+		events |= POLLOUT;
+	return events;
+}
+
+int
+net_tls_conn_pending(const net_tls_conn_t* conn)
+{
+	return conn && conn->ssl ? SSL_pending(conn->ssl) : 0;
+}
+
+static bool
+peer_subject(SSL* ssl, char* buf, u32 size)
 {
 	X509*	cert;
 	BIO*	bio;
@@ -179,34 +278,10 @@ net_tls_peer_subject(SSL* ssl, char* buf, u32 size)
 	return ok;
 }
 
-void
-net_tls_session_close(SSL* ssl)
+bool
+net_tls_conn_peer_subject(const net_tls_conn_t* conn, char* buf, u32 size)
 {
-	if (!ssl)
-		return;
-
-	/* The socket is nonblocking: keep trying while shutdown needs I/O, but never
-	 * wait for a peer that is not reading or sending. */
-	for (int i = 0; i < TLS_SHUTDOWN_ATTEMPTS; i++)
-	{
-		struct pollfd	pfd = { .fd = SSL_get_fd(ssl) };
-		int		rc;
-		int		err;
-		int		ready;
-
-		ERR_clear_error();
-		rc = SSL_shutdown(ssl);
-		if (rc >= 0)
-			break;
-		err = SSL_get_error(ssl, rc);
-		if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)
-			break;
-		pfd.events = err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT;
-		ready = poll(&pfd, 1, TLS_SHUTDOWN_POLL_MS);
-		if (ready < 0 && errno != EINTR)
-			break;
-	}
-	SSL_free(ssl);
+	return conn && peer_subject(conn->ssl, buf, size);
 }
 
 static net_tls_status_t
@@ -225,55 +300,64 @@ io_status(SSL* ssl, int rc)
 	return NET_TLS_ERROR;
 }
 
+static void
+set_wants(net_tls_conn_t* conn, net_tls_status_t status)
+{
+	conn->want_read  = status == NET_TLS_WANT_READ;
+	conn->want_write = status == NET_TLS_WANT_WRITE;
+}
+
 net_tls_status_t
-net_tls_handshake(SSL* ssl, char* err, u32 err_size)
+net_tls_conn_handshake(net_tls_conn_t* conn, char* err, u32 err_size)
 {
 	int rc;
-	int status;
+	net_tls_status_t status;
 
+	conn->want_read  = false;
+	conn->want_write = false;
 	ERR_clear_error();
-	rc = SSL_do_handshake(ssl);
-	status = io_status(ssl, rc);
-
+	rc = SSL_do_handshake(conn->ssl);
+	status = io_status(conn->ssl, rc);
+	if (status == NET_TLS_OK)
+		conn->handshake_done = true;
 	if (status == NET_TLS_ERROR)
 		copy_last_error(err, err_size);
+	set_wants(conn, status);
 	return status;
 }
 
 net_tls_status_t
-net_tls_read(SSL* ssl, void* buf, int size, int* len, char* err, u32 err_size)
+net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len, char* err, u32 err_size)
 {
 	int rc;
-	int status;
+	net_tls_status_t status;
 
+	conn->want_read  = false;
+	conn->want_write = false;
 	ERR_clear_error();
-	rc = SSL_read(ssl, buf, size);
-	status = io_status(ssl, rc);
-
+	rc = SSL_read(conn->ssl, buf, size);
+	status = io_status(conn->ssl, rc);
 	*len = rc > 0 ? rc : 0;
 	if (status == NET_TLS_ERROR)
 		copy_last_error(err, err_size);
+	set_wants(conn, status);
 	return status;
 }
 
 net_tls_status_t
-net_tls_write(SSL* ssl, const void* buf, int size, int* len, char* err, u32 err_size)
+net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len, char* err, u32 err_size)
 {
 	int rc;
-	int status;
+	net_tls_status_t status;
 
+	conn->want_read  = false;
+	conn->want_write = false;
 	ERR_clear_error();
-	rc = SSL_write(ssl, buf, size);
-	status = io_status(ssl, rc);
-
+	rc = SSL_write(conn->ssl, buf, size);
+	status = io_status(conn->ssl, rc);
 	*len = rc > 0 ? rc : 0;
 	if (status == NET_TLS_ERROR)
 		copy_last_error(err, err_size);
+	set_wants(conn, status);
 	return status;
-}
-
-int
-net_tls_pending(SSL* ssl)
-{
-	return SSL_pending(ssl);
 }

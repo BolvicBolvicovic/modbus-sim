@@ -39,9 +39,6 @@ u32		net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms,
  * device on the bus. Used for bad frames on both RTU and ASCII byte streams. */
 void		net_record_comm_error(device_t** devices, u32 count);
 
-/* RTU name retained for the RTU framer; same counter as net_record_comm_error. */
-void		net_record_rtu_comm_error(device_t** devices, u32 count);
-
 /* Clears a queued response slot. */
 void		pending_response_clear(pending_response_t* pending);
 

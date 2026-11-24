@@ -33,14 +33,17 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
-`net_tls` wraps OpenSSL and keeps its headers out of other modules; in a no-TLS build
-`net_tls_stub.c` implements the same API without OpenSSL. `config` only supplies borrowed TLS
-strings through `tcp_server_options_t` and rejects `(tls ...)` at load time in no-TLS builds.
+`net_tls` wraps OpenSSL and keeps its headers out of other modules; its opaque `net_tls_conn_t`
+owns each session's handshake/want flags and deadline. In a no-TLS build `net_tls_stub.c`
+implements the same API without OpenSSL. `net_tcp_pool` owns only listener, accept, idle and
+poll-table bookkeeping for the three TCP transports; per-connection framing/TLS setup stays in
+the servers. `config` only supplies borrowed TLS strings through `tcp_server_options_t` and
+rejects `(tls ...)` at load time in no-TLS builds.
 `build_config.h` provides the `WITH_TLS` fallback for direct compilations. `device` and `modbus`
 can be tested alone, and are (see `tests/`).
 
@@ -79,7 +82,10 @@ models arrive (below), expressions can be evaluated with `s7_eval` in a controll
 
 ### TCP (`net/tcp_server.c`)
 
-One thread, one `poll()` call. Per connection there is one receive buffer and one send buffer:
+One thread, one `poll()` call. Listener setup, accept backoff, free-slot lookup, peer formatting
+and idle sweeping are shared with the other TCP transports through `net/net_tcp_pool`; TLS
+handshake state is queried through `net/net_tls`. Per connection there is one receive buffer and
+one send buffer:
 
 - A response with a delay fault is placed in the send buffer with a due time. The poll timeout
   is the nearest due time, so nothing sleeps.

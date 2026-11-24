@@ -62,12 +62,6 @@ net_record_comm_error(device_t** devices, u32 count)
 }
 
 void
-net_record_rtu_comm_error(device_t** devices, u32 count)
-{
-	net_record_comm_error(devices, count);
-}
-
-void
 pending_response_clear(pending_response_t* pending)
 {
 	pending->active = false;

@@ -48,7 +48,7 @@ static void
 discard_rx(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx)
 {
 	if (rx_is_bad_frame(framer->rx, framer->rx_len))
-		net_record_rtu_comm_error(ctx->devices, ctx->device_count);
+		net_record_comm_error(ctx->devices, ctx->device_count);
 	framer->rx_len = 0;
 	clear_deferral(framer);
 }
