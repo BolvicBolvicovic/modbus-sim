@@ -289,6 +289,30 @@ The previously tracked Modbus spec deviations have been resolved:
 
 Current intentional transport/behavior limits (not spec deviations in supported FC semantics) are documented in [Not supported (yet)](#not-supported-yet) and the RTU/ASCII/TCP transport sections above.
 
+## Spec coverage at a glance
+
+Every public Modbus function code is implemented: FC 01-08, 0B, 0C, 0F, 10, 11, 14-18, and FC 43
+(0x2B) MEI 0x0E. Reserved and user-defined codes, including FC 43 MEI 0x0D (CANopen General
+Reference), are intentionally unsupported and return exception 01.
+
+The remaining gaps relative to the wider Modbus specification are:
+
+- Exception codes 04-08 and 0A are not produced by normal validation; they exist only through
+  `(fault (kind exception) (code N))`. Code 09 is reserved.
+- There is no ASCII-over-TCP, no IPv6, and no Modbus TCP Security/TLS. RTU-over-TCP is an explicit
+  listen mode, not a gateway or proxy.
+- True UART character-level t1.5 timing is not modeled. The optional RTU `strict-t15` heuristic works
+  at read() boundaries and is never applied to RTU-over-TCP.
+- Serial-diagnostics state that depends on a real serial line is simplified: FC 08 NAK, busy, and
+  character-overrun counters stay 0, and FC 08 `0x0003` always returns exception 03 because ASCII
+  framing is fixed at `CR LF`.
+- Only configured data exist. File records and FIFOs are config-backed and are not created or
+  destroyed by Modbus, FIFO reads are non-destructive, and writes change in-memory state only and are
+  lost on restart.
+
+See [Transport](#transport), [Function codes](#function-codes), and [Exceptions](#exceptions) for the
+exact wire formats, validation rules, and fault behavior.
+
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
