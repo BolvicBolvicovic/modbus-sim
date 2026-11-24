@@ -127,6 +127,8 @@ jobs:
     timeout-minutes: 15
     env:
       CC: clang
+      # clang-tools' bundled clang does not accept -fuse-ld=mold.
+      LDFLAGS: -pie -Wl,-z,relro,-z,now
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
