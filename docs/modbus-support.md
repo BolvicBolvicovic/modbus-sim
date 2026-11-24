@@ -10,6 +10,13 @@ in order. A client that sends a header with a protocol id other than 0, or an im
 is disconnected. `port` and `bind` select the listen socket; `bind` accepts an IPv4 or IPv6 literal
 address (IPv6 sockets are IPv6-only, so `"0.0.0.0"` and `"::"` listen on separate address families).
 
+`(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
+frames and receive the same unit routing, fault handling, and PDU answers. TLS is available only for
+`mode tcp`, defaults to port 802 when `(port N)` is omitted, and requires a server certificate and
+private key. Client certificates are required by default; the CA certificate is then required as
+well. TLS 1.2 is the minimum, and anonymous/NULL ciphers are disabled. See
+[config-reference.md](config-reference.md#tls-modbus-tcp-over-tls) for the full option list.
+
 ### Modbus RTU
 
 Modbus RTU is served over a bidirectional byte stream selected with `(server (mode rtu-pty))` (a new
@@ -319,10 +326,11 @@ through `(fault (kind exception) (code N))`; 09 is reserved.
 
 Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
 created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and
-[Transport](#transport): no Modbus TCP Security/TLS and no true UART t1.5 timing (the RTU
-`strict-t15` option is only a baud-derived-auto-mode approximation).
+[Transport](#transport): TLS only covers MBAP/TCP (not RTU-over-TCP or ASCII-over-TCP), and there is
+no true UART t1.5 timing (the RTU `strict-t15` option is only a baud-derived-auto-mode approximation).
 
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
-- TLS (Modbus/TCP Security)
+- TLS for RTU-over-TCP and ASCII-over-TCP; `(server (tls ...))` is rejected outside `mode tcp`
+- Role-based authorization from client certificate fields; a valid client certificate is either required or optional, with no per-role access control

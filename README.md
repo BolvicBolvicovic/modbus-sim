@@ -20,7 +20,7 @@ there are ready-made profiles you can copy.
 ## Quick start
 
 ```bash
-make                                   # builds ./modbus-sim (needs gcc and make)
+make                                   # builds ./modbus-sim (needs gcc, make and OpenSSL headers)
 ./modbus-sim profiles/minimal.scm      # start the simulator on port 1502
 
 # in another terminal:
@@ -43,7 +43,7 @@ loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP, Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
+| Protocol | Modbus TCP (optionally TLS-wrapped), Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
 | Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |
@@ -80,7 +80,7 @@ modbus-sim [options] CONFIG.scm
 
 There are no server CLI options: the transport mode, path and all server settings are selected in
 `(server ...)` in the config file. Port 502 is the Modbus standard but needs root on Linux; the
-default here is **1502**.
+plaintext TCP default here is **1502**, or **802** when `(tls ...)` is enabled.
 
 ## Transports
 
@@ -88,7 +88,7 @@ default here is **1502**.
 
 | Mode | Transport | Server entries allowed with `mode` |
 |---|---|---|
-| `tcp` | Modbus TCP (MBAP) over TCP (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms` |
+| `tcp` | Modbus TCP (MBAP) over TCP (IPv4 or IPv6 literal bind), optionally TLS-wrapped | `port`, `bind`, `seed`, `idle-timeout-ms`, `tls` |
 | `rtu-pty` | Modbus RTU over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `frame-gap-ms`, `strict-t15`, `broadcast-execute`, `parity`, `stop-bits` |
 | `rtu-device` | Modbus RTU over an existing byte-stream device | `path`, plus the `rtu-pty` entries |
 | `rtu-tcp` | Modbus RTU frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
@@ -101,9 +101,28 @@ Any other entry is rejected at load time, even when its value is the default. Se
 [docs/config-reference.md](docs/config-reference.md) for ranges and defaults.
 
 ```scheme
-; Modbus TCP
+; Modbus TCP (plaintext)
 (server (mode tcp) (port 1502) (bind "127.0.0.1") (idle-timeout-ms 5000))
 ```
+
+TLS wraps the same MBAP frames on `tcp` listeners only. Certificate and private key paths are
+required; client certificates are required by default. The CA certificate is required while client
+authentication is on. `(tls ...)` is rejected at load time in every other mode.
+
+```scheme
+; Modbus TCP Security: TLS-wrapped MBAP, default port 802
+(server (mode tcp) (bind "127.0.0.1")
+  (tls (certificate "/etc/modbus/server.pem")
+       (private-key "/etc/modbus/server.key")
+       (ca-certificate "/etc/modbus/ca.pem")))
+
+(device (name "TLS device") (unit-id 1) (holding 0 (static 42)))
+```
+
+Set `(require-client-certificate off)` in `(tls ...)` to simulate anonymous clients; the CA entry is
+then optional. This is a testing relaxation, not a recommended deployment setting. There is no
+role-based authorization based on certificate fields. See
+[docs/config-reference.md](docs/config-reference.md) for TLS options and defaults.
 
 ```scheme
 ; Modbus RTU: choose a PTY or an existing device, never both in one config

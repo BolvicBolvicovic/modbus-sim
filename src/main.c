@@ -64,6 +64,8 @@ print_usage(void)
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
 	     "t1.5 discard and unit-0 broadcast execution are opt-in via (server ...).\n"
+	     "Modbus TCP may be TLS-wrapped with (server (mode tcp) (tls ...)); it then\n"
+	     "defaults to port 802 unless (port N) is given, and requires OpenSSL at build time.\n"
 	     "\n"
 	     "Try:  modbus-sim profiles/minimal.scm\n"
 	     "Docs: README.md and docs/");
@@ -181,9 +183,13 @@ print_summary(const config_t* config)
 			putchar('\n');
 			break;
 		case SERVER_MODE_TCP:
-			printf("%u device%s on %s:%u\n", config->device_count,
+			printf("%u device%s on %s:%u", config->device_count,
 			       config->device_count == 1 ? "" : "s",
 			       config->bind_address, config->port);
+			if (config->tls_enabled)
+				printf(" (TLS, client certificates %s)",
+				       config->tls_require_client_certificate ? "required" : "optional");
+			putchar('\n');
 			break;
 	}
 
@@ -322,6 +328,16 @@ run_tcp(config_t* config)
 		.port            = config->port,
 		.seed            = config->seed,
 		.idle_timeout_ms = config->idle_timeout_ms,
+		.tls_enabled     = config->tls_enabled,
+		.tls_certificate = config->tls_certificate,
+		.tls_private_key = config->tls_private_key,
+		.tls_ca_certificate = config->tls_ca_certificate,
+		.tls_require_client_certificate = config->tls_require_client_certificate,
+		.tls_min_version = config->tls_min_version == CONFIG_TLS_VERSION_1_3 ?
+				   NET_TLS_VERSION_1_3 : NET_TLS_VERSION_1_2,
+		.tls1_2_ciphers  = config->tls1_2_ciphers[0] ? config->tls1_2_ciphers : NULL,
+		.tls1_3_ciphersuites = config->tls1_3_ciphersuites[0] ?
+				       config->tls1_3_ciphersuites : NULL,
 		.devices         = config->devices,
 		.device_count    = config->device_count,
 	};

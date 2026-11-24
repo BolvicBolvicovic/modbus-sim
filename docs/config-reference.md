@@ -33,7 +33,7 @@ produce an error message.
 
 | Mode | Transport | `(path ...)` |
 |---|---|---|
-| `tcp` | Modbus TCP (MBAP) on a TCP listen socket | forbidden |
+| `tcp` | Modbus TCP (MBAP) on a TCP listen socket, optionally wrapped in TLS | forbidden |
 | `rtu-pty` | Modbus RTU on a new Linux PTY (slave path is printed at startup) | forbidden |
 | `rtu-device` | Modbus RTU on an existing byte-stream device | required |
 | `rtu-tcp` | Modbus RTU frames on a TCP listen socket (not MBAP) | forbidden |
@@ -47,7 +47,7 @@ that is present but not allowed is rejected at load time, even if its value woul
 
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
-| `(port N)` | TCP port, 1-65535 | `1502` | `tcp`, `rtu-tcp`, `ascii-tcp` |
+| `(port N)` | TCP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack) | `"0.0.0.0"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
@@ -59,6 +59,7 @@ that is present but not allowed is rejected at load time, even if its value woul
 | `(parity none\|even\|odd\|mark\|space)` | tty parity. `mark` and `space` require `CMSPAR` support | `none` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
 | `(stop-bits 1\|2)` | Number of tty stop bits | `1` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
 | `(path "PATH")` | Byte-stream device path; opened with `O_NONBLOCK` | none | `rtu-device`, `ascii-device` (required there) |
+| `(tls ...)` | TLS settings for the TCP listener; see [TLS](#tls-modbus-tcp-over-tls). Rejected at load time in other modes, including `--check` | absent (plaintext) | `tcp` |
 
 Examples (each is a complete `(server ...)` block; a config file may contain only one):
 
@@ -86,6 +87,38 @@ Examples (each is a complete `(server ...)` block; a config file may contain onl
 ```scheme
 (server (mode ascii-tcp) (port 1502) (bind "127.0.0.1") (idle-timeout-ms 5000))
 ```
+
+```scheme
+(server (mode tcp) (bind "127.0.0.1")
+  (tls (certificate "/etc/modbus/server.pem")
+       (private-key "/etc/modbus/server.key")
+       (ca-certificate "/etc/modbus/ca.pem")))
+```
+
+### TLS (Modbus TCP over TLS)
+
+`(tls ...)` wraps the same 7-byte MBAP header and PDU in TLS on `tcp` listeners; no Modbus framing
+or function-code behavior changes. It is allowed only in `tcp` mode and is rejected at load time,
+including by `--check`, in every other mode (even as an empty `(tls)` form). Plaintext TCP is
+unchanged when `(tls ...)` is absent.
+
+| Entry | Meaning | Default |
+|---|---|---|
+| `(certificate "PATH")` | Server certificate chain in PEM format. Required, 1-255 characters | none |
+| `(private-key "PATH")` | Server private key in PEM format. Required, 1-255 characters. Its contents are never logged | none |
+| `(ca-certificate "PATH")` | CA certificate used to verify client certificates, 1-255 characters | none |
+| `(require-client-certificate on\|off)` | Require a client certificate signed by the configured CA | `on` |
+| `(min-version tls1.2\|tls1.3)` | Minimum TLS version | `tls1.2` |
+| `(tls1-2-ciphers "LIST")` | OpenSSL TLS 1.2 (and below) cipher list; must be non-empty, at most 511 characters | OpenSSL default |
+| `(tls1-3-ciphersuites "LIST")` | OpenSSL TLS 1.3 cipher suite list; must be non-empty, at most 511 characters | OpenSSL default |
+
+`ca-certificate` is required while `require-client-certificate` is on (the default). Set it to
+`off` and omit the CA to simulate anonymous clients; this is a testing relaxation, not a
+recommended production setting. Certificate paths are not checked for existence during config load
+or `--check`; a missing or unreadable certificate, key or CA makes server startup fail with a clear
+log message. TLS 1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher
+strings cannot lower the configured minimum. Role-based authorization from certificate fields is
+not implemented.
 
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
 existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are

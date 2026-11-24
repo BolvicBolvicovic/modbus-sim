@@ -39,12 +39,17 @@ struct conn_t
 	u64	tx_due_ms;		/* do not send before this time (delay fault) */
 	u64	last_activity_ms;	/* updated on I/O progress; used for idle timeout */
 	char	peer[INET6_ADDRSTRLEN + 8];
+	SSL*	ssl;			/* NULL for plaintext connections */
+	bool	tls_handshake_done;
+	bool	tls_want_read;
+	bool	tls_want_write;
 };
 
 typedef struct tcp_server_t tcp_server_t;
 struct tcp_server_t
 {
 	tcp_server_options_t	options;
+	net_tls_ctx_t*		tls;
 	int			listen_fd;
 	u64			accept_backoff_until_ms;
 	bool			accept_backoff_logged;
@@ -72,10 +77,47 @@ static void
 conn_close(conn_t* conn)
 {
 	LOG_DEBUG("client %s disconnected", conn->peer);
+	if (conn->ssl)
+	{
+		net_tls_session_free(conn->ssl);
+		conn->ssl = NULL;
+	}
 	close(conn->fd);
 	conn->fd     = -1;
 	conn->rx_len = 0;
 	conn->tx_len = 0;
+}
+
+static bool
+conn_tls_handshake(conn_t* conn)
+{
+	char			tls_err[256];
+	net_tls_status_t	status;
+
+	conn->tls_want_read  = false;
+	conn->tls_want_write = false;
+	status = net_tls_handshake(conn->ssl, tls_err, sizeof(tls_err));
+	if (status == NET_TLS_OK)
+	{
+		conn->tls_handshake_done = true;
+		conn->last_activity_ms   = clock_now_ms();
+		LOG_DEBUG("TLS handshake complete with %s", conn->peer);
+		return true;
+	}
+	if (status == NET_TLS_WANT_READ)
+	{
+		conn->tls_want_read = true;
+		return true;
+	}
+	if (status == NET_TLS_WANT_WRITE)
+	{
+		conn->tls_want_write = true;
+		return true;
+	}
+	if (status == NET_TLS_ERROR)
+		LOG_WARN("client %s TLS handshake failed: %s", conn->peer, tls_err);
+	conn_close(conn);
+	return false;
 }
 
 static conn_t*
@@ -95,6 +137,7 @@ accept_clients(tcp_server_t* server)
 	struct sockaddr_storage	addr = { 0 };
 	socklen_t		len  = sizeof(addr);
 	char			ip[INET6_ADDRSTRLEN];
+	char			tls_err[256];
 	int			fd   = 0;
 	int			yes  = 1;
 	conn_t*			conn = NULL;
@@ -156,6 +199,18 @@ accept_clients(tcp_server_t* server)
 			snprintf(conn->peer, sizeof(conn->peer), "%s:%u", ip, ntohs(a->sin_port));
 		}
 		LOG_DEBUG("client %s connected", conn->peer);
+		if (server->tls)
+		{
+			conn->ssl = net_tls_session_new(server->tls, fd, tls_err, sizeof(tls_err));
+			if (!conn->ssl)
+			{
+				LOG_WARN("client %s TLS setup failed: %s", conn->peer, tls_err);
+				conn_close(conn);
+				continue;
+			}
+			conn->tls_want_read = true;
+			(void)conn_tls_handshake(conn);
+		}
 	}
 }
 
@@ -235,16 +290,66 @@ conn_process(tcp_server_t* server, conn_t* conn)
 }
 
 static void
+conn_tx_advance(tcp_server_t* server, conn_t* conn, u32 sent)
+{
+	conn->tx_sent         += sent;
+	conn->last_activity_ms = clock_now_ms();
+	if (conn->tx_sent < conn->tx_len)
+		return;
+
+	conn->tx_len  = 0;
+	conn->tx_sent = 0;
+	conn_process(server, conn);	/* a pipelined request may already be waiting */
+}
+
+static void
 conn_read(tcp_server_t* server, conn_t* conn)
 {
-	ssize_t	got = recv(conn->fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len, 0);
+	ssize_t	got;
 
+	if (conn->ssl)
+	{
+		char			tls_err[256];
+		int			len      = 0;
+		net_tls_status_t	status;
+
+		if (conn->rx_len == sizeof(conn->rx))
+		{
+			LOG_WARN("client %s receive buffer full, closing", conn->peer);
+			conn_close(conn);
+			return;
+		}
+
+		conn->tls_want_read  = false;
+		conn->tls_want_write = false;
+		status = net_tls_read(conn->ssl, conn->rx + conn->rx_len,
+				      (int)(sizeof(conn->rx) - conn->rx_len), &len,
+				      tls_err, sizeof(tls_err));
+		if (status == NET_TLS_OK && len > 0)
+		{
+			conn->rx_len          += (u32)len;
+			conn->last_activity_ms = clock_now_ms();
+			conn_process(server, conn);
+			return;
+		}
+		if (status == NET_TLS_WANT_READ || status == NET_TLS_WANT_WRITE)
+		{
+			conn->tls_want_read  = status == NET_TLS_WANT_READ;
+			conn->tls_want_write = status == NET_TLS_WANT_WRITE;
+			return;
+		}
+		if (status == NET_TLS_ERROR && len == 0)
+			LOG_WARN("client %s TLS read failed: %s", conn->peer, tls_err);
+		conn_close(conn);
+		return;
+	}
+
+	got = recv(conn->fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len, 0);
 	if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR))
 	{
 		conn_close(conn);
 		return;
 	}
-
 	if (got < 0)
 		return;
 
@@ -256,9 +361,38 @@ conn_read(tcp_server_t* server, conn_t* conn)
 static void
 conn_write(tcp_server_t* server, conn_t* conn)
 {
-	ssize_t	sent = send(conn->fd, conn->tx + conn->tx_sent, conn->tx_len - conn->tx_sent,
-			    MSG_NOSIGNAL);
+	ssize_t	sent;
 
+	if (conn->ssl)
+	{
+		char			tls_err[256];
+		int			len      = 0;
+		net_tls_status_t	status;
+
+		conn->tls_want_read  = false;
+		conn->tls_want_write = false;
+		status = net_tls_write(conn->ssl, conn->tx + conn->tx_sent,
+				       (int)(conn->tx_len - conn->tx_sent), &len,
+				       tls_err, sizeof(tls_err));
+		if (status == NET_TLS_OK && len > 0)
+		{
+			conn_tx_advance(server, conn, (u32)len);
+			return;
+		}
+		if (status == NET_TLS_WANT_READ || status == NET_TLS_WANT_WRITE)
+		{
+			conn->tls_want_read  = status == NET_TLS_WANT_READ;
+			conn->tls_want_write = status == NET_TLS_WANT_WRITE;
+			return;
+		}
+		if (status == NET_TLS_ERROR && len == 0)
+			LOG_WARN("client %s TLS write failed: %s", conn->peer, tls_err);
+		conn_close(conn);
+		return;
+	}
+
+	sent = send(conn->fd, conn->tx + conn->tx_sent, conn->tx_len - conn->tx_sent,
+		    MSG_NOSIGNAL);
 	if (sent < 0 &&
 	    errno != EAGAIN &&
 	    errno != EINTR)
@@ -266,18 +400,10 @@ conn_write(tcp_server_t* server, conn_t* conn)
 		conn_close(conn);
 		return;
 	}
-
 	if (sent < 0)
 		return;
 
-	conn->tx_sent         += (u32)sent;
-	conn->last_activity_ms = clock_now_ms();
-	if (conn->tx_sent < conn->tx_len)
-		return;
-
-	conn->tx_len  = 0;
-	conn->tx_sent = 0;
-	conn_process(server, conn);	/* a pipelined request may already be waiting */
+	conn_tx_advance(server, conn, (u32)sent);
 }
 
 /* --- main loop --- */
@@ -307,6 +433,17 @@ close_idle_connections(tcp_server_t* server, u64 now_ms)
 	}
 }
 
+/* OpenSSL may hold decrypted request bytes even when the socket has nothing to read.
+ * Only synthesize a wakeup while no response is pending, so delayed faults are honored. */
+static bool
+conn_tls_has_buffered_input(const conn_t* conn)
+{
+	return conn->ssl &&
+	       conn->tls_handshake_done &&
+	       conn->tx_len == 0 &&
+	       net_tls_pending(conn->ssl) > 0;
+}
+
 /* Fills the poll table. Returns the number of entries; entry 0 is the listening socket. */
 static u32
 build_poll_table(tcp_server_t* server, struct pollfd* fds, conn_t** owners, u64 now_ms, int* timeout)
@@ -323,14 +460,34 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, conn_t** owners, u64 
 
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
-		conn_t*	conn = &server->conns[i];
+		conn_t*	conn   = &server->conns[i];
 		u64	idle_deadline;
+		short	events = POLLIN;
 
 		if (conn->fd < 0)
 			continue;
 
-		fds[count] = (struct pollfd){ .fd = conn->fd, .events = POLLIN };
+		fds[count] = (struct pollfd){ .fd = conn->fd, .events = events };
 		owners[count++] = conn;
+
+		if (conn->ssl && !conn->tls_handshake_done)
+		{
+			events = 0;
+			if (conn->tls_want_read)
+				events |= POLLIN;
+			if (conn->tls_want_write)
+				events |= POLLOUT;
+		}
+		else if (conn->ssl && conn->tx_len == 0 && conn->tls_want_write)
+			events = POLLOUT;
+
+		/* Decrypted bytes may already be buffered inside OpenSSL. */
+		if (conn_tls_has_buffered_input(conn))
+		{
+			events |= POLLIN;
+			*timeout = 0;
+		}
+
 		if (conn->tx_len == 0)
 		{
 			if (idle_ms > 0)
@@ -341,21 +498,37 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, conn_t** owners, u64 
 				else
 					*timeout = MIN(*timeout, (int)(idle_deadline - now_ms));
 			}
+			fds[count - 1].events = events;
 			continue;
 		}
 
 		/* A response is pending: wait for its due time, then for the socket to be writable. */
-		fds[count - 1].events = (conn->tx_due_ms <= now_ms) ? POLLOUT : 0;
 		if (conn->tx_due_ms > now_ms)
 			*timeout = MIN(*timeout, (int)(conn->tx_due_ms - now_ms));
+		if (conn->ssl)
+		{
+			events = 0;
+			if (conn->tls_want_read)
+				events |= POLLIN;
+			if (conn->tls_want_write)
+				events |= POLLOUT;
+			if (!conn->tls_want_read && !conn->tls_want_write &&
+			    conn->tx_due_ms <= now_ms)
+				events = POLLOUT;
+		}
+		else
+			events = (conn->tx_due_ms <= now_ms) ? POLLOUT : 0;
+		fds[count - 1].events = events;
 	}
 	return count;
 }
 
 static void
-serve_ready(tcp_server_t* server, const struct pollfd* fd, conn_t* conn)
+serve_ready(tcp_server_t* server, const struct pollfd* fd, conn_t* conn, u64 now_ms)
 {
-	if (fd->revents == 0)
+	bool buffered_input = conn && conn_tls_has_buffered_input(conn);
+
+	if (fd->revents == 0 && !buffered_input)
 		return;
 
 	if (!conn)
@@ -373,9 +546,50 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, conn_t* conn)
 		return;
 	}
 
+	if (conn->ssl && !conn->tls_handshake_done)
+	{
+		if (!conn_tls_handshake(conn) || !conn->tls_handshake_done)
+			return;
+		if ((fd->revents & (POLLIN | POLLHUP)) != 0 ||
+		    conn_tls_has_buffered_input(conn))
+			conn_read(server, conn);
+		return;
+	}
+
+	/* WANT_WRITE from SSL_read must be retried as a read, never as an empty write. */
+	if (conn->ssl &&
+	    conn->tx_len == 0 &&
+	    (conn->tls_want_read || conn->tls_want_write))
+	{
+		conn_read(server, conn);
+		return;
+	}
+
+	/* A TLS write can need a read (renegotiation/post-handshake messages), but
+	 * a delayed response must never be sent early. Do not consume new request
+	 * bytes while a response is still pending. */
+	if (conn->ssl && conn->tx_len > 0)
+	{
+		/* poll reports POLLHUP even when events is 0: a disconnect must free
+		 * the slot without waiting for the delayed response to become due. */
+		if (fd->revents & POLLHUP)
+		{
+			conn_close(conn);
+			return;
+		}
+		if (conn->tls_want_read ||
+		    conn->tls_want_write ||
+		    conn->tx_due_ms <= now_ms)
+			conn_write(server, conn);
+		return;
+	}
+
 	if (fd->revents & POLLOUT)
+	{
 		conn_write(server, conn);
-	else if (fd->revents & (POLLIN | POLLHUP))
+		return;
+	}
+	if ((fd->revents & (POLLIN | POLLHUP)) != 0 || buffered_input)
 		conn_read(server, conn);
 }
 
@@ -399,35 +613,69 @@ serve_loop(tcp_server_t* server)
 		now_ms = clock_now_ms();
 		close_idle_connections(server, now_ms);
 		for (u32 i = 0; i < count; i++)
-			serve_ready(server, &fds[i], owners[i]);
+			serve_ready(server, &fds[i], owners[i], now_ms);
 	}
 }
 
 s32
 tcp_server_run(const tcp_server_options_t* options)
 {
-	tcp_server_t server = { 0 };
+	tcp_server_t		server = { 0 };
+	char			tls_err[256];
 
 	server.options = *options;
 	rng_seed(&server.rng, options->seed);
 	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
 		server.conns[i].fd = -1;
 
+	if (options->tls_enabled)
+	{
+		net_tls_config_t tls_config = {
+			.certificate = options->tls_certificate,
+			.private_key = options->tls_private_key,
+			.ca_certificate = options->tls_ca_certificate,
+			.require_client_certificate = options->tls_require_client_certificate,
+			.min_version = options->tls_min_version,
+			.tls1_2_ciphers = options->tls1_2_ciphers,
+			.tls1_3_ciphersuites = options->tls1_3_ciphersuites,
+		};
+
+		server.tls = net_tls_ctx_create(&tls_config, tls_err, sizeof(tls_err));
+		if (!server.tls)
+		{
+			LOG_WARN("cannot configure TLS: %s", tls_err);
+			return 2;
+		}
+	}
+
 	g_stop = 0;
 	net_install_stop_handlers(&g_stop);
 	if (listen_open(&server) < 0)
+	{
+		net_tls_ctx_destroy(server.tls);
 		return 2;
+	}
 
 	LOG_INFO("listening on %s:%u (%u device%s). Ctrl-C to stop.", options->bind_address,
 		 options->port, options->device_count, options->device_count == 1 ? "" : "s");
+	if (server.tls)
+		LOG_INFO("TLS enabled: certificate=%s private-key=%s CA=%s client-certificate=%s",
+			 options->tls_certificate, options->tls_private_key,
+			 options->tls_ca_certificate ? options->tls_ca_certificate : "(none)",
+			 options->tls_require_client_certificate ? "required" : "optional");
 	serve_loop(&server);
 
 	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
 	{
 		if (server.conns[i].fd >= 0)
+		{
+			if (server.conns[i].ssl)
+				net_tls_session_free(server.conns[i].ssl);
 			close(server.conns[i].fd);
+		}
 	}
 	close(server.listen_fd);
+	net_tls_ctx_destroy(server.tls);
 	LOG_INFO("stopped");
 	return 0;
 }

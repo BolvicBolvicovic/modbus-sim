@@ -1,6 +1,7 @@
 #ifndef TCP_SERVER_H
 #define TCP_SERVER_H
 
+#include "net/net_tls.h"
 #include "vlib/c_types.h"
 
 typedef struct device_t device_t;
@@ -15,6 +16,14 @@ struct tcp_server_options_t
 	u16		port;
 	u32		seed;
 	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
+	bool		tls_enabled;		/* wrap MBAP in TLS; borrowed settings from config_t */
+	const char*	tls_certificate;
+	const char*	tls_private_key;
+	const char*	tls_ca_certificate;
+	bool		tls_require_client_certificate;
+	net_tls_version_t tls_min_version;
+	const char*	tls1_2_ciphers;
+	const char*	tls1_3_ciphersuites;
 	device_t**	devices;
 	u32		device_count;
 };

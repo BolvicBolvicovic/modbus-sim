@@ -954,6 +954,154 @@ TEST(ConfigServerPathLengthIsValidated)
 	ASSERT_EQ(strstr(err, "255 characters") != NULL);
 }
 
+TEST(ConfigTlsFullFormIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode tcp)\n"
+		"  (tls (certificate \"/tmp/server.pem\")\n"
+		"       (private-key \"/tmp/server.key\")\n"
+		"       (ca-certificate \"/tmp/ca.pem\")\n"
+		"       (require-client-certificate off)\n"
+		"       (min-version tls1.3)\n"
+		"       (tls1-2-ciphers \"ECDHE-RSA-AES128-GCM-SHA256\")\n"
+		"       (tls1-3-ciphersuites \"TLS_AES_128_GCM_SHA256\")))\n"
+		"(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
+	ASSERT_EQ(config.port == CONFIG_DEFAULT_TLS_PORT);
+	ASSERT_EQ(config.tls_enabled);
+	ASSERT_EQ(strcmp(config.tls_certificate, "/tmp/server.pem") == 0);
+	ASSERT_EQ(strcmp(config.tls_private_key, "/tmp/server.key") == 0);
+	ASSERT_EQ(strcmp(config.tls_ca_certificate, "/tmp/ca.pem") == 0);
+	ASSERT_EQ(config.tls_require_client_certificate == false);
+	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_3);
+	ASSERT_EQ(strcmp(config.tls1_2_ciphers, "ECDHE-RSA-AES128-GCM-SHA256") == 0);
+	ASSERT_EQ(strcmp(config.tls1_3_ciphersuites, "TLS_AES_128_GCM_SHA256") == 0);
+}
+
+TEST(ConfigTlsDefaultsAndExplicitPort)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\")\n"
+		"             (ca-certificate \"ca.pem\")))\n"
+		"(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.port == CONFIG_DEFAULT_TLS_PORT);
+	ASSERT_EQ(config.tls_enabled);
+	ASSERT_EQ(config.tls_require_client_certificate == true);
+	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
+	ASSERT_EQ(config.tls1_2_ciphers[0] == '\0');
+	ASSERT_EQ(config.tls1_3_ciphersuites[0] == '\0');
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode tcp) (port 1802)\n"
+		"        (tls (certificate \"cert.pem\") (private-key \"key.pem\")\n"
+		"             (require-client-certificate off)))\n"
+		"(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.port == 1802);
+	ASSERT_EQ(config.tls_ca_certificate[0] == '\0');
+	ASSERT_EQ(config.tls_require_client_certificate == false);
+}
+
+TEST(ConfigPlaintextTcpPortIsUnchanged)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
+	ASSERT_EQ(config.tls_enabled == false);
+}
+
+TEST(ConfigTlsRequiresCertificateAndPrivateKey)
+{
+	EXPECT_ERROR("(server (tls (private-key \"key.pem\") (ca-certificate \"ca.pem\"))) "
+		     "(device (holding 0))", "missing required option (certificate ...)");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (ca-certificate \"ca.pem\"))) "
+		     "(device (holding 0))", "missing required option (private-key ...)");
+	EXPECT_ERROR("(server (tls (certificate \"\") (private-key \"key.pem\"))) "
+		     "(device (holding 0))", "certificate path must not be empty");
+}
+
+TEST(ConfigTlsRequiresCaForClientAuthentication)
+{
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\"))) "
+		     "(device (holding 0))", "ca-certificate is required");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(require-client-certificate on))) (device (holding 0))",
+		     "ca-certificate is required");
+}
+
+TEST(ConfigTlsValidatesMinVersionAndBooleans)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		"(require-client-certificate off) (min-version tls1.2))) "
+		"(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
+
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(min-version tls1.1))) (device (holding 0))",
+		     "expected one of: tls1.2, tls1.3");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(min-version \"tls1.3\"))) (device (holding 0))",
+		     "expected one of: tls1.2, tls1.3");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(require-client-certificate maybe))) (device (holding 0))",
+		     "expected on or off");
+}
+
+TEST(ConfigTlsValidatesCipherStrings)
+{
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(tls1-2-ciphers \"\"))) (device (holding 0))", "tls1-2-ciphers must not be empty");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(tls1-3-ciphersuites \"\"))) (device (holding 0))",
+		     "tls1-3-ciphersuites must not be empty");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(tls1-2-ciphers 7))) (device (holding 0))", "expected text in double quotes");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(tls1-3-ciphersuites 7))) (device (holding 0))", "expected text in double quotes");
+}
+
+TEST(ConfigTlsValidatesNestedKeysDuplicatesAndPathLength)
+{
+	char	path[CONFIG_TLS_PATH_MAX + 2];
+	char	text[CONFIG_TLS_PATH_MAX + 160];
+
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "(unknown 1))) (device (holding 0))", "unknown option 'unknown'");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (certificate \"other.pem\") "
+		     "(private-key \"key.pem\"))) (device (holding 0))",
+		     "option 'certificate' is given more than once");
+
+	memset(path, 'x', CONFIG_TLS_PATH_MAX);
+	path[CONFIG_TLS_PATH_MAX] = '\0';
+	snprintf(text, sizeof(text),
+		 "(server (tls (certificate \"%s\") (private-key \"key.pem\"))) "
+		 "(device (holding 0))", path);
+	EXPECT_ERROR(text, "certificate path is too long");
+}
+
+TEST(ConfigTlsIsRejectedOutsideTcpMode)
+{
+	char	text[256];
+
+	for (u32 i = 1; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		snprintf(text, sizeof(text), "(server (mode %s)%s (tls)) (device (holding 0))",
+			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
+		EXPECT_ERROR(text, "not valid in");
+	}
+}
+
 TEST(ConfigSerialModesRejectReservedUnitIds)
 {
 	config_t		config = { 0 };

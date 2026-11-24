@@ -3,7 +3,7 @@
 ## Data flow
 
 ```
- TCP   client ──MBAP+PDU───────► net/tcp_server  ──┐
+ TCP   client ──[TLS] MBAP+PDU─► net/tcp_server  ──┐
                                                    ├─► modbus/pdu ──► device/device ──► data tables
  RTU   client ──addr+PDU+CRC───► net/rtu_server  ──┤                        ▲
  ASCII client ──:hex+LRC+CRLF──► net/ascii_server  ├          device_tick() │ ramps → registers
@@ -18,7 +18,7 @@
 
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
-2. `net/tcp_server` (Modbus TCP MBAP), `net/rtu_server` (RTU CRC-framed byte stream),
+2. `net/tcp_server` (Modbus TCP MBAP, optionally TLS-wrapped via `net/net_tls`), `net/rtu_server` (RTU CRC-framed byte stream),
    `net/ascii_server` (ASCII hex/LRC-framed byte stream), `net/ascii_tcp_server` (the same ASCII
    framing over TCP), or `net/rtu_tcp_server` (RTU CRC-framed over TCP) finds the device by
    unit/address and calls `modbus_handle_pdu`.
@@ -33,12 +33,14 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `net_tls`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP via OpenSSL, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
-`device` and `modbus` can be tested alone, and are (see `tests/`).
+`net_tls` wraps OpenSSL and keeps its headers out of other modules; `config` only supplies borrowed
+TLS strings through `tcp_server_options_t`. `device` and `modbus` can be tested alone, and are
+(see `tests/`).
 
 Headers sit next to their `.c` files.
 

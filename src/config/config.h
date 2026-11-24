@@ -14,6 +14,9 @@
 #define CONFIG_DEFAULT_BAUD		0	/* 0 = unknown; derive RTU timing from tty when possible */
 #define CONFIG_BIND_MAX			128
 #define CONFIG_PATH_MAX			256
+#define CONFIG_TLS_PATH_MAX		256
+#define CONFIG_TLS_CIPHER_MAX		512
+#define CONFIG_DEFAULT_TLS_PORT		802	/* IANA mbap-s; plaintext TCP stays on 1502 */
 
 /* Name: server_mode_t
  * Description: transport selected by (server (mode NAME)).
@@ -28,6 +31,16 @@ enum server_mode_t
 	SERVER_MODE_ASCII_PTY,
 	SERVER_MODE_ASCII_DEVICE,
 	SERVER_MODE_ASCII_TCP,
+};
+
+/* Name: config_tls_version_t
+ * Description: minimum TLS version accepted by a TLS-enabled TCP server.
+ * */
+typedef enum config_tls_version_t config_tls_version_t;
+enum config_tls_version_t
+{
+	CONFIG_TLS_VERSION_1_2,
+	CONFIG_TLS_VERSION_1_3,
 };
 
 /* Name: config_t
@@ -50,6 +63,14 @@ struct config_t
 	u32		data_bits;		/* ASCII byte streams: 7 or 8 */
 	parity_t	parity;			/* RTU and ASCII byte streams: serial parity */
 	u32		stop_bits;		/* RTU and ASCII byte streams: 1 or 2 */
+	bool		tls_enabled;		/* tcp mode only: wrap MBAP in TLS */
+	char		tls_certificate[CONFIG_TLS_PATH_MAX];
+	char		tls_private_key[CONFIG_TLS_PATH_MAX];
+	char		tls_ca_certificate[CONFIG_TLS_PATH_MAX];
+	bool		tls_require_client_certificate;
+	config_tls_version_t tls_min_version;
+	char		tls1_2_ciphers[CONFIG_TLS_CIPHER_MAX];
+	char		tls1_3_ciphersuites[CONFIG_TLS_CIPHER_MAX];
 	u32		device_count;
 	device_t*	devices[CONFIG_MAX_DEVICES];
 };

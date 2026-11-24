@@ -5,6 +5,7 @@
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
+#include "tests/tls_client.h"
 #include "util/clock.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -247,6 +248,58 @@ exchange(client_t* client, u8 unit, const u8* req, u32 req_len, u8* resp, u32* r
 	       recv_reply(client, unit, tid, resp, resp_len);
 }
 
+#define TLS_CA_PATH		"tests/tls/ca.pem"
+#define TLS_SERVER_CERT_PATH	"tests/tls/server.pem"
+#define TLS_SERVER_KEY_PATH	"tests/tls/server.key"
+#define TLS_CLIENT_CERT_PATH	"tests/tls/client.pem"
+#define TLS_CLIENT_KEY_PATH	"tests/tls/client.key"
+#define TLS_PROBE_TIMEOUT_MS	120
+
+static const char	TLS_SERVER_OPTIONS[] =
+	"(tls (certificate \"" TLS_SERVER_CERT_PATH "\") "
+	"(private-key \"" TLS_SERVER_KEY_PATH "\") "
+	"(ca-certificate \"" TLS_CA_PATH "\"))";
+
+enum
+{
+	TLS_PIPELINE_FRAME_LEN = MBAP_HEADER_SIZE + 5,
+	TLS_PIPELINE_COUNT     = MBAP_MAX_FRAME / TLS_PIPELINE_FRAME_LEN + 1,
+	TLS_PIPELINE_BYTES     = TLS_PIPELINE_COUNT * TLS_PIPELINE_FRAME_LEN,
+	TLS_DISCONNECT_FILLERS = 31	/* server cap is 32; leave one slot for the test client */
+};
+_Static_assert(TLS_PIPELINE_BYTES > MBAP_MAX_FRAME,
+	       "pipelined TLS test must exceed the server receive buffer");
+
+static bool
+tls_send_request(tls_client_t* client, u8 unit, u16 tid, const u8* pdu, u32 pdu_len)
+{
+	u8		frame[MBAP_MAX_FRAME];
+	mbap_header_t	header = { .transaction = tid, .length = (u16)(pdu_len + 1), .unit = unit };
+
+	mbap_encode(frame, &header);
+	memcpy(frame + MBAP_HEADER_SIZE, pdu, pdu_len);
+	return tls_client_write_all(client, frame, MBAP_HEADER_SIZE + pdu_len);
+}
+
+static bool
+tls_recv_reply(tls_client_t* client, u8 unit, u16 tid, u8* pdu, u32* pdu_len)
+{
+	u8		raw[MBAP_HEADER_SIZE];
+	mbap_header_t	header = { 0 };
+
+	if (!tls_client_read_exact(client, raw, sizeof(raw)))
+		return false;
+
+	mbap_decode(raw, &header);
+	if (!mbap_is_valid(&header) ||
+	    header.transaction != tid ||
+	    header.unit != unit)
+		return false;
+
+	*pdu_len = header.length - 1;
+	return tls_client_read_exact(client, pdu, *pdu_len);
+}
+
 static bool
 recv_none(client_t* client, int timeout_ms)
 {
@@ -263,6 +316,18 @@ read_pdu(u8* pdu, u8 function, u16 address, u16 quantity)
 	put_be16(pdu + 1, address);
 	put_be16(pdu + 3, quantity);
 	return 5;
+}
+
+static void
+tls_build_pipeline(u8 (*frames)[TLS_PIPELINE_FRAME_LEN], u16* tids)
+{
+	for (u32 i = 0; i < TLS_PIPELINE_COUNT; i++)
+	{
+		mbap_header_t header = { .transaction = tids[i], .length = 6, .unit = 1 };
+
+		mbap_encode(frames[i], &header);
+		read_pdu(frames[i] + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
+	}
 }
 
 static u32
@@ -676,6 +741,243 @@ TEST(NetPipelinedRequestsGetAnswersInOrder)
 		     len == 4 && register_value(resp, len, 0) == 22;
 
 	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsMutualAuthServesMbapRead)
+{
+	tls_client_t	client = { .fd = -1, .ssl = NULL };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len  = 0;
+	u16		tid  = next_tid();
+	bool		ok   = server_start(TLS_SERVER_OPTIONS,
+					    "(device (unit-id 1) (holding 0 (static 4660)) "
+					    "(holding 1 (static 7)))");
+
+	ok = ok && tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				   TLS_CA_PATH, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 2);
+		ok = tls_send_request(&client, 1, tid, req, 5) &&
+		     tls_recv_reply(&client, 1, tid, resp, &len) &&
+		     len == 6 &&
+		     resp[0] == FC_READ_HOLDING_REGISTERS &&
+		     register_value(resp, len, 0) == 4660 &&
+		     register_value(resp, len, 1) == 7;
+	}
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsRejectsPlaintextClient)
+{
+	client_t	client = { .fd = -1 };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len  = 0;
+	u16		tid  = next_tid();
+	bool		ok   = server_start(TLS_SERVER_OPTIONS,
+					    "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	ok = ok && client_open(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = send_request(&client, 1, tid, req, 5) &&
+		     !recv_reply(&client, 1, tid, resp, &len);
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsRejectsClientWithoutCertificate)
+{
+	tls_client_t	client = { .fd = -1, .ssl = NULL };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len      = 0;
+	u16		tid      = next_tid();
+	bool		rejected = false;
+	bool		ok       = server_start(TLS_SERVER_OPTIONS,
+					       "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	/* OpenSSL may reject the anonymous client during the handshake (client-side
+	 * failure), or complete the handshake and then close without serving MBAP. */
+	if (ok)
+	{
+		rejected = !tls_client_open(g_server.port, NULL, NULL, TLS_CA_PATH, &client);
+		if (!rejected)
+		{
+			read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+			(void)tls_send_request(&client, 1, tid, req, 5);
+			rejected = !tls_recv_reply(&client, 1, tid, resp, &len);
+		}
+	}
+	ok = ok && rejected;
+
+	tls_client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsPipelinedRequestsBeyondRxBuffer)
+{
+	tls_client_t	client = { .fd = -1, .ssl = NULL };
+	u8		frames[TLS_PIPELINE_COUNT][TLS_PIPELINE_FRAME_LEN];
+	u16		tids[TLS_PIPELINE_COUNT];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len  = 0;
+	bool		ok   = server_start(TLS_SERVER_OPTIONS,
+					    "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	if (ok)
+		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &client);
+	if (ok)
+	{
+		for (u32 i = 0; i < TLS_PIPELINE_COUNT; i++)
+			tids[i] = next_tid();
+		tls_build_pipeline(frames, tids);
+		ok = tls_client_write_record(&client, &frames[0][0], TLS_PIPELINE_BYTES);
+	}
+	if (ok)
+	{
+		for (u32 i = 0; i < TLS_PIPELINE_COUNT && ok; i++)
+		{
+			ok = tls_recv_reply(&client, 1, tids[i], resp, &len) &&
+			     len == 4 && register_value(resp, len, 0) == 4660;
+		}
+	}
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsDelayedFaultHonoredWithBufferedRequests)
+{
+	tls_client_t	client  = { .fd = -1, .ssl = NULL };
+	u8		frames[TLS_PIPELINE_COUNT][TLS_PIPELINE_FRAME_LEN];
+	u8		extra_req[8];
+	u16		tids[TLS_PIPELINE_COUNT];
+	u16		extra_tid;
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len     = 0;
+	u64		start   = 0;
+	u64		elapsed = 0;
+	bool		ok      = server_start(TLS_SERVER_OPTIONS,
+					       "(device (unit-id 1) (holding 0 (static 4660)) "
+					       " (fault (kind delay) (delay-ms 400) (percent 100)))");
+
+	if (ok)
+		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &client);
+	if (ok)
+	{
+		for (u32 i = 0; i < TLS_PIPELINE_COUNT; i++)
+			tids[i] = next_tid();
+		extra_tid = next_tid();
+		tls_build_pipeline(frames, tids);
+		start = clock_now_ms();
+		ok = tls_client_write_record(&client, &frames[0][0], TLS_PIPELINE_BYTES);
+		/* Let the server queue the delayed reply first, then make the socket
+		 * readable again. That event must not send the reply before its due time. */
+		if (ok)
+			usleep(100000);
+		if (ok)
+		{
+			read_pdu(extra_req, FC_READ_HOLDING_REGISTERS, 0, 1);
+			ok = tls_send_request(&client, 1, extra_tid, extra_req, 5);
+		}
+	}
+	if (ok)
+	{
+		ok = tls_recv_reply(&client, 1, tids[0], resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 4660;
+		elapsed = clock_now_ms() - start;
+		ok = ok && elapsed >= 200;
+	}
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s (elapsed %llu ms)\n",
+			tls_client_error(), (unsigned long long)elapsed);
+
+	tls_client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsClientDisconnectDuringDelayedResponse)
+{
+	tls_client_t	client  = { .fd = -1, .ssl = NULL };
+	tls_client_t	probe   = { .fd = -1, .ssl = NULL };
+	tls_client_t	fillers[TLS_DISCONNECT_FILLERS];
+	u32		opened  = 0;
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len     = 0;
+	u16		tid     = next_tid();
+	u16		probe_tid;
+	bool		ok      = server_start(TLS_SERVER_OPTIONS,
+					       "(device (unit-id 1) (holding 0 (static 4660)) "
+					       " (fault (kind delay) (delay-ms 300) (percent 100)))");
+
+	for (u32 i = 0; i < TLS_DISCONNECT_FILLERS; i++)
+		fillers[i] = (tls_client_t){ .fd = -1, .ssl = NULL };
+
+	/* Occupy every slot but one before the delayed client connects. */
+	for (u32 i = 0; ok && i < TLS_DISCONNECT_FILLERS; i++)
+	{
+		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &fillers[i]);
+		if (ok)
+			opened++;
+	}
+	if (ok)
+		ok = tls_client_open(g_server.port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = tls_send_request(&client, 1, tid, req, 5);
+	}
+	if (ok)
+	{
+		usleep(50000);
+		tls_client_close(&client);
+		/* Reconnect before the queued 300 ms reply becomes due, with a timeout
+		 * shorter than the remaining delay. */
+		usleep(50000);
+	}
+	if (ok)
+		ok = tls_client_open_timeout(g_server.port, TLS_CLIENT_CERT_PATH,
+					     TLS_CLIENT_KEY_PATH, TLS_CA_PATH,
+					     TLS_PROBE_TIMEOUT_MS, &probe);
+	if (ok)
+	{
+		probe_tid = next_tid();
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = tls_send_request(&probe, 1, probe_tid, req, 5) &&
+		     tls_recv_reply(&probe, 1, probe_tid, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 4660;
+	}
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&probe);
+	tls_client_close(&client);
+	for (u32 i = 0; i < opened; i++)
+		tls_client_close(&fillers[i]);
 	server_stop();
 	ASSERT_EQ(ok);
 }

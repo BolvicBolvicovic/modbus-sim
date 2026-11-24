@@ -11,7 +11,9 @@ CFLAGS      ?= -std=gnu11 -O2 -g -Werror -Wextra -Wall -Wformat=2 -Wshadow -D_FO
 LDFLAGS     ?= -pie -Wl,-z,relro,-z,now
 DEPFLAGS    = -MMD -MP
 INC         = -I. -Isrc
-LIBS        = -lm
+OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl)
+OPENSSL_LIBS   := $(shell pkg-config --libs openssl)
+LIBS        = -lm $(OPENSSL_LIBS)
 
 # SAN=1 builds separate .asan.o objects and links the sanitizer runtimes.
 SAN ?= 0
@@ -62,14 +64,14 @@ $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 tests/%$(OBJEXT): tests/%.c
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) -Ivlib -c $< -o $@
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(DEPFLAGS) -Wno-unused-function $(OPENSSL_CFLAGS) $(INC) -Ivlib -c $< -o $@
 
 # vtest.c relies on a newer gcc default for bool/true/false; force-include it so vlib stays untouched.
 vlib/vtest$(OBJEXT): vlib/vtest.c
 	$(CC) -std=gnu11 -O2 -g $(SAN_FLAGS) -include stdbool.h -Wno-unused-function $(DEPFLAGS) -Ivlib -c $< -o $@
 
 %$(OBJEXT): %.c
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(DEPFLAGS) $(OPENSSL_CFLAGS) $(INC) -c $< -o $@
 
 # Leak detection is off: the config tests intentionally keep arenas alive because
 # the parsed config points into them. UBSan failures abort (-fno-sanitize-recover).

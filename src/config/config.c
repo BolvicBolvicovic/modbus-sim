@@ -27,6 +27,7 @@ static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "spac
 static const char* const MODE_NAMES[] = {
 	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp"
 };
+static const char* const TLS_VERSION_NAMES[] = { "tls1.2", "tls1.3" };
 
 bool
 config_parity_from_name(const char* name, parity_t* out)
@@ -56,13 +57,99 @@ config_set_defaults(config_t* config)
 	config->data_bits         = 8;
 	config->parity            = PARITY_NONE;
 	config->stop_bits         = 1;
+	config->tls_require_client_certificate = true;
+	config->tls_min_version   = CONFIG_TLS_VERSION_1_2;
+}
+
+static bool
+check_tls_path(form_ctx_t* ctx, const char* key, const char* value)
+{
+	if (!value[0])
+		return form_fail(ctx, "tls: %s path must not be empty", key);
+	if (strlen(value) >= CONFIG_TLS_PATH_MAX)
+		return form_fail(ctx, "tls: %s path is too long (max %d characters)",
+				 key, CONFIG_TLS_PATH_MAX - 1);
+	return true;
+}
+
+static bool
+parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
+{
+	static const char* const keys[] = {
+		"certificate", "private-key", "ca-certificate", "require-client-certificate",
+		"min-version", "tls1-2-ciphers", "tls1-3-ciphersuites"
+	};
+	const char*	certificate = NULL;
+	const char*	private_key = NULL;
+	const char*	ca_certificate = NULL;
+	const char*	ciphers = NULL;
+	const char*	ciphersuites = NULL;
+	bool		require_client = true;
+	u32		version = CONFIG_TLS_VERSION_1_2;
+
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "tls"))
+		return false;
+	if (!form_need(ctx, options, "certificate", "tls") ||
+	    !form_need(ctx, options, "private-key", "tls"))
+		return false;
+
+	if (!form_opt_string(ctx, options, "certificate", &certificate) ||
+	    !form_opt_string(ctx, options, "private-key", &private_key) ||
+	    !form_opt_string(ctx, options, "ca-certificate", &ca_certificate) ||
+	    !form_opt_string(ctx, options, "tls1-2-ciphers", &ciphers) ||
+	    !form_opt_string(ctx, options, "tls1-3-ciphersuites", &ciphersuites))
+		return false;
+
+	if (!check_tls_path(ctx, "certificate", certificate) ||
+	    !check_tls_path(ctx, "private-key", private_key))
+		return false;
+	if (ca_certificate && !check_tls_path(ctx, "ca-certificate", ca_certificate))
+		return false;
+
+	if (ciphers)
+	{
+		if (!ciphers[0])
+			return form_fail(ctx, "tls: tls1-2-ciphers must not be empty");
+		if (strlen(ciphers) >= CONFIG_TLS_CIPHER_MAX)
+			return form_fail(ctx, "tls: tls1-2-ciphers is too long (max %d characters)",
+					 CONFIG_TLS_CIPHER_MAX - 1);
+	}
+	if (ciphersuites)
+	{
+		if (!ciphersuites[0])
+			return form_fail(ctx, "tls: tls1-3-ciphersuites must not be empty");
+		if (strlen(ciphersuites) >= CONFIG_TLS_CIPHER_MAX)
+			return form_fail(ctx, "tls: tls1-3-ciphersuites is too long (max %d characters)",
+					 CONFIG_TLS_CIPHER_MAX - 1);
+	}
+
+	if (!form_opt_bool(ctx, options, "require-client-certificate", &require_client))
+		return false;
+	if (!form_opt_choice(ctx, options, "min-version", TLS_VERSION_NAMES,
+			     ARRAY_COUNT(TLS_VERSION_NAMES), &version))
+		return false;
+	if (require_client && !ca_certificate)
+		return form_fail(ctx, "tls: ca-certificate is required when client certificates are required");
+
+	strcpy(config->tls_certificate, certificate);
+	strcpy(config->tls_private_key, private_key);
+	if (ca_certificate)
+		strcpy(config->tls_ca_certificate, ca_certificate);
+	if (ciphers)
+		strcpy(config->tls1_2_ciphers, ciphers);
+	if (ciphersuites)
+		strcpy(config->tls1_3_ciphersuites, ciphersuites);
+	config->tls_enabled               = true;
+	config->tls_require_client_certificate = require_client;
+	config->tls_min_version           = (config_tls_version_t)version;
+	return true;
 }
 
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits" };
-	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
+	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls" };
+	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls" };
 	static const char* const ascii_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
 	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
 	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
@@ -83,6 +170,8 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	bool		broadcast_execute = config->broadcast_execute;
 	const char*	bind              = NULL;
 	const char*	path              = NULL;
+	s7_pointer	tls_form          = s7_nil(ctx->sc);
+	bool		port_given        = false;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "server"))
 		return false;
@@ -147,6 +236,11 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 			return form_fail(ctx, "server: %s is not valid in %s mode", keys[i], MODE_NAMES[mode]);
 	}
 
+	tls_form   = form_find(ctx, options, "tls");
+	port_given = !form_is_absent(ctx, form_find(ctx, options, "port"));
+	if (!form_is_absent(ctx, tls_form) && !parse_tls(ctx, s7_cdr(tls_form), config))
+		return false;
+
 	if (!form_opt_int(ctx, options, "port", 1, 65535, &port))
 		return false;
 
@@ -206,7 +300,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		strcpy(config->path, path);
 
 	config->mode              = (server_mode_t)mode;
-	config->port              = (u16)port;
+	config->port              = (u16)(config->tls_enabled && !port_given ? CONFIG_DEFAULT_TLS_PORT : port);
 	config->seed              = (u32)seed;
 	config->idle_timeout_ms   = (u32)idle;
 	config->frame_gap_ms      = (u32)frame;
