@@ -116,11 +116,12 @@ unchanged when `(tls ...)` is absent.
 
 `ca-certificate` is required while `require-client-certificate` is on (the default). Set it to
 `off` and omit the CA to simulate anonymous clients; this is a testing relaxation, not a
-recommended production setting. Certificate paths are not checked for existence during config load
-or `--check`; a missing or unreadable certificate, key or CA makes server startup fail with a clear
-log message. TLS 1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher
-strings cannot lower the configured minimum. Role-based authorization from certificate fields is
-not implemented.
+recommended production setting. Paths are checked for non-emptiness during config load. When TLS is
+enabled, both `--check` and server startup create the OpenSSL context: a missing or unreadable
+certificate/key/CA, a mismatched certificate and private key, or an invalid cipher list makes
+`--check` fail with exit status 1 and no `config OK` line (startup fails with the same error). TLS
+1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher strings cannot
+lower the configured minimum. Role-based authorization from certificate fields is not implemented.
 
 Each accepted TLS connection has a handshake deadline measured from `accept()`, independent of
 `(idle-timeout-ms)` (which still defaults to `0`). A client that leaves the handshake unfinished is

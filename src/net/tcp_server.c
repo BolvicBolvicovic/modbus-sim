@@ -672,17 +672,7 @@ tcp_server_run(const tcp_server_options_t* options)
 
 	if (options->tls_enabled)
 	{
-		net_tls_config_t tls_config = {
-			.certificate = options->tls_certificate,
-			.private_key = options->tls_private_key,
-			.ca_certificate = options->tls_ca_certificate,
-			.require_client_certificate = options->tls_require_client_certificate,
-			.min_version = options->tls_min_version,
-			.tls1_2_ciphers = options->tls1_2_ciphers,
-			.tls1_3_ciphersuites = options->tls1_3_ciphersuites,
-		};
-
-		server.tls = net_tls_ctx_create(&tls_config, tls_err, sizeof(tls_err));
+		server.tls = net_tls_ctx_create(&options->tls, tls_err, sizeof(tls_err));
 		if (!server.tls)
 		{
 			LOG_WARN("cannot configure TLS: %s", tls_err);
@@ -702,9 +692,9 @@ tcp_server_run(const tcp_server_options_t* options)
 		 options->port, options->device_count, options->device_count == 1 ? "" : "s");
 	if (server.tls)
 		LOG_INFO("TLS enabled: certificate=%s private-key=%s CA=%s client-certificate=%s",
-			 options->tls_certificate, options->tls_private_key,
-			 options->tls_ca_certificate ? options->tls_ca_certificate : "(none)",
-			 options->tls_require_client_certificate ? "required" : "optional");
+			 options->tls.certificate, options->tls.private_key,
+			 options->tls.ca_certificate ? options->tls.ca_certificate : "(none)",
+			 options->tls.require_client_certificate ? "required" : "optional");
 	serve_loop(&server);
 
 	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)

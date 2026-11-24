@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define NET_RECV_TIMEOUT_MS	1000
@@ -38,6 +39,15 @@ static ts_server_t g_server = {
 	.ready_needle	= "listening on"
 };
 static u32 g_server_nofile = 0;
+
+/* Separate fixture for --check runs, which exit instead of listening. */
+static ts_server_t g_tls_check = {
+	.pid		= -1,
+	.master_fd	= -1,
+	.flags		= TS_CAPTURE_STDERR | TS_NULL_STDIN | TS_NULL_STDOUT | TS_EXIT_IS_READY,
+	.label		= "tls check",
+	.ready_needle	= "config OK"
+};
 
 /* --- socket helpers --- */
 
@@ -117,6 +127,51 @@ static const char	TLS_SHORT_HANDSHAKE_OPTIONS[] =
 	"(private-key \"" TLS_SERVER_KEY_PATH "\") "
 	"(ca-certificate \"" TLS_CA_PATH "\") "
 	"(handshake-timeout-ms 250))";
+
+/* Runs the real binary with --check and verifies its status and captured output. */
+static bool
+tls_check_run(const char* tls_options, int expected_status, const char* stderr_needle)
+{
+	const char* bin   = getenv("MODBUS_SIM_BIN");
+	char	    config[512];
+	char*	    argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check",
+			       g_tls_check.config, NULL };
+	int	    status = 0;
+	bool	    ok;
+
+	if (snprintf(config, sizeof(config),
+		     "(server (mode tcp) (bind \"127.0.0.1\") %s)\n"
+		     "(device (unit-id 1) (holding 0 (static 1)))\n",
+		     tls_options) >= (int)sizeof(config))
+		return false;
+	if (!ts_write_config(&g_tls_check, "/tmp/modbus-sim-tlscheck-XXXXXX", config) ||
+	    !ts_temp_file(g_tls_check.stderr_path, sizeof(g_tls_check.stderr_path),
+			  "/tmp/modbus-sim-tlscheckerr-XXXXXX") ||
+	    !ts_temp_file(g_tls_check.stdout_path, sizeof(g_tls_check.stdout_path),
+			  "/tmp/modbus-sim-tlscheckout-XXXXXX"))
+		goto fail;
+
+	g_tls_check.flags = TS_CAPTURE_STDERR | TS_CAPTURE_STDOUT | TS_NULL_STDIN |
+			    TS_EXIT_IS_READY;
+	if (!ts_server_start(&g_tls_check, argv))
+		goto fail;
+
+	ok = ts_wait_pid(g_tls_check.pid, &status, 5000);
+	g_tls_check.pid = -1;
+	ok = ok && WIFEXITED(status) && WEXITSTATUS(status) == expected_status;
+	if (stderr_needle)
+		ok = ok && ts_file_contains(g_tls_check.stderr_path, stderr_needle);
+	if (expected_status == 0)
+		ok = ok && ts_file_contains(g_tls_check.stdout_path, "config OK");
+	else
+		ok = ok && !ts_file_contains(g_tls_check.stdout_path, "config OK");
+	ok = ts_server_stop(&g_tls_check) && ok;
+	return ok;
+
+fail:
+	ts_server_cleanup(&g_tls_check);
+	return false;
+}
 
 enum
 {
@@ -2823,4 +2878,30 @@ TEST(NetTcpIpv6LoopbackServesRequest)
 	client_close(&client);
 	server_stop();
 	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsCheckRejectsInvalidTlsOptions)
+{
+	const char missing[] =
+		"(tls (certificate \"tests/tls/missing.pem\") "
+		"(private-key \"" TLS_SERVER_KEY_PATH "\") "
+		"(ca-certificate \"" TLS_CA_PATH "\"))";
+	const char mismatch[] =
+		"(tls (certificate \"" TLS_SERVER_CERT_PATH "\") "
+		"(private-key \"" TLS_CLIENT_KEY_PATH "\") "
+		"(ca-certificate \"" TLS_CA_PATH "\"))";
+	const char ciphers[] =
+		"(tls (certificate \"" TLS_SERVER_CERT_PATH "\") "
+		"(private-key \"" TLS_SERVER_KEY_PATH "\") "
+		"(ca-certificate \"" TLS_CA_PATH "\") "
+		"(tls1-2-ciphers \"NO_SUCH_CIPHER\"))";
+
+	ASSERT_EQ(tls_check_run(missing, 1, "cannot load server certificate"));
+	ASSERT_EQ(tls_check_run(mismatch, 1, "key values mismatch"));
+	ASSERT_EQ(tls_check_run(ciphers, 1, "invalid TLS 1.2 cipher list"));
+}
+
+TEST(NetTlsCheckAcceptsValidTlsConfig)
+{
+	ASSERT_EQ(tls_check_run(TLS_SERVER_OPTIONS, 0, NULL));
 }

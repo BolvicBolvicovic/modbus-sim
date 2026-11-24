@@ -111,10 +111,11 @@ authentication is on. `(tls ...)` is rejected at load time in every other mode.
 
 ```scheme
 ; Modbus TCP Security: TLS-wrapped MBAP, default port 802
+; example PEM files from tests/tls; replace with your own paths
 (server (mode tcp) (bind "127.0.0.1")
-  (tls (certificate "/etc/modbus/server.pem")
-       (private-key "/etc/modbus/server.key")
-       (ca-certificate "/etc/modbus/ca.pem")))
+  (tls (certificate "tests/tls/server.pem")
+       (private-key "tests/tls/server.key")
+       (ca-certificate "tests/tls/ca.pem")))
 
 (device (name "TLS device") (unit-id 1) (holding 0 (static 42)))
 ```

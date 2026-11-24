@@ -18,6 +18,7 @@
 #include "config/config.h"
 #include "net/ascii_server.h"
 #include "net/ascii_tcp_server.h"
+#include "net/net_tls.h"
 #include "net/rtu_framer.h"
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
@@ -320,6 +321,25 @@ run_rtu_tcp(config_t* config)
 	return rtu_tcp_server_run(&options);
 }
 
+/* Shared by check mode (context creation only) and the TCP server startup. */
+static net_tls_config_t
+tls_config_from_config(const config_t* config)
+{
+	net_tls_config_t tls = {
+		.certificate = config->tls_certificate,
+		.private_key = config->tls_private_key,
+		.ca_certificate = config->tls_ca_certificate,
+		.require_client_certificate = config->tls_require_client_certificate,
+		.min_version = config->tls_min_version == CONFIG_TLS_VERSION_1_3 ?
+			       NET_TLS_VERSION_1_3 : NET_TLS_VERSION_1_2,
+		.tls1_2_ciphers = config->tls1_2_ciphers[0] ? config->tls1_2_ciphers : NULL,
+		.tls1_3_ciphersuites = config->tls1_3_ciphersuites[0] ?
+				       config->tls1_3_ciphersuites : NULL,
+	};
+
+	return tls;
+}
+
 static s32
 run_tcp(config_t* config)
 {
@@ -330,15 +350,7 @@ run_tcp(config_t* config)
 		.idle_timeout_ms = config->idle_timeout_ms,
 		.tls_enabled     = config->tls_enabled,
 		.tls_handshake_timeout_ms = config->tls_handshake_timeout_ms,
-		.tls_certificate = config->tls_certificate,
-		.tls_private_key = config->tls_private_key,
-		.tls_ca_certificate = config->tls_ca_certificate,
-		.tls_require_client_certificate = config->tls_require_client_certificate,
-		.tls_min_version = config->tls_min_version == CONFIG_TLS_VERSION_1_3 ?
-				   NET_TLS_VERSION_1_3 : NET_TLS_VERSION_1_2,
-		.tls1_2_ciphers  = config->tls1_2_ciphers[0] ? config->tls1_2_ciphers : NULL,
-		.tls1_3_ciphersuites = config->tls1_3_ciphersuites[0] ?
-				       config->tls1_3_ciphersuites : NULL,
+		.tls             = tls_config_from_config(config),
 		.devices         = config->devices,
 		.device_count    = config->device_count,
 	};
@@ -390,6 +402,19 @@ main(int argc, char** argv)
 	print_summary(&config);
 	if (cli.check_only)
 	{
+		if (config.tls_enabled)
+		{
+			net_tls_config_t tls = tls_config_from_config(&config);
+			net_tls_ctx_t*   ctx = net_tls_ctx_create(&tls, error, sizeof(error));
+
+			if (!ctx)
+			{
+				fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path,
+					error);
+				goto cleanup;
+			}
+			net_tls_ctx_destroy(ctx);
+		}
 		puts("config OK");
 		status = 0;
 		goto cleanup;

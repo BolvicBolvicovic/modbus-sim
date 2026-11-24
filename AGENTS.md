@@ -6,7 +6,7 @@
   - Do not trust a plain whole-suite run of the vtest binary for pass/fail: vtest exits 0 for whole suites even on failure. `tools/run_tests.sh` runs each test individually and fails correctly. Independent suites run in parallel with `RUN_TESTS_JOBS` workers (default 3, capped by suite count); tests inside a suite stay sequential.
 - `make asan` builds/runs sanitizer tests (`ASAN_OPTIONS=detect_leaks=0` is intentional here; vendored `third_party/s7` is compiled without sanitizers). ASan builds include `float-cast-overflow`.
 - CI-equivalent checks: `make`, `make tests`, `for p in profiles/*.scm; do ./modbus-sim --check "$p"; done`, `make asan`. CI also runs clang build/tests and a gcc `-fanalyzer` build. Keep all profile checks passing when changing config parsing/validation or device behavior.
-- `./modbus-sim --check <config.scm>` validates a config without starting the server.
+- `./modbus-sim --check <config.scm>` validates a config without starting the server; when TLS is enabled it creates (and destroys) a TLS context, so missing/mismatched files and bad ciphers fail with exit status 1 instead of printing `config OK`.
 - After every push, check CI (`gh run list`/`gh run watch`) and open GitHub issues (`gh issue list --state open`). If an open issue needs handling, finalize the current push, pause the current loop, handle issues sequentially (branch/worktree, implement/test/review/fix/reverify/merge/cleanup/push, checking CI and open issues after each push), then resume the previous loop.
 
 ## Focused tests
