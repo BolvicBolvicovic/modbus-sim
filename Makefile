@@ -6,10 +6,18 @@ TESTS       = $(BIN)-tests
 ASAN_BIN    = modbus-sim-asan
 ASAN_TESTS  = modbus-sim-asan-tests
 
+# ccache, clang and mold are optional speed-ups: prefer the fast toolchain only
+# when all three are installed, otherwise use cc and the default linker.
+FAST_TOOLS  := $(shell command -v ccache >/dev/null 2>&1 && \
+                       command -v clang >/dev/null 2>&1 && \
+                       command -v mold >/dev/null 2>&1 && echo 1)
+
 # GNU make predefines CC with origin 'default'. Replace only that built-in value:
 # an explicit CC from the environment or command line must still win.
 ifeq ($(origin CC),default)
+ifneq ($(FAST_TOOLS),)
 CC          := ccache clang
+endif
 endif
 
 # BUILD=dev skips optimization and _FORTIFY_SOURCE (which warns without -O) and
@@ -37,7 +45,11 @@ $(error BUILD must be dev or prod (got '$(BUILD)'))
 endif
 
 CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow $(FORTIFY_FLAGS) -fstack-protector-strong -fPIE
-LDFLAGS     ?= -pie -Wl,-z,relro,-z,now -fuse-ld=mold
+# Hardening applies to every link, even when LDFLAGS is overridden; skip flags
+# the user already supplied so overrides stay free of duplicates.
+HARDEN_LDFLAGS = -pie -Wl,-z,relro,-z,now
+LDFLAGS     ?= $(if $(FAST_TOOLS),-fuse-ld=mold)
+LINK_FLAGS   = $(LDFLAGS) $(filter-out $(LDFLAGS),$(HARDEN_LDFLAGS))
 DEPFLAGS    = -MMD -MP
 INC         = -I. -Isrc
 PKG_CONFIG  ?= pkg-config
@@ -111,7 +123,7 @@ TEST_OBJS   = $(SRCS:.c=$(OBJEXT)) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OB
 # UBSan reports a misaligned load in its local_strncmp (third_party/s7/s7.c:4028).
 # It only parses config at startup, so -O0 avoids paying most of the build cost.
 S7_OBJ      = third_party/s7/s7$(OBJEXT)
-S7_FLAGS    = -std=gnu11 -O0 -w -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0
+S7_FLAGS    = -std=gnu11 -O0 -w -fstack-protector-strong -fPIE -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0
 
 # Relink when switching BUILD even though the binary name stays the same.
 BUILD_STAMP = .build-mode
@@ -137,13 +149,13 @@ dev:
 endif
 
 $(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 tests: $(TESTS) $(BIN)
 	./tools/run_tests.sh ./$(TESTS)
 
 $(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(S7_OBJ)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@
