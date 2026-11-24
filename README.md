@@ -43,9 +43,12 @@ loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 ### Build options
 
-Builds default to `CC='ccache clang'` and `LDFLAGS='-pie -Wl,-z,relro,-z,now -fuse-ld=mold'`,
-matching CI. Install `clang`, `ccache` and `mold`, or override `CC` and `LDFLAGS` (for example,
-`CC=gcc make`) to use a different toolchain.
+The default build uses `cc` and the system linker with hardening flags
+`-pie -Wl,-z,relro,-z,now`. If `clang`, `ccache` and `mold` are all on `PATH`, they are used as an
+optional speed-up (`CC='ccache clang'` and `-fuse-ld=mold`), matching CI; if any is missing, the
+build falls back to `cc` and the default linker. An explicit `CC` or `LDFLAGS` from the environment
+or command line wins (for example, `CC=gcc make`); hardening flags are still appended unless
+already present.
 
 `BUILD` controls optimization (`prod` by default, matching CI):
 
