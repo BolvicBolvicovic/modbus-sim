@@ -29,8 +29,9 @@ finished the handshake are unaffected. A client certificate's subject is logged 
 successful handshake so the authenticated peer can be audited; private keys and secrets are never
 logged. A configured CA is also advertised to clients as the acceptable client CA list, and failure
 to load that list fails context creation. Every TLS close (idle timeout, I/O error, EOF, or server
-shutdown) sends a best-effort `close_notify`, bounded to a few tens of milliseconds so a peer that
-is not reading cannot stall the server. See
+shutdown) makes one nonblocking best-effort attempt to send `close_notify` and never waits for the
+peer, so a peer that is not reading cannot stall the server. An ungraceful peer drop reported with
+an empty OpenSSL error queue is treated as EOF rather than logged as a TLS failure. See
 [config-reference.md](config-reference.md#tls-modbus-tcp-over-tls) for the full option list.
 
 #### Modbus/TCP Security coverage
