@@ -47,7 +47,7 @@ that is present but not allowed is rejected at load time, even if its value woul
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
 | `(port N)` | TCP port, 1-65535 | `1502` | `tcp`, `rtu-tcp` |
-| `(bind "ADDRESS")` | IPv4 address to listen on. `"0.0.0.0"` = all interfaces, `"127.0.0.1"` = this machine only | `"0.0.0.0"` | `tcp`, `rtu-tcp` |
+| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack) | `"0.0.0.0"` | `tcp`, `rtu-tcp` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |

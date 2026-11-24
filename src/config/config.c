@@ -178,8 +178,8 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (bind && strlen(bind) >= CONFIG_BIND_MAX)
 		return form_fail(ctx, "server: bind address is too long (max %d characters)", CONFIG_BIND_MAX - 1);
 
-	if (bind && !ip_is_ipv4_literal(bind))
-		return form_fail(ctx, "server: bind address '%s' is not an IPv4 address like 127.0.0.1", bind);
+	if (bind && !ip_is_literal(bind))
+		return form_fail(ctx, "server: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
 
 	if ((mode == SERVER_MODE_RTU_DEVICE || mode == SERVER_MODE_ASCII_DEVICE) &&
 	    !path)

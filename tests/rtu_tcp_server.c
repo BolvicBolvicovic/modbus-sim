@@ -192,7 +192,7 @@ done:
 }
 
 static void
-write_cfg(const char* server_options, const char* devices)
+write_cfg_with_bind(const char* bind, const char* server_options, const char* devices)
 {
 	int cfd;
 	FILE* f;
@@ -201,9 +201,15 @@ write_cfg(const char* server_options, const char* devices)
 	ASSERT(cfd >= 0);
 	f = fdopen(cfd, "w");
 	ASSERT(f != NULL);
-	fprintf(f, "(server (mode rtu-tcp) (port %u) (bind \"127.0.0.1\") %s)\n%s\n",
-		g_fx.port, server_options ? server_options : "", devices);
+	fprintf(f, "(server (mode rtu-tcp) (port %u) (bind \"%s\") %s)\n%s\n",
+		g_fx.port, bind ? bind : "127.0.0.1", server_options ? server_options : "", devices);
 	fclose(f);
+}
+
+static void
+write_cfg(const char* server_options, const char* devices)
+{
+	write_cfg_with_bind("127.0.0.1", server_options, devices);
 }
 
 static pid_t
@@ -240,6 +246,36 @@ server_start(const char* server_options, const char* devices)
 	ASSERT(g_fx.pid > 0);
 }
 
+static bool
+ipv6_loopback_available(void)
+{
+	struct sockaddr_in6 addr = { 0 };
+	int fd = socket(AF_INET6, SOCK_STREAM, 0);
+
+	if (fd < 0)
+		return false;
+	addr.sin6_family = AF_INET6;
+	addr.sin6_port = 0;
+	if (inet_pton(AF_INET6, "::1", &addr.sin6_addr) != 1 ||
+	    bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+	{
+		close(fd);
+		return false;
+	}
+	close(fd);
+	return true;
+}
+
+static void
+server_start_v6(const char* server_options, const char* devices)
+{
+	g_fx.port = find_free_port();
+	ASSERT(g_fx.port != 0);
+	write_cfg_with_bind("::1", server_options, devices);
+	g_fx.pid = start_rtu_tcp();
+	ASSERT(g_fx.pid > 0);
+}
+
 static int
 connect_port(u32 tries, u32 timeout_ms)
 {
@@ -256,6 +292,34 @@ connect_port(u32 tries, u32 timeout_ms)
 		a.sin_family = AF_INET;
 		a.sin_port = htons(g_fx.port);
 		inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+		if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0)
+			return fd;
+		close(fd);
+		usleep(20000);
+	}
+	return -1;
+}
+
+static int
+connect_port_v6(u32 tries, u32 timeout_ms)
+{
+	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
+			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
+	for (u32 i = 0; i < tries; i++)
+	{
+		int fd = socket(AF_INET6, SOCK_STREAM, 0);
+		struct sockaddr_in6 a = { 0 };
+		if (fd < 0)
+			return -1;
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+		a.sin6_family = AF_INET6;
+		a.sin6_port = htons(g_fx.port);
+		if (inet_pton(AF_INET6, "::1", &a.sin6_addr) != 1)
+		{
+			close(fd);
+			return -1;
+		}
 		if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0)
 			return fd;
 		close(fd);
@@ -859,4 +923,33 @@ TEST(RtuOverTcpTruncatedFrameDoesNotLoseValidRequest)
 	ASSERT_EQ(addr == 1);
 	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
 	ASSERT_EQ(get_be16(resp + 2) == 4386);
+}
+
+TEST(RtuOverTcpIpv6LoopbackServesRequest)
+{
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+	int fd;
+
+	if (!ipv6_loopback_available())
+	{
+		fprintf(stderr, "SKIP: IPv6 loopback unavailable\n");
+		return;
+	}
+
+	server_start_v6("", "(device (unit-id 1) (holding 0 (static 4660)))\n");
+	fd = connect_port_v6(100, 2000);
+	ASSERT(fd >= 0);
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT(flen > 0);
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(plen == 4);
+	ASSERT_EQ(get_be16(resp + 2) == 4660);
+
+	close(fd);
+	server_stop();
 }

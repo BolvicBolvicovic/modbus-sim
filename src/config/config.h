@@ -12,7 +12,7 @@
 #define CONFIG_DEFAULT_IDLE_TIMEOUT_MS	0
 #define CONFIG_DEFAULT_FRAME_GAP_MS	20	/* fallback when baud is unknown and no explicit gap is set */
 #define CONFIG_DEFAULT_BAUD		0	/* 0 = unknown; derive RTU timing from tty when possible */
-#define CONFIG_BIND_MAX			64
+#define CONFIG_BIND_MAX			128
 #define CONFIG_PATH_MAX			256
 
 /* Name: server_mode_t

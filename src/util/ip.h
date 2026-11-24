@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-/* Returns true when `text` is a valid IPv4 literal (dotted quad). */
-bool	ip_is_ipv4_literal(const char* text);
+/* Returns true when `text` is a valid IPv4 or IPv6 literal address. */
+bool	ip_is_literal(const char* text);
 
 #endif

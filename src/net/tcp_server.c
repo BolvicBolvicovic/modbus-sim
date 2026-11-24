@@ -38,7 +38,7 @@ struct conn_t
 	u32	tx_sent;
 	u64	tx_due_ms;		/* do not send before this time (delay fault) */
 	u64	last_activity_ms;	/* updated on I/O progress; used for idle timeout */
-	char	peer[INET_ADDRSTRLEN + 8];
+	char	peer[INET6_ADDRSTRLEN + 8];
 };
 
 typedef struct tcp_server_t tcp_server_t;
@@ -92,9 +92,9 @@ conn_find_free(tcp_server_t* server)
 static void
 accept_clients(tcp_server_t* server)
 {
-	struct sockaddr_in	addr = { 0 };
+	struct sockaddr_storage	addr = { 0 };
 	socklen_t		len  = sizeof(addr);
-	char			ip[INET_ADDRSTRLEN];
+	char			ip[INET6_ADDRSTRLEN];
 	int			fd   = 0;
 	int			yes  = 1;
 	conn_t*			conn = NULL;
@@ -138,11 +138,23 @@ accept_clients(tcp_server_t* server)
 		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) < 0)
 			LOG_WARN("cannot set TCP_NODELAY on accepted socket: %s", strerror(errno));
 
-		inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
 		memset(conn, 0, sizeof(*conn));
 		conn->fd               = fd;
 		conn->last_activity_ms = clock_now_ms();
-		snprintf(conn->peer, sizeof(conn->peer), "%s:%u", ip, ntohs(addr.sin_port));
+		if (addr.ss_family == AF_INET6)
+		{
+			struct sockaddr_in6* a = (struct sockaddr_in6*)&addr;
+
+			inet_ntop(AF_INET6, &a->sin6_addr, ip, sizeof(ip));
+			snprintf(conn->peer, sizeof(conn->peer), "[%s]:%u", ip, ntohs(a->sin6_port));
+		}
+		else
+		{
+			struct sockaddr_in* a = (struct sockaddr_in*)&addr;
+
+			inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
+			snprintf(conn->peer, sizeof(conn->peer), "%s:%u", ip, ntohs(a->sin_port));
+		}
 		LOG_DEBUG("client %s connected", conn->peer);
 	}
 }

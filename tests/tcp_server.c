@@ -109,6 +109,57 @@ client_open(u16 port, int timeout_ms, client_t* out)
 	return true;
 }
 
+static bool
+ipv6_loopback_available(void)
+{
+	struct sockaddr_in6	addr = { 0 };
+	int			fd   = socket(AF_INET6, SOCK_STREAM, 0);
+
+	if (fd < 0)
+		return false;
+
+	addr.sin6_family = AF_INET6;
+	addr.sin6_port = 0;
+	if (inet_pton(AF_INET6, "::1", &addr.sin6_addr) != 1)
+	{
+		close(fd);
+		return false;
+	}
+	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+	{
+		close(fd);
+		return false;
+	}
+	close(fd);
+	return true;
+}
+
+static bool
+client_open_v6(u16 port, int timeout_ms, client_t* out)
+{
+	struct sockaddr_in6	addr = { 0 };
+	struct timeval		tv   = { .tv_sec = timeout_ms / 1000,
+					 .tv_usec = (timeout_ms % 1000) * 1000 };
+	int			fd   = socket(AF_INET6, SOCK_STREAM, 0);
+
+	if (fd < 0)
+		return false;
+
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+	addr.sin6_family = AF_INET6;
+	addr.sin6_port = htons(port);
+	if (inet_pton(AF_INET6, "::1", &addr.sin6_addr) != 1 ||
+	    connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+	{
+		close(fd);
+		return false;
+	}
+
+	out->fd = fd;
+	return true;
+}
+
 static void
 client_close(client_t* client)
 {
@@ -410,7 +461,7 @@ file_contains(const char* path, const char* needle)
 
 /* `server_options` is appended inside (server ...); pass "" for defaults. */
 static bool
-server_start(const char* server_options, const char* devices)
+server_start_with_bind(const char* bind, const char* server_options, const char* devices)
 {
 	fixture_t*	fx       = &g_server;
 	char		config[2048];
@@ -425,8 +476,8 @@ server_start(const char* server_options, const char* devices)
 		return false;
 	}
 
-	snprintf(config, sizeof(config), "(server (mode tcp) (port %u) (bind \"127.0.0.1\") %s)\n%s\n",
-		 fx->port, server_options ? server_options : "", devices);
+	snprintf(config, sizeof(config), "(server (mode tcp) (port %u) (bind \"%s\") %s)\n%s\n",
+		 fx->port, bind ? bind : "127.0.0.1", server_options ? server_options : "", devices);
 
 	strcpy(fx->config, "/tmp/modbus-sim-net-XXXXXX");
 	fd = mkstemp(fx->config);
@@ -538,6 +589,12 @@ server_start(const char* server_options, const char* devices)
 	}
 	server_stop();
 	return false;
+}
+
+static bool
+server_start(const char* server_options, const char* devices)
+{
+	return server_start_with_bind("127.0.0.1", server_options, devices);
 }
 
 SETUP_SUITE()
@@ -2791,4 +2848,32 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 		client_close(&clients[i]);
 	server_stop();
 	ASSERT_EQ(ok && opened == 32);
+}
+
+TEST(NetTcpIpv6LoopbackServesRequest)
+{
+	client_t	client = { .fd = -1 };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	bool		ok;
+
+	if (!ipv6_loopback_available())
+	{
+		fprintf(stderr, "SKIP: IPv6 loopback unavailable\n");
+		return;
+	}
+
+	ok = server_start_with_bind("::1", "", "(device (unit-id 1) (holding 0 (static 42)))");
+	ok = ok && client_open_v6(g_server.port, NET_RECV_TIMEOUT_MS, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
+		     resp[0] == FC_READ_HOLDING_REGISTERS && register_value(resp, len, 0) == 42;
+	}
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
 }

@@ -7,7 +7,8 @@
 A 7-byte MBAP header (transaction id, protocol id 0, length, unit id) followed by the PDU.
 Clients may keep a connection open and send several requests; they are answered one after another
 in order. A client that sends a header with a protocol id other than 0, or an impossible length,
-is disconnected.
+is disconnected. `port` and `bind` select the listen socket; `bind` accepts an IPv4 or IPv6 literal
+address (IPv6 sockets are IPv6-only, so `"0.0.0.0"` and `"::"` listen on separate address families).
 
 ### Modbus RTU
 
@@ -302,12 +303,11 @@ through `(fault (kind exception) (code N))`; 09 is reserved.
 
 Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
 created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and
-[Transport](#transport): no ASCII-over-TCP, IPv6, or Modbus TCP Security/TLS, and no true UART t1.5
+[Transport](#transport): no ASCII-over-TCP or Modbus TCP Security/TLS, and no true UART t1.5
 timing (the RTU `strict-t15` option is only a baud-derived-auto-mode approximation).
 
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
 - ASCII-over-TCP: not implemented; ASCII is a serial byte-stream transport only
-- IPv6
 - TLS (Modbus/TCP Security)

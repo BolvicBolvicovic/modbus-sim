@@ -49,7 +49,8 @@ void		pending_response_clear(pending_response_t* pending);
  * byte-stream server loop. */
 bool		net_handle_hangup(pending_response_t* pending);
 
-/* Opens, binds, and listens on a nonblocking IPv4 TCP socket. Returns fd or -1. */
+/* Opens, binds, and listens on a nonblocking TCP socket. bind_address must be
+ * an IPv4 or IPv6 literal. IPv6 sockets set IPV6_V6ONLY. Returns fd or -1. */
 int		net_tcp_listen(const char* bind_address, u16 port, int backlog);
 
 #endif

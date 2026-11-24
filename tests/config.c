@@ -676,29 +676,35 @@ TEST(ConfigBindRejectsHostname)
 
 	ASSERT_FAILURE(load_text("(server (mode tcp) (bind \"localhost\")) (device (holding 0))",
 				 &config, err, sizeof(err)));
-	ASSERT_EQ(strstr(err, "not an IPv4 address") != NULL);
+	ASSERT_EQ(strstr(err, "not a valid IPv4 or IPv6 address") != NULL);
 }
 
-TEST(ConfigBindRejectsIpv6)
+TEST(ConfigBindAcceptsIpv6)
 {
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(server (mode tcp) (bind \"::1\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"::1\")) (device (holding 0))",
 				 &config, err, sizeof(err)));
-	ASSERT_EQ(strstr(err, "not an IPv4 address") != NULL);
+	ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
+
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (bind \"::\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(strcmp(config.bind_address, "::") == 0);
 }
 
 TEST(ConfigBindRejectsOverlongString)
 {
 	config_t	config = { 0 };
 	char		err[256] = "";
-	char		text[256];
+	char		text[320];
+	char		bind[CONFIG_BIND_MAX + 8];
 
-	/* CONFIG_BIND_MAX is 64; 63 chars is max content, 64+ is overlong. */
+	memset(bind, 'a', CONFIG_BIND_MAX);
+	bind[CONFIG_BIND_MAX] = '\0';
 	snprintf(text, sizeof(text),
-		 "(server (mode tcp) (bind \"%.*s\")) (device (holding 0))",
-		 64, "111.111.111.111111.111.111.111111.111.111.111111.111.111.1111111");
+		 "(server (mode tcp) (bind \"%s\")) (device (holding 0))",
+		 bind);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too long") != NULL);
 }

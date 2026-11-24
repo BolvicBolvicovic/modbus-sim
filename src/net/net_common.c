@@ -86,22 +86,51 @@ net_handle_hangup(pending_response_t* pending)
 int
 net_tcp_listen(const char* bind_address, u16 port, int backlog)
 {
-	struct sockaddr_in	addr = { 0 };
-	int			yes  = 1;
-	int			fd   = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	struct sockaddr_storage	addr = { 0 };
+	socklen_t		addr_len = 0;
+	struct in_addr		addr4;
+	struct in6_addr		addr6;
+	int			family = AF_UNSPEC;
+	int			yes = 1;
+	int			fd;
 
-	if (fd < 0)
-		return -1;
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-	addr.sin_family = AF_INET;
-	addr.sin_port   = htons(port);
-	if (inet_pton(AF_INET, bind_address, &addr.sin_addr) != 1)
+	if (inet_pton(AF_INET, bind_address, &addr4) == 1)
 	{
-		LOG_WARN("bind address '%s' is not an IPv4 address", bind_address);
-		close(fd);
+		struct sockaddr_in* a = (struct sockaddr_in*)&addr;
+
+		family = AF_INET;
+		a->sin_family = AF_INET;
+		a->sin_port = htons(port);
+		a->sin_addr = addr4;
+		addr_len = sizeof(*a);
+	}
+	else if (inet_pton(AF_INET6, bind_address, &addr6) == 1)
+	{
+		struct sockaddr_in6* a = (struct sockaddr_in6*)&addr;
+
+		family = AF_INET6;
+		a->sin6_family = AF_INET6;
+		a->sin6_port = htons(port);
+		a->sin6_addr = addr6;
+		addr_len = sizeof(*a);
+	}
+	else
+	{
+		LOG_WARN("bind address '%s' is not a valid IPv4 or IPv6 address", bind_address);
 		return -1;
 	}
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 || listen(fd, backlog) < 0)
+
+	fd = socket(family, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	if (fd < 0)
+	{
+		LOG_WARN("cannot create socket for %s:%u: %s", bind_address, port, strerror(errno));
+		return -1;
+	}
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+	if (family == AF_INET6)
+		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &yes, sizeof(yes));
+
+	if (bind(fd, (struct sockaddr*)&addr, addr_len) < 0 || listen(fd, backlog) < 0)
 	{
 		LOG_WARN("cannot listen on %s:%u: %s", bind_address, port, strerror(errno));
 		close(fd);
