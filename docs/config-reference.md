@@ -92,7 +92,8 @@ Examples (each is a complete `(server ...)` block; a config file may contain onl
 (server (mode tcp) (bind "127.0.0.1")
   (tls (certificate "/etc/modbus/server.pem")
        (private-key "/etc/modbus/server.key")
-       (ca-certificate "/etc/modbus/ca.pem")))
+       (ca-certificate "/etc/modbus/ca.pem")
+       (handshake-timeout-ms 5000)))
 ```
 
 ### TLS (Modbus TCP over TLS)
@@ -107,6 +108,7 @@ unchanged when `(tls ...)` is absent.
 | `(certificate "PATH")` | Server certificate chain in PEM format. Required, 1-255 characters | none |
 | `(private-key "PATH")` | Server private key in PEM format. Required, 1-255 characters. Its contents are never logged | none |
 | `(ca-certificate "PATH")` | CA certificate used to verify client certificates, 1-255 characters | none |
+| `(handshake-timeout-ms N)` | Close a TLS connection whose handshake is not complete within `N` milliseconds after accept, 1-86400000. Independent of `(idle-timeout-ms)` | `10000` |
 | `(require-client-certificate on\|off)` | Require a client certificate signed by the configured CA | `on` |
 | `(min-version tls1.2\|tls1.3)` | Minimum TLS version | `tls1.2` |
 | `(tls1-2-ciphers "LIST")` | OpenSSL TLS 1.2 (and below) cipher list; must be non-empty, at most 511 characters | OpenSSL default |
@@ -119,6 +121,12 @@ or `--check`; a missing or unreadable certificate, key or CA makes server startu
 log message. TLS 1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher
 strings cannot lower the configured minimum. Role-based authorization from certificate fields is
 not implemented.
+
+Each accepted TLS connection has a handshake deadline measured from `accept()`, independent of
+`(idle-timeout-ms)` (which still defaults to `0`). A client that leaves the handshake unfinished is
+closed at the deadline and logged at `WARN` with its peer address and the configured timeout, freeing
+its slot for other clients. Connections that completed the handshake are not affected; normal TLS
+requests and delay faults keep their existing timing.
 
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
 existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are

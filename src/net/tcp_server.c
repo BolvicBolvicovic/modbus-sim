@@ -38,6 +38,7 @@ struct conn_t
 	u32	tx_sent;
 	u64	tx_due_ms;		/* do not send before this time (delay fault) */
 	u64	last_activity_ms;	/* updated on I/O progress; used for idle timeout */
+	u64	tls_handshake_deadline_ms; /* measured from accept; 0 = no deadline */
 	char	peer[INET6_ADDRSTRLEN + 8];
 	SSL*	ssl;			/* NULL for plaintext connections */
 	bool	tls_handshake_done;
@@ -138,6 +139,7 @@ accept_clients(tcp_server_t* server)
 	socklen_t		len  = sizeof(addr);
 	char			ip[INET6_ADDRSTRLEN];
 	char			tls_err[256];
+	u64			now_ms = 0;
 	int			fd   = 0;
 	int			yes  = 1;
 	conn_t*			conn = NULL;
@@ -181,9 +183,13 @@ accept_clients(tcp_server_t* server)
 		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) < 0)
 			LOG_WARN("cannot set TCP_NODELAY on accepted socket: %s", strerror(errno));
 
+		now_ms                 = clock_now_ms();
 		memset(conn, 0, sizeof(*conn));
 		conn->fd               = fd;
-		conn->last_activity_ms = clock_now_ms();
+		conn->last_activity_ms = now_ms;
+		if (server->options.tls_handshake_timeout_ms > 0)
+			conn->tls_handshake_deadline_ms =
+				now_ms + server->options.tls_handshake_timeout_ms;
 		if (addr.ss_family == AF_INET6)
 		{
 			struct sockaddr_in6* a = (struct sockaddr_in6*)&addr;
@@ -433,6 +439,31 @@ close_idle_connections(tcp_server_t* server, u64 now_ms)
 	}
 }
 
+/* A TLS handshake has its own deadline from accept(), even with idle timeout disabled. */
+static void
+close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
+{
+	u32 timeout_ms = server->options.tls_handshake_timeout_ms;
+
+	if (!server->tls || timeout_ms == 0)
+		return;
+
+	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
+	{
+		conn_t* conn = &server->conns[i];
+
+		if (conn->fd < 0 ||
+		    !conn->ssl ||
+		    conn->tls_handshake_done ||
+		    conn->tls_handshake_deadline_ms == 0 ||
+		    now_ms < conn->tls_handshake_deadline_ms)
+			continue;
+
+		LOG_WARN("client %s TLS handshake exceeded %u ms, closing", conn->peer, timeout_ms);
+		conn_close(conn);
+	}
+}
+
 /* OpenSSL may hold decrypted request bytes even when the socket has nothing to read.
  * Only synthesize a wakeup while no response is pending, so delayed faults are honored. */
 static bool
@@ -462,6 +493,7 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, conn_t** owners, u64 
 	{
 		conn_t*	conn   = &server->conns[i];
 		u64	idle_deadline;
+		u64	handshake_deadline;
 		short	events = POLLIN;
 
 		if (conn->fd < 0)
@@ -477,6 +509,14 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, conn_t** owners, u64 
 				events |= POLLIN;
 			if (conn->tls_want_write)
 				events |= POLLOUT;
+			if (conn->tls_handshake_deadline_ms > 0)
+			{
+				handshake_deadline = conn->tls_handshake_deadline_ms;
+				if (handshake_deadline <= now_ms)
+					*timeout = 0;
+				else
+					*timeout = MIN(*timeout, (int)(handshake_deadline - now_ms));
+			}
 		}
 		else if (conn->ssl && conn->tx_len == 0 && conn->tls_want_write)
 			events = POLLOUT;
@@ -606,12 +646,14 @@ serve_loop(tcp_server_t* server)
 	{
 		now_ms = clock_now_ms();
 		close_idle_connections(server, now_ms);
+		close_stalled_handshakes(server, now_ms);
 		count = build_poll_table(server, fds, owners, now_ms, &timeout);
 		if (poll(fds, count, timeout) < 0)
 			continue;
 
 		now_ms = clock_now_ms();
 		close_idle_connections(server, now_ms);
+		close_stalled_handshakes(server, now_ms);
 		for (u32 i = 0; i < count; i++)
 			serve_ready(server, &fds[i], owners[i], now_ms);
 	}

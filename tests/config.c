@@ -964,6 +964,7 @@ TEST(ConfigTlsFullFormIsParsed)
 		"  (tls (certificate \"/tmp/server.pem\")\n"
 		"       (private-key \"/tmp/server.key\")\n"
 		"       (ca-certificate \"/tmp/ca.pem\")\n"
+		"       (handshake-timeout-ms 250)\n"
 		"       (require-client-certificate off)\n"
 		"       (min-version tls1.3)\n"
 		"       (tls1-2-ciphers \"ECDHE-RSA-AES128-GCM-SHA256\")\n"
@@ -977,6 +978,7 @@ TEST(ConfigTlsFullFormIsParsed)
 	ASSERT_EQ(strcmp(config.tls_ca_certificate, "/tmp/ca.pem") == 0);
 	ASSERT_EQ(config.tls_require_client_certificate == false);
 	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_3);
+	ASSERT_EQ(config.tls_handshake_timeout_ms == 250);
 	ASSERT_EQ(strcmp(config.tls1_2_ciphers, "ECDHE-RSA-AES128-GCM-SHA256") == 0);
 	ASSERT_EQ(strcmp(config.tls1_3_ciphersuites, "TLS_AES_128_GCM_SHA256") == 0);
 }
@@ -994,6 +996,7 @@ TEST(ConfigTlsDefaultsAndExplicitPort)
 	ASSERT_EQ(config.tls_enabled);
 	ASSERT_EQ(config.tls_require_client_certificate == true);
 	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
+	ASSERT_EQ(config.tls_handshake_timeout_ms == CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS);
 	ASSERT_EQ(config.tls1_2_ciphers[0] == '\0');
 	ASSERT_EQ(config.tls1_3_ciphersuites[0] == '\0');
 
@@ -1005,6 +1008,53 @@ TEST(ConfigTlsDefaultsAndExplicitPort)
 	ASSERT_EQ(config.port == 1802);
 	ASSERT_EQ(config.tls_ca_certificate[0] == '\0');
 	ASSERT_EQ(config.tls_require_client_certificate == false);
+}
+
+TEST(ConfigTlsHandshakeTimeoutIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		"             (ca-certificate \"ca.pem\") "
+		"             (handshake-timeout-ms 250))) (device (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.tls_handshake_timeout_ms == 250);
+
+	ASSERT_SUCCESS(load_text(
+		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		"             (ca-certificate \"ca.pem\") "
+		"             (handshake-timeout-ms 1))) (device (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.tls_handshake_timeout_ms == 1);
+
+	ASSERT_SUCCESS(load_text(
+		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		"             (ca-certificate \"ca.pem\") "
+		"             (handshake-timeout-ms 86400000))) (device (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.tls_handshake_timeout_ms == 86400000);
+}
+
+TEST(ConfigTlsHandshakeTimeoutRejectsInvalidValues)
+{
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "         (ca-certificate \"ca.pem\") "
+		     "         (handshake-timeout-ms 0))) (device (holding 0))",
+		     "between 1 and 86400000");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "         (ca-certificate \"ca.pem\") "
+		     "         (handshake-timeout-ms 86400001))) (device (holding 0))",
+		     "between 1 and 86400000");
+	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "         (ca-certificate \"ca.pem\") "
+		     "         (handshake-timeout-ms nope))) (device (holding 0))",
+		     "whole number");
+	EXPECT_ERROR("(server (handshake-timeout-ms 250) "
+		     "        (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
+		     "        (ca-certificate \"ca.pem\"))) "
+		     "(device (holding 0))", "unknown option 'handshake-timeout-ms'");
 }
 
 TEST(ConfigPlaintextTcpPortIsUnchanged)

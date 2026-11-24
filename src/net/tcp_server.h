@@ -17,6 +17,7 @@ struct tcp_server_options_t
 	u32		seed;
 	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
 	bool		tls_enabled;		/* wrap MBAP in TLS; borrowed settings from config_t */
+	u32		tls_handshake_timeout_ms; /* TLS only: close handshakes older than this; 0 = disabled */
 	const char*	tls_certificate;
 	const char*	tls_private_key;
 	const char*	tls_ca_certificate;

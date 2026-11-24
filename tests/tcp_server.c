@@ -112,12 +112,19 @@ static const char	TLS_SERVER_OPTIONS[] =
 	"(private-key \"" TLS_SERVER_KEY_PATH "\") "
 	"(ca-certificate \"" TLS_CA_PATH "\"))";
 
+static const char	TLS_SHORT_HANDSHAKE_OPTIONS[] =
+	"(tls (certificate \"" TLS_SERVER_CERT_PATH "\") "
+	"(private-key \"" TLS_SERVER_KEY_PATH "\") "
+	"(ca-certificate \"" TLS_CA_PATH "\") "
+	"(handshake-timeout-ms 250))";
+
 enum
 {
 	TLS_PIPELINE_FRAME_LEN = MBAP_HEADER_SIZE + 5,
 	TLS_PIPELINE_COUNT     = MBAP_MAX_FRAME / TLS_PIPELINE_FRAME_LEN + 1,
 	TLS_PIPELINE_BYTES     = TLS_PIPELINE_COUNT * TLS_PIPELINE_FRAME_LEN,
-	TLS_DISCONNECT_FILLERS = 31	/* server cap is 32; leave one slot for the test client */
+	TLS_DISCONNECT_FILLERS = 31,	/* server cap is 32; leave one slot for the test client */
+	TLS_HANDSHAKE_FILLERS  = 32	/* fill every slot with stalled handshakes */
 };
 _Static_assert(TLS_PIPELINE_BYTES > MBAP_MAX_FRAME,
 	       "pipelined TLS test must exceed the server receive buffer");
@@ -572,6 +579,52 @@ TEST(NetTlsClientDisconnectDuringDelayedResponse)
 		tls_client_close(&fillers[i]);
 	server_stop();
 	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsHandshakeTimeoutFreesSlots)
+{
+	client_t	fillers[TLS_HANDSHAKE_FILLERS];
+	tls_client_t	client   = { .fd = -1, .ssl = NULL };
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len      = 0;
+	u16		tid      = ts_next_tid();
+	u32		opened   = 0;
+	bool		ok       = server_start(TLS_SHORT_HANDSHAKE_OPTIONS,
+						"(device (unit-id 1) (holding 0 (static 4660)))");
+
+	for (u32 i = 0; i < TLS_HANDSHAKE_FILLERS; i++)
+		fillers[i].fd = -1;
+
+	/* Raw sockets that never send a ClientHello occupy every server slot. */
+	for (u32 i = 0; ok && i < TLS_HANDSHAKE_FILLERS; i++)
+	{
+		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &fillers[i]);
+		if (ok)
+			opened++;
+	}
+
+	for (u32 i = 0; ok && i < opened; i++)
+		ok = wait_for_server_close(&fillers[i], 2000);
+
+	if (ok)
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH,
+				     TLS_CLIENT_KEY_PATH, TLS_CA_PATH, &client);
+	if (ok)
+	{
+		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+		ok = tls_send_request(&client, 1, tid, req, 5) &&
+		     tls_recv_reply(&client, 1, tid, resp, &len) &&
+		     len == 4 && register_value(resp, len, 0) == 4660;
+	}
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&client);
+	for (u32 i = 0; i < opened; i++)
+		client_close(&fillers[i]);
+	server_stop();
+	ASSERT_EQ(ok && opened == TLS_HANDSHAKE_FILLERS);
 }
 
 TEST(NetUnitIdRoutingAndGatewayException)

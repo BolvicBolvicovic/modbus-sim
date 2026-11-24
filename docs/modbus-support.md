@@ -14,7 +14,11 @@ address (IPv6 sockets are IPv6-only, so `"0.0.0.0"` and `"::"` listen on separat
 frames and receive the same unit routing, fault handling, and PDU answers. TLS is available only for
 `mode tcp`, defaults to port 802 when `(port N)` is omitted, and requires a server certificate and
 private key. Client certificates are required by default; the CA certificate is then required as
-well. TLS 1.2 is the minimum, and anonymous/NULL ciphers are disabled. See
+well. TLS 1.2 is the minimum, and anonymous/NULL ciphers are disabled. An accepted TLS connection
+must complete its handshake within `(tls (handshake-timeout-ms N))` (1-86400000, default `10000`),
+measured from accept and independent of `(idle-timeout-ms)`. Stalled handshakes are closed and logged
+at `WARN` with the peer and timeout, so they cannot hold all 32 client slots; connections that
+finished the handshake are unaffected. See
 [config-reference.md](config-reference.md#tls-modbus-tcp-over-tls) for the full option list.
 
 ### Modbus RTU
@@ -301,6 +305,9 @@ MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 - Optional `(server (idle-timeout-ms N))` closes a connection after `N` ms with no I/O
   progress (`0` disables it, the default). Connections waiting to send a delayed fault
   response are not considered idle. Idle closes are logged at `INFO`.
+- TLS handshakes have their own deadline from `(tls (handshake-timeout-ms N))`, default `10000`
+  ms, independent of the idle timeout. Stalled handshakes are closed at `WARN`; this does not
+  change request timing after the handshake completes.
 
 ## Deviations from the spec
 

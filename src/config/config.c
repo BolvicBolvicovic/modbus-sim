@@ -59,6 +59,7 @@ config_set_defaults(config_t* config)
 	config->stop_bits         = 1;
 	config->tls_require_client_certificate = true;
 	config->tls_min_version   = CONFIG_TLS_VERSION_1_2;
+	config->tls_handshake_timeout_ms = CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
 }
 
 static bool
@@ -76,8 +77,9 @@ static bool
 parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 {
 	static const char* const keys[] = {
-		"certificate", "private-key", "ca-certificate", "require-client-certificate",
-		"min-version", "tls1-2-ciphers", "tls1-3-ciphersuites"
+		"certificate", "private-key", "ca-certificate", "handshake-timeout-ms",
+		"require-client-certificate", "min-version", "tls1-2-ciphers",
+		"tls1-3-ciphersuites"
 	};
 	const char*	certificate = NULL;
 	const char*	private_key = NULL;
@@ -86,6 +88,7 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 	const char*	ciphersuites = NULL;
 	bool		require_client = true;
 	u32		version = CONFIG_TLS_VERSION_1_2;
+	s64		handshake_timeout = CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "tls"))
 		return false;
@@ -123,6 +126,8 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 					 CONFIG_TLS_CIPHER_MAX - 1);
 	}
 
+	if (!form_opt_int(ctx, options, "handshake-timeout-ms", 1, 86400000, &handshake_timeout))
+		return false;
 	if (!form_opt_bool(ctx, options, "require-client-certificate", &require_client))
 		return false;
 	if (!form_opt_choice(ctx, options, "min-version", TLS_VERSION_NAMES,
@@ -142,6 +147,7 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 	config->tls_enabled               = true;
 	config->tls_require_client_certificate = require_client;
 	config->tls_min_version           = (config_tls_version_t)version;
+	config->tls_handshake_timeout_ms  = (u32)handshake_timeout;
 	return true;
 }
 

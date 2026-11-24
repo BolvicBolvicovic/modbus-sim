@@ -329,6 +329,7 @@ run_tcp(config_t* config)
 		.seed            = config->seed,
 		.idle_timeout_ms = config->idle_timeout_ms,
 		.tls_enabled     = config->tls_enabled,
+		.tls_handshake_timeout_ms = config->tls_handshake_timeout_ms,
 		.tls_certificate = config->tls_certificate,
 		.tls_private_key = config->tls_private_key,
 		.tls_ca_certificate = config->tls_ca_certificate,
