@@ -598,9 +598,10 @@ TEST(AsciiCliSilentOnBadLrc)
 	ASSERT_EQ(ok);
 }
 
-TEST(AsciiCliMalformedFramesCountCommErrors)
+TEST(AsciiCliCommErrorsIgnoreInterFrameWhitespace)
 {
 	const char	bad_lrc[] = ":010300000001FA\r\n";
+	const char	gap[] = "\r\n \r\n";
 	const char	bad_framing[] = ":0103\n";
 	u8		bad_addr[] = { FC_READ_HOLDING_REGISTERS, 0x12, 0x34, 0x00, 0x01 };
 	u8		addrs[1] = { 0 };
@@ -615,7 +616,12 @@ TEST(AsciiCliMalformedFramesCountCommErrors)
 	ok = ok && expect_silence_fd(g_ascii_cli.master_fd, 100);
 	if (ok) ok = ascii_cli_comm_error_count(&count) && count == 1;
 
-	/* A frame discarded by the scanner (lone LF) counts as one error too. */
+	/* A whitespace-only gap between frames is not a malformed frame. */
+	if (ok) ok = send_all_fd(g_ascii_cli.master_fd, (const u8*)gap, sizeof(gap) - 1);
+	if (ok) ok = expect_silence_fd(g_ascii_cli.master_fd, 100);
+	if (ok) ok = ascii_cli_comm_error_count(&count) && count == 1;
+
+	/* A frame discarded by the scanner (lone LF) still counts as one error. */
 	if (ok) ok = send_all_fd(g_ascii_cli.master_fd, (const u8*)bad_framing,
 				 sizeof(bad_framing) - 1);
 	if (ok) ok = expect_silence_fd(g_ascii_cli.master_fd, 100);

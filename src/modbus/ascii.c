@@ -112,16 +112,28 @@ modbus_ascii_scan(const u8* rx, u32 rx_len, u32* len)
 
 	if (rx[0] != ':')
 	{
+		u32 prefix_len = rx_len;
+
 		for (u32 i = 1; i < rx_len; i++)
 		{
 			if (rx[i] == ':')
 			{
-				*len = i;
+				prefix_len = i;
+				break;
+			}
+		}
+		for (u32 i = 0; i < prefix_len; i++)
+		{
+			if (rx[i] != '\r' &&
+			    rx[i] != '\n' &&
+			    rx[i] != ' ')
+			{
+				*len = prefix_len;
 				return MODBUS_ASCII_SCAN_DISCARD;
 			}
 		}
-		*len = rx_len;
-		return MODBUS_ASCII_SCAN_DISCARD;
+		*len = prefix_len;
+		return MODBUS_ASCII_SCAN_SKIP;
 	}
 
 	for (u32 i = 1; i < rx_len; i++)
@@ -136,12 +148,16 @@ modbus_ascii_scan(const u8* rx, u32 rx_len, u32* len)
 		if (rx[i] != '\r' && rx[i] != '\n')
 			continue;
 
-		/* A lone LF, or a CR not immediately followed by LF, is malformed. */
-		if (rx[i] == '\n' || i + 1 >= rx_len || rx[i + 1] != '\n')
+		/* A lone LF, or a CR followed by a non-LF byte, is malformed; a CR at
+		 * the end of the buffer may still be completed by the next read. */
+		if (rx[i] == '\n' ||
+		    (i + 1 < rx_len && rx[i + 1] != '\n'))
 		{
 			*len = i + 1;
 			return MODBUS_ASCII_SCAN_DISCARD;
 		}
+		if (i + 1 >= rx_len)
+			return MODBUS_ASCII_SCAN_NONE;
 
 		*len = i + 2;
 		if (*len > MODBUS_ASCII_MAX_FRAME)

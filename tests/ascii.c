@@ -182,22 +182,71 @@ TEST(AsciiScanFindsCompleteFrameAndPartial)
 		  MODBUS_ASCII_SCAN_NONE);
 }
 
+TEST(AsciiScanWaitsForLfAfterCr)
+{
+	const char	frame[] = ":010300000001FB\r\n";
+	u32		flen = sizeof(frame) - 1;
+	u32		len = 0;
+
+	/* A split before CR or between CR and LF must not discard the frame. */
+	ASSERT_EQ(modbus_ascii_scan((const u8*)frame, flen - 2, &len) ==
+		  MODBUS_ASCII_SCAN_NONE);
+	ASSERT_EQ(modbus_ascii_scan((const u8*)frame, flen - 1, &len) ==
+		  MODBUS_ASCII_SCAN_NONE);
+
+	/* One byte at a time: no partial prefix is a discard, and the last byte
+	 * completes the frame. */
+	for (u32 n = 1; n <= flen; n++)
+	{
+		modbus_ascii_scan_t scan = modbus_ascii_scan((const u8*)frame, n, &len);
+
+		if (n < flen)
+			ASSERT_EQ(scan == MODBUS_ASCII_SCAN_NONE);
+		else
+		{
+			ASSERT_EQ(scan == MODBUS_ASCII_SCAN_FRAME);
+			ASSERT_EQ(len == flen);
+		}
+	}
+}
+
 TEST(AsciiScanDiscardsGarbageAndBadTerminators)
 {
 	const char garbage[] = "junk:010300000001FB\r\n";
-	const char lone_cr[] = ":0103\r";
+	const char trailing_cr[] = ":0103\r";
+	const char cr_not_lf[] = ":0103\rX";
 	const char lone_lf[] = ":0103\n";
 	u32 len = 0;
 
 	ASSERT_EQ(modbus_ascii_scan((const u8*)garbage, sizeof(garbage) - 1, &len) ==
 		  MODBUS_ASCII_SCAN_DISCARD);
 	ASSERT_EQ(len == 4);
-	ASSERT_EQ(modbus_ascii_scan((const u8*)lone_cr, sizeof(lone_cr) - 1, &len) ==
+	ASSERT_EQ(modbus_ascii_scan((const u8*)trailing_cr, sizeof(trailing_cr) - 1, &len) ==
+		  MODBUS_ASCII_SCAN_NONE);
+	ASSERT_EQ(modbus_ascii_scan((const u8*)cr_not_lf, sizeof(cr_not_lf) - 1, &len) ==
 		  MODBUS_ASCII_SCAN_DISCARD);
-	ASSERT_EQ(len == sizeof(lone_cr) - 1);
+	ASSERT_EQ(len == sizeof(cr_not_lf) - 2); /* through CR, not the following byte */
 	ASSERT_EQ(modbus_ascii_scan((const u8*)lone_lf, sizeof(lone_lf) - 1, &len) ==
 		  MODBUS_ASCII_SCAN_DISCARD);
 	ASSERT_EQ(len == sizeof(lone_lf) - 1);
+}
+
+TEST(AsciiScanSkipsInterFrameWhitespace)
+{
+	const char gap_only[] = "\r\n \r\n";
+	const char gap_frame[] = "\r\n :010300000001FB\r\n";
+	const char junk_gap[] = "\r\njunk:010300000001FB\r\n";
+	u32 len = 0;
+
+	ASSERT_EQ(modbus_ascii_scan((const u8*)gap_only, sizeof(gap_only) - 1, &len) ==
+		  MODBUS_ASCII_SCAN_SKIP);
+	ASSERT_EQ(len == sizeof(gap_only) - 1);
+	ASSERT_EQ(modbus_ascii_scan((const u8*)gap_frame, sizeof(gap_frame) - 1, &len) ==
+		  MODBUS_ASCII_SCAN_SKIP);
+	ASSERT_EQ(len == sizeof("\r\n ") - 1);
+	ASSERT_EQ(modbus_ascii_scan((const u8*)junk_gap, sizeof(junk_gap) - 1, &len) ==
+		  MODBUS_ASCII_SCAN_DISCARD);
+	ASSERT_EQ(len == sizeof("\r\njunk") - 1);
 }
 
 TEST(AsciiScanDiscardsOversizedFrameAndResyncs)
@@ -733,6 +782,92 @@ TEST(AsciiServerDelayedResponseKeepsQueuedRequest)
 	if (ok)
 		ok = addrs[0] == 2 && lens[0] == 5 && pdus[0][0] == FC_DIAGNOSTICS &&
 		     get_be16(pdus[0] + 3) == 0;
+
+	ASSERT_EQ(ascii_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiServerAcceptsFrameSplitBetweenCrAndLf)
+{
+	/* Issue #58: the server must hold a frame whose CR arrives in one read and
+	 * whose LF arrives in the next, without counting a communication error. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = ascii_make_device(arena, 1, 0x3344);
+	ascii_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		diag[] = { FC_DIAGNOSTICS, 0x00, 0x0C, 0x00, 0x00 };
+	u8		frame[MODBUS_ASCII_MAX_FRAME];
+	u8		pdu[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		flen = 0;
+	u32		pdu_len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(ascii_child_start(&child, devices, 1));
+	}
+
+	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
+	ok = flen > 0 && send_all_fd(child.fd, frame, flen - 1);
+	if (ok) usleep(100000); /* the server has buffered the trailing CR */
+	if (ok) ok = send_all_fd(child.fd, frame + flen - 1, 1);
+	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
+	if (ok)
+		ok = addr == 1 && pdu_len == 4 && pdu[0] == FC_READ_HOLDING_REGISTERS &&
+		     get_be16(pdu + 2) == 0x3344;
+
+	flen = modbus_ascii_encode(frame, 1, diag, sizeof(diag));
+	if (ok) ok = send_all_fd(child.fd, frame, flen);
+	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
+	if (ok)
+		ok = addr == 1 && pdu_len == 5 && pdu[0] == FC_DIAGNOSTICS &&
+		     get_be16(pdu + 3) == 0;
+
+	ASSERT_EQ(ascii_child_stop(&child));
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(AsciiServerIgnoresInterFrameWhitespace)
+{
+	const char	gap[] = "\r\n \r\n";
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = ascii_make_device(arena, 1, 0x3344);
+	ascii_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		diag[] = { FC_DIAGNOSTICS, 0x00, 0x0C, 0x00, 0x00 };
+	u8		frame[MODBUS_ASCII_MAX_FRAME];
+	u8		pdu[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		flen = 0;
+	u32		pdu_len = 0;
+	bool		ok = false;
+
+	ASSERT_EQ(dev != NULL);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(ascii_child_start(&child, devices, 1));
+	}
+
+	ok = send_all_fd(child.fd, (const u8*)gap, sizeof(gap) - 1);
+	if (ok) usleep(50000); /* a whitespace-only read is not a bad frame */
+	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
+	if (ok) ok = send_all_fd(child.fd, frame, flen);
+	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
+	if (ok)
+		ok = addr == 1 && pdu_len == 4 && pdu[0] == FC_READ_HOLDING_REGISTERS &&
+		     get_be16(pdu + 2) == 0x3344;
+
+	flen = modbus_ascii_encode(frame, 1, diag, sizeof(diag));
+	if (ok) ok = send_all_fd(child.fd, (const u8*)gap, sizeof(gap) - 1);
+	if (ok) ok = send_all_fd(child.fd, frame, flen);
+	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
+	if (ok)
+		ok = addr == 1 && pdu_len == 5 && pdu[0] == FC_DIAGNOSTICS &&
+		     get_be16(pdu + 3) == 0;
 
 	ASSERT_EQ(ascii_child_stop(&child));
 	arena_release(arena);

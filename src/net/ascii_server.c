@@ -92,9 +92,24 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 static void
 ascii_process(ascii_server_t* server, u64 now_ms)
 {
-	const u8*	rx = server->rx;
-	u32		remaining = server->rx_len;
+	const u8*	rx = NULL;
+	u32		remaining = 0;
 	bool		have_frame = false;
+
+	/* Inter-frame whitespace is not a malformed frame. Drop it before the
+	 * look-ahead scan and the partial-frame timeout below. */
+	while (server->rx_len > 0)
+	{
+		u32			len = 0;
+		modbus_ascii_scan_t	scan = modbus_ascii_scan(server->rx, server->rx_len, &len);
+
+		if (scan != MODBUS_ASCII_SCAN_SKIP || len == 0)
+			break;
+		ascii_consume(server, len);
+	}
+
+	rx = server->rx;
+	remaining = server->rx_len;
 
 	/* Bytes buffered behind a delayed response are not stale just because no
 	 * new byte arrived; only a partial frame may be expired. Look past
@@ -137,6 +152,11 @@ ascii_process(ascii_server_t* server, u64 now_ms)
 		u32			len = 0;
 		modbus_ascii_scan_t	scan = modbus_ascii_scan(server->rx, server->rx_len, &len);
 
+		if (scan == MODBUS_ASCII_SCAN_SKIP)
+		{
+			ascii_consume(server, len);
+			continue;
+		}
 		if (scan == MODBUS_ASCII_SCAN_NONE || len == 0)
 			break;
 		if (scan == MODBUS_ASCII_SCAN_FRAME)

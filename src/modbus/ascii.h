@@ -38,14 +38,18 @@ enum modbus_ascii_scan_t
 	MODBUS_ASCII_SCAN_NONE,    /* No complete frame at rx[0]; keep buffered bytes. */
 	MODBUS_ASCII_SCAN_FRAME,   /* Complete frame of *len bytes at rx[0]. */
 	MODBUS_ASCII_SCAN_DISCARD, /* Malformed/oversized prefix of *len bytes; drop it. */
+	MODBUS_ASCII_SCAN_SKIP,    /* Inter-frame CR/LF/space of *len bytes; drop without an error. */
 };
 
 /* Name: modbus_ascii_scan
  * Description: locates the next deliverable ASCII frame at rx[0]. Bytes before
- * a leading colon, and a partial frame up to the next colon, are reported as
- * DISCARD so the caller can resynchronize from that colon. A lone CR/LF inside
- * a frame is reported as DISCARD through that byte. An oversized frame with or
- * without a terminator is discarded in full.
+ * a leading colon that are only CR, LF, or space are reported as SKIP so the
+ * caller can consume them as inter-frame whitespace without counting an error;
+ * other bytes before a colon are DISCARD. A partial frame up to the next colon
+ * is reported as DISCARD so the caller can resynchronize from that colon. A
+ * lone LF, or a CR followed by a non-LF, is DISCARD through that byte; a CR at
+ * the end of the buffer returns NONE so the LF can arrive in a later read. An
+ * oversized frame with or without a terminator is discarded in full.
  * */
 modbus_ascii_scan_t	modbus_ascii_scan(const u8* rx, u32 rx_len, u32* len);
 

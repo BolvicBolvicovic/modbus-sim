@@ -71,20 +71,22 @@ hex. The maximum encoded frame is `1 + 2 + 2*253 + 2 + 2 = 513` bytes.
 Framing is delimiter-based: a frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5,
 `frame-gap-ms`, or `strict-t15` behavior for ASCII; complete frames are dispatched immediately,
 including several complete frames delivered in one `read()`. A bounded RX buffer accumulates
-partial frames across reads. A second `:` before the terminator starts a new frame: bytes up to that
-colon are discarded and the rest is rescanned, so a truncated frame followed immediately by a valid
-request still delivers the request. Bytes before a first colon are discarded as before. If a
-buffered frame receives no new byte for 1 s, the partial frame is dropped so it cannot corrupt a
-later request.
+partial frames across reads; a trailing `CR` waits for its `LF` in a later read. A second `:` before
+the terminator starts a new frame: bytes up to that colon are discarded and the rest is rescanned,
+so a truncated frame followed immediately by a valid request still delivers the request. Bytes
+before a first colon that are only `CR`, `LF`, or space are ignored as inter-frame whitespace;
+other garbage there is discarded. If a buffered frame receives no new byte for 1 s, the partial
+frame is dropped so it cannot corrupt a later request.
 
 Every discarded or undecodable ASCII frame (bad framing, invalid hex, bad LRC, or a timed-out
 partial frame) increments the FC 08 bus communication error counter (`0x000C`) on every device.
-Successfully decoded frames do not, including those answered with a Modbus exception.
+Inter-frame `CR`, `LF`, and space are not errors. Successfully decoded frames do not, including
+those answered with a Modbus exception.
 
 No response is produced, and no PDU is dispatched, for:
 
 - **Malformed framing**: missing leading `:`, missing/wrong `CR LF`, odd hex count, invalid hex
-  digit, overlong frame, or a lone `CR`/`LF` inside a frame.
+  digit, overlong frame, a `CR` followed by a non-`LF`, or a lone `LF` inside a frame.
 - **Bad LRC**: the decoded LRC does not match the sum of address and PDU bytes.
 - **Unknown unit**: no configured device has that unit id.
 - **Broadcast (unit 0)**: intentionally ignored in every ASCII mode. `broadcast-execute` is rejected
