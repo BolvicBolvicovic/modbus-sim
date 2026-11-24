@@ -128,6 +128,12 @@ static const char	TLS_SHORT_HANDSHAKE_OPTIONS[] =
 	"(ca-certificate \"" TLS_CA_PATH "\") "
 	"(handshake-timeout-ms 250))";
 
+static const char	TLS_IDLE_SERVER_OPTIONS[] =
+	"(tls (certificate \"" TLS_SERVER_CERT_PATH "\") "
+	"(private-key \"" TLS_SERVER_KEY_PATH "\") "
+	"(ca-certificate \"" TLS_CA_PATH "\")) "
+	"(idle-timeout-ms 200)";
+
 /* Runs the real binary with --check and verifies its status and captured output. */
 static bool
 tls_check_run(const char* tls_options, int expected_status, const char* stderr_needle)
@@ -421,6 +427,71 @@ TEST(NetTlsMutualAuthServesMbapRead)
 		     resp[0] == FC_READ_HOLDING_REGISTERS &&
 		     register_value(resp, len, 0) == 4660 &&
 		     register_value(resp, len, 1) == 7;
+	}
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsGracefulShutdownSendsCloseNotify)
+{
+	tls_client_t	client = { .fd = -1, .ssl = NULL };
+	bool		ok     = server_start(TLS_SERVER_OPTIONS,
+					      "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	if (ok)
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &client);
+	server_stop();
+	if (ok)
+		ok = tls_client_wait_close_notify(&client, 2000);
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&client);
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsIdleTimeoutSendsCloseNotify)
+{
+	tls_client_t	client = { .fd = -1, .ssl = NULL };
+	bool		ok     = server_start(TLS_IDLE_SERVER_OPTIONS,
+					      "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	if (ok)
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &client);
+	if (ok)
+		ok = tls_client_wait_close_notify(&client, 2000);
+	if (!ok)
+		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
+
+	tls_client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetTlsLogsAuthenticatedPeerSubject)
+{
+	tls_client_t	client = { .fd = -1, .ssl = NULL };
+	bool		ok     = server_start(TLS_SERVER_OPTIONS,
+					      "(device (unit-id 1) (holding 0 (static 4660)))");
+
+	if (ok)
+		ok = tls_client_open(g_server.probe_port, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH,
+				     TLS_CA_PATH, &client);
+	if (ok)
+	{
+		for (u32 i = 0; i < 100; i++)
+		{
+			if (ts_file_contains(g_server.stderr_path, "CN=modbus-sim test client"))
+				break;
+			usleep(20000);
+		}
+		ok = ts_file_contains(g_server.stderr_path, "CN=modbus-sim test client");
 	}
 	if (!ok)
 		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());

@@ -80,7 +80,7 @@ conn_close(conn_t* conn)
 	LOG_DEBUG("client %s disconnected", conn->peer);
 	if (conn->ssl)
 	{
-		net_tls_session_free(conn->ssl);
+		net_tls_session_close(conn->ssl);
 		conn->ssl = NULL;
 	}
 	close(conn->fd);
@@ -93,6 +93,7 @@ static bool
 conn_tls_handshake(conn_t* conn)
 {
 	char			tls_err[256];
+	char			subject[512];
 	net_tls_status_t	status;
 
 	conn->tls_want_read  = false;
@@ -103,6 +104,8 @@ conn_tls_handshake(conn_t* conn)
 		conn->tls_handshake_done = true;
 		conn->last_activity_ms   = clock_now_ms();
 		LOG_DEBUG("TLS handshake complete with %s", conn->peer);
+		if (net_tls_peer_subject(conn->ssl, subject, sizeof(subject)))
+			LOG_INFO("client %s authenticated TLS peer subject: %s", conn->peer, subject);
 		return true;
 	}
 	if (status == NET_TLS_WANT_READ)
@@ -702,7 +705,7 @@ tcp_server_run(const tcp_server_options_t* options)
 		if (server.conns[i].fd >= 0)
 		{
 			if (server.conns[i].ssl)
-				net_tls_session_free(server.conns[i].ssl);
+				net_tls_session_close(server.conns[i].ssl);
 			close(server.conns[i].fd);
 		}
 	}

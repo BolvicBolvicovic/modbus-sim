@@ -19,7 +19,12 @@ and ciphers by creating the context, just as startup does. An accepted TLS conne
 must complete its handshake within `(tls (handshake-timeout-ms N))` (1-86400000, default `10000`),
 measured from accept and independent of `(idle-timeout-ms)`. Stalled handshakes are closed and logged
 at `WARN` with the peer and timeout, so they cannot hold all 32 client slots; connections that
-finished the handshake are unaffected. See
+finished the handshake are unaffected. A client certificate's subject is logged at `INFO` after a
+successful handshake so the authenticated peer can be audited; private keys and secrets are never
+logged. A configured CA is also advertised to clients as the acceptable client CA list, and failure
+to load that list fails context creation. Every TLS close (idle timeout, I/O error, EOF, or server
+shutdown) sends a best-effort `close_notify`, bounded to a few tens of milliseconds so a peer that
+is not reading cannot stall the server. See
 [config-reference.md](config-reference.md#tls-modbus-tcp-over-tls) for the full option list.
 
 ### Modbus RTU
@@ -309,6 +314,8 @@ MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 - TLS handshakes have their own deadline from `(tls (handshake-timeout-ms N))`, default `10000`
   ms, independent of the idle timeout. Stalled handshakes are closed at `WARN`; this does not
   change request timing after the handshake completes.
+- TLS closes send a `close_notify` before releasing the session. The wait is best-effort and
+  bounded, so an unresponsive peer cannot delay shutdown indefinitely.
 
 ## Deviations from the spec
 

@@ -1,9 +1,17 @@
 #include "net/net_tls.h"
 #include <errno.h>
+#include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
+
+#define TLS_SHUTDOWN_WAIT_MS	50
+#define TLS_SHUTDOWN_POLL_MS	5
+#define TLS_SHUTDOWN_ATTEMPTS	(TLS_SHUTDOWN_WAIT_MS / TLS_SHUTDOWN_POLL_MS)
 
 static void
 copy_last_error(char* out, u32 size)
@@ -97,8 +105,14 @@ net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size)
 
 	if (config->ca_certificate)
 	{
+		STACK_OF(X509_NAME)* ca_names;
+
 		if (SSL_CTX_load_verify_locations(ctx, config->ca_certificate, NULL) != 1)
 			return tls_fail(ctx, err, err_size, "cannot load CA certificate");
+		ca_names = SSL_load_client_CA_file(config->ca_certificate);
+		if (!ca_names)
+			return tls_fail(ctx, err, err_size, "cannot load client CA names");
+		SSL_CTX_set_client_CA_list(ctx, ca_names);
 		verify = SSL_VERIFY_PEER;
 		if (config->require_client_certificate)
 			verify |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
@@ -135,11 +149,64 @@ net_tls_session_new(net_tls_ctx_t* ctx, int fd, char* err, u32 err_size)
 	return ssl;
 }
 
-void
-net_tls_session_free(SSL* ssl)
+bool
+net_tls_peer_subject(SSL* ssl, char* buf, u32 size)
 {
-	if (ssl)
-		SSL_free(ssl);
+	X509*	cert;
+	BIO*	bio;
+	bool	ok = false;
+
+	if (!ssl || size < 2)
+		return false;
+	buf[0] = '\0';
+	cert = SSL_get1_peer_certificate(ssl);
+	if (!cert)
+		return false;
+	bio = BIO_new(BIO_s_mem());
+	if (bio &&
+	    X509_NAME_print_ex(bio, X509_get_subject_name(cert), 0, XN_FLAG_RFC2253) > 0)
+	{
+		int len = BIO_read(bio, buf, (int)size - 1);
+
+		if (len > 0)
+		{
+			buf[len] = '\0';
+			ok = true;
+		}
+	}
+	BIO_free(bio);
+	X509_free(cert);
+	return ok;
+}
+
+void
+net_tls_session_close(SSL* ssl)
+{
+	if (!ssl)
+		return;
+
+	/* The socket is nonblocking: keep trying while shutdown needs I/O, but never
+	 * wait for a peer that is not reading or sending. */
+	for (int i = 0; i < TLS_SHUTDOWN_ATTEMPTS; i++)
+	{
+		struct pollfd	pfd = { .fd = SSL_get_fd(ssl) };
+		int		rc;
+		int		err;
+		int		ready;
+
+		ERR_clear_error();
+		rc = SSL_shutdown(ssl);
+		if (rc >= 0)
+			break;
+		err = SSL_get_error(ssl, rc);
+		if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)
+			break;
+		pfd.events = err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT;
+		ready = poll(&pfd, 1, TLS_SHUTDOWN_POLL_MS);
+		if (ready < 0 && errno != EINTR)
+			break;
+	}
+	SSL_free(ssl);
 }
 
 static net_tls_status_t
@@ -161,8 +228,12 @@ io_status(SSL* ssl, int rc)
 net_tls_status_t
 net_tls_handshake(SSL* ssl, char* err, u32 err_size)
 {
-	int rc     = SSL_do_handshake(ssl);
-	int status = io_status(ssl, rc);
+	int rc;
+	int status;
+
+	ERR_clear_error();
+	rc = SSL_do_handshake(ssl);
+	status = io_status(ssl, rc);
 
 	if (status == NET_TLS_ERROR)
 		copy_last_error(err, err_size);
@@ -172,8 +243,12 @@ net_tls_handshake(SSL* ssl, char* err, u32 err_size)
 net_tls_status_t
 net_tls_read(SSL* ssl, void* buf, int size, int* len, char* err, u32 err_size)
 {
-	int rc     = SSL_read(ssl, buf, size);
-	int status = io_status(ssl, rc);
+	int rc;
+	int status;
+
+	ERR_clear_error();
+	rc = SSL_read(ssl, buf, size);
+	status = io_status(ssl, rc);
 
 	*len = rc > 0 ? rc : 0;
 	if (status == NET_TLS_ERROR)
@@ -184,8 +259,12 @@ net_tls_read(SSL* ssl, void* buf, int size, int* len, char* err, u32 err_size)
 net_tls_status_t
 net_tls_write(SSL* ssl, const void* buf, int size, int* len, char* err, u32 err_size)
 {
-	int rc     = SSL_write(ssl, buf, size);
-	int status = io_status(ssl, rc);
+	int rc;
+	int status;
+
+	ERR_clear_error();
+	rc = SSL_write(ssl, buf, size);
+	status = io_status(ssl, rc);
 
 	*len = rc > 0 ? rc : 0;
 	if (status == NET_TLS_ERROR)

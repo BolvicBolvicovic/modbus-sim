@@ -51,7 +51,11 @@ void		net_tls_ctx_destroy(net_tls_ctx_t* ctx);
 
 /* Creates an accept-side SSL object on a nonblocking socket. */
 SSL*		net_tls_session_new(net_tls_ctx_t* ctx, int fd, char* err, u32 err_size);
-void		net_tls_session_free(SSL* ssl);
+/* Copies the peer certificate subject in RFC2253 form; false when there is no peer
+ * certificate or it cannot be rendered. */
+bool		net_tls_peer_subject(SSL* ssl, char* buf, u32 size);
+/* Sends a best-effort close_notify, waiting at most a few tens of ms, then frees the session. */
+void		net_tls_session_close(SSL* ssl);
 
 /* Nonblocking TLS operations. For read/write, `len` receives the byte count on OK. */
 net_tls_status_t net_tls_handshake(SSL* ssl, char* err, u32 err_size);

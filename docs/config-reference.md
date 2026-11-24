@@ -107,7 +107,7 @@ unchanged when `(tls ...)` is absent.
 |---|---|---|
 | `(certificate "PATH")` | Server certificate chain in PEM format. Required, 1-255 characters | none |
 | `(private-key "PATH")` | Server private key in PEM format. Required, 1-255 characters. Its contents are never logged | none |
-| `(ca-certificate "PATH")` | CA certificate used to verify client certificates, 1-255 characters | none |
+| `(ca-certificate "PATH")` | CA certificate used to verify client certificates and advertised as the acceptable client CA list, 1-255 characters | none |
 | `(handshake-timeout-ms N)` | Close a TLS connection whose handshake is not complete within `N` milliseconds after accept, 1-86400000. Independent of `(idle-timeout-ms)` | `10000` |
 | `(require-client-certificate on\|off)` | Require a client certificate signed by the configured CA | `on` |
 | `(min-version tls1.2\|tls1.3)` | Minimum TLS version | `tls1.2` |
@@ -118,8 +118,9 @@ unchanged when `(tls ...)` is absent.
 `off` and omit the CA to simulate anonymous clients; this is a testing relaxation, not a
 recommended production setting. Paths are checked for non-emptiness during config load. When TLS is
 enabled, both `--check` and server startup create the OpenSSL context: a missing or unreadable
-certificate/key/CA, a mismatched certificate and private key, or an invalid cipher list makes
-`--check` fail with exit status 1 and no `config OK` line (startup fails with the same error). TLS
+certificate/key/CA, a CA whose name list cannot be loaded, a mismatched certificate and private key,
+or an invalid cipher list makes `--check` fail with exit status 1 and no `config OK` line (startup
+fails with the same error). TLS
 1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher strings cannot
 lower the configured minimum. Role-based authorization from certificate fields is not implemented.
 
@@ -127,7 +128,10 @@ Each accepted TLS connection has a handshake deadline measured from `accept()`, 
 `(idle-timeout-ms)` (which still defaults to `0`). A client that leaves the handshake unfinished is
 closed at the deadline and logged at `WARN` with its peer address and the configured timeout, freeing
 its slot for other clients. Connections that completed the handshake are not affected; normal TLS
-requests and delay faults keep their existing timing.
+requests and delay faults keep their existing timing. A client certificate's subject is logged at
+`INFO` once the handshake succeeds. When the server closes a TLS connection (idle timeout, I/O
+error, EOF, or shutdown), it sends a best-effort `close_notify` with a bounded wait before freeing
+the session, so clients can observe a clean TLS close.
 
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
 existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are

@@ -280,6 +280,50 @@ tls_client_write_record(tls_client_t* client, const u8* buf, u32 len)
 }
 
 bool
+tls_client_wait_close_notify(tls_client_t* client, u32 timeout_ms)
+{
+	u64		deadline = clock_now_ms() + timeout_ms;
+	u8		byte;
+
+	g_error[0] = '\0';
+	for (;;)
+	{
+		int	rc;
+		int	err;
+		u64	now;
+		u32	remaining;
+
+		ERR_clear_error();
+		rc = SSL_read(client->ssl, &byte, 1);
+		err = SSL_get_error(client->ssl, rc);
+		if (rc <= 0 && err == SSL_ERROR_ZERO_RETURN)
+			return true;
+		if (rc > 0)
+		{
+			set_error_text("unexpected TLS data before close_notify");
+			return false;
+		}
+		if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)
+		{
+			save_error();
+			return false;
+		}
+		now = clock_now_ms();
+		if (now >= deadline)
+		{
+			set_error_text("TLS close_notify timed out");
+			return false;
+		}
+		remaining = (u32)(deadline - now);
+		if (!wait_fd(client->fd, err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, remaining))
+		{
+			set_error_text("TLS close_notify timed out");
+			return false;
+		}
+	}
+}
+
+bool
 tls_client_read_exact(tls_client_t* client, u8* buf, u32 len)
 {
 	g_error[0] = '\0';

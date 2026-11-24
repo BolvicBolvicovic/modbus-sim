@@ -29,6 +29,8 @@ bool	tls_client_write_all(tls_client_t* client, const u8* buf, u32 len);
 /* Writes `len` bytes in a single SSL_write call, for tests that need one TLS record. */
 bool	tls_client_write_record(tls_client_t* client, const u8* buf, u32 len);
 bool	tls_client_read_exact(tls_client_t* client, u8* buf, u32 len);
+/* Waits for a clean TLS close (SSL_ERROR_ZERO_RETURN) within `timeout_ms`. */
+bool	tls_client_wait_close_notify(tls_client_t* client, u32 timeout_ms);
 const char* tls_client_error(void);
 
 #endif
