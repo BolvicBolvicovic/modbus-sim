@@ -3,11 +3,14 @@
  * assertion cannot leave a child behind. PRE_TEST/atexit clean up leftovers from failures.
  * Readiness comes from stderr log polling, so capacity tests never need a probe client. */
 #include "vtest.h"
+#include "build_config.h"
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
 #include "tests/tests_utils/test_support.h"
+#if WITH_TLS
 #include "tests/tests_utils/tls_client.h"
+#endif
 #include "util/clock.h"
 #include <errno.h>
 #include <netinet/in.h>
@@ -41,6 +44,7 @@ static ts_server_t g_server = {
 static u32 g_server_nofile = 0;
 
 /* Separate fixture for --check runs, which exit instead of listening. */
+#if WITH_TLS
 static ts_server_t g_tls_check = {
 	.pid		= -1,
 	.master_fd	= -1,
@@ -48,6 +52,7 @@ static ts_server_t g_tls_check = {
 	.label		= "tls check",
 	.ready_needle	= "config OK"
 };
+#endif
 
 /* --- socket helpers --- */
 
@@ -110,6 +115,7 @@ exchange(client_t* client, u8 unit, const u8* req, u32 req_len, u8* resp, u32* r
 	       recv_reply(client, unit, tid, resp, resp_len);
 }
 
+#if WITH_TLS
 #define TLS_CA_PATH		"tests/tls/ca.pem"
 #define TLS_SERVER_CERT_PATH	"tests/tls/server.pem"
 #define TLS_SERVER_KEY_PATH	"tests/tls/server.key"
@@ -210,6 +216,7 @@ tls_recv_reply(tls_client_t* client, u8 unit, u16 tid, u8* pdu, u32* pdu_len)
 		return false;
 	return tls_client_read_exact(client, pdu, *pdu_len);
 }
+#endif
 
 static bool
 recv_none(client_t* client, int timeout_ms)
@@ -226,6 +233,7 @@ read_pdu(u8* pdu, u8 function, u16 address, u16 quantity)
 	return 5;
 }
 
+#if WITH_TLS
 static void
 tls_build_pipeline(u8 (*frames)[TLS_PIPELINE_FRAME_LEN], u16* tids)
 {
@@ -233,6 +241,7 @@ tls_build_pipeline(u8 (*frames)[TLS_PIPELINE_FRAME_LEN], u16* tids)
 		ts_mbap_encode(frames[i], 1, tids[i],
 			       (const u8[]){ FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 }, 5);
 }
+#endif
 
 static u32
 write_pdu(u8* pdu, u16 address, u16 value)
@@ -405,6 +414,7 @@ TEST(NetPipelinedRequestsGetAnswersInOrder)
 	ASSERT_EQ(ok);
 }
 
+#if WITH_TLS
 TEST(NetTlsMutualAuthServesMbapRead)
 {
 	tls_client_t	client = { .fd = -1, .ssl = NULL };
@@ -752,6 +762,7 @@ TEST(NetTlsHandshakeTimeoutFreesSlots)
 	server_stop();
 	ASSERT_EQ(ok && opened == TLS_HANDSHAKE_FILLERS);
 }
+#endif
 
 TEST(NetUnitIdRoutingAndGatewayException)
 {
@@ -2951,6 +2962,7 @@ TEST(NetTcpIpv6LoopbackServesRequest)
 	ASSERT_EQ(ok);
 }
 
+#if WITH_TLS
 TEST(NetTlsCheckRejectsInvalidTlsOptions)
 {
 	const char missing[] =
@@ -2976,3 +2988,4 @@ TEST(NetTlsCheckAcceptsValidTlsConfig)
 {
 	ASSERT_EQ(tls_check_run(TLS_SERVER_OPTIONS, 0, NULL));
 }
+#endif

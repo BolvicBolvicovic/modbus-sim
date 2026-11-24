@@ -33,14 +33,16 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `net_tls`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP via OpenSSL, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
-`net_tls` wraps OpenSSL and keeps its headers out of other modules; `config` only supplies borrowed
-TLS strings through `tcp_server_options_t`. `device` and `modbus` can be tested alone, and are
-(see `tests/`).
+`net_tls` wraps OpenSSL and keeps its headers out of other modules; in a no-TLS build
+`net_tls_stub.c` implements the same API without OpenSSL. `config` only supplies borrowed TLS
+strings through `tcp_server_options_t` and rejects `(tls ...)` at load time in no-TLS builds.
+`build_config.h` provides the `WITH_TLS` fallback for direct compilations. `device` and `modbus`
+can be tested alone, and are (see `tests/`).
 
 Headers sit next to their `.c` files.
 
@@ -149,9 +151,12 @@ limit); override the binary with `MODBUS_SIM_BIN`. Independent suites run in par
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
 Compilations emit `.d` dependency files (`-MMD -MP`), so editing a header rebuilds every
-object that includes it. CI (`.github/workflows/ci.yml`) runs all three checks.
-The Makefile is based on the one `vlib/gen_makefile.py` creates, but finds sources recursively
-because modules have sub-folders. s7 is compiled with its own relaxed flags
+object that includes it. CI (`.github/workflows/ci.yml`) runs these checks plus a `WITH_TLS=0` job
+with no OpenSSL install step. The Makefile is based on the one `vlib/gen_makefile.py` creates, but finds
+sources recursively because modules have sub-folders. `WITH_TLS=auto` (default) detects OpenSSL
+via `pkg-config`; `WITH_TLS=1` requires it and fails early otherwise, while `WITH_TLS=0` compiles
+only the no-TLS stub and omits OpenSSL flags/libraries. Object files are tagged per TLS setting so
+switching configurations without a clean rebuild is safe. s7 is compiled with its own relaxed flags
 (`-DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0`, so even s7's file and OS functions are off).
 
 The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s7.h`.

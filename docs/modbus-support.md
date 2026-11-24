@@ -11,10 +11,13 @@ is disconnected. `port` and `bind` select the listen socket; `bind` accepts an I
 address (IPv6 sockets are IPv6-only, so `"0.0.0.0"` and `"::"` listen on separate address families).
 
 `(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
-frames and receive the same unit routing, fault handling, and PDU answers. TLS is available only for
-`mode tcp`, defaults to port 802 when `(port N)` is omitted, and requires a server certificate and
-private key. Client certificates are required by default; the CA certificate is then required as
-well. TLS 1.2 is the minimum, and anonymous/NULL ciphers are disabled. `--check` validates TLS files
+frames and receive the same unit routing, fault handling, and PDU answers. TLS is an optional build
+feature (`WITH_TLS=auto` enables it when OpenSSL is installed; `WITH_TLS=0` omits it) and is available
+only for `mode tcp`; a no-TLS build rejects `(tls ...)` at load time with `built without TLS support`.
+Plaintext TCP, RTU and ASCII transports work identically in both builds. TLS defaults to port 802
+when `(port N)` is omitted, and requires a server certificate and private key. Client certificates
+are required by default; the CA certificate is then required as well. TLS 1.2 is the minimum, and
+anonymous/NULL ciphers are disabled. `--check` validates TLS files
 and ciphers by creating the context, just as startup does. An accepted TLS connection
 must complete its handshake within `(tls (handshake-timeout-ms N))` (1-86400000, default `10000`),
 measured from accept and independent of `(idle-timeout-ms)`. Stalled handshakes are closed and logged
@@ -341,8 +344,9 @@ through `(fault (kind exception) (code N))`; 09 is reserved.
 
 Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
 created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and
-[Transport](#transport): TLS only covers MBAP/TCP (not RTU-over-TCP or ASCII-over-TCP), and there is
-no true UART t1.5 timing (the RTU `strict-t15` option is only a baud-derived-auto-mode approximation).
+[Transport](#transport): TLS is build-optional and only covers MBAP/TCP (not RTU-over-TCP or
+ASCII-over-TCP), and there is no true UART t1.5 timing (the RTU `strict-t15` option is only a
+baud-derived-auto-mode approximation).
 
 ## Not supported (yet)
 

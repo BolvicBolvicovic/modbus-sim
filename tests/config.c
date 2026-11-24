@@ -1,4 +1,5 @@
 #include "vtest.h"
+#include "build_config.h"
 #include "config/config.h"
 #include "vlib/macros.h"
 #include <math.h>
@@ -954,6 +955,7 @@ TEST(ConfigServerPathLengthIsValidated)
 	ASSERT_EQ(strstr(err, "255 characters") != NULL);
 }
 
+#if WITH_TLS
 TEST(ConfigTlsFullFormIsParsed)
 {
 	config_t	config = { 0 };
@@ -1056,6 +1058,7 @@ TEST(ConfigTlsHandshakeTimeoutRejectsInvalidValues)
 		     "        (ca-certificate \"ca.pem\"))) "
 		     "(device (holding 0))", "unknown option 'handshake-timeout-ms'");
 }
+#endif
 
 TEST(ConfigPlaintextTcpPortIsUnchanged)
 {
@@ -1067,6 +1070,7 @@ TEST(ConfigPlaintextTcpPortIsUnchanged)
 	ASSERT_EQ(config.tls_enabled == false);
 }
 
+#if WITH_TLS
 TEST(ConfigTlsRequiresCertificateAndPrivateKey)
 {
 	EXPECT_ERROR("(server (tls (private-key \"key.pem\") (ca-certificate \"ca.pem\"))) "
@@ -1151,6 +1155,16 @@ TEST(ConfigTlsIsRejectedOutsideTcpMode)
 		EXPECT_ERROR(text, "not valid in");
 	}
 }
+#else
+TEST(ConfigTlsRejectedWithoutTlsSupport)
+{
+	EXPECT_ERROR("(server (mode tcp) (tls (certificate \"cert.pem\") "
+		     "(private-key \"key.pem\") (ca-certificate \"ca.pem\"))) "
+		     "(device (holding 0))", "built without TLS support");
+	EXPECT_ERROR("(server (mode rtu-pty) (tls)) (device (holding 0))",
+		     "built without TLS support");
+}
+#endif
 
 TEST(ConfigSerialModesRejectReservedUnitIds)
 {

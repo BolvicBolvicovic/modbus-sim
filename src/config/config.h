@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include "build_config.h"
 #include "vlib/c_types.h"
 #include "vlib/arena.h"
 #include "device/device.h"

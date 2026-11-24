@@ -36,10 +36,32 @@ for f in README.md docs/*.md; do
 	extract "$f" >> "$status.list"
 done
 
+# Detect a no-TLS binary without depending on the example certificate paths.
+# A TLS build fails because the probe certificate does not exist; a no-TLS
+# build fails earlier in config loading with the explicit message.
+tls_probe=$tmpdir/tls-probe.scm
+cat >"$tls_probe" <<'EOF'
+(server (mode tcp)
+  (tls (certificate "no-such-cert.pem") (private-key "no-such-key.pem")
+       (require-client-certificate off)))
+(device (unit-id 1) (holding 0 (static 1)))
+EOF
+"$bin" --check "$tls_probe" >/dev/null 2>"$tmpdir/tls-probe.err" || true
+if grep -q 'built without TLS support' "$tmpdir/tls-probe.err"; then
+	tls_supported=0
+else
+	tls_supported=1
+fi
+
 checked=0
+skipped=0
 failed=0
 while IFS= read -r example; do
 	[ -n "$example" ] || continue
+	if [ "$tls_supported" -eq 0 ] && grep -q '(tls' "$example"; then
+		skipped=$((skipped + 1))
+		continue
+	fi
 	checked=$((checked + 1))
 	if ! "$bin" --check "$example" >/dev/null 2>"$tmpdir/err"; then
 		echo "FAIL doc example: $example" >&2
@@ -49,6 +71,7 @@ while IFS= read -r example; do
 done < "$status.list"
 
 echo "checked $checked doc examples, $failed failed"
+[ "$skipped" -eq 0 ] || echo "skipped $skipped TLS examples (binary built without TLS support)"
 if [ "$checked" -eq 0 ]; then
 	echo "FAIL: no doc examples were checked" >&2
 	exit 1

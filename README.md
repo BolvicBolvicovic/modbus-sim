@@ -20,7 +20,7 @@ there are ready-made profiles you can copy.
 ## Quick start
 
 ```bash
-make                                   # builds ./modbus-sim (needs gcc, make and OpenSSL headers)
+make                                   # builds ./modbus-sim (TLS enabled when OpenSSL headers are found)
 ./modbus-sim profiles/minimal.scm      # start the simulator on port 1502
 
 # in another terminal:
@@ -38,6 +38,22 @@ Run the tests: `make tests`. Independent suites run in parallel (3 workers by de
 Run them under AddressSanitizer and UBSan: `make asan` (the vendored s7 interpreter is excluded
 from instrumentation). The suite includes network integration tests that start the real server on
 loopback; set `MODBUS_SIM_BIN` to test a different binary.
+
+### Build options
+
+`WITH_TLS` controls the OpenSSL dependency (`auto` by default):
+
+| Value | Effect |
+|---|---|
+| `make` / `make WITH_TLS=auto` | TLS enabled only when `pkg-config --exists openssl` succeeds; behavior is unchanged on systems with OpenSSL development files |
+| `make WITH_TLS=1` | Require TLS; fail immediately with a clear error if `pkg-config` or OpenSSL development files are missing |
+| `make WITH_TLS=0` | No OpenSSL cflags or libraries: builds plaintext TCP, RTU and ASCII transports only; TLS tests are skipped |
+
+A no-TLS build rejects `(tls ...)` at config load time with `built without TLS support`, including
+in `--check` mode. Serial, RTU, ASCII and plaintext TCP configs behave identically in both builds.
+`make WITH_TLS=0 tests` runs the no-TLS test set; `make WITH_TLS=0 asan` and `make WITH_TLS=0 CC=clang`
+work as expected. Documentation examples containing `(tls ...)` are skipped by `check_doc_examples.sh`
+when checking a no-TLS binary.
 
 ## What it does today
 
@@ -105,9 +121,10 @@ Any other entry is rejected at load time, even when its value is the default. Se
 (server (mode tcp) (port 1502) (bind "127.0.0.1") (idle-timeout-ms 5000))
 ```
 
-TLS wraps the same MBAP frames on `tcp` listeners only. Certificate and private key paths are
-required; client certificates are required by default. The CA certificate is required while client
-authentication is on. `(tls ...)` is rejected at load time in every other mode.
+TLS wraps the same MBAP frames on `tcp` listeners only, in builds with TLS support. Certificate and
+private key paths are required; client certificates are required by default. The CA certificate is
+required while client authentication is on. `(tls ...)` is rejected at load time in every other mode,
+and in every mode of a no-TLS build.
 
 ```scheme
 ; Modbus TCP Security: TLS-wrapped MBAP, default port 802
@@ -190,10 +207,11 @@ exception 03; `CR LF` framing is fixed.
 
 ```
 src/            the program, one folder per module (headers next to their .c files)
+  build_config.h  WITH_TLS compile-time fallback shared by sources and tests
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
-  net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, and ASCII-over-TCP network loops
+  net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, and ASCII-over-TCP network loops; OpenSSL TLS wrapper or no-TLS stub
   util/         clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)

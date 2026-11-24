@@ -59,7 +59,7 @@ that is present but not allowed is rejected at load time, even if its value woul
 | `(parity none\|even\|odd\|mark\|space)` | tty parity. `mark` and `space` require `CMSPAR` support | `none` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
 | `(stop-bits 1\|2)` | Number of tty stop bits | `1` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
 | `(path "PATH")` | Byte-stream device path; opened with `O_NONBLOCK` | none | `rtu-device`, `ascii-device` (required there) |
-| `(tls ...)` | TLS settings for the TCP listener; see [TLS](#tls-modbus-tcp-over-tls). Rejected at load time in other modes, including `--check` | absent (plaintext) | `tcp` |
+| `(tls ...)` | TLS settings for the TCP listener; see [TLS](#tls-modbus-tcp-over-tls). Rejected at load time in other modes, including `--check`, and in every mode of a no-TLS build | absent (plaintext) | `tcp` |
 
 Examples (each is a complete `(server ...)` block; a config file may contain only one):
 
@@ -100,8 +100,10 @@ Examples (each is a complete `(server ...)` block; a config file may contain onl
 
 `(tls ...)` wraps the same 7-byte MBAP header and PDU in TLS on `tcp` listeners; no Modbus framing
 or function-code behavior changes. It is allowed only in `tcp` mode and is rejected at load time,
-including by `--check`, in every other mode (even as an empty `(tls)` form). Plaintext TCP is
-unchanged when `(tls ...)` is absent.
+including by `--check`, in every other mode (even as an empty `(tls)` form). A binary built with
+`WITH_TLS=0` has no OpenSSL support: `(tls ...)` is rejected at load time in every mode with the
+error `built without TLS support`. Plaintext TCP is unchanged when `(tls ...)` is absent, in either
+build.
 
 | Entry | Meaning | Default |
 |---|---|---|

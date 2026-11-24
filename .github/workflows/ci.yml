@@ -43,6 +43,27 @@ jobs:
       - name: Sanitizers (ASan + UBSan, vendored s7 excluded)
         run: make asan
 
+  no-tls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Build without TLS
+        run: make WITH_TLS=0
+
+      - name: Unit tests without TLS
+        run: make WITH_TLS=0 tests
+
+      - name: Check all profiles without TLS
+        run: |
+          for profile in profiles/*.scm; do
+            ./modbus-sim --check "$profile"
+          done
+
+      - name: Check doc examples without TLS
+        run: ./tools/check_doc_examples.sh ./modbus-sim
+
   clang:
     runs-on: ubuntu-latest
     timeout-minutes: 15

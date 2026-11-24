@@ -27,7 +27,9 @@ static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "spac
 static const char* const MODE_NAMES[] = {
 	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp"
 };
+#if WITH_TLS
 static const char* const TLS_VERSION_NAMES[] = { "tls1.2", "tls1.3" };
+#endif
 
 bool
 config_parity_from_name(const char* name, parity_t* out)
@@ -62,6 +64,7 @@ config_set_defaults(config_t* config)
 	config->tls_handshake_timeout_ms = CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
 }
 
+#if WITH_TLS
 static bool
 check_tls_path(form_ctx_t* ctx, const char* key, const char* value)
 {
@@ -150,6 +153,7 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 	config->tls_handshake_timeout_ms  = (u32)handshake_timeout;
 	return true;
 }
+#endif
 
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
@@ -176,11 +180,18 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	bool		broadcast_execute = config->broadcast_execute;
 	const char*	bind              = NULL;
 	const char*	path              = NULL;
+#if WITH_TLS
 	s7_pointer	tls_form          = s7_nil(ctx->sc);
+#endif
 	bool		port_given        = false;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "server"))
 		return false;
+
+#if !WITH_TLS
+	if (!form_is_absent(ctx, form_find(ctx, options, "tls")))
+		return form_fail(ctx, "tls: built without TLS support");
+#endif
 
 	if (!form_opt_choice(ctx, options, "mode", MODE_NAMES, ARRAY_COUNT(MODE_NAMES), &mode))
 		return false;
@@ -242,10 +253,14 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 			return form_fail(ctx, "server: %s is not valid in %s mode", keys[i], MODE_NAMES[mode]);
 	}
 
-	tls_form   = form_find(ctx, options, "tls");
+#if WITH_TLS
+	tls_form = form_find(ctx, options, "tls");
+#endif
 	port_given = !form_is_absent(ctx, form_find(ctx, options, "port"));
+#if WITH_TLS
 	if (!form_is_absent(ctx, tls_form) && !parse_tls(ctx, s7_cdr(tls_form), config))
 		return false;
+#endif
 
 	if (!form_opt_int(ctx, options, "port", 1, 65535, &port))
 		return false;

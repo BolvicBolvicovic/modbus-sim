@@ -1,13 +1,15 @@
 #ifndef NET_TLS_H
 #define NET_TLS_H
 
+#include "build_config.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
-/* Thin OpenSSL wrapper for TLS-wrapped Modbus TCP. MBAP framing and PDU
- * handling stay in tcp_server.c; this layer only owns the TLS objects and
- * keeps OpenSSL headers out of modules that include vlib/macros.h (both
- * headers define __counted_by). */
+/* TLS API for TLS-wrapped Modbus TCP. The build selects either the OpenSSL
+ * implementation (net_tls.c) or a no-TLS stub (net_tls_stub.c), so callers do
+ * not branch on WITH_TLS. MBAP framing and PDU handling stay in tcp_server.c;
+ * this layer keeps OpenSSL headers out of modules that include vlib/macros.h
+ * (both headers define __counted_by). */
 
 typedef struct ssl_ctx_st SSL_CTX;
 typedef struct ssl_st SSL;
