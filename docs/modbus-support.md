@@ -291,27 +291,19 @@ Current intentional transport/behavior limits (not spec deviations in supported 
 
 ## Spec coverage at a glance
 
-Every public Modbus function code is implemented: FC 01-08, 0B, 0C, 0F, 10, 11, 14-18, and FC 43
-(0x2B) MEI 0x0E. Reserved and user-defined codes, including FC 43 MEI 0x0D (CANopen General
-Reference), are intentionally unsupported and return exception 01.
+All standard public function codes are implemented at the FC level, written here as decimal FC with
+hex in parentheses: FC 1 (0x01) through FC 8 (0x08), FC 11 (0x0B), FC 12 (0x0C), FC 15 (0x0F),
+FC 16 (0x10), FC 17 (0x11), FC 20 (0x14) through FC 24 (0x18), and FC 43 (0x2B). FC 43 is
+implemented only for MEI 0x0E; the other standardized MEI type 0x0D (CANopen General Reference) and
+all other MEI types return exception 01, as do reserved and vendor-defined FCs.
 
-The remaining gaps relative to the wider Modbus specification are:
+Normal validation emits exception codes 01, 02, 03, and 0B. Codes 04-08 and 0A are available only
+through `(fault (kind exception) (code N))`; 09 is reserved.
 
-- Exception codes 04-08 and 0A are not produced by normal validation; they exist only through
-  `(fault (kind exception) (code N))`. Code 09 is reserved.
-- There is no ASCII-over-TCP, no IPv6, and no Modbus TCP Security/TLS. RTU-over-TCP is an explicit
-  listen mode, not a gateway or proxy.
-- True UART character-level t1.5 timing is not modeled. The optional RTU `strict-t15` heuristic works
-  at read() boundaries and is never applied to RTU-over-TCP.
-- Serial-diagnostics state that depends on a real serial line is simplified: FC 08 NAK, busy, and
-  character-overrun counters stay 0, and FC 08 `0x0003` always returns exception 03 because ASCII
-  framing is fixed at `CR LF`.
-- Only configured data exist. File records and FIFOs are config-backed and are not created or
-  destroyed by Modbus, FIFO reads are non-destructive, and writes change in-memory state only and are
-  lost on restart.
-
-See [Transport](#transport), [Function codes](#function-codes), and [Exceptions](#exceptions) for the
-exact wire formats, validation rules, and fault behavior.
+Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
+created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and
+[Transport](#transport): no ASCII-over-TCP, IPv6, or Modbus TCP Security/TLS, and no true UART t1.5
+timing (the RTU `strict-t15` option is only a baud-derived-auto-mode approximation).
 
 ## Not supported (yet)
 
