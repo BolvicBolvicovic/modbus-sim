@@ -45,10 +45,16 @@ Only the entries listed for the selected mode are accepted. `mode` is allowed in
 that is present but not allowed is rejected at load time, even if its value would be the default
 (for example `(stop-bits 1)` in `tcp` mode). `path` has its own required/forbidden checks.
 
+`bind` must be a plain IPv4 or IPv6 literal: no hostnames and no zone/scoped link-local suffix such
+as `"fe80::1%eth0"` (the validator uses `inet_pton()`, which does not accept `%iface`). IPv6 listen
+sockets set `IPV6_V6ONLY`, so `"::"` serves IPv6 clients only and the default `"0.0.0.0"` serves IPv4
+clients only. A config file contains exactly one `(server ...)` block, so there is no way to listen on
+both families at once; there is no dual-stack option.
+
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
 | `(port N)` | TCP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp` |
-| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack) | `"0.0.0.0"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
+| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"0.0.0.0"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
@@ -124,7 +130,9 @@ certificate/key/CA, a CA whose name list cannot be loaded, a mismatched certific
 or an invalid cipher list makes `--check` fail with exit status 1 and no `config OK` line (startup
 fails with the same error). TLS
 1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher strings cannot
-lower the configured minimum. Role-based authorization from certificate fields is not implemented.
+lower the configured minimum. The configured CA is advertised to clients as the acceptable client CA
+list, but revocation checking (CRL/OCSP) and Modbus Security role authorization from x.509 role OIDs
+are not implemented: a trusted client certificate is either required or optional for every device.
 
 Each accepted TLS connection has a handshake deadline measured from `accept()`, independent of
 `(idle-timeout-ms)` (which still defaults to `0`). A client that leaves the handshake unfinished is

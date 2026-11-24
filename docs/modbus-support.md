@@ -7,8 +7,11 @@
 A 7-byte MBAP header (transaction id, protocol id 0, length, unit id) followed by the PDU.
 Clients may keep a connection open and send several requests; they are answered one after another
 in order. A client that sends a header with a protocol id other than 0, or an impossible length,
-is disconnected. `port` and `bind` select the listen socket; `bind` accepts an IPv4 or IPv6 literal
-address (IPv6 sockets are IPv6-only, so `"0.0.0.0"` and `"::"` listen on separate address families).
+is disconnected. `port` and `bind` select the listen socket; `bind` accepts a plain IPv4 or IPv6
+literal address. IPv6 listen sockets set `IPV6_V6ONLY`, so `"0.0.0.0"` and `"::"` listen on separate
+address families and cannot both be used: a config contains one `(server ...)` block, there is no
+dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
+config validator.
 
 `(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
 frames and receive the same unit routing, fault handling, and PDU answers. TLS is an optional build
@@ -29,6 +32,17 @@ to load that list fails context creation. Every TLS close (idle timeout, I/O err
 shutdown) sends a best-effort `close_notify`, bounded to a few tens of milliseconds so a peer that
 is not reading cannot stall the server. See
 [config-reference.md](config-reference.md#tls-modbus-tcp-over-tls) for the full option list.
+
+#### Modbus/TCP Security coverage
+
+TLS mode implements the transport-security part of the Modbus/TCP Security specification: the MBAP
+exchange is wrapped in TLS 1.2 or 1.3, the server presents a certificate, mutual TLS can require a
+client certificate signed by the configured CA, the CA is advertised in the TLS certificate request,
+TLS versions and cipher suites are configurable, and the authenticated peer subject is logged. This
+is not full Modbus Security role-based access control: certificate revocation (CRL/OCSP) is not
+checked, Modbus Security x.509 role OIDs are not interpreted, and a trusted client certificate grants
+access to every configured device and unit. Clients must also trust the server certificate out of
+band; the advertised CA does not provision client trust stores.
 
 ### Modbus RTU
 
@@ -352,4 +366,6 @@ baud-derived-auto-mode approximation).
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
 - TLS for RTU-over-TCP and ASCII-over-TCP; `(server (tls ...))` is rejected outside `mode tcp`
-- Role-based authorization from client certificate fields; a valid client certificate is either required or optional, with no per-role access control
+- Certificate revocation checking (CRL/OCSP); a client certificate signed by the configured CA is accepted for the lifetime configured in the certificate
+- Modbus Security role authorization from x.509 role OIDs; a valid client certificate is either required or optional, with no per-role access control
+- Dual-stack IPv6 listening: IPv6 sockets are `IPV6_V6ONLY` and a config has only one `(server ...)` block, so `"::"` and `"0.0.0.0"` cannot be served together; scoped link-local literals such as `fe80::1%eth0` are rejected
