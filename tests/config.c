@@ -156,8 +156,9 @@ TEST(ConfigFaultIsParsed)
 
 	ASSERT_SUCCESS(load_text("(device (fault (kind delay) (delay-ms 300) (percent 40)) (holding 0))",
 				 &config, err, sizeof(err)));
-	ASSERT_EQ(config.devices[0]->fault.kind == FAULT_DELAY);
-	ASSERT_EQ(config.devices[0]->fault.delay_ms == 300 && config.devices[0]->fault.percent == 40);
+	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_DELAY));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DELAY].delay_ms == 300);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DELAY].percent == 40);
 }
 
 TEST(ConfigFaultExceptionAndCorruptAreParsed)
@@ -167,15 +168,15 @@ TEST(ConfigFaultExceptionAndCorruptAreParsed)
 
 	ASSERT_SUCCESS(load_text("(device (fault (kind exception) (code 4)) (holding 0))",
 				 &config, err, sizeof(err)));
-	ASSERT_EQ(config.devices[0]->fault.kind == FAULT_EXCEPTION);
-	ASSERT_EQ(config.devices[0]->fault.exception_code == 4);
-	ASSERT_EQ(config.devices[0]->fault.percent == 100);
+	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_EXCEPTION));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].exception_code == 4);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].percent == 100);
 
 	ASSERT_SUCCESS(load_text("(device (fault (kind corrupt) (percent 25)) (holding 0))",
 				 &config, err, sizeof(err)));
-	ASSERT_EQ(config.devices[0]->fault.kind == FAULT_CORRUPT);
-	ASSERT_EQ(config.devices[0]->fault.exception_code == 0);
-	ASSERT_EQ(config.devices[0]->fault.percent == 25);
+	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_CORRUPT));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].exception_code == 0);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].percent == 25);
 }
 
 TEST(ConfigFaultAcceptsEveryStandardExceptionCode)
@@ -190,7 +191,82 @@ TEST(ConfigFaultAcceptsEveryStandardExceptionCode)
 		snprintf(text, sizeof(text), "(device (fault (kind exception) (code %u)) (holding 0))",
 			 codes[i]);
 		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
-		ASSERT_EQ(config.devices[0]->fault.exception_code == codes[i]);
+		ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].exception_code == codes[i]);
+	}
+}
+
+TEST(ConfigAcceptsMultipleDifferentFaultKinds)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(device (fault (kind delay) (delay-ms 200) (percent 30))"
+		" (fault (kind drop) (percent 20))"
+		" (fault (kind exception) (code 4) (percent 10))"
+		" (fault (kind corrupt) (percent 5))"
+		" (fault (kind disconnect) (percent 1)) (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->faults.present ==
+		  (FAULT_BIT(FAULT_DELAY) | FAULT_BIT(FAULT_DROP) | FAULT_BIT(FAULT_EXCEPTION) |
+		   FAULT_BIT(FAULT_CORRUPT) | FAULT_BIT(FAULT_DISCONNECT)));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DELAY].delay_ms == 200);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DELAY].percent == 30);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DROP].percent == 20);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].exception_code == 4);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].percent == 10);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].percent == 5);
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DISCONNECT].percent == 1);
+}
+
+TEST(ConfigRejectsDuplicateFaultKind)
+{
+	static const char* const texts[] = {
+		"(device (fault (kind delay) (delay-ms 1)) (fault (kind delay) (delay-ms 2)))",
+		"(device (fault (kind drop)) (fault (kind drop)))",
+		"(device (fault (kind exception) (code 2)) (fault (kind exception) (code 3)))",
+		"(device (fault (kind corrupt)) (fault (kind corrupt)))",
+		"(device (fault (kind disconnect)) (fault (kind disconnect)))",
+	};
+	static const char* const kinds[] = { "delay", "drop", "exception", "corrupt", "disconnect" };
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	for (u32 i = 0; i < ARRAY_COUNT(texts); i++)
+	{
+		ASSERT_FAILURE(load_text(texts[i], &config, err, sizeof(err)));
+		ASSERT_EQ(strstr(err, "only one is allowed per kind") != NULL);
+		ASSERT_EQ(strstr(err, kinds[i]) != NULL);
+	}
+}
+
+TEST(ConfigDisconnectFaultModeRestrictions)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[256];
+
+	for (u32 i = 0; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		bool tcp_like = SERVER_MODES[i].mode == SERVER_MODE_TCP ||
+				SERVER_MODES[i].mode == SERVER_MODE_RTU_TCP ||
+				SERVER_MODES[i].mode == SERVER_MODE_ASCII_TCP;
+
+		snprintf(text, sizeof(text),
+			 "(server (mode %s)%s) (device (fault (kind disconnect) (percent 20)) (holding 0))",
+			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
+		if (tcp_like)
+		{
+			ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+			ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_DISCONNECT));
+			ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DISCONNECT].percent == 20);
+		}
+		else
+		{
+			ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+			ASSERT_EQ(strstr(err, "(fault (kind disconnect)) is not valid") != NULL);
+			ASSERT_EQ(strstr(err, SERVER_MODES[i].name) != NULL);
+		}
 	}
 }
 
@@ -574,6 +650,9 @@ TEST(ConfigFaultValidationErrorsAreReadable)
 	EXPECT_ERROR("(device (fault (kind exception) (code 4) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
 	EXPECT_ERROR("(device (fault (kind corrupt) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
 	EXPECT_ERROR("(device (fault (kind exception) (code 4) (code 5)) (holding 0))", "given more than once");
+	EXPECT_ERROR("(device (fault (kind disconnect) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (fault (kind disconnect) (code 4)) (holding 0))", "code is only valid for kind exception");
+	EXPECT_ERROR("(device (fault (kind disconnect) (percent 101)) (holding 0))", "between 0 and 100");
 }
 
 TEST(ConfigMissingFileIsAnError)

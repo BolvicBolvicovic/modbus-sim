@@ -370,6 +370,27 @@ check_mode_rules(form_ctx_t* ctx, const config_t* config)
 }
 
 static bool
+check_fault_modes(form_ctx_t* ctx, const config_t* config)
+{
+	bool tcp_like = config->mode == SERVER_MODE_TCP ||
+			config->mode == SERVER_MODE_RTU_TCP ||
+			config->mode == SERVER_MODE_ASCII_TCP;
+
+	if (tcp_like)
+		return true;
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		const device_t* dev = config->devices[i];
+
+		if ((dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) == 0)
+			continue;
+		return form_fail(ctx, "device '%s': (fault (kind disconnect)) is not valid in %s mode (TCP-like transports only)",
+				 dev->name, MODE_NAMES[config->mode]);
+	}
+	return true;
+}
+
+static bool
 parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_ms,
 		     config_t* config, bool* server_seen)
 {
@@ -411,7 +432,9 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 	if (config->device_count == 0)
 		return form_fail(ctx, "the file has no (device ...) form");
 
-	return check_unit_ids_unique(ctx, config) && check_mode_rules(ctx, config);
+	return check_unit_ids_unique(ctx, config) &&
+	       check_mode_rules(ctx, config) &&
+	       check_fault_modes(ctx, config);
 }
 
 /* Reads all forms of `text` with s7. Returns the list of forms, or false with ctx->err set. */

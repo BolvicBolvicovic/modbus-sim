@@ -1095,7 +1095,7 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 	u32	len = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
 	u8	fc  = (req_len == 0) ? 0 : req[0];
 
-	*decision = fault_decide(&dev->fault, rng);
+	*decision = fault_decide(&dev->faults, rng);
 
 	/* The request was already processed above; faults only alter the response. */
 	if (decision->exception_code != 0)
@@ -1103,7 +1103,11 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 	if (decision->corrupt)
 		resp[len > 1 ? 1 : 0] ^= 0xFF;
 	if (len == 0 || dev->listen_only)
-		decision->drop = true;
+	{
+		/* A silent reply cannot justify closing the client's connection. */
+		decision->drop        = true;
+		decision->disconnect  = false;
+	}
 	if (decision->drop)
 		dev->diag_no_response_count = (u16)(dev->diag_no_response_count + 1);
 	return len;

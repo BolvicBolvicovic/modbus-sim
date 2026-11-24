@@ -113,18 +113,39 @@ count_points(const device_t* dev, space_kind_t space)
 }
 
 static const char*
-fault_text(const fault_t* fault, char* buf, u32 size)
+fault_text(const fault_set_t* set, char* buf, u32 size)
 {
-	switch (fault->kind)
-	{
-		case FAULT_NONE     : return "none";
-		case FAULT_DROP     : snprintf(buf, size, "drop %u%% of responses", fault->percent); break;
-		case FAULT_DELAY    : snprintf(buf, size, "delay %u%% of responses by %u ms", fault->percent, fault->delay_ms); break;
-		case FAULT_EXCEPTION: snprintf(buf, size, "exception %u on %u%% of responses", fault->exception_code, fault->percent); break;
-		case FAULT_CORRUPT  : snprintf(buf, size, "corrupt %u%% of responses", fault->percent); break;
-	}
+	u32 used = 0;
 
-	return buf;
+	buf[0] = '\0';
+	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
+	{
+		char	part[80];
+		u32	written;
+
+		if ((set->present & FAULT_BIT(i)) == 0)
+			continue;
+		switch ((fault_kind_t)i)
+		{
+			case FAULT_DROP       : snprintf(part, sizeof(part), "drop %u%% of responses",
+							 set->by_kind[i].percent); break;
+			case FAULT_DELAY      : snprintf(part, sizeof(part), "delay %u%% of responses by %u ms",
+							 set->by_kind[i].percent, set->by_kind[i].delay_ms); break;
+			case FAULT_EXCEPTION  : snprintf(part, sizeof(part), "exception %u on %u%% of responses",
+							 set->by_kind[i].exception_code, set->by_kind[i].percent); break;
+			case FAULT_CORRUPT    : snprintf(part, sizeof(part), "corrupt %u%% of responses",
+							 set->by_kind[i].percent); break;
+			case FAULT_DISCONNECT : snprintf(part, sizeof(part), "disconnect %u%% of responses",
+							 set->by_kind[i].percent); break;
+			default: continue;
+		}
+		written = (u32)snprintf(buf + used, size - used, "%s%s",
+					used ? "; " : "", part);
+		if (written >= size - used)
+			break;
+		used += written;
+	}
+	return used == 0 ? "none" : buf;
 }
 
 static void
@@ -144,7 +165,7 @@ print_rtu_timing(const config_t* config)
 static void
 print_summary(const config_t* config)
 {
-	char	fault[96];
+	char	fault[512];
 	const char*	serial_path = "pty";
 
 	if (config->mode == SERVER_MODE_RTU_DEVICE ||
@@ -201,7 +222,7 @@ print_summary(const config_t* config)
 		printf("  unit %-3u %-32s coils %u, discrete %u, input %u, holding %u, fault: %s\n",
 		       dev->unit_id, dev->name, count_points(dev, SPACE_COIL),
 		       count_points(dev, SPACE_DISCRETE), count_points(dev, SPACE_INPUT),
-		       count_points(dev, SPACE_HOLDING), fault_text(&dev->fault, fault, sizeof(fault)));
+		       count_points(dev, SPACE_HOLDING), fault_text(&dev->faults, fault, sizeof(fault)));
 	}
 }
 

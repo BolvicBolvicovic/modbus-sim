@@ -80,6 +80,15 @@ conn_on_accept(void* ctx, net_tcp_conn_t* base, u64 now_ms)
 }
 
 static bool
+conn_check_fault_disconnect(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
+{
+	if (conn->base.fd < 0 || !conn->framer.fault_disconnect)
+		return false;
+	conn_close(server, conn);
+	return true;
+}
+
+static bool
 conn_skip_idle(void* ctx, const net_tcp_conn_t* base)
 {
 	const rtu_tcp_conn_t* conn = (const rtu_tcp_conn_t*)base;
@@ -94,6 +103,7 @@ conn_process_gap_due(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms,
 	rtu_framer_ctx_t ctx = server->ctx;
 	ctx.peer = conn->base.peer;
 	rtu_framer_on_gap_due(&conn->framer, &ctx, now_ms, now_us);
+	(void)conn_check_fault_disconnect(server, conn);
 }
 
 static void
@@ -102,6 +112,7 @@ conn_process(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms)
 	rtu_framer_ctx_t ctx = server->ctx;
 	ctx.peer = conn->base.peer;
 	rtu_framer_process(&conn->framer, &ctx, now_ms);
+	(void)conn_check_fault_disconnect(server, conn);
 }
 
 static void
@@ -119,6 +130,8 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	if (f->rx_len >= sizeof(f->rx))
 		rtu_framer_consume(f, f->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
 	rtu_framer_note_gap(f, &ctx, now_ms, now_us);
+	if (conn_check_fault_disconnect(server, conn))
+		return;
 
 	got = recv(conn->base.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len, 0);
 	if (got == 0)
@@ -129,6 +142,8 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 			rtu_framer_process(f, &ctx, now_ms);
 			f->have_rx = f->rx_len > 0;
 		}
+		if (conn_check_fault_disconnect(server, conn))
+			return;
 		if (!f->pending.active)
 			conn_close(server, conn);
 		return;
@@ -149,6 +164,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	f->have_rx = true;
 	conn->base.last_activity_ms = now_ms;
 	rtu_framer_on_new_data(f, &ctx, now_ms);
+	(void)conn_check_fault_disconnect(server, conn);
 }
 
 static void
@@ -244,6 +260,8 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		if (f->have_rx && f->rx_len > 0)
 		{
 			conn_process(server, conn, clock_now_ms());
+			if (conn->base.fd < 0)
+				return;
 			if (f->pending.active)
 			{
 				pending_response_clear(&f->pending);

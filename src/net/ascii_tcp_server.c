@@ -112,6 +112,11 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 	LOG_DEBUG("ascii-tcp client=%s unit=%u fc=0x%02X -> %s%s", conn->base.peer, addr, pdu[0],
 		  (resp[0] & 0x80) ? "exception" : "ok",
 		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
+	if (decision.disconnect)
+	{
+		conn_close(server, conn);
+		return;
+	}
 	if (decision.drop)
 		return;
 
@@ -339,8 +344,12 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, short re
 		return;
 	}
 	conn_process(server, conn, now_ms); /* expire stale bytes before adding new ones */
+	if (conn->base.fd < 0)
+		return;
 	if (revents & POLLIN)
 		conn_read(server, conn, now_ms);
+	if (conn->base.fd < 0)
+		return;
 	conn_process(server, conn, now_ms);
 	if (conn->base.fd >= 0 && (revents & POLLOUT))
 		conn_write(server, conn);

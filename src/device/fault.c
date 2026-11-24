@@ -1,20 +1,31 @@
 #include "device/fault.h"
 
+enum { FAULT_MAX_DELAY_MS = 60000 };
+
 fault_decision_t
-fault_decide(const fault_t* fault, rng_t* rng)
+fault_decide(const fault_set_t* set, rng_t* rng)
 {
-	fault_decision_t	none = { 0 };
+	fault_decision_t	decision = { 0 };
+	bool			fired[FAULT_KIND_COUNT] = { 0 };
 
-	if (fault->kind == FAULT_NONE)
-		return none;
+	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
+	{
+		if ((set->present & FAULT_BIT(i)) != 0)
+			fired[i] = rng_percent(rng, set->by_kind[i].percent);
+	}
 
-	if (!rng_percent(rng, fault->percent))
-		return none;
-
-	return (fault_decision_t){
-		.drop           = (fault->kind == FAULT_DROP),
-		.delay_ms       = (fault->kind == FAULT_DELAY) ? fault->delay_ms : 0,
-		.exception_code = (fault->kind == FAULT_EXCEPTION) ? fault->exception_code : 0,
-		.corrupt        = (fault->kind == FAULT_CORRUPT),
-	};
+	decision.disconnect = fired[FAULT_DISCONNECT];
+	decision.drop        = fired[FAULT_DROP] || decision.disconnect;
+	decision.corrupt     = fired[FAULT_CORRUPT];
+	if (fired[FAULT_EXCEPTION])
+		decision.exception_code = set->by_kind[FAULT_EXCEPTION].exception_code;
+	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
+	{
+		if (!fired[i])
+			continue;
+		decision.delay_ms += set->by_kind[i].delay_ms;
+		if (decision.delay_ms > FAULT_MAX_DELAY_MS)
+			decision.delay_ms = FAULT_MAX_DELAY_MS;
+	}
+	return decision;
 }

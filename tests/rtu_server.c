@@ -24,6 +24,16 @@ struct rtu_child_t
 	int	fd;	/* test side of socketpair */
 };
 
+static void
+set_fault(device_t* dev, fault_kind_t kind, u32 delay_ms, u32 percent)
+{
+	dev->faults.by_kind[kind] = (fault_t){
+		.delay_ms = delay_ms,
+		.percent  = percent,
+	};
+	dev->faults.present |= FAULT_BIT(kind);
+}
+
 static bool
 send_all_fd(int fd, const u8* buf, u32 len)
 {
@@ -737,9 +747,7 @@ TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->fault.kind     = FAULT_DELAY;
-	dev->fault.delay_ms = 500;
-	dev->fault.percent  = 100;
+	set_fault(dev, FAULT_DELAY, 500, 100);
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 5));
@@ -788,9 +796,7 @@ TEST(RtuServerPendingDelayedResponseHangupWithRequestNoSpin)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->fault.kind     = FAULT_DELAY;
-	dev->fault.delay_ms = 500;
-	dev->fault.percent  = 100;
+	set_fault(dev, FAULT_DELAY, 500, 100);
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
@@ -1292,11 +1298,8 @@ TEST(RtuServerDelayAndDropFaultsOverRtu)
 	bool		ok = false;
 
 	ASSERT_EQ(dev_delay != NULL && dev_drop != NULL);
-	dev_delay->fault.kind = FAULT_DELAY;
-	dev_delay->fault.delay_ms = 250;
-	dev_delay->fault.percent = 100;
-	dev_drop->fault.kind = FAULT_DROP;
-	dev_drop->fault.percent = 100;
+	set_fault(dev_delay, FAULT_DELAY, 250, 100);
+	set_fault(dev_drop, FAULT_DROP, 0, 100);
 
 	{
 		device_t* devices[] = { dev_delay, dev_drop };
@@ -1335,8 +1338,7 @@ TEST(RtuCorruptFaultSendsValidCrcWithWrongData)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->fault.kind = FAULT_CORRUPT;
-	dev->fault.percent = 100;
+	set_fault(dev, FAULT_CORRUPT, 0, 100);
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
@@ -2050,9 +2052,7 @@ TEST(RtuServerEofAfterDelayedRequestSendsResponse)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->fault.kind = FAULT_DELAY;
-	dev->fault.delay_ms = 200;
-	dev->fault.percent = 100;
+	set_fault(dev, FAULT_DELAY, 200, 100);
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));

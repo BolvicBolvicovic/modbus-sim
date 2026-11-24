@@ -151,29 +151,42 @@ TEST(WriteToUndefinedAddressChangesNothing)
 	arena_release(arena);
 }
 
+static void
+add_fault(fault_set_t* set, fault_kind_t kind, u32 delay_ms, u8 code, u32 percent)
+{
+	set->by_kind[kind] = (fault_t){
+		.delay_ms       = delay_ms,
+		.exception_code = code,
+		.percent        = percent,
+	};
+	set->present |= FAULT_BIT(kind);
+}
+
 TEST(FaultNoneNeverFires)
 {
 	rng_t		rng;
-	fault_t		fault = { 0 };
+	fault_set_t	set = { 0 };
 
 	rng_seed(&rng, 1);
 	for (u32 i = 0; i < 1000; i++)
 	{
-		fault_decision_t	d = fault_decide(&fault, &rng);
+		fault_decision_t	d = fault_decide(&set, &rng);
 
-		ASSERT_EQ(!d.drop && d.delay_ms == 0 && d.exception_code == 0 && !d.corrupt);
+		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0 &&
+			  d.exception_code == 0 && !d.corrupt);
 	}
 }
 
 TEST(FaultPercentIsRoughlyRespected)
 {
 	rng_t		rng;
-	fault_t		fault = { .kind = FAULT_DROP, .percent = 25 };
+	fault_set_t	set = { 0 };
 	u32		dropped = 0;
 
+	add_fault(&set, FAULT_DROP, 0, 0, 25);
 	rng_seed(&rng, 99);
 	for (u32 i = 0; i < 10000; i++)
-		dropped += fault_decide(&fault, &rng).drop;
+		dropped += fault_decide(&set, &rng).drop;
 
 	ASSERT_EQ(dropped > 2200 && dropped < 2800);
 }
@@ -181,36 +194,38 @@ TEST(FaultPercentIsRoughlyRespected)
 TEST(FaultDelayAlwaysAtHundredPercent)
 {
 	rng_t		rng;
-	fault_t		fault = { .kind = FAULT_DELAY, .delay_ms = 250, .percent = 100 };
+	fault_set_t	set = { 0 };
 
+	add_fault(&set, FAULT_DELAY, 250, 0, 100);
 	rng_seed(&rng, 5);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&fault, &rng);
+		fault_decision_t	d = fault_decide(&set, &rng);
 
-		ASSERT_EQ(!d.drop && d.delay_ms == 250);
+		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 250);
 	}
 }
 
 TEST(FaultExceptionDecisionUsesCodeAtHundredPercent)
 {
 	rng_t		rng;
-	fault_t		fault = { .kind = FAULT_EXCEPTION, .exception_code = EXC_SLAVE_DEVICE_BUSY, .percent = 100 };
+	fault_set_t	set = { 0 };
 
+	add_fault(&set, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
 	rng_seed(&rng, 5);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&fault, &rng);
+		fault_decision_t	d = fault_decide(&set, &rng);
 
 		ASSERT_EQ(d.exception_code == EXC_SLAVE_DEVICE_BUSY);
-		ASSERT_EQ(!d.drop && d.delay_ms == 0 && !d.corrupt);
+		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0 && !d.corrupt);
 	}
 
-	fault.percent = 0;
+	set.by_kind[FAULT_EXCEPTION].percent = 0;
 	rng_seed(&rng, 5);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&fault, &rng);
+		fault_decision_t	d = fault_decide(&set, &rng);
 
 		ASSERT_EQ(d.exception_code == 0 && !d.corrupt);
 	}
@@ -219,48 +234,158 @@ TEST(FaultExceptionDecisionUsesCodeAtHundredPercent)
 TEST(FaultCorruptDecisionUsesFlagAtHundredPercent)
 {
 	rng_t		rng;
-	fault_t		fault = { .kind = FAULT_CORRUPT, .percent = 100 };
+	fault_set_t	set = { 0 };
 
+	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
 	rng_seed(&rng, 7);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&fault, &rng);
+		fault_decision_t	d = fault_decide(&set, &rng);
 
 		ASSERT_EQ(d.corrupt && d.exception_code == 0);
-		ASSERT_EQ(!d.drop && d.delay_ms == 0);
+		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0);
 	}
 
-	fault.percent = 0;
+	set.by_kind[FAULT_CORRUPT].percent = 0;
 	rng_seed(&rng, 7);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&fault, &rng);
+		fault_decision_t	d = fault_decide(&set, &rng);
 
 		ASSERT_EQ(!d.corrupt && d.exception_code == 0);
 	}
 }
 
+TEST(FaultDisconnectAlwaysImpliesDrop)
+{
+	rng_t		rng;
+	fault_set_t	set = { 0 };
+
+	add_fault(&set, FAULT_DISCONNECT, 0, 0, 100);
+	rng_seed(&rng, 8);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&set, &rng);
+
+		ASSERT_EQ(d.disconnect && d.drop);
+		ASSERT_EQ(d.delay_ms == 0 && d.exception_code == 0 && !d.corrupt);
+	}
+
+	set.by_kind[FAULT_DISCONNECT].percent = 0;
+	rng_seed(&rng, 8);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&set, &rng);
+
+		ASSERT_EQ(!d.disconnect && !d.drop);
+	}
+}
+
+TEST(FaultDelayAndCorruptCombine)
+{
+	rng_t		rng;
+	fault_set_t	set = { 0 };
+
+	add_fault(&set, FAULT_DELAY, 200, 0, 100);
+	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
+	rng_seed(&rng, 11);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&set, &rng);
+
+		ASSERT_EQ(d.delay_ms == 200 && d.corrupt);
+		ASSERT_EQ(!d.drop && !d.disconnect && d.exception_code == 0);
+	}
+}
+
+TEST(FaultExceptionAndCorruptCombine)
+{
+	rng_t		rng;
+	fault_set_t	set = { 0 };
+
+	add_fault(&set, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
+	rng_seed(&rng, 12);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&set, &rng);
+
+		ASSERT_EQ(d.exception_code == EXC_SLAVE_DEVICE_BUSY && d.corrupt);
+		ASSERT_EQ(!d.drop && !d.disconnect);
+	}
+}
+
+TEST(FaultDropAndExceptionCombine)
+{
+	rng_t		rng;
+	fault_set_t	set = { 0 };
+
+	add_fault(&set, FAULT_DROP, 0, 0, 100);
+	add_fault(&set, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 100);
+	rng_seed(&rng, 13);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&set, &rng);
+
+		ASSERT_EQ(d.drop && d.exception_code == EXC_MEMORY_PARITY_ERROR);
+		ASSERT_EQ(!d.disconnect && !d.corrupt);
+	}
+}
+
+TEST(FaultDelaysAreCapped)
+{
+	rng_t		rng;
+	fault_set_t	set = { 0 };
+
+	add_fault(&set, FAULT_DELAY, 60000, 0, 100);
+	add_fault(&set, FAULT_CORRUPT, 59000, 0, 100);
+	rng_seed(&rng, 14);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	d = fault_decide(&set, &rng);
+
+		ASSERT_EQ(d.delay_ms == 60000 && d.corrupt);
+	}
+}
+
 TEST(FaultDecisionsAreDeterministicForSeed)
 {
-	rng_t	first;
-	rng_t	second;
-	fault_t	fault = { .kind = FAULT_EXCEPTION, .exception_code = EXC_MEMORY_PARITY_ERROR, .percent = 40 };
+	rng_t		first;
+	rng_t		second;
+	fault_set_t	set = { 0 };
 
+	add_fault(&set, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 40);
 	rng_seed(&first, 1234);
 	rng_seed(&second, 1234);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	a = fault_decide(&fault, &first);
-		fault_decision_t	b = fault_decide(&fault, &second);
+		fault_decision_t	a = fault_decide(&set, &first);
+		fault_decision_t	b = fault_decide(&set, &second);
 
 		ASSERT_EQ(a.exception_code == b.exception_code);
 	}
 
-	fault.kind = FAULT_CORRUPT;
+	set.present = 0;
+	add_fault(&set, FAULT_CORRUPT, 0, 0, 40);
 	rng_seed(&first, 4321);
 	rng_seed(&second, 4321);
 	for (u32 i = 0; i < 100; i++)
-		ASSERT_EQ(fault_decide(&fault, &first).corrupt == fault_decide(&fault, &second).corrupt);
+		ASSERT_EQ(fault_decide(&set, &first).corrupt == fault_decide(&set, &second).corrupt);
+
+	set.present = 0;
+	add_fault(&set, FAULT_DELAY, 100, 0, 50);
+	add_fault(&set, FAULT_DROP, 0, 0, 50);
+	add_fault(&set, FAULT_DISCONNECT, 0, 0, 50);
+	rng_seed(&first, 5678);
+	rng_seed(&second, 5678);
+	for (u32 i = 0; i < 100; i++)
+	{
+		fault_decision_t	a = fault_decide(&set, &first);
+		fault_decision_t	b = fault_decide(&set, &second);
+
+		ASSERT_EQ(a.drop == b.drop && a.disconnect == b.disconnect);
+		ASSERT_EQ(a.delay_ms == b.delay_ms);
+	}
 }
 
 TEST(FileRecordStoreAndRead)

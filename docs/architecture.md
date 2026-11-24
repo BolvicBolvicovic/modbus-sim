@@ -10,7 +10,7 @@
  ASCII/TCP client ──same frames──► net/ascii_tcp_server ┘
                       │                                       fault_decide()
                       ▼
-               device/fault (drop / delay)
+     device/fault (drop / delay / exception / corrupt / disconnect)
 
  config file ──► config/config ──► config/config_device ──► device/device
                   (s7 reads text)
@@ -24,7 +24,8 @@
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
-4. The transport asks `fault_decide` whether to drop or delay the response.
+4. `fault_decide` rolls every configured fault kind and the transport applies the combined
+   decision (drop, delay, exception, corrupt, or disconnect on TCP-like transports).
 
 ## Modules
 
@@ -175,10 +176,47 @@ The config gets a new entry next to `(static ...)` and `(ramp ...)`; `parse_beha
 them with s7 while the config is read, or keep an s7 environment alive and call it from
 `device_tick`.
 
-**More fault injection.** `fault_t` holds one fault today. Make it a small array and let
-`fault_decide` return the combined decision (delay, drop, corrupt, wrong exception code,
-disconnect). `net/tcp_server.c` and `net/rtu_server.c` already act on a `fault_decision_t`, so new
-fields are applied in their response paths.
+The current documented behaviour mechanisms are:
+
+- Static register values.
+- Ramping values (wrap, bounce or hold).
+- Writing a register can freeze its ramp.
+- Delayed and dropped responses.
+
+That is enough for basic communication testing, but real industrial equipment has more
+complicated behaviour. For example, a VFD should have:
+
+- Start/stop state transitions.
+- Acceleration and deceleration.
+- Fault states.
+- Reset sequences.
+- Interlocks.
+- Dependencies between registers.
+
+Proposed direction: introduce a state-machine or scripting mechanism for defining these
+relationships.
+
+**More fault injection (implemented).** `fault_t` held one fault in the original roadmap; it is
+now a kind-keyed `fault_set_t` and `fault_decide` returns the combined decision (delay, drop,
+corrupt, wrong exception code, disconnect). `net/tcp_server.c` and `net/rtu_server.c` already
+acted on a `fault_decision_t`, so the new fields are applied in their response paths. A
+`(fault ...)` entry may be repeated, but only one definition per kind is allowed. Each kind
+rolls independently: drop suppresses the response, disconnect implies drop and closes the
+connection on TCP-like transports, an injected exception replaces the response, corrupt flips a
+payload byte, and delays are summed and capped at 60000 ms. Faults still change only the
+response, never request processing.
+
+Further ideas, not implemented:
+
+- Already covered in generic form by the current kinds: intermittent communication failures
+  (`drop`), connection resets (`disconnect`), and Modbus exception responses (`exception`).
+- Distinct corruption modes would be needed for invalid register values and CRC errors; today
+  `corrupt` flips one PDU byte while the transport recomputes CRC/LRC.
+- New fault kinds would be needed for device restart and sensor disconnection.
+- Gradually degrading sensor measurements belong in the dynamic behaviour models above, with
+  dependencies between registers.
+- Configurable fault schedules would need timing/count/sequence config rather than a fixed
+  percent chance per response.
 
 **RTU timing and RTU-over-TCP.** RTU derives inter-frame t3.5 from known baud rates and, in
 baud-derived auto mode, enforces t1.5 as a best-effort intra-frame read() boundary check on byte
@@ -186,3 +224,40 @@ streams. `frame-gap-ms` remains an explicit inter-frame override/fallback for st
 timing. True UART character-level timing is still not modeled. RTU-over-TCP is implemented as a
 separate `(server (mode rtu-tcp))` transport/framing choice, not a silent change to existing TCP
 or RTU byte-stream behavior.
+
+### 4. Operational observability
+
+- Structured JSON logs.
+- Metrics for requests and errors.
+- Active client connections.
+- Request latency.
+- Device health status.
+- Fault injection statistics.
+- Prometheus metrics endpoint.
+- A health/readiness endpoint.
+
+Purpose: easier operation as part of an automated testing platform.
+
+### 5. Deployment and portability
+
+The README explicitly identifies Linux as the supported platform. Wanted improvements:
+
+- Docker image and deployment examples.
+- Container health checks.
+- Non-root execution.
+- Resource limits.
+- Windows/macOS support if required.
+- Automated release builds and versioned binaries.
+- Reproducible builds and software bill of materials (SBOM).
+
+### 6. Protocol validation and compatibility
+
+The supported function codes are extensive, but supporting an FC does not guarantee
+interoperability with every implementation. Wanted work:
+
+- Independent Modbus conformance testing.
+- Interoperability testing against multiple commercial PLCs and SCADA products.
+- Fuzz testing of TCP and serial protocol parsers.
+- Long-running stability tests.
+- Performance tests with many clients and devices.
+- Testing of malformed and fragmented network frames.

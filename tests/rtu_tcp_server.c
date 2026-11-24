@@ -507,6 +507,35 @@ TEST(RtuOverTcpDropFaultStillAppliesWrites)
 	ASSERT(false && "did not observe write effect through drop fault");
 }
 
+TEST(RtuOverTcpDisconnectFaultClosesConnection)
+{
+	int fd;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start("(seed 1) (broadcast-execute on)",
+		     "(device (unit-id 1) (holding 0 (static 5))\n"
+		     "  (fault (kind disconnect) (percent 100)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	/* Broadcast and unknown units are silent even when a device has a disconnect fault. */
+	flen = modbus_rtu_encode(frame, 0, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(ts_no_data(fd, 250));
+	flen = modbus_rtu_encode(frame, 99, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(ts_no_data(fd, 250));
+
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
+	ASSERT_EQ(!recv_rtu_resp(fd, &addr, resp, &plen, 200));
+	close(fd);
+	server_stop();
+}
+
 TEST(RtuOverTcpIdleTimeoutClosesConnection)
 {
 	int fd;
