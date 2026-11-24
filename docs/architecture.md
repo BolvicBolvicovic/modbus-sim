@@ -3,10 +3,10 @@
 ## Data flow
 
 ```
- TCP   client ──[TLS] MBAP+PDU─► net/tcp_server  ──┐
-                                                   ├─► modbus/pdu ──► device/device ──► data tables
- RTU   client ──addr+PDU+CRC───► net/rtu_server  ──┤                        ▲
- ASCII client ──:hex+LRC+CRLF──► net/ascii_server  ├          device_tick() │ ramps → registers
+ TCP   client ──[TLS] MBAP+PDU─► net/tcp_server  ───────┐
+                                                        ├─► modbus/pdu ──► device/device ──► data tables
+ RTU   client ──addr+PDU+CRC───► net/rtu_server  ───────┤                        ▲
+ ASCII client ──:hex+LRC+CRLF──► net/ascii_server       ├          device_tick() │ ramps → registers
  ASCII/TCP client ──same frames──► net/ascii_tcp_server ┘
                       │                                       fault_decide()
                       ▼
@@ -62,8 +62,7 @@ Headers sit next to their `.c` files.
 
 ## Memory
 
-- No `malloc`, `free`, `new` or `delete` in this code base. Everything lives in vlib arenas
-  (`ARENA_ALLOC`, `ARENA_PUSH_STRUCT`, `ARENA_PUSH_ARRAY`).
+- No `malloc` or `free` in this code base. Everything lives in vlib arenas (`ARENA_ALLOC`, `ARENA_PUSH_STRUCT`, `ARENA_PUSH_ARRAY`).
 - `main` creates two arenas: `app` (devices, lives until exit) and `scratch`
   (the config file text, released right after loading). Server state is a stack local.
 - Request handling uses fixed-size stack buffers. Nothing is allocated per request.
@@ -181,8 +180,9 @@ them with s7 while the config is read, or keep an s7 environment alive and call 
 disconnect). `net/tcp_server.c` and `net/rtu_server.c` already act on a `fault_decision_t`, so new
 fields are applied in their response paths.
 
-**RTU timing / RTU-over-TCP.** RTU derives inter-frame t3.5 from known baud rates and, in
+**RTU timing and RTU-over-TCP.** RTU derives inter-frame t3.5 from known baud rates and, in
 baud-derived auto mode, enforces t1.5 as a best-effort intra-frame read() boundary check on byte
 streams. `frame-gap-ms` remains an explicit inter-frame override/fallback for streams without UART
-timing. True UART character-level timing is still not modeled. RTU-over-TCP, if added, should be a
-separate transport/framing choice, not a silent change to existing TCP or RTU byte-stream behavior.
+timing. True UART character-level timing is still not modeled. RTU-over-TCP is implemented as a
+separate `(server (mode rtu-tcp))` transport/framing choice, not a silent change to existing TCP
+or RTU byte-stream behavior.
