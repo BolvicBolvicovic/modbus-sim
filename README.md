@@ -43,6 +43,10 @@ loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 ### Build options
 
+Builds default to `CC='ccache clang'` and `LDFLAGS='-pie -Wl,-z,relro,-z,now -fuse-ld=mold'`,
+matching CI. Install `clang`, `ccache` and `mold`, or override `CC` and `LDFLAGS` (for example,
+`CC=gcc make`) to use a different toolchain.
+
 `BUILD` controls optimization (`prod` by default, matching CI):
 
 | Value | Effect |
@@ -53,14 +57,13 @@ loopback; set `MODBUS_SIM_BIN` to test a different binary.
 The vendored s7 config parser is always built at `-O0`: it only runs at startup and dominates compile
 time. `CFLAGS` still overrides the complete flag set if you need a custom build.
 
-For the fastest local iteration, install `ccache` and `mold` and use:
+For the fastest local iteration, use `BUILD=dev` (or its `make dev` shorthand), which keeps the
+default toolchain and uses separate `-O0` objects:
 
 ```bash
-make -j$(nproc) dev          # clang + ccache + mold, BUILD=dev
-make -j$(nproc) dev tests    # same setup, plus the test suite
+make -j$(nproc) dev          # BUILD=dev
+make -j$(nproc) dev tests    # BUILD=dev, plus the test suite
 ```
-
-That is shorthand for `CC='ccache clang' LDFLAGS='-pie -Wl,-z,relro,-z,now -fuse-ld=mold' BUILD=dev`.
 
 `WITH_TLS` controls the OpenSSL dependency (`auto` by default):
 

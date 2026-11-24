@@ -6,7 +6,11 @@ TESTS       = $(BIN)-tests
 ASAN_BIN    = modbus-sim-asan
 ASAN_TESTS  = modbus-sim-asan-tests
 
-CC          ?= cc
+# GNU make predefines CC with origin 'default'. Replace only that built-in value:
+# an explicit CC from the environment or command line must still win.
+ifeq ($(origin CC),default)
+CC          := ccache clang
+endif
 
 # BUILD=dev skips optimization and _FORTIFY_SOURCE (which warns without -O) and
 # uses separate objects, so switching back and forth never rebuilds blindly.
@@ -24,9 +28,7 @@ $(error BUILD must be dev or prod (got '$(BUILD)'))
 endif
 
 CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow $(FORTIFY_FLAGS) -fstack-protector-strong -fPIE
-LDFLAGS     ?= -pie -Wl,-z,relro,-z,now
-DEV_CC      ?= ccache clang
-DEV_LDFLAGS ?= -pie -Wl,-z,relro,-z,now -fuse-ld=mold
+LDFLAGS     ?= -pie -Wl,-z,relro,-z,now -fuse-ld=mold
 DEPFLAGS    = -MMD -MP
 INC         = -I. -Isrc
 PKG_CONFIG  ?= pkg-config
@@ -118,7 +120,7 @@ all: $(BIN)
 
 # Fast local build: make -j$(nproc) dev [tests|clean|...].
 dev:
-	$(MAKE) CC='$(DEV_CC)' LDFLAGS='$(DEV_LDFLAGS)' BUILD=dev $(filter-out $@,$(MAKECMDGOALS))
+	$(MAKE) BUILD=dev $(filter-out $@,$(MAKECMDGOALS))
 
 $(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)

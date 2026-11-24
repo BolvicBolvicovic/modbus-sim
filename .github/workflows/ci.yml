@@ -8,8 +8,7 @@ permissions:
   contents: read
 
 env:
-  CC: ccache clang
-  LDFLAGS: -pie -Wl,-z,relro,-z,now -fuse-ld=mold
+  # The prod, no-TLS and dev jobs use the Makefile's clang + ccache + mold defaults.
   CCACHE_DIR: .ccache
 
 jobs:
