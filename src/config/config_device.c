@@ -14,11 +14,12 @@ enum fault_option
 	FAULT_OPTION_DROP,
 	FAULT_OPTION_EXCEPTION,
 	FAULT_OPTION_CORRUPT,
+	FAULT_OPTION_DISCONNECT,
 };
 
-static const char* const KIND_NAMES[]  = { "delay", "drop", "exception", "corrupt" };
+static const char* const KIND_NAMES[]  = { "delay", "drop", "exception", "corrupt", "disconnect" };
 static const fault_kind_t KIND_VALUES[] = {
-	FAULT_DELAY, FAULT_DROP, FAULT_EXCEPTION, FAULT_CORRUPT,
+	FAULT_DELAY, FAULT_DROP, FAULT_EXCEPTION, FAULT_CORRUPT, FAULT_DISCONNECT,
 };
 
 /* --- simple device options --- */
@@ -324,12 +325,10 @@ parse_fault(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	s7_pointer	delay_f   = NULL;
 	s7_pointer	code_f    = NULL;
 	u32		kind      = 0;
+	fault_t*	fault     = NULL;
 	s64		delay     = 0;
 	s64		code      = 0;
 	s64		percent   = 100;
-
-	if (dev->fault.kind != FAULT_NONE)
-		return form_fail(ctx, "device has more than one (fault ...); only one is allowed");
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "fault"))
 		return false;
@@ -339,6 +338,9 @@ parse_fault(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 	if (!form_opt_choice(ctx, options, "kind", KIND_NAMES, ARRAY_COUNT(KIND_NAMES), &kind))
 		return false;
+	if ((dev->faults.present & FAULT_BIT(KIND_VALUES[kind])) != 0)
+		return form_fail(ctx, "%s: device already has a (fault (kind %s) ...); only one is allowed per kind",
+				 form_text(ctx, item), KIND_NAMES[kind]);
 
 	delay_f = form_find(ctx, options, "delay-ms");
 	code_f  = form_find(ctx, options, "code");
@@ -365,10 +367,13 @@ parse_fault(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	if (!form_opt_int(ctx, options, "percent", 0, 100, &percent))
 		return false;
 
-	dev->fault.kind           = KIND_VALUES[kind];
-	dev->fault.delay_ms       = (u32)delay;
-	dev->fault.exception_code = (u8)code;
-	dev->fault.percent        = (u32)percent;
+	fault        = &dev->faults.by_kind[KIND_VALUES[kind]];
+	*fault       = (fault_t){
+		.delay_ms       = (u32)delay,
+		.exception_code = (u8)code,
+		.percent        = (u32)percent,
+	};
+	dev->faults.present |= FAULT_BIT(KIND_VALUES[kind]);
 	return true;
 }
 

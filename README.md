@@ -89,7 +89,7 @@ when checking a no-TLS binary.
 | Protocol | Modbus TCP (optionally TLS-wrapped), Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
-| Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |
+| Fault | Repeatable per device: combine **delay**, **drop**, **exception**, **corrupt**, and TCP-only **disconnect** faults, each with its own chance in percent. |
 | Devices | Several devices on one port, told apart by unit id. |
 | Clients | Up to 32 at the same time. A delayed response never blocks other clients. |
 | Writes | Clients can write coils and holding registers. Writing a ramp freezes it at the written value. |
@@ -217,7 +217,7 @@ ASCII frames are `:` + uppercase hex for `[addr][PDU][LRC]` + `CR LF`; received 
 lowercase. Frames are delimited by `CR LF`, so RTU timing options do not apply; complete frames are
 answered immediately, including several frames in one read. A missing colon, invalid hex, odd hex
 count, bad LRC, or wrong terminator produces no response and never reaches the PDU handlers. Like
-RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. `ascii-tcp` carries
+RTU, broadcast (unit 0), unknown units, and fault-suppressed answers are silent. `ascii-tcp` carries
 the same frames on TCP byte streams (up to 32 clients, with `idle-timeout-ms`); it is not Modbus TCP
 (MBAP). `(baud N)` may set the serial line speed but never changes ASCII framing or timing, and is
 rejected in `ascii-tcp`. FC 08 subfunction `0x0003` (Change ASCII Delimiter) is rejected with

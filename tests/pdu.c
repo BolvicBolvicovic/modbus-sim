@@ -6,6 +6,17 @@
 #include "vlib/macros.h"
 #include <string.h>
 
+static void
+set_fault(device_t* dev, fault_kind_t kind, u32 delay_ms, u8 code, u32 percent)
+{
+	dev->faults.by_kind[kind] = (fault_t){
+		.delay_ms       = delay_ms,
+		.exception_code = code,
+		.percent        = percent,
+	};
+	dev->faults.present |= FAULT_BIT(kind);
+}
+
 /* Builds a device with: holding 0 = 0x1234, holding 1 = 0x5678, input 0 = 7,
  * coils 0..9 off, discrete 0..2 = on,off,on. */
 static device_t*
@@ -2299,9 +2310,7 @@ TEST(ExceptionFaultReplacesResponseAfterProcessing)
 	u8			resp[MODBUS_MAX_PDU];
 	u16			value = 0;
 
-	dev->fault.kind           = FAULT_EXCEPTION;
-	dev->fault.exception_code = EXC_SLAVE_DEVICE_BUSY;
-	dev->fault.percent        = 100;
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
 	rng_seed(&rng, 1);
 	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, write, sizeof(write), resp, &decision) == 2);
 	ASSERT_EQ(resp[0] == (FC_WRITE_SINGLE_REGISTER | 0x80) && resp[1] == EXC_SLAVE_DEVICE_BUSY);
@@ -2326,8 +2335,7 @@ TEST(CorruptFaultFlipsPayloadAfterProcessing)
 	u8			resp[MODBUS_MAX_PDU];
 	u16			value = 0;
 
-	dev->fault.kind    = FAULT_CORRUPT;
-	dev->fault.percent = 100;
+	set_fault(dev, FAULT_CORRUPT, 0, 0, 100);
 	rng_seed(&rng, 2);
 	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, read, sizeof(read), resp, &decision) == 6);
 	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == (0x04 ^ 0xFF));
@@ -2353,15 +2361,63 @@ TEST(FaultsAtZeroPercentLeaveResponsesUntouched)
 	u8			want[] = { FC_READ_HOLDING_REGISTERS, 0x02, 0x12, 0x34 };
 
 	rng_seed(&rng, 4);
-	dev->fault.kind           = FAULT_EXCEPTION;
-	dev->fault.exception_code = EXC_MEMORY_PARITY_ERROR;
-	dev->fault.percent        = 0;
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 0);
 	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision) == sizeof(want));
 	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
 
-	dev->fault.kind    = FAULT_CORRUPT;
-	dev->fault.percent = 0;
+	dev->faults.present = 0;
+	set_fault(dev, FAULT_CORRUPT, 0, 0, 0);
 	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision) == sizeof(want));
 	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	arena_release(arena);
+}
+
+TEST(MultipleFaultsCombineInOneResponse)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_DELAY, 150, 0, 100);
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	set_fault(dev, FAULT_CORRUPT, 0, 0, 100);
+	rng_seed(&rng, 21);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80));
+	ASSERT_EQ(resp[1] == (EXC_SLAVE_DEVICE_BUSY ^ 0xFF)); /* corrupt applies to the exception */
+	ASSERT_EQ(decision.delay_ms == 150 && decision.exception_code == EXC_SLAVE_DEVICE_BUSY);
+	ASSERT_EQ(decision.corrupt && !decision.drop && !decision.disconnect);
+
+	dev->faults.present = 0;
+	set_fault(dev, FAULT_DROP, 0, 0, 100);
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 100);
+	rng_seed(&rng, 22);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision) == 2);
+	ASSERT_EQ(decision.drop && decision.exception_code == EXC_MEMORY_PARITY_ERROR);
+	ASSERT_EQ(!decision.disconnect);
+	arena_release(arena);
+}
+
+TEST(SilentRequestSuppressesDisconnectFault)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			resp[MODBUS_MAX_PDU];
+	u8			listen[] = { FC_DIAGNOSTICS, 0x00, 0x04, 0x00, 0x00 };
+	u8			read[]   = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+
+	set_fault(dev, FAULT_DISCONNECT, 0, 0, 100);
+	rng_seed(&rng, 23);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, listen, sizeof(listen), resp, &decision) == 0);
+	ASSERT_EQ(dev->listen_only && decision.drop && !decision.disconnect);
+
+	rng_seed(&rng, 24);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, read, sizeof(read), resp, &decision) == 0);
+	ASSERT_EQ(decision.drop && !decision.disconnect);
 	arena_release(arena);
 }

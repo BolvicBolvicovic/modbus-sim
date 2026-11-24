@@ -87,8 +87,8 @@ No response is produced for:
 - **Unknown unit**: a valid frame addressed to a unit id with no configured device is ignored.
 - **Broadcast (unit 0)**: ignored by default. With `(server (broadcast-execute on))`, a broadcast
   request is executed on every configured device (normal request handling: tick, counters, writes)
-  and no response frame is sent. Fault delays/drops are not applied because there is no response to
-  send.
+  and no response frame is sent. Fault delays/drops/disconnects are not applied because there is no
+  response to send.
 
 ### Modbus ASCII
 
@@ -128,7 +128,8 @@ No response is produced, and no PDU is dispatched, for:
 - **Unknown unit**: no configured device has that unit id.
 - **Broadcast (unit 0)**: intentionally ignored in every ASCII mode. `broadcast-execute` is rejected
   by config validation for ASCII, so a unit-0 frame is never executed on a device.
-- **Fault drop**: the configured fault decision suppresses the response.
+- **Fault drop or disconnect**: the configured fault decision suppresses the response; a
+  disconnect also closes a TCP-like connection (never a serial fd).
 
 Delay faults still hold the ASCII response until the configured delay has elapsed, without blocking
 other work in the poll loop. Unit ids must be 1-247 in ASCII modes, as in RTU; `--check` with an ASCII
@@ -147,7 +148,8 @@ socket (defaults `1502` and `"0.0.0.0"`); `bind` accepts IPv4 or IPv6 literals, 
 IPv6-only, as for Modbus TCP. Up to 32 clients are served by one poll loop, each with its own RX
 buffer and delayed-response slot; `idle-timeout-ms` closes connections with no I/O progress.
 Framing, resynchronization, error counting, unit routing, and fault behavior are identical to the
-serial ASCII modes: complete frames are answered as soon as `CR LF` arrives, multiple frames per
+serial ASCII modes, except that `(fault (kind disconnect) ...)` is accepted here and closes the
+client connection (serial modes reject it): complete frames are answered as soon as `CR LF` arrives, multiple frames per
 read and split frames work, a trailing `CR` waits for the next `LF`, and a partial frame with no byte
 for 1 s is dropped and counted as one FC 08 `0x000C` communication error per device. Broadcast
 (unit 0) is silently ignored with no PDU processing. Serial options (`baud`, `frame-gap-ms`,
@@ -162,7 +164,9 @@ MBAP framing, RTU byte-stream modes still use byte-stream framing, and `rtu-tcp`
 (`[addr][PDU][CRC lo hi]`) carried over TCP connections.
 
 The same PDU handlers, device model, unit-id routing, fault injection, and RTU CRC validation are
-used. Bad CRC and unknown unit produce no response, matching RTU behavior. Broadcast (unit 0) is
+used. A `(fault (kind disconnect) ...)` decision closes the TCP connection after processing the
+addressed frame; it is not applied to bad-CRC, unknown-unit, or broadcast frames, which stay silent
+without disconnecting. Bad CRC and unknown unit produce no response, matching RTU behavior. Broadcast (unit 0) is
 ignored by default; `(server (broadcast-execute on))` executes it on every configured device with no
 response, exactly as for RTU byte streams. `port` and `bind` select the listen socket, and
 `idle-timeout-ms` closes idle connections. `baud` and `frame-gap-ms` select RTU inter-frame timing:
@@ -215,13 +219,13 @@ Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: req
 | `0x000C` | Return Bus Communication Error Count | Increments once for every device when a bad-CRC/invalid RTU frame or a malformed/bad-LRC/timed-out ASCII frame is discarded; TCP has no bus framing errors. Exception responses do not increment this counter. Starts at 0. |
 | `0x000D` | Return Bus Exception Error Count | Increments for every exception response, including address errors. Starts at 0. |
 | `0x000E` | Return Slave Message Count | Same per-device `message_count` as `0x000B`. |
-| `0x000F` | Return Slave No Response Count | Increments whenever a response is suppressed by listen-only mode or a configured drop fault, including the listen-only and silent-restart requests themselves. Starts at 0. |
+| `0x000F` | Return Slave No Response Count | Increments whenever a response is suppressed by listen-only mode, a configured drop fault, or a disconnect fault (which implies drop), including the listen-only and silent-restart requests themselves. Starts at 0. |
 | `0x0010` | Return Slave NAK Count | Always 0; no NAK response is modeled. |
 | `0x0011` | Return Slave Busy Count | Always 0; no busy exception is modeled. |
 | `0x0012` | Return Bus Character Overrun Count | Always 0; there is no UART character stream in which an overrun can occur. |
 | `0x0014` | Clear Overrun Counter and Flag | Requires data `0x0000`, then clears the bus character-overrun counter and diagnostic register bit `0x0001`, and echoes the request. Other counters and bits are unchanged. |
 
-The shared `message_count` follows the FC 12 rule: it increments once for every request PDU delivered to a device, including requests ignored in listen-only mode, exceptions, and FC 08/11/12 requests, and wraps at 65536. FC 08 `0x0001` (both data values) and `0x000A` reset it together with the other FC 08 diagnostic counters. The FC 11/12 `com_event_count` follows its own rule (successful completions only, excluding FC 11/12 and all Restart Communications requests) and is reset by either Restart Communications data value but not by `0x000A`. All FC 08 diagnostic counters start at 0 and wrap at 65536; the no-response counter (`0x000F`) also increments when a configured drop fault suppresses a response.
+The shared `message_count` follows the FC 12 rule: it increments once for every request PDU delivered to a device, including requests ignored in listen-only mode, exceptions, and FC 08/11/12 requests, and wraps at 65536. FC 08 `0x0001` (both data values) and `0x000A` reset it together with the other FC 08 diagnostic counters. The FC 11/12 `com_event_count` follows its own rule (successful completions only, excluding FC 11/12 and all Restart Communications requests) and is reset by either Restart Communications data value but not by `0x000A`. All FC 08 diagnostic counters start at 0 and wrap at 65536; the no-response counter (`0x000F`) also increments when a configured drop or disconnect fault suppresses a response.
 
 Get Com Event Counter (FC 11 / 0x0B) is a serial-diagnostics function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x0B`, 1 byte). A normal response is `[FC 0x0B][Status Hi][Status Lo][Event Count Hi][Event Count Lo]` (5 bytes). The status is configured per device with `(com-status N)`, where `N` is `0` (device ready) or `65535` (busy); the default is `0`. Each device keeps a 16-bit communication event counter that is incremented once for each successful message completion. It is not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11). The response returns the current counter value; the counter wraps to 0 after 65535. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value). (Note: exception code 0x0B in this project means Gateway Target Device Failed to Respond; it is unrelated to FC 11.)
 
@@ -287,14 +291,22 @@ Any other function code gets exception 01.
 
 Checks run in this order: function, request shape and quantity (03), then addresses (02). Codes
 04-08 and 0A are never produced by the simulator's own validation: they exist only for fault
-injection (see [config-reference.md](config-reference.md)). An exception fault replaces the
-response that normal processing produced, including an exception response, and does not undo the
-request's effects. A corrupt fault instead flips `resp[1]` of the normal response, typically the
-byte count or the first data byte (XOR with `0xFF`, or the function code itself for a one-byte
+injection (see [config-reference.md](config-reference.md)). Fault injection is a simulator testing
+feature, not a Modbus protocol feature: a device may configure several kinds at once (at most one
+definition per kind), and each kind rolls independently for every response.
+
+A fired exception fault replaces the response that normal processing produced, including an
+exception response, and does not undo the request's effects. A fired corrupt fault instead flips
+`resp[1]` of the response, including an injected exception response; that is typically the byte
+count or the first data byte (XOR with `0xFF`, or the function code itself for a one-byte
 response). The transport computes CRC (RTU), LRC (ASCII), or the MBAP length (TCP) over the altered
 PDU, so receivers see a structurally valid frame carrying wrong data: it is never rejected for a
-CRC/LRC error and does not increment the FC08 `0x000C` communication-error counters. The request is
-still processed normally.
+CRC/LRC error and does not increment the FC08 `0x000C` communication-error counters. A drop fault
+suppresses the response, and a disconnect fault implies a drop and closes the connection on
+`tcp`, `rtu-tcp` and `ascii-tcp` (serial modes reject disconnect). A configured delay is capped at
+60000 ms. Silent responses (listen-only and requests with no response) are always
+suppressed without disconnecting. All faults change only the response: the request is still
+processed normally, and silent/broadcast/unknown-unit paths never trigger a disconnect.
 
 ## Writes are all-or-nothing
 
@@ -327,7 +339,8 @@ MBAP/TCP unit 0 is unrelated: it is only a unit id and is never broadcast.
 ## Timing
 
 - Values are computed from the clock when a request arrives. There is no background thread.
-- Responses are sent as soon as they are ready, unless a delay fault holds them.
+- Responses are sent as soon as they are ready, unless a delay fault holds them. A disconnect
+  fault closes the client connection instead of sending the suppressed response.
 - One connection handles one request at a time; many connections are served concurrently
   (up to 32). More connections are refused.
 - Optional `(server (idle-timeout-ms N))` closes a connection after `N` ms with no I/O
@@ -349,8 +362,10 @@ limited to object-dictionary SDO upload/download). All other MEI types return ex
 reserved and vendor-defined FCs.
 
 Normal validation emits exception codes 01, 02, 03, and 0B, plus FC 43 / MEI 0x0D extended
-exceptions (`AB FF ... 0D AE/CE ...`). Codes 04-08 and 0A are available only
-through `(fault (kind exception) (code N))`; 09 is reserved.
+exceptions (`AB FF ... 0D AE/CE ...`). Codes 04-08 and 0A are available only through the
+simulator's repeatable `(fault (kind exception) (code N))` injection; 09 is reserved. The other
+fault kinds (delay, drop, corrupt, disconnect) are simulator-side response manipulation, not
+Modbus exceptions, and disconnect is allowed only on TCP-like transports.
 
 Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
 created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and

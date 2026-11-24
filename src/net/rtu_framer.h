@@ -22,6 +22,7 @@ struct rtu_framer_t
 	u64		last_rx_ms;
 	u64		last_rx_us;
 	bool		have_rx;
+	bool		fault_disconnect;	/* handled frame asked the TCP transport to close */
 	bool		gap_deferred;
 	u32		gap_deferred_len;
 	pending_response_t	pending;

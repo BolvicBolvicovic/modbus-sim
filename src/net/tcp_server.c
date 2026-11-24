@@ -156,6 +156,11 @@ handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u6
 		  (pdu[0] & 0x80) ? "exception" : "ok",
 		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
 
+	if (decision.disconnect)
+	{
+		conn_close(server, conn);
+		return;
+	}
 	if (decision.drop || pdu_len == 0)
 	{
 		conn->base.last_activity_ms = now_ms;
@@ -193,6 +198,8 @@ conn_process(tcp_server_t* server, conn_t* conn)
 			return;
 
 		handle_frame(server, conn, &header, clock_now_ms());
+		if (conn->base.fd < 0)
+			return; /* a fault closed the connection */
 		conn_consume(conn, frame);
 	}
 }

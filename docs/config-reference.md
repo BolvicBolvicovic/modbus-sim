@@ -182,7 +182,7 @@ ignored in all ASCII modes; `broadcast-execute` is rejected there at load time, 
 | `(user-application-name "Text")` | MEI 14 object 0x06, 0-244 bytes | absent |
 | `(device-id-object ID "Text")` | Repeatable extended Read Device Identification object; `ID` is decimal 128-255 (`0x80-0xFF`), text is 1-244 bytes | none |
 | `(note "Text")` | A comment kept for humans. Can be repeated. Ignored by the program | - |
-| `(fault ...)` | One fault, see below | none |
+| `(fault ...)` | Repeatable fault, one definition per kind, see below | none |
 | `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |
 | `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
 | `(canopen-object ...)` | Repeatable CANopen object used by FC 43 MEI `0x0D` SDO uploads/downloads, see below | none |
@@ -347,12 +347,13 @@ most 8192 points total (`DEVICE_MAX_POINTS`); a count that would exceed this is 
 
 ## `(fault ...)`
 
-A device can have **one** fault. It applies to every response of that device, each time with
-the chance given by `percent`.
+A device can have several faults. `(fault ...)` is repeatable, but **only one definition per
+kind** is allowed: a second `(fault (kind X) ...)` for the same kind is rejected at config load.
+Each kind rolls independently with the chance given by its `percent`.
 
 | Entry | Meaning | Default |
 |---|---|---|
-| `(kind delay)`, `(kind drop)`, `(kind exception)` or `(kind corrupt)` | required. `delay` sends the response late, `drop` never sends it, `exception` replaces it with a Modbus exception, `corrupt` flips a byte of the PDU response | - |
+| `(kind delay)`, `(kind drop)`, `(kind exception)`, `(kind corrupt)` or `(kind disconnect)` | required. `delay` sends the response late, `drop` never sends it, `exception` replaces it with a Modbus exception, `corrupt` flips a byte of the PDU response, `disconnect` drops the response and closes the client connection | - |
 | `(delay-ms N)` | for `delay` only: how late, 1-60000 ms. Required for `delay`, rejected for other kinds | - |
 | `(code N)` | for `exception` only: exception code to return, one of 1-8, 10 or 11 (decimal). Required for `exception`, rejected for other kinds; 9 is reserved | - |
 | `(percent N)` | chance per response, 0-100 | `100` |
@@ -362,11 +363,24 @@ the chance given by `percent`.
 (fault (kind drop) (percent 20))                    ; 1 in 5 answers never arrives
 (fault (kind exception) (code 4) (percent 100))     ; every answer becomes exception 04
 (fault (kind corrupt) (percent 50))                 ; half of the answers get a flipped PDU byte
+(fault (kind disconnect) (percent 10))              ; 1 in 10 answers closes the connection
 ```
 
-- Delays do not block the server: other clients are served while a response waits.
+`(kind disconnect)` is valid only for TCP-like transports (`tcp`, `rtu-tcp`, `ascii-tcp`).
+It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty` and `ascii-device`; serial
+server fds are never closed by a fault.
+
+- Delays do not block the server: other clients are served while a response waits. A configured
+  delay is capped at 60000 ms.
 - A dropped response means the client sees a timeout. The write or read itself **still
   happens** on the device, like a real device whose answer got lost.
+- A disconnect implies a dropped response and additionally closes the connection after the
+  request has been processed. A plain `drop` only suppresses the response and leaves the
+  connection open. Silent responses (listen-only mode and requests that produce no response)
+  never close the connection.
+- Fault kinds combine on the same response: a fired exception replaces the response, and `corrupt`
+  still applies to that injected exception response. A dropped response suppresses whatever the
+  other kinds produced.
 - Exception and corrupt faults also affect only the response: the request is still processed
   normally (writes apply, counters and ramp timing update). Exception faults replace the whole
   response with `[FC|0x80][code]`. Corrupt faults flip `resp[1]`, typically the byte count or the
@@ -500,11 +514,12 @@ is wrong and show the entry. Common ones:
 | `server: broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)` | ASCII never executes broadcasts; remove the entry |
 | `server: (path ...) is required in rtu-device and ascii-device modes` | Add `(path "PATH")` |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
-| `device has more than one (fault ...)` | Only one fault per device |
+| `only one is allowed per kind` | A fault kind may be defined only once per device; combine different kinds instead |
 | `missing required option (code ...)` | `(kind exception)` needs `(code N)` |
 | `code is only valid for kind exception` | Remove `(code ...)` from other fault kinds |
 | `delay-ms is only valid for kind delay` | Remove `(delay-ms ...)` from other fault kinds |
 | `code 9 is reserved` | Use one of 1-8, 10 or 11 |
+| `(fault (kind disconnect)) is not valid in ... mode` | Use `tcp`, `rtu-tcp` or `ascii-tcp`, or remove the fault |
 | `unknown top-level form` | Only `(server ...)` and `(device ...)` are allowed at the top |
 
 ## A complete example

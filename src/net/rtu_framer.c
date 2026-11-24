@@ -120,6 +120,7 @@ handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
 		return; /* unknown unit: no response */
 
 	resp_len = net_handle_pdu(dev, ctx->rng, now_ms, pdu, pdu_len, resp, &decision);
+	framer->fault_disconnect |= decision.disconnect;
 	{
 		const char* result = resp_len == 0 ? "no response" :
 				     (resp[0] & 0x80) ? "exception" : "ok";

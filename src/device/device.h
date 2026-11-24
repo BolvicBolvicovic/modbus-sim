@@ -168,7 +168,7 @@ struct device_t
 	u16		diag_overrun_count;	/* FC 08 subfunction 0x0012 */
 	bool		listen_only;		/* FC 08 subfunction 0x0004 */
 	u64		start_ms;		/* ramps count their time from here */
-	fault_t		fault;
+	fault_set_t	faults;
 	arena_t*	arena;			/* backing arena for dynamic config storage */
 	u32		point_count;
 	point_t*	points;			/* DEVICE_MAX_POINTS entries */

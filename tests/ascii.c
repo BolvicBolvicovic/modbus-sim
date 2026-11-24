@@ -17,6 +17,16 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static void
+set_fault(device_t* dev, fault_kind_t kind, u32 delay_ms, u32 percent)
+{
+	dev->faults.by_kind[kind] = (fault_t){
+		.delay_ms = delay_ms,
+		.percent  = percent,
+	};
+	dev->faults.present |= FAULT_BIT(kind);
+}
+
 TEST(AsciiLrcKnownVector)
 {
 	/* Modbus ASCII spec example: 01 03 00 00 00 0A -> LRC F2. */
@@ -583,9 +593,7 @@ TEST(AsciiServerPendingDelayedResponseHangupStopsWithoutSpin)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->fault.kind     = FAULT_DELAY;
-	dev->fault.delay_ms = 500;
-	dev->fault.percent  = 100;
+	set_fault(dev, FAULT_DELAY, 500, 100);
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(ascii_child_start(&child, devices, 1));
@@ -640,9 +648,7 @@ TEST(AsciiServerEofAfterDelayedRequestSendsResponse)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->fault.kind     = FAULT_DELAY;
-	dev->fault.delay_ms = 200;
-	dev->fault.percent  = 100;
+	set_fault(dev, FAULT_DELAY, 200, 100);
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(ascii_child_start(&child, devices, 1));
@@ -749,9 +755,7 @@ TEST(AsciiServerDelayedResponseKeepsQueuedRequest)
 	bool		ok = false;
 
 	ASSERT_EQ(dev1 != NULL && dev2 != NULL);
-	dev1->fault.kind     = FAULT_DELAY;
-	dev1->fault.delay_ms = 1200;
-	dev1->fault.percent  = 100;
+	set_fault(dev1, FAULT_DELAY, 1200, 100);
 	{
 		device_t* devices[] = { dev1, dev2 };
 		ASSERT_EQ(ascii_child_start(&child, devices, 2));

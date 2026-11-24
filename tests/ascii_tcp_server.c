@@ -274,6 +274,24 @@ TEST(AsciiTcpDelayedFaultDoesNotExpireQueuedFrame)
 	server_stop();
 }
 
+TEST(AsciiTcpDisconnectFaultClosesClient)
+{
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 pdu[MODBUS_MAX_PDU], addr = 0;
+	u32 pdu_len = 0;
+	int fd;
+
+	server_start("", "(device (unit-id 1) (holding 0 (static 42))\n"
+		     "  (fault (kind disconnect) (percent 100)))");
+	fd = connect_port(AF_INET, 100, 2000);
+	ASSERT(fd >= 0);
+	ASSERT_EQ(send_ascii_request(fd, 1, req, sizeof(req)));
+	ASSERT_EQ(ts_wait_eof(fd, 2000));
+	ASSERT_EQ(!recv_ascii_response(fd, &addr, pdu, &pdu_len, 200));
+	close(fd);
+	server_stop();
+}
+
 TEST(AsciiTcpServesIpv6Loopback)
 {
 	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
