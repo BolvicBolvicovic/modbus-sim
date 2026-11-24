@@ -15,6 +15,15 @@ endif
 # BUILD=dev skips optimization and _FORTIFY_SOURCE (which warns without -O) and
 # uses separate objects, so switching back and forth never rebuilds blindly.
 BUILD       ?= prod
+
+# `dev` selects dev mode for the whole invocation; nested makes (asan, commands)
+# must inherit it too. Without this, the parent make would rebuild the forwarded
+# goals in prod mode after the sub-make.
+ifneq ($(filter dev,$(MAKECMDGOALS)),)
+override BUILD := dev
+endif
+export BUILD
+
 ifeq ($(BUILD),dev)
 DEV_OBJ_TAG   = .dev
 OPT_FLAGS     = -O0 -g
@@ -118,9 +127,14 @@ ALL_DEPS    = $(ALL_OBJS:.o=.d)
 
 all: $(BIN)
 
-# Fast local build: make -j$(nproc) dev [tests|clean|...].
+# Fast local build: make -j$(nproc) dev [tests|clean|...]. With no other goal,
+# `dev` builds the default binary; with extra goals it is just a mode switch.
+ifeq ($(filter-out dev,$(MAKECMDGOALS)),)
+dev: all
+else
 dev:
-	$(MAKE) BUILD=dev $(filter-out $@,$(MAKECMDGOALS))
+	@:
+endif
 
 $(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
