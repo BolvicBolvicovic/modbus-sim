@@ -542,16 +542,7 @@ tcp_server_run(const tcp_server_options_t* options)
 			 options->tls.require_client_certificate ? "required" : "optional");
 	serve_loop(&server);
 
-	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
-	{
-		if (server.conns[i].base.fd >= 0)
-		{
-			if (server.conns[i].tls)
-				net_tls_conn_close(server.conns[i].tls);
-			close(server.conns[i].base.fd);
-		}
-	}
-	close(server.pool.listen_fd);
+	net_tcp_pool_close_all(&server.pool);
 	net_tls_ctx_destroy(server.tls);
 	LOG_INFO("stopped");
 	return 0;

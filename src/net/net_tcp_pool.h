@@ -49,6 +49,10 @@ void	net_tcp_pool_accept(net_tcp_pool_t* pool);
 void	net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn);
 void	net_tcp_pool_close_idle(net_tcp_pool_t* pool, u64 now_ms);
 
+/* Closes every active connection (through on_close) and the listener. Safe to
+ * call repeatedly: closed slots and listeners are left at -1. */
+void	net_tcp_pool_close_all(net_tcp_pool_t* pool);
+
 /* Fills entry 0 with the listener and one entry per active connection.
  * Callers refine events and add their own deadlines afterwards. */
 u32	net_tcp_pool_build_poll(net_tcp_pool_t* pool, struct pollfd* fds,

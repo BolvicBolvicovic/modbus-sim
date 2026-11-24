@@ -422,13 +422,7 @@ ascii_tcp_server_run(const ascii_tcp_server_options_t* options)
 		}
 	}
 
-	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
-	{
-		if (server.conns[i].base.fd >= 0)
-			close(server.conns[i].base.fd);
-	}
-	if (server.pool.listen_fd >= 0)
-		close(server.pool.listen_fd);
+	net_tcp_pool_close_all(&server.pool);
 	LOG_INFO("ASCII-over-TCP stopped");
 	return 0;
 }

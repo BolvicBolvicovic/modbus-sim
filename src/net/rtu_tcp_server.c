@@ -53,14 +53,6 @@ rtu_tcp_init_ctx(rtu_tcp_server_t* server)
 	};
 }
 
-static bool
-gap_due(rtu_tcp_conn_t* conn, u64 now_ms, u32 gap_ms)
-{
-	rtu_framer_t* f = &conn->framer;
-	return !f->pending.active && f->have_rx && f->rx_len > 0 &&
-	       (conn->read_closed || rtu_gap_elapsed(now_ms, f->last_rx_ms, gap_ms));
-}
-
 static void
 conn_close(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
@@ -156,19 +148,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	f->last_rx_us = now_us;
 	f->have_rx = true;
 	conn->base.last_activity_ms = now_ms;
-	if (server->options.frame_gap_ms == 0 &&
-	    server->options.baud != 0 &&
-	    f->gap_deferred &&
-	    f->rx_len > f->gap_deferred_len)
-	{
-		bool incomplete = rtu_framer_process(f, &ctx, now_ms);
-		f->have_rx = f->rx_len > 0;
-		if (!incomplete)
-		{
-			f->gap_deferred = false;
-			f->gap_deferred_len = 0;
-		}
-	}
+	rtu_framer_on_new_data(f, &ctx, now_ms);
 }
 
 static void
@@ -294,7 +274,8 @@ conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, short revent
 		conn_handle_hangup(server, conn);
 		return;
 	}
-	if (conn->base.fd >= 0 && gap_due(conn, clock_now_ms(), server->gap_ms))
+	if (conn->base.fd >= 0 &&
+	    rtu_framer_gap_due(&conn->framer, conn->read_closed, clock_now_ms(), server->gap_ms))
 		conn_process_gap_due(server, conn, clock_now_ms(), clock_now_us());
 }
 
@@ -358,7 +339,8 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 		{
 			rtu_tcp_conn_t* conn = &server.conns[i];
 
-			if (conn->base.fd >= 0 && gap_due(conn, now_ms, server.gap_ms))
+			if (conn->base.fd >= 0 &&
+			    rtu_framer_gap_due(&conn->framer, conn->read_closed, now_ms, server.gap_ms))
 				conn_process_gap_due(&server, conn, now_ms, clock_now_us());
 		}
 
@@ -383,13 +365,7 @@ rtu_tcp_server_run(const rtu_tcp_server_options_t* options)
 		}
 	}
 
-	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
-	{
-		if (server.conns[i].base.fd >= 0)
-			close(server.conns[i].base.fd);
-	}
-	if (server.pool.listen_fd >= 0)
-		close(server.pool.listen_fd);
+	net_tcp_pool_close_all(&server.pool);
 	LOG_INFO("RTU-over-TCP stopped");
 	return 0;
 }

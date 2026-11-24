@@ -50,14 +50,6 @@ rtu_server_init_ctx(rtu_server_t* server)
 }
 
 static bool
-rtu_gap_due(rtu_server_t* server, u64 now_ms, u32 gap_ms)
-{
-	rtu_framer_t* f = &server->framer;
-	return !f->pending.active && f->have_rx && f->rx_len > 0 &&
-	       (server->read_closed || rtu_gap_elapsed(now_ms, f->last_rx_ms, gap_ms));
-}
-
-static bool
 read_available(rtu_server_t* server, u64 now_ms)
 {
 	ssize_t	got;
@@ -92,19 +84,7 @@ read_available(rtu_server_t* server, u64 now_ms)
 	f->last_rx_ms = now_ms;
 	f->last_rx_us = now_us;
 	f->have_rx = true;
-	if (server->options.frame_gap_ms == 0 &&
-	    server->options.baud != 0 &&
-	    f->gap_deferred &&
-	    f->rx_len > f->gap_deferred_len)
-	{
-		bool incomplete = rtu_framer_process(f, &server->ctx, now_ms);
-		f->have_rx = f->rx_len > 0;
-		if (!incomplete)
-		{
-			f->gap_deferred = false;
-			f->gap_deferred_len = 0;
-		}
-	}
+	rtu_framer_on_new_data(f, &server->ctx, now_ms);
 	return true;
 }
 
@@ -243,7 +223,8 @@ rtu_log_startup(const rtu_server_options_t* options, u32 gap_ms)
 static void
 rtu_process_gap_due(rtu_server_t* server, u64 now_ms)
 {
-	if (!rtu_gap_due(server, now_ms, rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud)))
+	if (!rtu_framer_gap_due(&server->framer, server->read_closed, now_ms,
+	    rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud)))
 		return;
 	rtu_framer_on_gap_due(&server->framer, &server->ctx, now_ms, clock_now_us());
 }
