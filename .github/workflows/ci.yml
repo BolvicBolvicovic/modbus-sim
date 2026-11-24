@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+env:
+  CC: ccache clang
+  LDFLAGS: -pie -Wl,-z,relro,-z,now -fuse-ld=mold
+  CCACHE_DIR: .ccache
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -14,11 +19,18 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install OpenSSL development files
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Install OpenSSL development files, ccache and mold
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev ccache mold
+
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-clang-${{ hashFiles('**/*.c', '**/*.h', 'Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-clang-
 
       - name: Build
-        run: make
+        run: make -j$(nproc)
 
       - name: Dependency direction check
         run: |
@@ -29,7 +41,7 @@ jobs:
         run: ./tools/run_tests.sh --self-test
 
       - name: Unit tests
-        run: make tests
+        run: make -j$(nproc) tests
 
       - name: Check all profiles
         run: |
@@ -41,7 +53,7 @@ jobs:
         run: ./tools/check_doc_examples.sh ./modbus-sim
 
       - name: Sanitizers (ASan + UBSan, vendored s7 excluded)
-        run: make asan
+        run: make -j$(nproc) asan
 
   no-tls:
     runs-on: ubuntu-latest
@@ -49,11 +61,21 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      - name: Install ccache and mold
+        run: sudo apt-get update && sudo apt-get install -y ccache mold
+
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-clang-${{ hashFiles('**/*.c', '**/*.h', 'Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-clang-
+
       - name: Build without TLS
-        run: make WITH_TLS=0
+        run: make -j$(nproc) WITH_TLS=0
 
       - name: Unit tests without TLS
-        run: make WITH_TLS=0 tests
+        run: make -j$(nproc) WITH_TLS=0 tests
 
       - name: Check all profiles without TLS
         run: |
@@ -64,37 +86,57 @@ jobs:
       - name: Check doc examples without TLS
         run: ./tools/check_doc_examples.sh ./modbus-sim
 
-  clang:
+  dev:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      BUILD: dev
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install OpenSSL development files
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Install OpenSSL development files, ccache and mold
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev ccache mold
 
-      - name: Build (clang)
-        run: make CC=clang
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-clang-${{ hashFiles('**/*.c', '**/*.h', 'Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-clang-
 
-      - name: Unit tests (clang)
-        run: make CC=clang tests
+      - name: Build (dev)
+        run: make -j$(nproc)
 
-      - name: Check all profiles (clang)
+      - name: Unit tests (dev)
+        run: make -j$(nproc) tests
+
+      - name: Check all profiles (dev)
         run: |
           for profile in profiles/*.scm; do
             ./modbus-sim --check "$profile"
           done
 
+      - name: Check doc examples (dev)
+        run: ./tools/check_doc_examples.sh ./modbus-sim
+
+      - name: Sanitizers (dev)
+        run: make -j$(nproc) asan
+
   analyzer:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CC: clang
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install OpenSSL development files
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Install OpenSSL development files and clang static analyzer
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev clang-tools
 
-      - name: Static analysis (gcc -fanalyzer)
+      # scan-build wraps the build with ccc-analyzer, so do not put ccache in CC here.
+      # Prebuild vendored s7 normally: it is too large to analyze and is excluded from checks.
+      - name: Static analysis (clang scan-build)
         run: |
           make clean
-          make CC=gcc CFLAGS='-std=gnu11 -O2 -g -Werror -Wextra -Wall -Wformat=2 -Wshadow -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -fanalyzer' LDFLAGS='-pie -Wl,-z,relro,-z,now'
+          make -j$(nproc) third_party/s7/s7.o
+          scan-build --status-bugs --use-cc clang --exclude third_party/s7 -o scan-output make -j$(nproc)

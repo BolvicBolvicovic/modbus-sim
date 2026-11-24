@@ -181,7 +181,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	const char*	bind              = NULL;
 	const char*	path              = NULL;
 #if WITH_TLS
-	s7_pointer	tls_form          = s7_nil(ctx->sc);
+	s7_pointer	tls_form;
 #endif
 	bool		port_given        = false;
 

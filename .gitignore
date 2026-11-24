@@ -6,4 +6,7 @@ modbus-sim-tests
 modbus-sim-asan
 modbus-sim-asan-tests
 compile_commands.json
+.build-mode
+.ccache/
+scan-output/
 .worktrees/

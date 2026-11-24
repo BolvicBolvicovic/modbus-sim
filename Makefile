@@ -7,8 +7,26 @@ ASAN_BIN    = modbus-sim-asan
 ASAN_TESTS  = modbus-sim-asan-tests
 
 CC          ?= cc
-CFLAGS      ?= -std=gnu11 -O2 -g -Werror -Wextra -Wall -Wformat=2 -Wshadow -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE
+
+# BUILD=dev skips optimization and _FORTIFY_SOURCE (which warns without -O) and
+# uses separate objects, so switching back and forth never rebuilds blindly.
+BUILD       ?= prod
+ifeq ($(BUILD),dev)
+DEV_OBJ_TAG   = .dev
+OPT_FLAGS     = -O0 -g
+FORTIFY_FLAGS =
+else ifeq ($(BUILD),prod)
+DEV_OBJ_TAG   =
+OPT_FLAGS     = -O2 -g
+FORTIFY_FLAGS = -D_FORTIFY_SOURCE=2
+else
+$(error BUILD must be dev or prod (got '$(BUILD)'))
+endif
+
+CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow $(FORTIFY_FLAGS) -fstack-protector-strong -fPIE
 LDFLAGS     ?= -pie -Wl,-z,relro,-z,now
+DEV_CC      ?= ccache clang
+DEV_LDFLAGS ?= -pie -Wl,-z,relro,-z,now -fuse-ld=mold
 DEPFLAGS    = -MMD -MP
 INC         = -I. -Isrc
 PKG_CONFIG  ?= pkg-config
@@ -46,16 +64,16 @@ ifeq ($(WITH_TLS),0)
 TLS_OBJ_TAG = .notls
 endif
 
-# SAN=1 builds separate .asan.o objects and links the sanitizer runtimes.
+# SAN=1 and BUILD=dev build separate objects and link their runtimes/flags.
 SAN ?= 0
 
 ifeq ($(SAN),1)
-OBJEXT      = $(TLS_OBJ_TAG).asan.o
+OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG).asan.o
 BIN         = $(ASAN_BIN)
 TESTS       = $(ASAN_TESTS)
 SAN_FLAGS   = -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=undefined,float-cast-overflow -fno-omit-frame-pointer
 else
-OBJEXT      = $(TLS_OBJ_TAG).o
+OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG).o
 SAN_FLAGS   =
 endif
 
@@ -80,37 +98,49 @@ TEST_OBJS   = $(SRCS:.c=$(OBJEXT)) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OB
 
 # s7 is third-party code: built with its own relaxed flags, without sanitizers.
 # UBSan reports a misaligned load in its local_strncmp (third_party/s7/s7.c:4028).
+# It only parses config at startup, so -O0 avoids paying most of the build cost.
 S7_OBJ      = third_party/s7/s7$(OBJEXT)
-S7_FLAGS    = -std=gnu11 -O2 -w -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0
+S7_FLAGS    = -std=gnu11 -O0 -w -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0
+
+# Relink when switching BUILD even though the binary name stays the same.
+BUILD_STAMP = .build-mode
 
 # -MMD writes a .d file next to every object; -MP adds dummy rules so renaming a
 # header does not break the build. Including them makes header edits trigger rebuilds.
 DEPS        = $(foreach obj,$(OBJS) $(TEST_OBJS) $(S7_OBJ),$(basename $(obj)).d)
 # Include every object variant so clean always removes the other configurations.
 ALL_SRCS    = $(TREE_SRCS) $(MAIN) $(TEST_MAIN) $(ALL_TEST_SRCS) third_party/s7/s7.c
-ALL_OBJS    = $(ALL_SRCS:.c=.o) $(ALL_SRCS:.c=.notls.o) $(ALL_SRCS:.c=.asan.o) $(ALL_SRCS:.c=.notls.asan.o)
-ALL_DEPS    = $(ALL_SRCS:.c=.d) $(ALL_SRCS:.c=.notls.d) $(ALL_SRCS:.c=.asan.d) $(ALL_SRCS:.c=.notls.asan.d)
+ALL_OBJ_SUFFIXES = .o .notls.o .asan.o .notls.asan.o .dev.o .dev.notls.o .dev.asan.o .dev.notls.asan.o
+ALL_OBJS    = $(foreach suffix,$(ALL_OBJ_SUFFIXES),$(ALL_SRCS:.c=$(suffix)))
+ALL_DEPS    = $(ALL_OBJS:.o=.d)
 
 all: $(BIN)
 
-$(BIN): $(OBJS) $(S7_OBJ)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $^ -o $@ $(LIBS)
+# Fast local build: make -j$(nproc) dev [tests|clean|...].
+dev:
+	$(MAKE) CC='$(DEV_CC)' LDFLAGS='$(DEV_LDFLAGS)' BUILD=dev $(filter-out $@,$(MAKECMDGOALS))
+
+$(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 tests: $(TESTS) $(BIN)
 	./tools/run_tests.sh ./$(TESTS)
 
-$(TESTS): $(TEST_OBJS) $(S7_OBJ)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $^ -o $@ $(LIBS)
+$(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(S7_OBJ)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LDFLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD_STAMP): FORCE
+	@printf '%s\n' '$(BUILD)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(BUILD)' > $@
 
 tests/%$(OBJEXT): tests/%.c
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) -Ivlib -c $< -o $@
 
 # vtest.c relies on a newer gcc default for bool/true/false; force-include it so vlib stays untouched.
 vlib/vtest$(OBJEXT): vlib/vtest.c
-	$(CC) -std=gnu11 -O2 -g $(SAN_FLAGS) $(TLS_CFLAGS) -include stdbool.h -Wno-unused-function $(DEPFLAGS) -Ivlib -c $< -o $@
+	$(CC) -std=gnu11 $(OPT_FLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) -include stdbool.h -Wno-unused-function $(DEPFLAGS) -Ivlib -c $< -o $@
 
 %$(OBJEXT): %.c
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
@@ -122,7 +152,7 @@ asan:
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MODBUS_SIM_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
 
 clean:
-	rm -f $(ALL_OBJS) $(ALL_DEPS) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS)
+	rm -f $(ALL_OBJS) $(ALL_DEPS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS)
 
 distclean: clean
 
@@ -133,4 +163,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all tests asan clean distclean re commands
+.PHONY: all dev tests asan clean distclean re commands FORCE

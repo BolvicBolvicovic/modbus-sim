@@ -778,7 +778,6 @@ read_device_identification(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		{
 			if (dev->device_id[object_id][0] == '\0')
 				return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-			value = dev->device_id[object_id];
 		}
 		else
 		{

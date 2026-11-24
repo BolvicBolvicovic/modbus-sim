@@ -27,6 +27,8 @@ make                                   # builds ./modbus-sim (TLS enabled when O
 ./tools/modbus_probe.py holding 0 2    # -> [42, <a value that moves>]
 ```
 
+Use `make -j$(nproc)` for a faster clean build; compilation is safe to parallelize.
+
 Check a config without starting the server:
 
 ```bash
@@ -40,6 +42,25 @@ from instrumentation). The suite includes network integration tests that start t
 loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 ### Build options
+
+`BUILD` controls optimization (`prod` by default, matching CI):
+
+| Value | Effect |
+|---|---|
+| `make` / `make BUILD=prod` | `-O2` with `_FORTIFY_SOURCE=2`; the hardened production build |
+| `make BUILD=dev` | `-O0` without `_FORTIFY_SOURCE`; faster rebuilds, with separate object files and automatic relinking when switching modes |
+
+The vendored s7 config parser is always built at `-O0`: it only runs at startup and dominates compile
+time. `CFLAGS` still overrides the complete flag set if you need a custom build.
+
+For the fastest local iteration, install `ccache` and `mold` and use:
+
+```bash
+make -j$(nproc) dev          # clang + ccache + mold, BUILD=dev
+make -j$(nproc) dev tests    # same setup, plus the test suite
+```
+
+That is shorthand for `CC='ccache clang' LDFLAGS='-pie -Wl,-z,relro,-z,now -fuse-ld=mold' BUILD=dev`.
 
 `WITH_TLS` controls the OpenSSL dependency (`auto` by default):
 
