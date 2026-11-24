@@ -27,6 +27,7 @@ enum server_mode_t
 	SERVER_MODE_RTU_TCP,
 	SERVER_MODE_ASCII_PTY,
 	SERVER_MODE_ASCII_DEVICE,
+	SERVER_MODE_ASCII_TCP,
 };
 
 /* Name: config_t

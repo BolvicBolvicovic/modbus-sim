@@ -29,7 +29,7 @@ produce an error message.
 
 ## `(server ...)`
 
-`(mode NAME)` selects the transport. There are six modes; device modes require `(path "PATH")`:
+`(mode NAME)` selects the transport. There are seven modes; device modes require `(path "PATH")`:
 
 | Mode | Transport | `(path ...)` |
 |---|---|---|
@@ -39,6 +39,7 @@ produce an error message.
 | `rtu-tcp` | Modbus RTU frames on a TCP listen socket (not MBAP) | forbidden |
 | `ascii-pty` | Modbus ASCII on a new Linux PTY (slave path is printed at startup) | forbidden |
 | `ascii-device` | Modbus ASCII on an existing byte-stream device | required |
+| `ascii-tcp` | Modbus ASCII frames on a TCP listen socket (not MBAP) | forbidden |
 
 Only the entries listed for the selected mode are accepted. `mode` is allowed in every mode; an entry
 that is present but not allowed is rejected at load time, even if its value would be the default
@@ -46,10 +47,10 @@ that is present but not allowed is rejected at load time, even if its value woul
 
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
-| `(port N)` | TCP port, 1-65535 | `1502` | `tcp`, `rtu-tcp` |
-| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack) | `"0.0.0.0"` | `tcp`, `rtu-tcp` |
+| `(port N)` | TCP port, 1-65535 | `1502` | `tcp`, `rtu-tcp`, `ascii-tcp` |
+| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack) | `"0.0.0.0"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
-| `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp` |
+| `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
 | `(frame-gap-ms N)` | Explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) | `rtu-pty`, `rtu-device`, `rtu-tcp` |
 | `(strict-t15 on\|off)` | Opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Never applied to RTU-over-TCP | `off` | `rtu-pty`, `rtu-device` |
@@ -82,6 +83,10 @@ Examples (each is a complete `(server ...)` block; a config file may contain onl
 (server (mode ascii-pty) (data-bits 7) (parity even) (stop-bits 1)) ; 7E1 line
 ```
 
+```scheme
+(server (mode ascii-tcp) (port 1502) (bind "127.0.0.1") (idle-timeout-ms 5000))
+```
+
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
 existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are
 `:` + hex `[addr][PDU][LRC]` + `CR LF`, delimited by `CR LF` rather than inter-frame silence, so
@@ -92,9 +97,11 @@ bytes for 1 s is dropped. Discarded or undecodable ASCII frames increment the FC
 communication error counter (`0x000C`) on every device. `(baud N)` in ASCII only changes the line
 speed. ASCII tty line settings default to 8N1; select 7E1 explicitly with
 `(data-bits 7) (parity even) (stop-bits 1)` when talking to a master that uses the serial-line
-default. These settings never change ASCII framing, and there is no ASCII-over-TCP mode. Unit-0
-broadcast frames are silently ignored in ASCII modes;
-`broadcast-execute` is rejected there at load time, including by `--check`.
+default. These settings never change ASCII framing. They apply only to `ascii-pty` and
+`ascii-device`; `ascii-tcp` carries the same CRLF-delimited frames on a TCP byte stream and accepts
+only `mode`, `port`, `bind`, `seed`, and `idle-timeout-ms`. Unit-0 broadcast frames are silently
+ignored in all ASCII modes; `broadcast-execute` is rejected there at load time, including by
+`--check`.
 
 ## `(device ...)`
 
@@ -143,9 +150,9 @@ served in ascending ID order. Configuring any extended object raises FC 43 Confo
 (CANopen General Reference) is not supported and returns exception 01. See
 [modbus-support.md](modbus-support.md) for response semantics.
 
-Unit ids must be different between devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty` and
-`ascii-device` modes, unit ids 0 and 248-255 are rejected at startup and by `--check` because address
-0 is broadcast and 248-255 are reserved by the Modbus serial specification.
+Unit ids must be different between devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`,
+`ascii-device` and `ascii-tcp` modes, unit ids 0 and 248-255 are rejected at startup and by
+`--check` because address 0 is broadcast and 248-255 are reserved by the Modbus serial specification.
 
 ## Data points
 

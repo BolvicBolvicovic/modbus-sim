@@ -6,7 +6,8 @@
  TCP   client ──MBAP+PDU───────► net/tcp_server  ──┐
                                                    ├─► modbus/pdu ──► device/device ──► data tables
  RTU   client ──addr+PDU+CRC───► net/rtu_server  ──┤                        ▲
- ASCII client ──:hex+LRC+CRLF──► net/ascii_server  ┘          device_tick() │ ramps → registers
+ ASCII client ──:hex+LRC+CRLF──► net/ascii_server  ├          device_tick() │ ramps → registers
+ ASCII/TCP client ──same frames──► net/ascii_tcp_server ┘
                       │                                       fault_decide()
                       ▼
                device/fault (drop / delay)
@@ -18,8 +19,9 @@
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
 2. `net/tcp_server` (Modbus TCP MBAP), `net/rtu_server` (RTU CRC-framed byte stream),
-   `net/ascii_server` (ASCII hex/LRC-framed byte stream), or `net/rtu_tcp_server` (RTU CRC-framed
-   over TCP) finds the device by unit/address and calls `modbus_handle_pdu`.
+   `net/ascii_server` (ASCII hex/LRC-framed byte stream), `net/ascii_tcp_server` (the same ASCII
+   framing over TCP), or `net/rtu_tcp_server` (RTU CRC-framed over TCP) finds the device by
+   unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
 4. The transport asks `fault_decide` whether to drop or delay the response.
@@ -31,7 +33,7 @@
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
 | `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `rtu_server`, `ascii_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, RTU byte stream, ASCII byte stream, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
@@ -101,7 +103,18 @@ server owns the bounded RX buffer, fd polling, EOF/hangup behavior, and delayed 
 A frame is complete at `CR LF`, so complete frames are dispatched immediately without RTU timing;
 several frames in one `read()` are handled in order. Malformed frames, bad LRC, broadcast, and
 unknown units never reach PDU dispatch and produce no response. Fault drop suppresses the response;
-delay faults reuse the due-time poll pattern. There is no ASCII-over-TCP server.
+delay faults reuse the due-time poll pattern. Serial line settings apply only here.
+
+### ASCII-over-TCP (`net/ascii_tcp_server.c`)
+
+Single-threaded `poll()` TCP listen loop with up to 32 connections. Each connection borrows the
+devices, owns a bounded `MODBUS_ASCII_MAX_FRAME` RX buffer and one delayed-response slot, and uses
+the same `modbus/ascii` scanner/codec as the serial ASCII server. Framing semantics are identical:
+CRLF-delimited frames dispatch immediately, partial frames time out after 1 s, inter-frame
+whitespace is skipped, a second colon resynchronizes, and malformed/bad-LRC frames count one FC08
+`0x000C` error per device. Broadcast (unit 0) and unknown units are silent. `bind` supports IPv4/IPv6
+literals and `idle-timeout-ms` closes idle clients. This is an explicit separate transport selected
+by `(server (mode ascii-tcp))`; it is not Modbus TCP (MBAP) and does not alter serial ASCII behavior.
 
 ### RTU-over-TCP (`net/rtu_tcp_server.c`)
 

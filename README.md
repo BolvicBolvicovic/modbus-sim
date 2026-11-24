@@ -43,7 +43,7 @@ loopback; set `MODBUS_SIM_BIN` to test a different binary.
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP, Modbus RTU (PTY/device byte stream), and Modbus ASCII (PTY/device byte stream, serial only). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
+| Protocol | Modbus TCP, Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
 | Fault | One fault per device: **delay** responses or **drop** them, with a chance in percent. |
@@ -84,7 +84,7 @@ default here is **1502**.
 
 ## Transports
 
-`(server (mode NAME))` selects one of six modes:
+`(server (mode NAME))` selects one of seven modes:
 
 | Mode | Transport | Server entries allowed with `mode` |
 |---|---|---|
@@ -94,6 +94,7 @@ default here is **1502**.
 | `rtu-tcp` | Modbus RTU frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
 | `ascii-pty` | Modbus ASCII over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `data-bits`, `parity`, `stop-bits` |
 | `ascii-device` | Modbus ASCII over an existing byte-stream device | `path`, plus the `ascii-pty` entries |
+| `ascii-tcp` | Raw Modbus ASCII frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms` |
 
 `mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
 Any other entry is rejected at load time, even when its value is the default. See
@@ -123,11 +124,16 @@ Any other entry is rejected at load time, even when its value is the default. Se
 (server (mode ascii-pty) (data-bits 7) (parity even) (stop-bits 1)) ; 7E1 line
 ```
 
+```scheme
+; Modbus ASCII over TCP (raw ASCII frames, not MBAP)
+(server (mode ascii-tcp) (port 1502) (bind "0.0.0.0") (idle-timeout-ms 5000))
+```
+
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC and unknown unit produce no response. Broadcast
 (unit 0) requests are ignored by default. `broadcast-execute` (allowed in `rtu-pty`, `rtu-device`
 and `rtu-tcp`) makes them execute on every configured device and never send a response. ASCII modes
 never execute broadcasts and reject `broadcast-execute` at load time. Unit ids 0 and 248-255 are
-rejected in all serial modes because 0 is broadcast and 248-255 are reserved. MBAP/TCP unit 0 is
+rejected in all RTU/ASCII modes because 0 is broadcast and 248-255 are reserved. MBAP/TCP unit 0 is
 only a unit id and never broadcast.
 
 Device modes open the path with `O_NONBLOCK` so startup does not hang on FIFOs or similar paths.
@@ -147,10 +153,11 @@ ASCII frames are `:` + uppercase hex for `[addr][PDU][LRC]` + `CR LF`; received 
 lowercase. Frames are delimited by `CR LF`, so RTU timing options do not apply; complete frames are
 answered immediately, including several frames in one read. A missing colon, invalid hex, odd hex
 count, bad LRC, or wrong terminator produces no response and never reaches the PDU handlers. Like
-RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. ASCII is **serial
-byte-stream only**: there is no ASCII-over-TCP mode, and this is not Modbus TCP (MBAP). `(baud N)`
-may set the line speed but never changes ASCII framing or timing. FC 08 subfunction `0x0003`
-(Change ASCII Delimiter) is rejected with exception 03; `CR LF` framing is fixed.
+RTU, broadcast (unit 0), unknown units, and fault-dropped answers are silent. `ascii-tcp` carries
+the same frames on TCP byte streams (up to 32 clients, with `idle-timeout-ms`); it is not Modbus TCP
+(MBAP). `(baud N)` may set the serial line speed but never changes ASCII framing or timing, and is
+rejected in `ascii-tcp`. FC 08 subfunction `0x0003` (Change ASCII Delimiter) is rejected with
+exception 03; `CR LF` framing is fixed.
 
 ## Documentation
 
@@ -166,7 +173,7 @@ src/            the program, one folder per module (headers next to their .c fil
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
-  net/          TCP, RTU byte-stream, ASCII byte-stream, and RTU-over-TCP network loops
+  net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, and ASCII-over-TCP network loops
   util/         clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)

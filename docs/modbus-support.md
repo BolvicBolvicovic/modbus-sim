@@ -58,10 +58,11 @@ No response is produced for:
 ### Modbus ASCII
 
 Modbus ASCII is served over a bidirectional byte stream (Linux PTY or an existing serial-like
-device path) via `(server (mode ascii-pty))` or `(server (mode ascii-device) (path "PATH"))`. It is a
-separate transport/framing choice: it uses the same PDU handlers and device model as TCP/RTU, but it
-is not Modbus TCP (MBAP) and there is no ASCII-over-TCP mode. ASCII accepts `mode`, `seed`, `baud`,
-`data-bits`, `parity`, `stop-bits` and (in device mode) `path` in `(server ...)`.
+device path) via `(server (mode ascii-pty))` or `(server (mode ascii-device) (path "PATH"))`, or over
+a TCP listen socket via `(server (mode ascii-tcp))`. It is a separate transport/framing choice: it
+uses the same PDU handlers and device model as TCP/RTU, but it is not Modbus TCP (MBAP). Serial ASCII
+accepts `mode`, `seed`, `baud`, `data-bits`, `parity`, `stop-bits` and (in device mode) `path`;
+`ascii-tcp` accepts only `mode`, `port`, `bind`, `seed`, and `idle-timeout-ms` in `(server ...)`.
 
 Frame format on the wire is `:` + uppercase hex digits for `[addr][PDU...][LRC]` + `CR LF`.
 `addr` is one byte, the PDU is 1..253 bytes, and the LRC is one byte:
@@ -100,8 +101,23 @@ mode applies the same check. `(server (baud N))` may set the serial line/PTY spe
 ASCII framing or timing. When the fd is a tty, `modbus-sim` configures raw 8N1 by default (8 data
 bits, no parity, 1 stop bit, no flow control). The traditional Modbus ASCII 7E1 line format is opt-in:
 `(server (data-bits 7) (parity even) (stop-bits 1))` sets `CS7`, even parity and 1 stop bit. Each
-config selects exactly one mode; TCP listen, RTU timing, and broadcast entries are rejected in ASCII
-modes.
+config selects exactly one mode; RTU timing and broadcast entries are rejected in ASCII modes, and
+serial line settings are accepted only in the PTY/device modes.
+
+### Modbus ASCII over TCP
+
+`(server (mode ascii-tcp))` serves the same raw ASCII frames on TCP byte streams: `:` + uppercase
+hex `[addr][PDU][LRC]` + `CR LF`, with no MBAP header and no TLS. `port` and `bind` select the listen
+socket (defaults `1502` and `"0.0.0.0"`); `bind` accepts IPv4 or IPv6 literals, with IPv6 sockets
+IPv6-only, as for Modbus TCP. Up to 32 clients are served by one poll loop, each with its own RX
+buffer and delayed-response slot; `idle-timeout-ms` closes connections with no I/O progress.
+Framing, resynchronization, error counting, unit routing, and fault behavior are identical to the
+serial ASCII modes: complete frames are answered as soon as `CR LF` arrives, multiple frames per
+read and split frames work, a trailing `CR` waits for the next `LF`, and a partial frame with no byte
+for 1 s is dropped and counted as one FC 08 `0x000C` communication error per device. Broadcast
+(unit 0) is silently ignored with no PDU processing. Serial options (`baud`, `frame-gap-ms`,
+`strict-t15`, `data-bits`, `parity`, `stop-bits`, `path`) and `broadcast-execute` are rejected at load
+time, including by `--check`.
 
 ### Modbus RTU over TCP
 
@@ -303,11 +319,10 @@ through `(fault (kind exception) (code N))`; 09 is reserved.
 
 Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
 created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and
-[Transport](#transport): no ASCII-over-TCP or Modbus TCP Security/TLS, and no true UART t1.5
-timing (the RTU `strict-t15` option is only a baud-derived-auto-mode approximation).
+[Transport](#transport): no Modbus TCP Security/TLS and no true UART t1.5 timing (the RTU
+`strict-t15` option is only a baud-derived-auto-mode approximation).
 
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
-- ASCII-over-TCP: not implemented; ASCII is a serial byte-stream transport only
 - TLS (Modbus/TCP Security)

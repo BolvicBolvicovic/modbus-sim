@@ -55,6 +55,7 @@ static const struct {
 	{ "rtu-tcp",      SERVER_MODE_RTU_TCP,      "" },
 	{ "ascii-pty",    SERVER_MODE_ASCII_PTY,    "" },
 	{ "ascii-device", SERVER_MODE_ASCII_DEVICE, " (path \"/dev/ttyS0\")" },
+	{ "ascii-tcp",    SERVER_MODE_ASCII_TCP,    "" },
 };
 
 TEST(ConfigLoadsServerAndDevice)
@@ -896,8 +897,8 @@ TEST(ConfigServerModeDefaultsToTcp)
 
 TEST(ConfigServerModeRejectsUnknownNames)
 {
-	EXPECT_ERROR("(server (mode rtu)) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device");
-	EXPECT_ERROR("(server (mode \"tcp\")) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device");
+	EXPECT_ERROR("(server (mode rtu)) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
+	EXPECT_ERROR("(server (mode \"tcp\")) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
 }
 
 TEST(ConfigServerPathIsParsedForDeviceModes)
@@ -928,6 +929,7 @@ TEST(ConfigServerPathIsForbiddenForOtherModes)
 	EXPECT_ERROR("(server (mode rtu-pty) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
 	EXPECT_ERROR("(server (mode rtu-tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
 	EXPECT_ERROR("(server (mode ascii-pty) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode ascii-tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
 	EXPECT_ERROR("(server (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
 }
 
@@ -1073,7 +1075,8 @@ TEST(ConfigSerialModesRejectTcpListenOptions)
 
 	for (u32 i = 1; i < ARRAY_COUNT(SERVER_MODES); i++)
 	{
-		if (SERVER_MODES[i].mode == SERVER_MODE_RTU_TCP)
+		if (SERVER_MODES[i].mode == SERVER_MODE_RTU_TCP ||
+		    SERVER_MODES[i].mode == SERVER_MODE_ASCII_TCP)
 			continue;
 		for (u32 j = 0; j < ARRAY_COUNT(options); j++)
 		{
@@ -1131,6 +1134,48 @@ TEST(ConfigAsciiModeAcceptsBaudOnly)
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.baud == 115200);
 	ASSERT_EQ(config.seed == 3);
+}
+
+TEST(ConfigAsciiTcpAcceptsListenOptions)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode ascii-tcp)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_TCP);
+	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
+	ASSERT_EQ(strcmp(config.bind_address, "0.0.0.0") == 0);
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode ascii-tcp) (port 1503) (bind \"::1\") (seed 4) (idle-timeout-ms 500))"
+		" (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.port == 1503);
+	ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
+	ASSERT_EQ(config.seed == 4);
+	ASSERT_EQ(config.idle_timeout_ms == 500);
+}
+
+TEST(ConfigAsciiTcpRejectsSerialOptionsAndBroadcast)
+{
+	EXPECT_ERROR("(server (mode ascii-tcp) (path \"/dev/ttyS0\")) (device (holding 0))",
+		     "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode ascii-tcp) (baud 9600)) (device (holding 0))",
+		     "baud is not valid in ascii-tcp mode");
+	EXPECT_ERROR("(server (mode ascii-tcp) (frame-gap-ms 20)) (device (holding 0))",
+		     "frame-gap-ms is not valid in ascii-tcp mode");
+	EXPECT_ERROR("(server (mode ascii-tcp) (strict-t15 on)) (device (holding 0))",
+		     "strict-t15 is not valid in ascii-tcp mode");
+	EXPECT_ERROR("(server (mode ascii-tcp) (broadcast-execute on)) (device (holding 0))",
+		     "broadcast-execute is not valid in ascii-tcp mode");
+	EXPECT_ERROR("(server (mode ascii-tcp) (broadcast-execute off)) (device (holding 0))",
+		     "broadcast-execute is not valid in ascii-tcp mode (ASCII never executes unit-0 broadcasts)");
+	EXPECT_ERROR("(server (mode ascii-tcp) (data-bits 7)) (device (holding 0))",
+		     "data-bits is not valid in ascii-tcp mode");
+	EXPECT_ERROR("(server (mode ascii-tcp) (parity even)) (device (holding 0))",
+		     "parity is not valid in ascii-tcp mode");
+	EXPECT_ERROR("(server (mode ascii-tcp) (stop-bits 1)) (device (holding 0))",
+		     "stop-bits is not valid in ascii-tcp mode");
 }
 
 TEST(ConfigSerialModesAcceptSerialOptions)

@@ -25,7 +25,7 @@ static const char READ_ALL_FORMS[] =
 
 static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "space" };
 static const char* const MODE_NAMES[] = {
-	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device"
+	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp"
 };
 
 bool
@@ -63,6 +63,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
 	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits" };
 	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
+	static const char* const ascii_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
 	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
 	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
 	static const char* const ascii_keys[] = { "mode", "seed", "baud", "data-bits", "parity", "stop-bits" };
@@ -98,6 +99,10 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 			allowed = tcp_keys;
 			allowed_count = ARRAY_COUNT(tcp_keys);
 			break;
+		case SERVER_MODE_ASCII_TCP:
+			allowed = ascii_tcp_keys;
+			allowed_count = ARRAY_COUNT(ascii_tcp_keys);
+			break;
 		case SERVER_MODE_RTU_TCP:
 			allowed = rtu_tcp_keys;
 			allowed_count = ARRAY_COUNT(rtu_tcp_keys);
@@ -115,7 +120,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	}
 	/* ASCII never executes broadcasts; call that out instead of relying on the
 	 * generic mode check below. */
-	if ((mode == SERVER_MODE_ASCII_PTY || mode == SERVER_MODE_ASCII_DEVICE) &&
+	if ((mode == SERVER_MODE_ASCII_PTY ||
+	     mode == SERVER_MODE_ASCII_DEVICE ||
+	     mode == SERVER_MODE_ASCII_TCP) &&
 	    !form_is_absent(ctx, form_find(ctx, options, "broadcast-execute")))
 		return form_fail(ctx, "server: broadcast-execute is not valid in %s mode (ASCII never executes unit-0 broadcasts)",
 				 MODE_NAMES[mode]);

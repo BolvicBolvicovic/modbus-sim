@@ -17,6 +17,7 @@
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
 #include "net/ascii_server.h"
+#include "net/ascii_tcp_server.h"
 #include "net/rtu_framer.h"
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
@@ -56,8 +57,9 @@ print_usage(void)
 	     "\n"
 	     "RTU byte streams use a PTY or an existing serial-like device selected by\n"
 	     "(server (mode rtu-pty|rtu-device) ...). ASCII uses a byte stream (PTY or\n"
-	     "device) selected by (mode ascii-pty|ascii-device); it has no TCP form.\n"
-	     "ASCII defaults to 8N1; (data-bits 7) (parity even) (stop-bits 1) selects 7E1.\n"
+	     "device) selected by (mode ascii-pty|ascii-device), or a TCP listen socket\n"
+	     "selected by (mode ascii-tcp); both carry the same raw ASCII frames.\n"
+	     "ASCII serial ttys default to 8N1; (data-bits 7) (parity even) (stop-bits 1) selects 7E1.\n"
 	     "ASCII frames are ':' + hex + LRC + CRLF, delimited by CRLF, not by timing.\n"
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
@@ -156,6 +158,11 @@ print_summary(const config_t* config)
 			if (config->broadcast_execute)
 				printf(", broadcast-execute on");
 			putchar('\n');
+			break;
+		case SERVER_MODE_ASCII_TCP:
+			printf("%u device%s, ASCII-over-TCP %s:%u\n",
+			       config->device_count, config->device_count == 1 ? "" : "s",
+			       config->bind_address, config->port);
 			break;
 		case SERVER_MODE_ASCII_PTY:
 		case SERVER_MODE_ASCII_DEVICE:
@@ -275,6 +282,21 @@ run_ascii(config_t* config)
 }
 
 static s32
+run_ascii_tcp(config_t* config)
+{
+	ascii_tcp_server_options_t	options = {
+		.bind_address    = config->bind_address,
+		.port            = config->port,
+		.seed            = config->seed,
+		.idle_timeout_ms = config->idle_timeout_ms,
+		.devices         = config->devices,
+		.device_count    = config->device_count,
+	};
+
+	return ascii_tcp_server_run(&options);
+}
+
+static s32
 run_rtu_tcp(config_t* config)
 {
 	rtu_tcp_server_options_t	options = {
@@ -363,6 +385,9 @@ main(int argc, char** argv)
 			break;
 		case SERVER_MODE_RTU_TCP:
 			status = run_rtu_tcp(&config);
+			break;
+		case SERVER_MODE_ASCII_TCP:
+			status = run_ascii_tcp(&config);
 			break;
 		case SERVER_MODE_RTU_PTY:
 		case SERVER_MODE_RTU_DEVICE:
