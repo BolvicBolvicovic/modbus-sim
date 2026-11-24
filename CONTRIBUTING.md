@@ -14,7 +14,7 @@ Run the checks relevant to your change:
 ```bash
 make
 make tests
-for p in profiles/*.scm; do ./modbus-sim --check "$p"; done
+for p in profiles/*.scm; do ./mogbus --check "$p"; done
 make asan
 ```
 

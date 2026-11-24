@@ -15,4 +15,4 @@ Include, when possible:
 
 ## Scope notes
 
-`modbus-sim` is a Modbus TCP simulator intended for development and testing environments. Do not expose it to untrusted networks without understanding the risks of running a simulator with writable device state.
+`mogbus` is a Modbus TCP simulator intended for development and testing environments. Do not expose it to untrusted networks without understanding the risks of running a simulator with writable device state.

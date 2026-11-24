@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""modbus_probe.py - tiny Modbus TCP client to try out modbus-sim. Python 3 standard library only.
+"""modbus_probe.py - tiny Modbus TCP client to try out mogbus. Python 3 standard library only.
 
 Examples (server on localhost:1502):
   ./tools/modbus_probe.py holding 0 2            read 2 holding registers from address 0
@@ -89,7 +89,7 @@ def run(args, sock):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tiny Modbus TCP client for modbus-sim")
+    parser = argparse.ArgumentParser(description="Tiny Modbus TCP client for mogbus")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1502)
     parser.add_argument("--unit", type=int, default=1)

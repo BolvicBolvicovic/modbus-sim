@@ -104,7 +104,7 @@ case "${1:-}" in
 	;;
 esac
 
-bin=${1:-./modbus-sim-tests}
+bin=${1:-./mogbus-tests}
 timeout_cmd=${TEST_TIMEOUT_CMD:-timeout}
 test_timeout=${TEST_TIMEOUT:-120s}
 jobs=${RUN_TESTS_JOBS:-3}

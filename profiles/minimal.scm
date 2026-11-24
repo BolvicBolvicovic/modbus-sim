@@ -1,6 +1,6 @@
 ; minimal.scm - the smallest useful device.
 ;
-; Run it:   ./modbus-sim profiles/minimal.scm
+; Run it:   ./mogbus profiles/minimal.scm
 ; Read it:  holding register 0 always returns 42.
 ;           holding register 1 counts 0, 10, 20 ... 100 and starts again, one step per second.
 

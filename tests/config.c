@@ -12,7 +12,7 @@
 static bool
 load_text(const char* text, config_t* config, char* err, u32 err_size)
 {
-	char		path[]  = "/tmp/modbus-sim-test-XXXXXX";
+	char		path[]  = "/tmp/mogbus-test-XXXXXX";
 	arena_t*	persist = ARENA_ALLOC();	/* intentionally kept: config points into it */
 	arena_t*	scratch = ARENA_ALLOC();
 	int			fd      = mkstemp(path);
@@ -474,8 +474,8 @@ TEST(ConfigDeviceIdentificationDefaultsAndOverrides)
 	char		err[256] = "";
 
 	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
-	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME], "modbus-sim") == 0);
-	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_PRODUCT_CODE], "modbus-sim") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME], "mogbus") == 0);
+	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_PRODUCT_CODE], "mogbus") == 0);
 	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "1.0") == 0);
 	ASSERT_EQ(config.devices[0]->device_id[DEVICE_ID_VENDOR_URL][0] == '\0');
 

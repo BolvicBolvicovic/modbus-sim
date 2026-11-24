@@ -66,13 +66,13 @@ write_cfg_with_bind(const char* bind, const char* options, const char* devices)
 		     "(server (mode ascii-tcp) (port %u) (bind \"%s\") %s)\n%s\n",
 		     g_fx.probe_port, bind, options ? options : "", devices);
 	ASSERT(n > 0 && (size_t)n < sizeof(config));
-	ASSERT_EQ(ts_write_config(&g_fx, "/tmp/modbus-sim-asciitcp-XXXXXX", config));
+	ASSERT_EQ(ts_write_config(&g_fx, "/tmp/mogbus-asciitcp-XXXXXX", config));
 }
 
 static void
 server_start_with_bind(const char* bind, int family, const char* options, const char* devices)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	char*       argv[3];
 
 	g_fx.probe_port   = ts_free_port();
@@ -80,7 +80,7 @@ server_start_with_bind(const char* bind, int family, const char* options, const 
 	ASSERT(g_fx.probe_port != 0);
 	write_cfg_with_bind(bind, options, devices);
 
-	argv[0] = (char*)(bin ? bin : "./modbus-sim");
+	argv[0] = (char*)(bin ? bin : "./mogbus");
 	argv[1] = g_fx.config;
 	argv[2] = NULL;
 	ASSERT_EQ(ts_server_start(&g_fx, argv));

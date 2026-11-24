@@ -1589,18 +1589,20 @@ TEST(RtuServerSupportedFunctionCodesFraming)
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
 		u8 resp[MODBUS_MAX_PDU], addr = 0;
 		u32 len = 0;
+		const u32 name_len = sizeof("mogbus") - 1;
+
 		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
 		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
 		ASSERT_EQ(addr == 1 && len > 3);
 		ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0E);
 		ASSERT_EQ(resp[2] == 0x01 && resp[3] == 0x81);
 		ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x03);
-		ASSERT_EQ(resp[7] == 0x00 && resp[8] == 10);
-		ASSERT_EQ(memcmp(resp + 9, "modbus-sim", 10) == 0);
-		ASSERT_EQ(resp[19] == 0x01 && resp[20] == 10);
-		ASSERT_EQ(memcmp(resp + 21, "modbus-sim", 10) == 0);
-		ASSERT_EQ(resp[31] == 0x02 && resp[32] == 3);
-		ASSERT_EQ(memcmp(resp + 33, "1.0", 3) == 0);
+		ASSERT_EQ(resp[7] == 0x00 && resp[8] == name_len);
+		ASSERT_EQ(memcmp(resp + 9, "mogbus", name_len) == 0);
+		ASSERT_EQ(resp[9 + name_len] == 0x01 && resp[10 + name_len] == name_len);
+		ASSERT_EQ(memcmp(resp + 11 + name_len, "mogbus", name_len) == 0);
+		ASSERT_EQ(resp[11 + 2 * name_len] == 0x02 && resp[12 + 2 * name_len] == 3);
+		ASSERT_EQ(memcmp(resp + 13 + 2 * name_len, "1.0", 3) == 0);
 	}
 
 	ASSERT_EQ(rtu_child_stop(&child));

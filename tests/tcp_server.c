@@ -144,9 +144,9 @@ static const char	TLS_IDLE_SERVER_OPTIONS[] =
 static bool
 tls_check_run(const char* tls_options, int expected_status, const char* stderr_needle)
 {
-	const char* bin   = getenv("MODBUS_SIM_BIN");
+	const char* bin   = getenv("MOGBUS_BIN");
 	char	    config[512];
-	char*	    argv[] = { (char*)(bin ? bin : "./modbus-sim"), "--check",
+	char*	    argv[] = { (char*)(bin ? bin : "./mogbus"), "--check",
 			       g_tls_check.config, NULL };
 	int	    status = 0;
 	bool	    ok;
@@ -156,11 +156,11 @@ tls_check_run(const char* tls_options, int expected_status, const char* stderr_n
 		     "(device (unit-id 1) (holding 0 (static 1)))\n",
 		     tls_options) >= (int)sizeof(config))
 		return false;
-	if (!ts_write_config(&g_tls_check, "/tmp/modbus-sim-tlscheck-XXXXXX", config) ||
+	if (!ts_write_config(&g_tls_check, "/tmp/mogbus-tlscheck-XXXXXX", config) ||
 	    !ts_temp_file(g_tls_check.stderr_path, sizeof(g_tls_check.stderr_path),
-			  "/tmp/modbus-sim-tlscheckerr-XXXXXX") ||
+			  "/tmp/mogbus-tlscheckerr-XXXXXX") ||
 	    !ts_temp_file(g_tls_check.stdout_path, sizeof(g_tls_check.stdout_path),
-			  "/tmp/modbus-sim-tlscheckout-XXXXXX"))
+			  "/tmp/mogbus-tlscheckout-XXXXXX"))
 		goto fail;
 
 	g_tls_check.flags = TS_CAPTURE_STDERR | TS_CAPTURE_STDOUT | TS_NULL_STDIN |
@@ -300,12 +300,12 @@ server_start_with_bind(const char* bind, const char* server_options, const char*
 		     g_server.probe_port, bind,
 		     server_options ? server_options : "", devices);
 	if (n <= 0 || (size_t)n >= sizeof(config) ||
-	    !ts_write_config(&g_server, "/tmp/modbus-sim-net-XXXXXX", config))
+	    !ts_write_config(&g_server, "/tmp/mogbus-net-XXXXXX", config))
 		return false;
 
 	{
-		const char* bin = getenv("MODBUS_SIM_BIN");
-		char*       argv[] = { (char*)(bin ? bin : "./modbus-sim"), g_server.config, NULL };
+		const char* bin = getenv("MOGBUS_BIN");
+		char*       argv[] = { (char*)(bin ? bin : "./mogbus"), g_server.config, NULL };
 
 		return ts_server_start(&g_server, argv);
 	}
@@ -497,11 +497,11 @@ TEST(NetTlsLogsAuthenticatedPeerSubject)
 	{
 		for (u32 i = 0; i < 100; i++)
 		{
-			if (ts_file_contains(g_server.stderr_path, "CN=modbus-sim test client"))
+			if (ts_file_contains(g_server.stderr_path, "CN=mogbus test client"))
 				break;
 			usleep(20000);
 		}
-		ok = ts_file_contains(g_server.stderr_path, "CN=modbus-sim test client");
+		ok = ts_file_contains(g_server.stderr_path, "CN=mogbus test client");
 	}
 	if (!ok)
 		fprintf(stderr, "net test: TLS client: %s\n", tls_client_error());
@@ -2772,10 +2772,10 @@ TEST(NetReadDeviceIdentificationExtendedObjects)
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
 
 		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 45 && resp[1] == 0x0E && resp[3] == 0x83 &&
+		     len == 41 && resp[1] == 0x0E && resp[3] == 0x83 &&
 		     resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x05 &&
-		     resp[30] == 0x80 && resp[31] == 5 && memcmp(resp + 32, "First", 5) == 0 &&
-		     resp[37] == 0xA0 && resp[38] == 6 && memcmp(resp + 39, "Second", 6) == 0;
+		     resp[26] == 0x80 && resp[27] == 5 && memcmp(resp + 28, "First", 5) == 0 &&
+		     resp[33] == 0xA0 && resp[34] == 6 && memcmp(resp + 35, "Second", 6) == 0;
 	}
 	if (ok)
 	{

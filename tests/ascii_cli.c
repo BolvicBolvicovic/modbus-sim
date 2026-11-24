@@ -48,14 +48,14 @@ ascii_cli_stop(void)
 static bool
 ascii_cli_write_config(const char* text)
 {
-	return ts_write_config(&g_ascii_cli, "/tmp/modbus-sim-asciicli-XXXXXX", text);
+	return ts_write_config(&g_ascii_cli, "/tmp/mogbus-asciicli-XXXXXX", text);
 }
 
 static bool
 ascii_cli_capture_stderr(void)
 {
 	return ts_temp_file(g_ascii_cli.stderr_path, sizeof(g_ascii_cli.stderr_path),
-			    "/tmp/modbus-sim-asciiclierr-XXXXXX");
+			    "/tmp/mogbus-asciiclierr-XXXXXX");
 }
 
 static bool
@@ -82,7 +82,7 @@ ascii_cli_start_with_args(char* const argv[])
 static bool
 ascii_cli_start_device_with_options(const char* options, const char* devices, bool dirty_line)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	char config[1024];
 	char* argv[3];
 	int   slave = -1;
@@ -91,7 +91,7 @@ ascii_cli_start_device_with_options(const char* options, const char* devices, bo
 	int n;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 	if (openpty(&g_ascii_cli.master_fd, &slave, name, NULL, NULL) < 0)
 		return false;
 	if (tcgetattr(g_ascii_cli.master_fd, &tio) == 0)
@@ -433,7 +433,7 @@ ascii_cli_run_check(const char* config_text, char* const argv[],
 
 TEST(AsciiCliConfigModeValidatesUnitIdsAndRejectsRemovedFlags)
 {
-	const char* bin = getenv("MODBUS_SIM_BIN");
+	const char* bin = getenv("MOGBUS_BIN");
 	const char* ascii_valid = "(server (mode ascii-pty))\n"
 				  "(device (unit-id 1) (holding 0 (static 1)))\n";
 	const char* ascii_reserved = "(server (mode ascii-pty))\n"
@@ -447,7 +447,7 @@ TEST(AsciiCliConfigModeValidatesUnitIdsAndRejectsRemovedFlags)
 	bool ok = true;
 
 	if (!bin)
-		bin = "./modbus-sim";
+		bin = "./mogbus";
 
 	{
 		char* argv[] = { (char*)bin, "--check", g_ascii_cli.config, NULL };

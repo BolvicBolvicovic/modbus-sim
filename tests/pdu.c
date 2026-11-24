@@ -1968,8 +1968,8 @@ TEST(ReadDeviceIdentificationBasicStream)
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[5] == 0x00);
 	ASSERT_EQ(resp[6] == 0x03);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	ASSERT_EQ(len == off);
 	arena_release(arena);
@@ -1994,8 +1994,8 @@ TEST(ReadDeviceIdentificationRegularAndExtended)
 	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x07);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x03, "https://example.invalid");
 	assert_mei_object(resp, &off, 0x04, "Simulator");
@@ -2028,13 +2028,13 @@ TEST(ReadDeviceIdentificationSpecific)
 	u32		off = 7;
 
 	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 10);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 6);
 	ASSERT_EQ(resp[2] == 0x04);
 	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[5] == 0x00);
 	ASSERT_EQ(resp[6] == 0x01);
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 
 	req[3] = 0x04;
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 9);
@@ -2079,8 +2079,8 @@ TEST(ReadDeviceIdentificationExtendedObjects)
 	run(dev, stream, sizeof(stream), resp);
 	ASSERT_EQ(resp[3] == 0x83); /* extended conformity takes precedence */
 	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x08);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x03, "url");
 	assert_mei_object(resp, &off, 0x04, "Sim");
@@ -2097,8 +2097,8 @@ TEST(ReadDeviceIdentificationExtendedObjects)
 	off = 7;
 	run(dev, unknown, sizeof(unknown), resp);
 	ASSERT_EQ(resp[6] == 0x08 && resp[7] == 0x00);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x03, "url");
 	assert_mei_object(resp, &off, 0x04, "Sim");
@@ -2109,15 +2109,15 @@ TEST(ReadDeviceIdentificationExtendedObjects)
 	off = 7;
 	run(dev, basic, sizeof(basic), resp);
 	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x03);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 
 	off = 7;
 	run(dev, regular, sizeof(regular), resp);
 	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x05);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x03, "url");
 	assert_mei_object(resp, &off, 0x04, "Sim");
@@ -2151,8 +2151,8 @@ TEST(ReadDeviceIdentificationExtendedMoreFollows)
 	len = run(dev, req, sizeof(req), resp);
 	ASSERT_EQ(len <= MODBUS_MAX_PDU);
 	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0xFF && resp[5] == 0x90 && resp[6] == 0x04);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x80, value);
 	ASSERT_EQ(len == off);
@@ -2272,8 +2272,8 @@ TEST(ReadDeviceIdentificationStreamRestartsAtObject0)
 	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x03);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 
 	off = 7;
@@ -2282,8 +2282,8 @@ TEST(ReadDeviceIdentificationStreamRestartsAtObject0)
 	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x04);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x04, "Simulator");
 
@@ -2293,8 +2293,8 @@ TEST(ReadDeviceIdentificationStreamRestartsAtObject0)
 	ASSERT_EQ(resp[3] == 0x82);
 	ASSERT_EQ(resp[4] == 0x00);
 	ASSERT_EQ(resp[6] == 0x04);
-	assert_mei_object(resp, &off, 0x00, "modbus-sim");
-	assert_mei_object(resp, &off, 0x01, "modbus-sim");
+	assert_mei_object(resp, &off, 0x00, "mogbus");
+	assert_mei_object(resp, &off, 0x01, "mogbus");
 	assert_mei_object(resp, &off, 0x02, "1.0");
 	assert_mei_object(resp, &off, 0x04, "Simulator");
 	arena_release(arena);

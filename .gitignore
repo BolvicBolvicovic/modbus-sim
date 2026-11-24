@@ -1,10 +1,10 @@
 *.o
 *.d
 *.asan.o
-modbus-sim
-modbus-sim-tests
-modbus-sim-asan
-modbus-sim-asan-tests
+mogbus
+mogbus-tests
+mogbus-asan
+mogbus-asan-tests
 compile_commands.json
 .build-mode
 .ccache/

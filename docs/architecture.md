@@ -147,12 +147,12 @@ TCP MBAP behavior or RTU byte-stream behavior.
 
 ## Build and tests
 
-`make` builds `modbus-sim`. `make tests` builds both `modbus-sim` (used by integration tests)
-and `modbus-sim-tests`, and runs the tests through `tools/run_tests.sh`: vtest always exits 0
+`make` builds `mogbus`. `make tests` builds both `mogbus` (used by integration tests)
+and `mogbus-tests`, and runs the tests through `tools/run_tests.sh`: vtest always exits 0
 for whole suites, so the script runs each test by
 name and fails if any one fails. `tests/tcp_server.c` starts the real binary on a private loopback
 port and exercises the documented protocol behaviour (routing, exceptions, faults, connection
-limit); override the binary with `MODBUS_SIM_BIN`. Independent suites run in parallel with
+limit); override the binary with `MOGBUS_BIN`. Independent suites run in parallel with
 `RUN_TESTS_JOBS` workers (default 3, capped by suite count); tests inside a suite stay sequential.
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
