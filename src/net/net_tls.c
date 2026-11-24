@@ -9,9 +9,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TLS_SHUTDOWN_WAIT_MS	50
-#define TLS_SHUTDOWN_POLL_MS	5
-#define TLS_SHUTDOWN_ATTEMPTS	(TLS_SHUTDOWN_WAIT_MS / TLS_SHUTDOWN_POLL_MS)
 #define NET_TLS_MAX_SESSIONS	32
 
 struct net_tls_conn_t
@@ -185,27 +182,10 @@ net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, char* er
 static void
 ssl_close(SSL* ssl)
 {
-	/* The socket is nonblocking: keep trying while shutdown needs I/O, but never
-	 * wait for a peer that is not reading or sending. */
-	for (int i = 0; i < TLS_SHUTDOWN_ATTEMPTS; i++)
-	{
-		struct pollfd	pfd = { .fd = SSL_get_fd(ssl) };
-		int		rc;
-		int		err;
-		int		ready;
-
-		ERR_clear_error();
-		rc = SSL_shutdown(ssl);
-		if (rc >= 0)
-			break;
-		err = SSL_get_error(ssl, rc);
-		if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)
-			break;
-		pfd.events = err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT;
-		ready = poll(&pfd, 1, TLS_SHUTDOWN_POLL_MS);
-		if (ready < 0 && errno != EINTR)
-			break;
-	}
+	/* One nonblocking attempt: a peer that is not reading must not stall other
+	 * clients while we try to deliver close_notify. */
+	ERR_clear_error();
+	(void)SSL_shutdown(ssl);
 	SSL_free(ssl);
 }
 
@@ -296,6 +276,11 @@ io_status(SSL* ssl, int rc)
 	if (err == SSL_ERROR_WANT_WRITE)
 		return NET_TLS_WANT_WRITE;
 	if (err == SSL_ERROR_ZERO_RETURN)
+		return NET_TLS_EOF;
+	/* A peer that drops without close_notify can surface as SSL_ERROR_SYSCALL
+	 * with an empty error queue and a stale errno; do not report it as a TLS
+	 * failure. */
+	if (err == SSL_ERROR_SYSCALL && ERR_peek_error() == 0)
 		return NET_TLS_EOF;
 	return NET_TLS_ERROR;
 }

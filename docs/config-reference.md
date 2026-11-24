@@ -140,8 +140,10 @@ closed at the deadline and logged at `WARN` with its peer address and the config
 its slot for other clients. Connections that completed the handshake are not affected; normal TLS
 requests and delay faults keep their existing timing. A client certificate's subject is logged at
 `INFO` once the handshake succeeds. When the server closes a TLS connection (idle timeout, I/O
-error, EOF, or shutdown), it sends a best-effort `close_notify` with a bounded wait before freeing
-the session, so clients can observe a clean TLS close.
+error, EOF, or shutdown), it makes one nonblocking best-effort attempt to send `close_notify` before
+freeing the session, so clients can observe a clean TLS close without delaying other clients. An
+ungraceful peer drop reported with an empty OpenSSL error queue is treated as EOF and is not logged
+as a TLS failure.
 
 RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
 existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are
