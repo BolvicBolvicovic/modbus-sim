@@ -11,8 +11,9 @@ is disconnected. `port` and `bind` select the listen socket; `bind` accepts a pl
 literal address and defaults to `"127.0.0.1"` (loopback, local clients only). Accepting remote
 clients requires an explicit `(bind "0.0.0.0")` or `(bind "::")`. IPv6 listen sockets set
 `IPV6_V6ONLY`, so `"0.0.0.0"` and `"::"` listen on separate address families and cannot both be
-used: a config contains one `(server ...)` block, there is no dual-stack option, and scoped
-link-local literals such as `"fe80::1%eth0"` are rejected by the config validator. This default
+used: a config may contain at most one `(server ...)` block (defaults apply if omitted), there is
+no dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
+config validator. This default
 applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`).
 
 `(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
@@ -385,4 +386,4 @@ baud-derived-auto-mode approximation).
 - TLS for RTU-over-TCP and ASCII-over-TCP; `(server (tls ...))` is rejected outside `mode tcp`
 - Certificate revocation checking (CRL/OCSP); a client certificate signed by the configured CA is accepted for the lifetime configured in the certificate
 - Modbus Security role authorization from x.509 role OIDs; a valid client certificate is either required or optional, with no per-role access control
-- Dual-stack IPv6 listening: IPv6 sockets are `IPV6_V6ONLY` and a config has only one `(server ...)` block, so `"::"` and `"0.0.0.0"` cannot be served together; scoped link-local literals such as `fe80::1%eth0` are rejected
+- Dual-stack IPv6 listening: IPv6 sockets are `IPV6_V6ONLY` and a config may contain at most one `(server ...)` block, so `"::"` and `"0.0.0.0"` cannot be served together; scoped link-local literals such as `fe80::1%eth0` are rejected

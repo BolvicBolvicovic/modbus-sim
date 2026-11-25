@@ -56,10 +56,10 @@ Headers sit next to their `.c` files.
 - Each address stores which *point* defines it (`owner`). `owner == 0` means "not defined",
   which is how unknown addresses become exception 02.
 - A `point_t` says where it lives, how it is encoded (`type`, `word-order`) and its behaviour
-  (`POINT_STATIC` or `POINT_RAMP`).
+  (`POINT_STATIC`, `POINT_RAMP` or `POINT_MACHINE`).
 - `ramp_value()` is a pure function of `(params, start, now)`. No state, so results are
   reproducible and tests need no clock.
-- A client write turns the owning points static (`device_write`).
+- A client write turns the owning point static (`device_write`) only when it is not machine-owned.
 
 ## Memory
 
@@ -215,9 +215,11 @@ Catch-up gives intermediate states only on-exit/on-enter; just the final state g
 Random deadlines use a private RNG seeded from the server seed mixed with the device unit id, so
 they are deterministic per device. A machine may write only the first address of a configured,
 non-ramp point and becomes that point's owner (`POINT_MACHINE`); expression reads still go through
-`device_get_point`, and variables are private to their machine. Phase 2 candidates (not
-implemented): on-write handlers, fault overlays, a state-register view of the current state, and
-read-only machine-owned points.
+`device_get_point`, and variables are private to their machine. Machines share one point table and
+advance in declaration order: any machine can read another machine's points, each point has at most
+one machine writer, and writes are visible to later machines in the same tick and to earlier ones on
+the next tick. Phase 2 candidates (not implemented): on-write handlers, fault overlays, a
+state-register view of the current state, and read-only machine-owned points.
 
 **More fault injection (implemented).** `fault_t` held one fault in the original roadmap; it is
 now a kind-keyed `fault_set_t` and `fault_decide` returns the combined decision (delay, drop,

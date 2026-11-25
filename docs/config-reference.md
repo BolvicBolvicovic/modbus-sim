@@ -11,9 +11,10 @@ The file format comes from Scheme, but you only need these rules:
 - `;` starts a comment that runs to the end of the line.
 - Text is in double quotes: `"Power meter"`.
 - Numbers are written normally: `42`, `-5`, `0.5`, `230.4`.
+- Scheme hex literals such as `#x1234` are also accepted where examples use them.
 - On/off can be written `on`, `off`, `yes`, `no`, `true`, `false`, `#t`, `#f`, `1` or `0`.
 - Spaces, tabs and new lines are all the same. Indent however you like.
-- Order of entries does not matter, except that a point can only be defined once.
+- Top-level forms and most entries can appear in any order. Exceptions: at most one `(server ...)` form; point address ranges cannot overlap; `(com-event ...)` entries are reported in the order written; and inside `(machine ...)`, `(var ...)`, `(state ...)`, and `(transition ...)` must be ordered as shown.
 
 The file is only *read as data*. Nothing in it is run, so a typo can never do anything but
 produce an error message.
@@ -49,14 +50,15 @@ that is present but not allowed is rejected at load time, even if its value woul
 as `"fe80::1%eth0"` (the validator uses `inet_pton()`, which does not accept `%iface`). IPv6 listen
 sockets set `IPV6_V6ONLY`, so `"::"` serves IPv6 clients only. TCP-family listeners default to
 `"127.0.0.1"` (loopback); remote connections require an explicit `(bind "0.0.0.0")` for all IPv4
-interfaces or `(bind "::")` for all IPv6 interfaces. A config file contains exactly one `(server ...)`
-block, so there is no way to listen on both families at once; there is no dual-stack option.
+interfaces or `(bind "::")` for all IPv6 interfaces. A config file may contain at most one
+`(server ...)` block; if it is omitted, the defaults in the table apply. There is no way to listen
+on both families at once; there is no dual-stack option.
 
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
 | `(port N)` | TCP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces (explicit opt-in for remote clients), `"127.0.0.1"` = this machine over IPv4 only (default), `"::"` = all IPv6 interfaces (explicit opt-in), `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"127.0.0.1"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
-| `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
+| `(seed N)` | Seed for the random dice used by faults and by `(after-ms (random MIN MAX))` machine deadlines, 0-4294967295. Same seed gives the same sequences | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
 | `(frame-gap-ms N)` | Explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) | `rtu-pty`, `rtu-device`, `rtu-tcp` |
@@ -68,7 +70,8 @@ block, so there is no way to listen on both families at once; there is no dual-s
 | `(path "PATH")` | Byte-stream device path; opened with `O_NONBLOCK` | none | `rtu-device`, `ascii-device` (required there) |
 | `(tls ...)` | TLS settings for the TCP listener; see [TLS](#tls-modbus-tcp-over-tls). Rejected at load time in other modes, including `--check`, and in every mode of a no-TLS build | absent (plaintext) | `tcp` |
 
-Examples (each is a complete `(server ...)` block; a config file may contain only one):
+Examples below show alternatives; each `(server ...)` form is complete, and a config file may contain
+only one.
 
 ```scheme
 (server (mode tcp) (port 1502) (bind "127.0.0.1") (seed 1))
@@ -146,21 +149,20 @@ freeing the session, so clients can observe a clean TLS close without delaying o
 ungraceful peer drop reported with an empty OpenSSL error queue is treated as EOF and is not logged
 as a TLS failure.
 
-RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or, for a tty device, the
-existing baud rate); `(frame-gap-ms N)` takes precedence when set. ASCII frames are
-`:` + hex `[addr][PDU][LRC]` + `CR LF`, delimited by `CR LF` rather than inter-frame silence, so
-RTU timing options are not allowed in ASCII modes. A `CR` at the end of a read waits for its `LF`;
-`CR`, `LF`, and space between frames are ignored without incrementing the error counter. A second
-`:` before the terminator resynchronizes to that new frame, and a partial frame with no further
-bytes for 1 s is dropped. Discarded or undecodable ASCII frames increment the FC 08 bus
-communication error counter (`0x000C`) on every device. `(baud N)` in ASCII only changes the line
-speed. ASCII tty line settings default to 8N1; select 7E1 explicitly with
-`(data-bits 7) (parity even) (stop-bits 1)` when talking to a master that uses the serial-line
-default. These settings never change ASCII framing. They apply only to `ascii-pty` and
-`ascii-device`; `ascii-tcp` carries the same CRLF-delimited frames on a TCP byte stream and accepts
-only `mode`, `port`, `bind`, `seed`, and `idle-timeout-ms`. Unit-0 broadcast frames are silently
-ignored in all ASCII modes; `broadcast-execute` is rejected there at load time, including by
-`--check`.
+### Framing and serial lines
+
+RTU frame boundaries use baud-derived t3.5 when baud is known (`(baud N)` or the tty's current
+rate), unless `(frame-gap-ms N)` overrides it; with no known baud the fallback is 20 ms.
+`strict-t15` is a best-effort RTU byte-stream-only heuristic in baud-derived auto mode and never
+applies to RTU-over-TCP.
+
+ASCII is `:` + hex `[addr][PDU][LRC]` + `CR LF`, delimited by the terminator rather than silence;
+it has no RTU timing options. Inter-frame `CR`, `LF`, and spaces are ignored; a trailing `CR` waits
+for `LF`; a second `:` resynchronizes; a partial frame with no byte for 1 s is dropped. Rejected or
+undecodable frames increment FC08 `0x000C` on every device. Serial ASCII ttys default to 8N1;
+`(data-bits 7) (parity even) (stop-bits 1)` selects 7E1 but does not change framing. `ascii-tcp`
+carries the same frames over TCP and accepts only `mode`, `port`, `bind`, `seed`, and
+`idle-timeout-ms`. All ASCII modes ignore unit-0 broadcasts and reject `broadcast-execute`.
 
 ## `(device ...)`
 
@@ -187,7 +189,12 @@ ignored in all ASCII modes; `broadcast-execute` is rejected there at load time, 
 | `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |
 | `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
 | `(canopen-object ...)` | Repeatable CANopen object used by FC 43 MEI `0x0D` SDO uploads/downloads, see below | none |
+| `(machine NAME ...)` | Repeatable scripted state machine, see below (max 8 per device) | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
+
+Unit ids must be unique across devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`,
+`ascii-device` and `ascii-tcp` modes, unit ids 0 and 248-255 are rejected at startup and by
+`--check` because address 0 is broadcast and 248-255 are reserved by the Modbus serial specification.
 
 ### Read Device Identification (FC 43)
 
@@ -232,7 +239,7 @@ offset within its configured data. Undefined objects and out-of-range transfers 
   (canopen-object 5 #x6041 1 "AABB"))
 ```
 
-Unit ids must be different between devices. In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`,
+In `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`,
 `ascii-device` and `ascii-tcp` modes, unit ids 0 and 248-255 are rejected at startup and by
 `--check` because address 0 is broadcast and 248-255 are reserved by the Modbus serial specification.
 
@@ -245,7 +252,7 @@ There are four Modbus tables. Use the one your real device uses.
 | `coil` | Coils | on/off | yes | 01, 05, 15 |
 | `discrete` | Discrete inputs | on/off | no | 02 |
 | `input` | Input registers | numbers | no | 04 |
-| `holding` | Holding registers | numbers | yes | 03, 06, 16 |
+| `holding` | Holding registers | numbers | yes | 03, 06, 16, 22, 23 |
 
 Shape of a point:
 
@@ -403,6 +410,11 @@ error. A machine can `set!` a static point but not a ramp point, and a point may
 most one machine. A machine-driven point stays machine-owned: a client write changes the table
 value but does not freeze it, so the machine keeps driving it.
 
+Machines on the same device share one point table: any machine can read any configured point,
+including a point driven by another machine, but a point has at most one machine writer, and
+machines advance in declaration order on each tick, so earlier writes are visible to later machines
+in the same tick and later writes are visible to earlier machines on the next tick.
+
 Each transition has at least one trigger and at most one `(when EXPR)` and one `(after-ms ...)`:
 
 ```scheme
@@ -503,21 +515,19 @@ server fds are never closed by a fault.
   request has been processed. A plain `drop` only suppresses the response and leaves the
   connection open. Silent responses (listen-only mode and requests that produce no response)
   never close the connection.
-- Fault kinds combine on the same response: a fired exception replaces the response, and `corrupt`
-  still applies to that injected exception response. A dropped response suppresses whatever the
-  other kinds produced.
-- Exception and corrupt faults also affect only the response: the request is still processed
-  normally (writes apply, counters and ramp timing update). Exception faults replace the whole
-  response with `[FC|0x80][code]`; a sent injected exception is counted like a real exception in
-  FC08 and is not an FC11 successful completion. A suppressed injected exception counts only as no
-  response; real exceptions keep their exception/busy/NAK accounting even when dropped. Busy/NAK
-  counts use the injected code before any corrupt flip. Corrupt faults flip `resp[1]`, typically the byte count or the
-  first data byte after the function code (XOR with `0xFF`, or the function code itself for a
-  one-byte response); the response length does not change. The transport computes CRC (RTU),
-  LRC (ASCII), or the MBAP length (TCP) over the altered PDU, so receivers see a structurally valid
-  frame carrying wrong data: it is never rejected for a CRC/LRC error and does not increment the
-  FC08 `0x000C` communication-error counters. See [modbus-support.md](modbus-support.md) for the
-  exception codes this simulator otherwise emits.
+- Fault kinds combine independently: a fired exception replaces the response and `corrupt` still
+  applies to that injected exception; `drop` (including `disconnect`) suppresses whatever the other
+  kinds produced.
+- Faults only alter the response: the request is already processed (writes apply, counters and ramp
+  timing update). An exception replaces the response with `[FC|0x80][code]`. A sent injected
+  exception is counted like a real exception and not as an FC11 successful completion; a suppressed
+  injected exception counts only as no response. Real exceptions keep their accounting even when
+  dropped, and busy/NAK counts use the injected code before any corrupt flip.
+- A `corrupt` fault flips `resp[1]` (the byte count or first data byte; the function code for a
+  one-byte response) with XOR `0xFF`; the response length does not change. The transport recomputes
+  CRC (RTU), LRC (ASCII), or MBAP length (TCP), so receivers see a structurally valid frame with
+  wrong data: never a CRC/LRC error and no FC08 `0x000C` communication-error count. See
+  [modbus-support.md](modbus-support.md) for the exception codes this simulator otherwise emits.
 - Use `(seed N)` in `(server ...)` to repeat the exact same pattern of faults on every run.
 
 ## `(file ...)` (File Records, FC 20/21)
@@ -543,7 +553,8 @@ Shape:
   entries (and several `(record ...)` entries inside a file).
 - `REC_NO` is the starting record number, 0-9999 (`0x270F`).
 - Each `VALUE` is a 16-bit register value, 0-65535. A record defines that many consecutive
-  registers starting at `REC_NO` (one register per value, in order).
+  registers starting at `REC_NO` (one register per value, in order), and may contain at most 126
+  values (`DEVICE_MAX_RECORD_VALUES`).
 - Record ranges in the same file must not overlap. Record ranges must fit within record 9999.
 
 ```scheme
@@ -637,7 +648,7 @@ is wrong and show the entry. Common ones:
 | `a point cannot have both (static ...) and (ramp ...)` | Choose one |
 | `ramp step must be greater than 0` | `step` is always positive; use `from` and `to` for the direction |
 | `ramp range is too large for the step` | The ramp would need 2^63 steps or more; increase `step` or narrow `from`/`to` |
-| `the file has more than one (server ...)` | Keep a single `(server ...)` block |
+| `the file has more than one (server ...); only one is allowed` | Keep a single `(server ...)` block |
 | `server: parity is not valid in tcp mode` | The entry is not allowed by the selected mode; move it to a mode that supports it or remove it |
 | `server: broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)` | ASCII never executes broadcasts; remove the entry |
 | `server: (path ...) is required in rtu-device and ascii-device modes` | Add `(path "PATH")` |
