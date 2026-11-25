@@ -3,13 +3,29 @@
 
 #include <stdbool.h>
 
-/* Logging goes to stderr. DEBUG lines only print when verbose is on. */
-void	log_set_verbose(bool verbose);
-bool	log_verbose(void);
-void	log_write(const char* level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+typedef enum log_level_t log_level_t;
+enum log_level_t
+{
+	LOG_LEVEL_DEBUG,
+	LOG_LEVEL_INFO,
+	LOG_LEVEL_WARN,
+	LOG_LEVEL_OFF,
+};
 
-#define LOG_INFO(...)	log_write("info", __VA_ARGS__)
-#define LOG_WARN(...)	log_write("warn", __VA_ARGS__)
-#define LOG_DEBUG(...)	do { if (log_verbose()) log_write("debug", __VA_ARGS__); } while (0)
+/* Receives one formatted line without a trailing newline. Called synchronously
+ * from the thread that logs; `message` is only valid during the call. */
+typedef void (*log_sink_t)(void* ctx, log_level_t level, const char* message);
+
+/* Process-wide logging. By default INFO and WARN lines go to stderr with a UTC
+ * timestamp. A NULL sink restores the stderr default. Lines below the level are
+ * dropped before formatting; messages longer than 1023 bytes are truncated. */
+void	log_set_sink(log_sink_t sink, void* ctx);
+void	log_set_level(log_level_t level);
+bool	log_enabled(log_level_t level);
+void	log_write(log_level_t level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+
+#define LOG_INFO(...)	do { if (log_enabled(LOG_LEVEL_INFO)) log_write(LOG_LEVEL_INFO, __VA_ARGS__); } while (0)
+#define LOG_WARN(...)	do { if (log_enabled(LOG_LEVEL_WARN)) log_write(LOG_LEVEL_WARN, __VA_ARGS__); } while (0)
+#define LOG_DEBUG(...)	do { if (log_enabled(LOG_LEVEL_DEBUG)) log_write(LOG_LEVEL_DEBUG, __VA_ARGS__); } while (0)
 
 #endif

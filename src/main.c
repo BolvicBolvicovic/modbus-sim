@@ -265,7 +265,7 @@ main(int argc, char** argv)
 		return cli.show_help ? 0 : 2;
 	}
 
-	log_set_verbose(cli.verbose);
+	log_set_level(cli.verbose ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO);
 	app = ARENA_ALLOC();
 	if (!app)
 	{

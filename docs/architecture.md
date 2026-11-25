@@ -39,7 +39,7 @@
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
+| `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
@@ -126,6 +126,14 @@ The net layer installs no signal handlers. `main.c` owns SIGINT/SIGTERM (no `SA_
 `server_stop` on the running `server_t`) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
 byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
 embedding a TLS server must ignore SIGPIPE itself.
+
+### Logging (`util/log`)
+
+Logging is process-wide. By default INFO and WARN lines go to stderr with a UTC timestamp; the
+binary's `--verbose` sets the DEBUG level. A host embedding the stack installs
+`log_set_sink(fn, ctx)` to receive each formatted line (no trailing newline, truncated to 1023
+bytes, valid only during the call) and chooses `log_set_level(LOG_LEVEL_DEBUG|INFO|WARN|OFF)`;
+lines below the level are dropped before formatting. A `NULL` sink restores stderr.
 
 ### TCP (`net/tcp_server.c`)
 
