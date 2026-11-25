@@ -28,10 +28,45 @@ split_u32(word_order_t order, u32 raw, u16 out[2])
 	out[1] = (order == WORDS_HIGH_FIRST) ? low  : high;
 }
 
+static u32
+join_u32(word_order_t order, const u16* words)
+{
+	u16	high = (order == WORDS_HIGH_FIRST) ? words[0] : words[1];
+	u16	low  = (order == WORDS_HIGH_FIRST) ? words[1] : words[0];
+
+	return ((u32)high << 16) | low;
+}
+
 static f64
 clamp_round(f64 v, f64 lo, f64 hi)
 {
 	return round(MIN(hi, MAX(lo, v)));
+}
+
+f64
+decode_value(value_type_t type, word_order_t order, const u16* words)
+{
+	u32	raw  = 0;
+	f32	real = 0;
+
+	switch (type)
+	{
+	case VT_BOOL:
+		return words[0] != 0 ? 1.0 : 0.0;
+	case VT_U16:
+		return words[0];
+	case VT_S16:
+		return (s16)words[0];
+	case VT_U32:
+		return join_u32(order, words);
+	case VT_S32:
+		return (s32)join_u32(order, words);
+	case VT_F32:
+		raw = join_u32(order, words);
+		memcpy(&real, &raw, sizeof(real));
+		return real;
+	}
+	return 0;
 }
 
 u32

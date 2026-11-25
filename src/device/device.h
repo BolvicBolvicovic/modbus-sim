@@ -36,6 +36,7 @@ enum point_kind_t
 {
 	POINT_STATIC,	/* value never changes by itself */
 	POINT_RAMP,	/* value follows a ramp over time */
+	POINT_MACHINE,	/* value is driven by a scripted device machine */
 };
 
 /* Name: point_t

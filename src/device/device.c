@@ -158,6 +158,26 @@ device_tick(device_t* dev, u64 now_ms)
 	}
 }
 
+/* Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
+static u32
+find_point(const device_t* dev, space_kind_t space, u32 address)
+{
+	const point_t*	point = NULL;
+	u16		owner = 0;
+
+	if (space >= SPACE_COUNT || address >= ADDRESS_SPACE_SIZE)
+		return DEVICE_MAX_POINTS;
+
+	owner = dev->spaces[space].owner[address];
+	if (owner == 0 || (u32)owner > dev->point_count)
+		return DEVICE_MAX_POINTS;
+
+	point = &dev->points[owner - 1];
+	if (point->space != space || point->address != address)
+		return DEVICE_MAX_POINTS;
+	return owner - 1;
+}
+
 /* True when [address, address+qty) is inside the table and fully defined. */
 static bool
 range_is_defined(const space_t* space, u32 address, u32 qty)
@@ -199,8 +219,62 @@ device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16*
 		u16	owner = table->owner[address + i];
 
 		table->value[address + i] = in[i];
-		dev->points[owner - 1].kind = POINT_STATIC;
+		if (dev->points[owner - 1].kind != POINT_MACHINE)
+			dev->points[owner - 1].kind = POINT_STATIC;
 	}
+	return true;
+}
+
+bool
+device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out)
+{
+	const point_t*	point = NULL;
+	u16		words[2] = { 0, 0 };
+	u32		index = find_point(dev, space, address);
+
+	if (index == DEVICE_MAX_POINTS || !out)
+		return false;
+
+	point = &dev->points[index];
+	for (u32 i = 0; i < value_width(point->type); i++)
+		words[i] = dev->spaces[space].value[address + i];
+
+	if (space_is_bit(space))
+	{
+		out->type = VAL_BOOL;
+		out->b    = words[0] != 0;
+		out->n    = 0;
+	}
+	else
+	{
+		out->type = VAL_NUM;
+		out->n    = decode_value(point->type, point->order, words);
+		out->b    = false;
+	}
+	return true;
+}
+
+bool
+device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in)
+{
+	const point_t*	point = NULL;
+	u16		words[2] = { 0, 0 };
+	u32		index = find_point(dev, space, address);
+	f64		value = 0;
+
+	if (index == DEVICE_MAX_POINTS || !in)
+		return false;
+	if (in->type != (space_is_bit(space) ? VAL_BOOL : VAL_NUM))
+		return false;
+
+	point = &dev->points[index];
+	value = in->type == VAL_BOOL ? (in->b ? 1.0 : 0.0) : in->n;
+	encode_value(point->type, point->order, value, words);
+
+	for (u32 i = 0; i < value_width(point->type); i++)
+		dev->spaces[space].value[address + i] = words[i];
+
+	dev->points[index].kind = POINT_MACHINE;
 	return true;
 }
 
