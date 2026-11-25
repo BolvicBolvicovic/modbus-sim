@@ -1,5 +1,7 @@
 #include "vtest.h"
 #include "device/machine.h"
+#include "modbus/mbap.h"
+#include "modbus/pdu.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
 #include <string.h>
@@ -1674,5 +1676,90 @@ TEST(EffectiveFaultsKeepUnmentionedDeviceFaults)
 	ASSERT_EQ(effective.present == (FAULT_BIT(FAULT_DELAY) |
 				       FAULT_BIT(FAULT_EXCEPTION) |
 				       FAULT_BIT(FAULT_DROP)));
+	arena_release(arena);
+}
+
+static void
+add_overlay_schedule(machine_def_t* def, u16 state, fault_kind_t kind, u8 code,
+		     u32 after_ms, u32 count)
+{
+	fault_t* fault = &def->states[state].faults.by_kind[kind];
+
+	*fault = (fault_t){
+		.exception_code = code,
+		.schedule_count = 1,
+		.schedule_id    = 77,
+		.schedule       = { { .after_ms = after_ms, .count = count } },
+	};
+	def->states[state].faults.present |= FAULT_BIT(kind);
+}
+
+TEST(OverlayWithIdenticalScheduleRestartsProgress)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	machine_def_t*	def   = new_def(arena, "m");
+	point_t		p     = { .space = SPACE_HOLDING, .type = VT_U16,
+			      .kind = POINT_STATIC, .static_value = 5 };
+	rng_t		rng;
+	fault_decision_t decision = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	rng_seed(&rng, 1);
+	dev->faults.by_kind[FAULT_EXCEPTION] = (fault_t){
+		.exception_code = 4, .schedule_count = 1, .schedule_id = 77,
+		.schedule = { { .after_ms = 0, .count = 5 } },
+	};
+	dev->faults.present |= FAULT_BIT(FAULT_EXCEPTION);
+	add_state(def, "idle");
+	add_state(def, "alarm");
+	add_after(def, 0, 1, 100);
+	add_overlay_schedule(def, 1, FAULT_EXCEPTION, 6, 0, 5);
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	for (u32 i = 0; i < 5; i++)
+	{
+		ASSERT_EQ(modbus_handle_request(dev, &rng, 10, req, sizeof(req), resp, &decision) == 2);
+		ASSERT_EQ(resp[0] == 0x83 && resp[1] == 4);
+	}
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 50, req, sizeof(req), resp, &decision) == 4);
+
+	device_tick(dev, 100);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 100, req, sizeof(req), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == 0x83 && resp[1] == 6);
+	arena_release(arena);
+}
+
+TEST(OverlayScheduleAfterMsCountsFromActivation)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	machine_def_t*	def   = new_def(arena, "m");
+	point_t		p     = { .space = SPACE_INPUT, .type = VT_U16,
+			      .kind = POINT_STATIC, .static_value = 7 };
+	rng_t		rng;
+	fault_decision_t decision = { 0 };
+	u8		req[] = { FC_READ_INPUT_REGISTERS, 0, 0, 0, 1 };
+	u8		resp[MODBUS_MAX_PDU];
+
+	ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	rng_seed(&rng, 1);
+	add_state(def, "ok");
+	add_state(def, "degraded");
+	add_after(def, 0, 1, 120000);
+	add_overlay_schedule(def, 1, FAULT_SENSOR_DISCONNECT, 0, 10000, 50);
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	device_tick(dev, 120000);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 120000, req, sizeof(req), resp, &decision) == 4);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 129999, req, sizeof(req), resp, &decision) == 4);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 130000, req, sizeof(req), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == 0x84 && resp[1] == 4);
 	arena_release(arena);
 }

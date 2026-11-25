@@ -67,6 +67,8 @@ struct fault_t
 	fault_corrupt_mode_t	corrupt_mode;	/* used only by FAULT_CORRUPT */
 	u8			schedule_count;	/* 0..FAULT_MAX_SCHEDULE_STEPS */
 	u64			schedule_id;	/* 0 = no schedule */
+	u32			source;		/* 0 = device base, else machine/state overlay; set by device_effective_faults */
+	u64			origin_ms;	/* overlay activation time, the schedule origin when source != 0 */
 	fault_schedule_step_t	schedule[FAULT_MAX_SCHEDULE_STEPS];
 };
 
@@ -103,6 +105,8 @@ typedef struct fault_schedule_state_t fault_schedule_state_t;
 struct fault_schedule_state_t
 {
 	u64	schedule_id;	/* schedule the progress below belongs to */
+	u32	source;		/* fault source and activation time the progress belongs to */
+	u64	origin_ms;
 	u16	step;
 	u32	remaining;	/* requests left in the active step */
 	u64	next_at_ms;	/* earliest start time for `step` */
@@ -116,19 +120,16 @@ struct fault_runtime_t
 
 /* Rolls each configured fault independently and combines the decisions for one
  * response. `runtime` carries per-kind schedule progress across requests;
- * `start_ms` is the schedule origin (device start or last restart). A fault with
- * a nonzero schedule_id fires by schedule instead of percent: the first step
- * starts at start_ms + after_ms, each step fires for count consecutive
+ * `start_ms` is the schedule origin (device start or last restart) of base
+ * faults; an overlay fault (source != 0) uses its own origin_ms instead. A fault
+ * with a nonzero schedule_id fires by schedule instead of percent: the first step
+ * starts at the origin + after_ms, each step fires for count consecutive
  * requests, and each later step starts after_ms after the request that completed
- * the previous one. Changing schedule_id, or removing the kind from the active
+ * the previous one. Changing schedule_id, source or origin_ms, or removing the kind from the active
  * set, resets that kind's progress. An empty
  * set never drops, delays or disconnects. A fired corrupt fault with
  * FAULT_CORRUPT_NONE in the set still reports FAULT_CORRUPT_PDU. */
 fault_decision_t	fault_decide_at(const fault_set_t* set, rng_t* rng,
 					fault_runtime_t* runtime, u64 now_ms, u64 start_ms);
-
-/* Convenience wrapper with a zero runtime, equivalent to fault_decide_at() with
- * now_ms and start_ms both 0. */
-fault_decision_t	fault_decide(const fault_set_t* set, rng_t* rng);
 
 #endif

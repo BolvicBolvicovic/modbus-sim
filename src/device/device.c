@@ -181,16 +181,21 @@ device_restart(device_t* dev, u64 now_ms)
 		point->kind = kind;
 		point_apply(dev, point, now_ms);
 	}
+	device_machines_restart(dev, now_ms);
 	/* Reboot re-arms every fault schedule from the new start time. The restart
 	 * kind keeps its own progress so a scheduled restart advances through its
-	 * steps and stops instead of re-arming itself forever. */
+	 * steps and stops instead of re-arming itself forever; an overlay restart
+	 * fault follows the machine's fresh activation time for the same reason. */
 	{
 		fault_schedule_state_t restart_state = dev->fault_runtime.by_kind[FAULT_RESTART];
+		fault_set_t effective = device_effective_faults(dev);
 
+		if ((effective.present & FAULT_BIT(FAULT_RESTART)) != 0 &&
+		    effective.by_kind[FAULT_RESTART].source == restart_state.source)
+			restart_state.origin_ms = effective.by_kind[FAULT_RESTART].origin_ms;
 		dev->fault_runtime = (fault_runtime_t){ 0 };
 		dev->fault_runtime.by_kind[FAULT_RESTART] = restart_state;
 	}
-	device_machines_restart(dev, now_ms);
 }
 
 u32

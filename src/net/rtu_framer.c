@@ -103,12 +103,13 @@ handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
 		if (!ctx->broadcast_execute)
 			return; /* broadcast: no response */
 		/* Deliberately queue nothing: broadcasts execute on all devices but
-		 * never produce a response, so fault drop/delay is irrelevant here. */
+		 * never produce a response; a NULL rng keeps them from consuming fault
+		 * schedule steps. */
 		for (u32 i = 0; i < ctx->device_count; i++)
 		{
 			fault_decision_t ignored = { 0 };
 
-			(void)net_handle_pdu(ctx->devices[i], ctx->rng, now_ms, pdu, pdu_len,
+			(void)net_handle_pdu(ctx->devices[i], NULL, now_ms, pdu, pdu_len,
 					     resp, &ignored);
 		}
 		if (ctx->peer)

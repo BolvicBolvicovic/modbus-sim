@@ -8,7 +8,7 @@
  RTU   client ──addr+PDU+CRC───► net/rtu_server  ───────┤                        ▲
  ASCII client ──:hex+LRC+CRLF──► net/ascii_server       ├          device_tick() │ ramps → registers
  ASCII/TCP client ──same frames──► net/ascii_tcp_server ┘
-                      │                                       fault_decide()
+                      │                                       fault_decide_at()
                       ▼
      device/fault (delay / drop / exception / corrupt / disconnect /
                    restart / sensor-disconnect)
@@ -25,7 +25,7 @@
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
-4. `fault_decide` evaluates every effective fault kind (a percent roll or a schedule step) and the
+4. `fault_decide_at` evaluates every effective fault kind (a percent roll or a schedule step) and the
    transport applies the combined decision (drop, delay, exception, pdu/register/checksum corrupt,
    or disconnect on TCP-like transports). Effective faults are device faults with overlays from the
    machines' active states; the earliest declared machine wins for each kind. A fired

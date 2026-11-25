@@ -3,17 +3,6 @@
 enum { FAULT_MAX_DELAY_MS = 60000 };
 
 static void
-schedule_reset(fault_schedule_state_t* state, const fault_t* fault, u64 start_ms)
-{
-	state->schedule_id = fault->schedule_id;
-	state->step        = 0;
-	state->remaining   = 0;
-	state->next_at_ms  = start_ms;
-	if (fault->schedule_count > 0)
-		state->next_at_ms += fault->schedule[0].after_ms;
-}
-
-static void
 schedule_advance(fault_schedule_state_t* state, const fault_t* fault, u64 from_ms)
 {
 	state->step++;
@@ -25,8 +14,21 @@ schedule_advance(fault_schedule_state_t* state, const fault_t* fault, u64 from_m
 static bool
 schedule_fires(const fault_t* fault, fault_schedule_state_t* state, u64 now_ms, u64 start_ms)
 {
-	if (state->schedule_id != fault->schedule_id)
-		schedule_reset(state, fault, start_ms);
+	if (state->schedule_id != fault->schedule_id ||
+	    state->source != fault->source ||
+	    state->origin_ms != fault->origin_ms)
+	{
+		state->schedule_id = fault->schedule_id;
+		state->source      = fault->source;
+		state->origin_ms   = fault->origin_ms;
+		if (fault->source != 0)
+			start_ms = fault->origin_ms;
+		state->step        = 0;
+		state->remaining   = 0;
+		state->next_at_ms  = start_ms;
+		if (fault->schedule_count > 0)
+			state->next_at_ms += fault->schedule[0].after_ms;
+	}
 	if (fault->schedule_id == 0)
 		return false;
 	if (state->remaining > 0)
@@ -101,12 +103,4 @@ fault_decide_at(const fault_set_t* set, rng_t* rng, fault_runtime_t* runtime,
 			decision.delay_ms = FAULT_MAX_DELAY_MS;
 	}
 	return decision;
-}
-
-fault_decision_t
-fault_decide(const fault_set_t* set, rng_t* rng)
-{
-	fault_runtime_t runtime = { 0 };
-
-	return fault_decide_at(set, rng, &runtime, 0, 0);
 }

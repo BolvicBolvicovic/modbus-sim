@@ -987,6 +987,8 @@ device_effective_faults(const device_t* dev)
 			if ((overlay->present & bit) == 0 || (overridden & bit) != 0)
 				continue;
 			effective.by_kind[kind] = overlay->by_kind[kind];
+			effective.by_kind[kind].source = ((u32)m << 16 | state) + 1;
+			effective.by_kind[kind].origin_ms = sys->entered_at[m];
 			effective.present |= bit;
 			overridden |= bit;
 		}

@@ -3079,3 +3079,26 @@ TEST(OnWriteHandlerRunsInSuccessfulModbusWriteRequest)
 	ASSERT_EQ(dev->machines->entered_at[0] == 0);
 	arena_release(arena);
 }
+
+TEST(SilentRequestsDoNotConsumeFaultScheduleSteps)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			resp[MODBUS_MAX_PDU];
+	u8			listen[] = { FC_DIAGNOSTICS, 0x00, 0x04, 0x00, 0x00 };
+	u8			read[]   = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	fault_schedule_step_t	steps[]  = { { .after_ms = 0, .count = 1 } };
+
+	rng_seed(&rng, 5);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, listen, sizeof(listen), resp, &decision) == 0);
+	set_scheduled_fault(dev, FAULT_EXCEPTION, steps, 1, 1);
+	dev->faults.by_kind[FAULT_EXCEPTION].exception_code = EXC_ACKNOWLEDGE;
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(decision.drop);
+	dev->listen_only = false;
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == 0x83 && resp[1] == 0x05);
+	arena_release(arena);
+}

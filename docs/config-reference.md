@@ -552,12 +552,17 @@ A fault fires either by its `percent` chance or by its `schedule`; the two are m
 | `(percent N)` | Chance per response, 0-100. Not allowed together with `schedule`. | `100` |
 | `(schedule (step ...) ...)` | Non-repeating schedule of at most 8 steps; each step needs `(after-ms N)` (0-86400000) and `(count N)` (1-1000000). Not allowed together with `percent`. | none (percent roll) |
 
-Schedule timing: the first step becomes active `after-ms` after device start. Each later step
+Schedule timing: the first step becomes active `after-ms` after device start (or, for a machine
+state overlay, after that overlay became active). Each later step
 becomes active `after-ms` after the request that completes the previous step. A step fires exactly
 `count` consecutive requests, then the next step waits; after the last step the schedule stops.
 Schedules never repeat. Progress restarts when the active fault definition or schedule changes (for
 example a machine state overlay becoming active) and on a device restart, except that the restart
-kind keeps its own progress so a scheduled restart does not re-arm itself.
+kind keeps its own progress so a scheduled restart does not re-arm itself. A different source
+counts as a change even with an identical schedule: switching between the device definition and a
+state overlay, between two overlays, or re-entering a state restarts progress. Requests that
+produce no response (broadcast-execute unit-0 requests, listen-only mode) do not consume schedule
+steps.
 
 `corrupt` modes: `pdu` (the default) flips `resp[1]` (the byte count or first data byte; the
 function code for a one-byte response) with XOR `0xFF`, so the response length does not change.

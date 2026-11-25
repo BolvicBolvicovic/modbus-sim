@@ -1110,7 +1110,20 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 	                         fc != FC_GET_COM_EVENT_COUNTER &&
 	                         fc != FC_GET_COM_EVENT_LOG;
 
-	*decision = fault_decide_at(&faults, rng, &dev->fault_runtime, now_ms, dev->start_ms);
+	/* Silent requests (no reply, listen-only) are decided on a scratch copy of the
+	 * schedule progress so they never consume steps or restart the device; a NULL
+	 * rng (broadcasts) is not decided at all. */
+	*decision = (fault_decision_t){ 0 };
+	if (rng != NULL)
+	{
+		fault_runtime_t scratch = dev->fault_runtime;
+		bool silent = len == 0 || dev->listen_only;
+
+		*decision = fault_decide_at(&faults, rng, silent ? &scratch : &dev->fault_runtime,
+					    now_ms, dev->start_ms);
+		if (silent)
+			decision->restart = false;
+	}
 
 	/* The request was already processed above; faults only alter the response. */
 	if (decision->exception_code != 0)

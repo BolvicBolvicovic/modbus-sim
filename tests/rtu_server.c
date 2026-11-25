@@ -2215,3 +2215,35 @@ TEST(RtuServerBaudTruncatedFrameDoesNotLoseValidRequest)
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
 }
+
+TEST(RtuServerBroadcastDoesNotConsumeFaultScheduleStep)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x0001);
+	rtu_child_t	child = { 0 };
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	u32		len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	dev->faults.by_kind[FAULT_EXCEPTION] = (fault_t){
+		.exception_code = EXC_SLAVE_DEVICE_BUSY,
+		.schedule_count = 1,
+		.schedule_id    = 1,
+		.schedule       = { { .after_ms = 0, .count = 1 } },
+	};
+	dev->faults.present |= FAULT_BIT(FAULT_EXCEPTION);
+	{
+		device_t* devices[] = { dev };
+		ASSERT_EQ(rtu_child_start_opts_flags(&child, devices, 1, 20, 0, false, true));
+	}
+	ASSERT_EQ(send_rtu_req(child.fd, 0, req, sizeof(req)));
+	ASSERT_EQ(recv_none_fd(child.fd, 120));
+	ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
+	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
+	ASSERT_EQ(addr == 1 && len == 2);
+	ASSERT_EQ(resp[0] == 0x83 && resp[1] == 0x06);
+	ASSERT_EQ(rtu_child_stop(&child));
+	arena_release(arena);
+}

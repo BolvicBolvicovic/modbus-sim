@@ -177,6 +177,14 @@ add_scheduled_fault(fault_set_t* set, fault_kind_t kind,
 	set->present |= FAULT_BIT(kind);
 }
 
+static fault_decision_t
+decide(const fault_set_t* set, rng_t* rng)
+{
+	fault_runtime_t runtime = { 0 };
+
+	return fault_decide_at(set, rng, &runtime, 0, 0);
+}
+
 TEST(FaultNoneNeverFires)
 {
 	rng_t		rng;
@@ -185,7 +193,7 @@ TEST(FaultNoneNeverFires)
 	rng_seed(&rng, 1);
 	for (u32 i = 0; i < 1000; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0 &&
 			  d.exception_code == 0 && !d.corrupt);
@@ -201,7 +209,7 @@ TEST(FaultPercentIsRoughlyRespected)
 	add_fault(&set, FAULT_DROP, 0, 0, 25);
 	rng_seed(&rng, 99);
 	for (u32 i = 0; i < 10000; i++)
-		dropped += fault_decide(&set, &rng).drop;
+		dropped += decide(&set, &rng).drop;
 
 	ASSERT_EQ(dropped > 2200 && dropped < 2800);
 }
@@ -215,7 +223,7 @@ TEST(FaultDelayAlwaysAtHundredPercent)
 	rng_seed(&rng, 5);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 250);
 	}
@@ -230,7 +238,7 @@ TEST(FaultExceptionDecisionUsesCodeAtHundredPercent)
 	rng_seed(&rng, 5);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.exception_code == EXC_SLAVE_DEVICE_BUSY);
 		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0 && !d.corrupt);
@@ -240,7 +248,7 @@ TEST(FaultExceptionDecisionUsesCodeAtHundredPercent)
 	rng_seed(&rng, 5);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.exception_code == 0 && !d.corrupt);
 	}
@@ -255,7 +263,7 @@ TEST(FaultCorruptDecisionUsesFlagAtHundredPercent)
 	rng_seed(&rng, 7);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.corrupt && d.exception_code == 0);
 		ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0);
@@ -265,7 +273,7 @@ TEST(FaultCorruptDecisionUsesFlagAtHundredPercent)
 	rng_seed(&rng, 7);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(!d.corrupt && d.exception_code == 0);
 	}
@@ -280,7 +288,7 @@ TEST(FaultDisconnectAlwaysImpliesDrop)
 	rng_seed(&rng, 8);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.disconnect && d.drop);
 		ASSERT_EQ(d.delay_ms == 0 && d.exception_code == 0 && !d.corrupt);
@@ -290,7 +298,7 @@ TEST(FaultDisconnectAlwaysImpliesDrop)
 	rng_seed(&rng, 8);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(!d.disconnect && !d.drop);
 	}
@@ -306,7 +314,7 @@ TEST(FaultDelayAndCorruptCombine)
 	rng_seed(&rng, 11);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.delay_ms == 200 && d.corrupt);
 		ASSERT_EQ(!d.drop && !d.disconnect && d.exception_code == 0);
@@ -323,7 +331,7 @@ TEST(FaultExceptionAndCorruptCombine)
 	rng_seed(&rng, 12);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.exception_code == EXC_SLAVE_DEVICE_BUSY && d.corrupt);
 		ASSERT_EQ(!d.drop && !d.disconnect);
@@ -340,7 +348,7 @@ TEST(FaultDropAndExceptionCombine)
 	rng_seed(&rng, 13);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.drop && d.exception_code == EXC_MEMORY_PARITY_ERROR);
 		ASSERT_EQ(!d.disconnect && !d.corrupt);
@@ -357,7 +365,7 @@ TEST(FaultDelaysAreCapped)
 	rng_seed(&rng, 14);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	d = fault_decide(&set, &rng);
+		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(d.delay_ms == 60000 && d.corrupt);
 	}
@@ -374,8 +382,8 @@ TEST(FaultDecisionsAreDeterministicForSeed)
 	rng_seed(&second, 1234);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	a = fault_decide(&set, &first);
-		fault_decision_t	b = fault_decide(&set, &second);
+		fault_decision_t	a = decide(&set, &first);
+		fault_decision_t	b = decide(&set, &second);
 
 		ASSERT_EQ(a.exception_code == b.exception_code);
 	}
@@ -385,7 +393,7 @@ TEST(FaultDecisionsAreDeterministicForSeed)
 	rng_seed(&first, 4321);
 	rng_seed(&second, 4321);
 	for (u32 i = 0; i < 100; i++)
-		ASSERT_EQ(fault_decide(&set, &first).corrupt == fault_decide(&set, &second).corrupt);
+		ASSERT_EQ(decide(&set, &first).corrupt == decide(&set, &second).corrupt);
 
 	set.present = 0;
 	add_fault(&set, FAULT_DELAY, 100, 0, 50);
@@ -395,8 +403,8 @@ TEST(FaultDecisionsAreDeterministicForSeed)
 	rng_seed(&second, 5678);
 	for (u32 i = 0; i < 100; i++)
 	{
-		fault_decision_t	a = fault_decide(&set, &first);
-		fault_decision_t	b = fault_decide(&set, &second);
+		fault_decision_t	a = decide(&set, &first);
+		fault_decision_t	b = decide(&set, &second);
 
 		ASSERT_EQ(a.drop == b.drop && a.disconnect == b.disconnect);
 		ASSERT_EQ(a.delay_ms == b.delay_ms);
@@ -411,19 +419,19 @@ TEST(FaultCorruptModeDefaultsToPduAndReportsConfiguredMode)
 
 	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
 	rng_seed(&rng, 1);
-	d = fault_decide(&set, &rng);
+	d = decide(&set, &rng);
 	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_PDU);
 
 	set.by_kind[FAULT_CORRUPT].corrupt_mode = FAULT_CORRUPT_REGISTER;
-	d = fault_decide(&set, &rng);
+	d = decide(&set, &rng);
 	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_REGISTER);
 
 	set.by_kind[FAULT_CORRUPT].corrupt_mode = FAULT_CORRUPT_CHECKSUM;
-	d = fault_decide(&set, &rng);
+	d = decide(&set, &rng);
 	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_CHECKSUM);
 
 	set.by_kind[FAULT_CORRUPT].percent = 0;
-	d = fault_decide(&set, &rng);
+	d = decide(&set, &rng);
 	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_NONE);
 }
 
@@ -435,14 +443,14 @@ TEST(FaultRestartAndSensorDisconnectDoNotDrop)
 
 	add_fault(&set, FAULT_RESTART, 0, 0, 100);
 	rng_seed(&rng, 2);
-	d = fault_decide(&set, &rng);
+	d = decide(&set, &rng);
 	ASSERT_EQ(d.restart && !d.sensor_disconnect);
 	ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0);
 	ASSERT_EQ(d.exception_code == 0 && d.corrupt == FAULT_CORRUPT_NONE);
 
 	set.present = 0;
 	add_fault(&set, FAULT_SENSOR_DISCONNECT, 0, 0, 100);
-	d = fault_decide(&set, &rng);
+	d = decide(&set, &rng);
 	ASSERT_EQ(d.sensor_disconnect && !d.restart);
 	ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0);
 	ASSERT_EQ(d.exception_code == 0 && d.corrupt == FAULT_CORRUPT_NONE);

@@ -112,15 +112,6 @@ count_points(const device_t* dev, space_kind_t space)
 	return count;
 }
 
-static void
-fault_trigger(const fault_t* fault, char* buf, u32 size)
-{
-	if (fault->schedule_id != 0)
-		snprintf(buf, size, "by schedule");
-	else
-		snprintf(buf, size, "%u%% of responses", fault->percent);
-}
-
 static const char*
 fault_text(const fault_set_t* set, char* buf, u32 size)
 {
@@ -135,7 +126,10 @@ fault_text(const fault_set_t* set, char* buf, u32 size)
 
 		if ((set->present & FAULT_BIT(i)) == 0)
 			continue;
-		fault_trigger(&set->by_kind[i], trigger, sizeof(trigger));
+		if (set->by_kind[i].schedule_id != 0)
+			snprintf(trigger, sizeof(trigger), "by schedule");
+		else
+			snprintf(trigger, sizeof(trigger), "%u%% of responses", set->by_kind[i].percent);
 		switch ((fault_kind_t)i)
 		{
 			case FAULT_DROP       : snprintf(part, sizeof(part), "drop %s", trigger); break;
