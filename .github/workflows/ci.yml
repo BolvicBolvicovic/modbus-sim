@@ -1,8 +1,29 @@
 name: CI
 
 on:
+  # Docs-only changes do not affect builds or tests. Profiles and tools stay in
+  # scope because CI validates their contents.
   push:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'vlib/**'
+      - 'third_party/**'
+      - 'profiles/**'
+      - 'Makefile'
+      - '.github/workflows/**'
   pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'vlib/**'
+      - 'third_party/**'
+      - 'profiles/**'
+      - 'Makefile'
+      - '.github/workflows/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
