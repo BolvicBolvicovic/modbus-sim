@@ -576,14 +576,11 @@ exec_statements(device_t* dev, machine_system_t* sys, u16 machine_index, u16 sta
 	{
 		const machine_stmt_t* stmt = &def->statements[first + i];
 		val_t value = { 0 };
-		bool failed = false;
 
 		if (!expr_eval(def->nodes, stmt->expr_root, ctx, &value))
 		{
 			warn_once(sys, machine_index, state_index, role, ctx->failure);
-			if (stmt->kind == STMT_SET)
-				return false;
-			failed = true; /* an aborted condition counts as false */
+			return false;
 		}
 		if (stmt->kind == STMT_SET)
 		{
@@ -599,7 +596,7 @@ exec_statements(device_t* dev, machine_system_t* sys, u16 machine_index, u16 sta
 
 		if (stmt->kind == STMT_WHEN || stmt->kind == STMT_UNLESS)
 		{
-			bool take = !failed && value.type == VAL_BOOL && value.b;
+			bool take = value.type == VAL_BOOL && value.b;
 
 			if (stmt->kind == STMT_UNLESS)
 				take = !take;
@@ -608,8 +605,6 @@ exec_statements(device_t* dev, machine_system_t* sys, u16 machine_index, u16 sta
 						     (u16)(depth + 1)))
 				return false;
 		}
-		if (failed)
-			return false;
 	}
 	return true;
 }

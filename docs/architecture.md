@@ -211,6 +211,7 @@ fire when their deadline is due, earliest deadline first with ties in declaratio
 deadline timestamp; conditional transitions are checked in declaration order (with optional
 deadline) and fire at the current time. No transition means one on-tick. A firing runs on-exit,
 switches state, redraws all deadlines of the new state from the firing time, then runs on-enter.
+Catch-up gives intermediate states only on-exit/on-enter; just the final state gets one on-tick, and none runs at the firing cap.
 Random deadlines use a private RNG seeded from the server seed mixed with the device unit id, so
 they are deterministic per device. A machine may write only the first address of a configured,
 non-ramp point and becomes that point's owner (`POINT_MACHINE`); expression reads still go through
