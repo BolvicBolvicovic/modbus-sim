@@ -1,6 +1,7 @@
 #include "config/config.h"
 #include "config/config_device.h"
 #include "config/config_machine.h"
+#include "device/machine.h"
 #include "util/baud.h"
 #include "util/clock.h"
 #include "util/ip.h"
@@ -383,7 +384,8 @@ check_fault_modes(form_ctx_t* ctx, const config_t* config)
 	{
 		const device_t* dev = config->devices[i];
 
-		if ((dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) == 0)
+		if ((dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) == 0 &&
+		    !device_machine_fault_present(dev, FAULT_DISCONNECT))
 			continue;
 		return form_fail(ctx, "device '%s': (fault (kind disconnect)) is not valid in %s mode (TCP-like transports only)",
 				 dev->name, MODE_NAMES[config->mode]);

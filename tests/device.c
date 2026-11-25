@@ -816,7 +816,7 @@ TEST(DevicePointAccessEnforcesValueTypes)
 	arena_release(arena);
 }
 
-TEST(MasterWriteKeepsMachinePointKind)
+TEST(MasterWriteRejectsMachinePoint)
 {
 	arena_t*	arena  = ARENA_ALLOC();
 	device_t*	dev    = fresh_device(arena);
@@ -834,15 +834,17 @@ TEST(MasterWriteKeepsMachinePointKind)
 	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
 	ASSERT_EQ(out.type == VAL_NUM && out.n == 100);
 
-	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 2, words));
+	ASSERT_FAILURE(device_write(dev, SPACE_HOLDING, 0, 2, words));
 	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 100);
 	device_tick(dev, 5000);
 	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
-	ASSERT_EQ(out.type == VAL_NUM && out.n == 65536);
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 100);
 	arena_release(arena);
 }
 
-TEST(MasterWriteFreezesRampWithoutAffectingMachineOrStatic)
+TEST(MasterWriteRejectsRangeContainingMachinePoint)
 {
 	arena_t*	arena   = ARENA_ALLOC();
 	device_t*	dev     = fresh_device(arena);
@@ -860,13 +862,21 @@ TEST(MasterWriteFreezesRampWithoutAffectingMachineOrStatic)
 	ASSERT_EQ(device_add_point(dev, &machine) == NULL);
 	ASSERT_EQ(device_add_point(dev, &fixed) == NULL);
 
-	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 3, words));
+	ASSERT_FAILURE(device_write(dev, SPACE_HOLDING, 0, 3, words));
+	ASSERT_EQ(dev->points[0].kind == POINT_RAMP);
+	ASSERT_EQ(dev->points[1].kind == POINT_MACHINE);
+	ASSERT_EQ(dev->points[2].kind == POINT_STATIC);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 3, out));
+	ASSERT_EQ(out[0] == 0 && out[1] == 0 && out[2] == 0);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, words));
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 2, 1, &words[2]));
 	ASSERT_EQ(dev->points[0].kind == POINT_STATIC);
 	ASSERT_EQ(dev->points[1].kind == POINT_MACHINE);
 	ASSERT_EQ(dev->points[2].kind == POINT_STATIC);
 
 	device_tick(dev, 7000);
 	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 3, out));
-	ASSERT_EQ(out[0] == 500 && out[1] == 600 && out[2] == 700);
+	ASSERT_EQ(out[0] == 500 && out[1] == 0 && out[2] == 700);
 	arena_release(arena);
 }

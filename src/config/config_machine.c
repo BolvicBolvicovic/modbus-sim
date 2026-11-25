@@ -1,4 +1,5 @@
 #include "config/config_machine.h"
+#include "config/config_fault.h"
 #include "vlib/macros.h"
 #include <math.h>
 #include <stdarg.h>
@@ -10,15 +11,17 @@ enum
 	HANDLER_ENTER,
 	HANDLER_TICK,
 	HANDLER_EXIT,
+	HANDLER_WRITE,
 	HANDLER_COUNT,
 };
 
 static const char* const HANDLER_NAMES[HANDLER_COUNT] = {
-	"on-enter", "on-tick", "on-exit",
+	"on-enter", "on-tick", "on-exit", "on-write",
 };
 
 #define MACHINE_POINT_REF_MAX \
-	(MACHINE_MAX_MACHINES * (MACHINE_MAX_STATEMENTS + MACHINE_MAX_EXPR_NODES))
+	(MACHINE_MAX_MACHINES * (MACHINE_MAX_STATEMENTS + MACHINE_MAX_EXPR_NODES + \
+				 MACHINE_MAX_WRITE_HANDLERS + 1))
 #define EMITTED_NONE UINT16_MAX
 #define NO_CHILD_SLOT UINT16_MAX
 
@@ -40,6 +43,8 @@ struct machine_state_t
 	point_ref_t	point_refs[MACHINE_POINT_REF_MAX];
 	u32		point_ref_count;
 	u16		ref_by_stmt[MACHINE_MAX_MACHINES][MACHINE_MAX_STATEMENTS];
+	u16		state_register_ref[MACHINE_MAX_MACHINES];
+	u16		write_ref[MACHINE_MAX_MACHINES][MACHINE_MAX_WRITE_HANDLERS];
 };
 
 typedef struct staged_stmt_t staged_stmt_t;
@@ -76,6 +81,7 @@ struct compile_t
 	staged_stmt_t	staged[MACHINE_MAX_STATEMENTS];
 	u32		staged_count;
 	top_list_t	tops[MACHINE_MAX_STATES][HANDLER_COUNT];
+	top_list_t	write_tops[MACHINE_MAX_WRITE_HANDLERS];
 	u16		emitted[MACHINE_MAX_STATEMENTS];
 };
 
@@ -640,7 +646,7 @@ set_handler_range(compile_t* c, u16 state_index, u8 handler, u16 first, u16 coun
 		state->on_tick_first = first;
 		state->on_tick_count = count;
 	}
-	else
+	else if (handler == HANDLER_EXIT)
 	{
 		state->on_exit_first = first;
 		state->on_exit_count = count;
@@ -672,7 +678,7 @@ flatten_statements(compile_t* c)
 
 	for (u16 state = 0; state < c->def->state_count; state++)
 	{
-		for (u8 handler = 0; handler < HANDLER_COUNT; handler++)
+		for (u8 handler = 0; handler < HANDLER_WRITE; handler++)
 		{
 			top_list_t* list = &c->tops[state][handler];
 
@@ -686,6 +692,21 @@ flatten_statements(compile_t* c)
 			set_handler_range(c, state, handler, c->emitted[list->indices[0]],
 					  list->count);
 		}
+	}
+
+	for (u16 h = 0; h < c->def->write_handler_count; h++)
+	{
+		top_list_t* list = &c->write_tops[h];
+
+		if (list->count == 0)
+			return fail_machine(c, "on-write", "on-write requires at least one statement");
+		for (u16 i = 0; i < list->count; i++)
+		{
+			if (!emit_stmt(c, list->indices[i]))
+				return false;
+		}
+		c->def->write_handlers[h].first = c->emitted[list->indices[0]];
+		c->def->write_handlers[h].count = list->count;
 	}
 
 	for (u32 i = 0; i < c->staged_count; i++)
@@ -770,6 +791,7 @@ parse_state(compile_t* c, s7_pointer form)
 	machine_state_def_t* state = NULL;
 	const char*	name = NULL;
 	const char*	previous = NULL;
+	char		owner[MACHINE_NAME_MAX * 2 + 32];
 	bool		seen[HANDLER_COUNT] = { false };
 	s7_pointer	tail = NULL;
 
@@ -780,6 +802,8 @@ parse_state(compile_t* c, s7_pointer form)
 		return fail_at(c, s7_cadr(form), "bad state name");
 	previous = c->state_name;
 	c->state_name = name;
+	snprintf(owner, sizeof(owner), "machine '%s', state '%s'",
+		 c->machine_name ? c->machine_name : "(unknown)", name);
 	for (u16 i = 0; i < c->def->state_count; i++)
 	{
 		if (strcmp(c->def->states[i].name, name) == 0)
@@ -799,7 +823,13 @@ parse_state(compile_t* c, s7_pointer form)
 		s7_pointer handler_form = s7_car(p);
 		bool	    found = false;
 
-		for (u8 h = 0; h < HANDLER_COUNT; h++)
+		if (is_head(handler_form, "fault"))
+		{
+			if (!config_parse_fault(c->ctx, handler_form, &state->faults, owner))
+				return false;
+			continue;
+		}
+		for (u8 h = 0; h < HANDLER_WRITE; h++)
 		{
 			if (!is_head(handler_form, HANDLER_NAMES[h]))
 				continue;
@@ -947,12 +977,95 @@ parse_transition(compile_t* c, s7_pointer form)
 }
 
 static bool
+parse_state_register(compile_t* c, s7_pointer form)
+{
+	space_kind_t	space = SPACE_COUNT;
+	u32		address = 0;
+	u16		ref = 0;
+
+	if (s7_list_length(c->ctx->sc, form) != 2)
+		return fail_at(c, form, "expected (state-register (holding N)) or (state-register (input N))");
+	if (c->def->has_state_register)
+		return fail_at(c, form, "state register is given more than once");
+	if (!parse_point_form(c, s7_cadr(form), &space, &address))
+		return false;
+	if (space != SPACE_HOLDING && space != SPACE_INPUT)
+		return fail_at(c, form, "state register must name a holding or input point");
+	if (!add_point_ref(c, s7_cadr(form), space, address, EMITTED_NONE, &ref))
+		return false;
+
+	c->def->has_state_register = true;
+	c->def->state_register_space = (u8)space;
+	c->def->state_register_address = address;
+	c->state->state_register_ref[c->machine_index] = ref;
+	return true;
+}
+
+static bool
+parse_on_write(compile_t* c, s7_pointer form)
+{
+	space_kind_t	space = SPACE_COUNT;
+	u32		address = 0;
+	u16		ref = 0;
+	u16		handler = 0;
+	top_list_t*	list = NULL;
+	const char*	previous_state = c->state_name;
+
+	c->state_name = NULL;
+	/* On-write is machine-level: keep its refs out of state-name lookups. */
+	c->state_index = MACHINE_MAX_STATES;
+	c->handler = HANDLER_WRITE;
+	if (s7_list_length(c->ctx->sc, form) < 3)
+		return fail_at(c, form, "expected (on-write POINT STATEMENT ...)");
+	if (!parse_point_form(c, s7_cadr(form), &space, &address))
+		return false;
+	for (u16 i = 0; i < c->def->write_handler_count; i++)
+	{
+		const machine_write_handler_t* other = &c->def->write_handlers[i];
+
+		if (other->space == (u8)space && other->address == address)
+			return fail_at(c, s7_cadr(form), "on-write is given more than once for the same point");
+	}
+	if (c->def->write_handler_count >= MACHINE_MAX_WRITE_HANDLERS)
+		return fail_at(c, form, "MACHINE_MAX_WRITE_HANDLERS exceeded");
+	if (!add_point_ref(c, s7_cadr(form), space, address, EMITTED_NONE, &ref))
+		return false;
+
+	handler = c->def->write_handler_count++;
+	c->def->write_handlers[handler] = (machine_write_handler_t){
+		.space = (u8)space,
+		.address = address,
+	};
+	c->state->write_ref[c->machine_index][handler] = ref;
+	list = &c->write_tops[handler];
+	for (s7_pointer p = s7_cddr(form); s7_is_pair(p); p = s7_cdr(p))
+	{
+		u16 top_index = (u16)c->staged_count;
+
+		if (!compile_stmt(c, s7_car(p), true))
+			return false;
+		if (list->count >= MACHINE_MAX_STATEMENTS)
+			return fail_at(c, s7_car(p), "MACHINE_MAX_STATEMENTS exceeded");
+		list->indices[list->count++] = top_index;
+	}
+	if (list->count == 0)
+		return fail_at(c, form, "on-write requires at least one statement");
+	if (!s7_is_proper_list(c->ctx->sc, form))
+		return fail_at(c, form, "malformed on-write form");
+
+	c->state_name = previous_state;
+	return true;
+}
+
+static bool
 parse_machine(compile_t* c, s7_pointer form, const char* machine_text, device_t* dev)
 {
 	const char*	initial_name = NULL;
 	const char*	previous_state = NULL;
 	long		len = s7_list_length(c->ctx->sc, form);
 	enum { PHASE_VAR, PHASE_STATE, PHASE_TRANSITION } phase = PHASE_VAR;
+	bool		seen_item = false;
+	bool		seen_on_write = false;
 	s7_pointer	tail = NULL;
 	s7_pointer	p    = NULL;
 	const char*	error = NULL;
@@ -991,11 +1104,24 @@ parse_machine(compile_t* c, s7_pointer form, const char* machine_text, device_t*
 
 		if (!head)
 			return fail_machine(c, machine_text,
-					    "expected (var ...), (state ...) or (transition ...)");
+					    "expected (var ...), (state-register ...), (state ...), "
+					    "(on-write ...) or (transition ...)");
+		if (strcmp(head, "state-register") == 0)
+		{
+			if (seen_item || c->def->has_state_register)
+				return fail_machine(c, form_text(c->ctx, item),
+						    "state-register must immediately follow (initial STATE)");
+			seen_item = true;
+			if (!parse_state_register(c, item))
+				return false;
+			continue;
+		}
+		seen_item = true;
 		if (strcmp(head, "var") == 0)
 		{
 			if (phase != PHASE_VAR)
-				return fail_at(c, item, "var must precede states and transitions");
+				return fail_machine(c, form_text(c->ctx, item),
+						    "var must precede states and transitions");
 			if (!parse_var(c, item))
 				return false;
 			continue;
@@ -1003,9 +1129,23 @@ parse_machine(compile_t* c, s7_pointer form, const char* machine_text, device_t*
 		if (strcmp(head, "state") == 0)
 		{
 			if (phase == PHASE_TRANSITION)
-				return fail_at(c, item, "state must precede transitions");
+				return fail_machine(c, form_text(c->ctx, item),
+						    "state must precede transitions");
+			if (seen_on_write)
+				return fail_machine(c, form_text(c->ctx, item),
+						    "state must precede on-write handlers");
 			phase = PHASE_STATE;
 			if (!parse_state(c, item))
+				return false;
+			continue;
+		}
+		if (strcmp(head, "on-write") == 0)
+		{
+			if (phase != PHASE_STATE)
+				return fail_machine(c, form_text(c->ctx, item),
+						    "on-write must follow states and precede transitions");
+			seen_on_write = true;
+			if (!parse_on_write(c, item))
 				return false;
 			continue;
 		}
@@ -1016,7 +1156,7 @@ parse_machine(compile_t* c, s7_pointer form, const char* machine_text, device_t*
 				return false;
 			continue;
 		}
-		return fail_at(c, item, "unknown machine form");
+		return fail_machine(c, form_text(c->ctx, item), "unknown machine form");
 	}
 	if (!s7_is_null(c->ctx->sc, p))
 		return fail_machine(c, machine_text, "malformed machine form");
@@ -1067,6 +1207,13 @@ config_machine_add(form_ctx_t* ctx, s7_pointer form, device_t* dev)
 	return parse_machine(&c, form, text, dev);
 }
 
+static const char*
+ref_state_name(const machine_def_t* def, const point_ref_t* ref)
+{
+	return ref && ref->state_index < def->state_count ?
+	       def->states[ref->state_index].name : "(none)";
+}
+
 static const point_ref_t*
 find_expr_ref(const machine_state_t* state, u16 machine_index, u16 expr_index)
 {
@@ -1097,8 +1244,7 @@ check_expr_points(form_ctx_t* ctx, const machine_state_t* state, const device_t*
 			continue;
 		ref = find_expr_ref(state, machine_index, i);
 		text = ref ? ref->text : def->name;
-		state_name = ref && ref->state_index < def->state_count ?
-			     def->states[ref->state_index].name : "(none)";
+		state_name = ref_state_name(def, ref);
 		return form_fail(ctx, "%s: machine '%s', state '%s': point read must name the first address of a configured point",
 				 text, def->name, state_name);
 	}
@@ -1127,8 +1273,7 @@ check_set_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* 
 		if (ref_index)
 			ref = &state->point_refs[ref_index - 1];
 		text = ref ? ref->text : def->name;
-		state_name = ref && ref->state_index < def->state_count ?
-			     def->states[ref->state_index].name : "(none)";
+		state_name = ref_state_name(def, ref);
 		if (target.status == MACHINE_TARGET_NOT_FOUND)
 			return form_fail(ctx, "%s: machine '%s', state '%s': point %s %u is not the first address of a configured point",
 					 text, def->name, state_name,
@@ -1144,20 +1289,93 @@ check_set_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* 
 	return true;
 }
 
+static const char*
+ref_text(const machine_state_t* state, u16 ref_index)
+{
+	return ref_index ? state->point_refs[ref_index - 1].text : NULL;
+}
+
+static bool
+check_state_registers(form_ctx_t* ctx, const machine_state_t* state, const device_t* dev,
+		      const u8* set_owners, u8* reg_owners)
+{
+	for (u16 m = 0; m < dev->machines->count; m++)
+	{
+		const machine_def_t* def = &dev->machines->defs[m];
+		const point_ref_t* ref = NULL;
+		const char* text = NULL;
+		u32 index = 0;
+
+		if (!def->has_state_register)
+			continue;
+		ref = state->state_register_ref[m] ?
+		      &state->point_refs[state->state_register_ref[m] - 1] : NULL;
+		text = ref ? ref->text : "(state-register)";
+		index = device_find_point(dev, (space_kind_t)def->state_register_space,
+					  def->state_register_address);
+		if (index == DEVICE_MAX_POINTS)
+			return form_fail(ctx, "machine '%s': %s: state register must name the first address "
+					      "of a configured point", def->name, text);
+		if (dev->points[index].kind == POINT_RAMP)
+			return form_fail(ctx, "machine '%s': %s: state register cannot name a ramp point",
+					 def->name, text);
+		if (set_owners[index] != 0)
+			return form_fail(ctx, "machine '%s': %s: state register cannot name a point driven "
+					      "by a machine", def->name, text);
+		if (reg_owners[index] != 0)
+			return form_fail(ctx, "machine '%s': %s: state register point is already used by "
+					      "another machine", def->name, text);
+		reg_owners[index] = (u8)(m + 1);
+	}
+	return true;
+}
+
+static bool
+check_write_targets(form_ctx_t* ctx, const machine_state_t* state, const device_t* dev,
+		    const u8* set_owners, const u8* reg_owners)
+{
+	for (u16 m = 0; m < dev->machines->count; m++)
+	{
+		const machine_def_t* def = &dev->machines->defs[m];
+
+		for (u16 w = 0; w < def->write_handler_count; w++)
+		{
+			const machine_write_handler_t* h = &def->write_handlers[w];
+			const char* text = ref_text(state, state->write_ref[m][w]);
+			u32 index = device_find_point(dev, (space_kind_t)h->space, h->address);
+
+			if (!text)
+				text = "(on-write)";
+			if (index == DEVICE_MAX_POINTS)
+				return form_fail(ctx, "machine '%s': %s: on-write target must name the first "
+						      "address of a configured point", def->name, text);
+			if (set_owners[index] != 0 ||
+			    reg_owners[index] != 0 ||
+			    dev->points[index].kind == POINT_MACHINE)
+				return form_fail(ctx, "machine '%s': %s: on-write cannot watch a "
+						      "machine-driven point", def->name, text);
+		}
+	}
+	return true;
+}
+
 static bool
 check_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* dev)
 {
-	u8 owners[DEVICE_MAX_POINTS] = { 0 };
+	u8 set_owners[DEVICE_MAX_POINTS] = { 0 };
+	u8 reg_owners[DEVICE_MAX_POINTS] = { 0 };
 
 	for (u16 m = 0; m < dev->machines->count; m++)
 	{
 		const machine_def_t* def = &dev->machines->defs[m];
 
 		if (!check_expr_points(ctx, state, dev, m, def) ||
-		    !check_set_points(ctx, state, dev, m, def, owners))
+		    !check_set_points(ctx, state, dev, m, def, set_owners))
 			return false;
 	}
-	return true;
+	if (!check_state_registers(ctx, state, dev, set_owners, reg_owners))
+		return false;
+	return check_write_targets(ctx, state, dev, set_owners, reg_owners);
 }
 
 bool
@@ -1174,6 +1392,8 @@ config_machine_check_points(form_ctx_t* ctx, device_t* dev)
 
 		state->point_ref_count = 0;
 		memset(state->ref_by_stmt, 0, sizeof(state->ref_by_stmt));
+		memset(state->state_register_ref, 0, sizeof(state->state_register_ref));
+		memset(state->write_ref, 0, sizeof(state->write_ref));
 	}
 	return true;
 }

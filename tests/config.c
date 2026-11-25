@@ -1960,3 +1960,236 @@ TEST(ConfigMachineRejectsLimitViolations)
 		     "(machine m8 (initial idle) (state idle (on-enter (set! (holding 0) 1)))): "
 		     "too many machines on one device (max 8)");
 }
+
+TEST(ConfigMachinePhase2Loads)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev = NULL;
+	const machine_def_t* def = NULL;
+	fault_set_t	effective = { 0 };
+	u16		word = 3;
+	u16		out = 0;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1) (holding 0) (holding 1) (holding 2)"
+		" (machine m (initial idle)"
+		"  (state-register (holding 1))"
+		"  (state idle (fault (kind drop) (percent 100)))"
+		"  (state done (fault (kind exception) (code 4)))"
+		"  (on-write (holding 2) (set! (holding 0) 9))"
+		"  (transition idle done (after-ms 100))))",
+		&config, err, sizeof(err)));
+	dev = config.devices[0];
+	def = &dev->machines->defs[0];
+	ASSERT_EQ(def->has_state_register);
+	ASSERT_EQ(def->state_register_space == SPACE_HOLDING &&
+		  def->state_register_address == 1);
+	ASSERT_EQ(def->write_handler_count == 1);
+	ASSERT_EQ(def->write_handlers[0].space == SPACE_HOLDING &&
+		  def->write_handlers[0].address == 2);
+	ASSERT_EQ(def->states[0].faults.present == FAULT_BIT(FAULT_DROP));
+	ASSERT_EQ(def->states[0].faults.by_kind[FAULT_DROP].percent == 100);
+	ASSERT_EQ(def->states[1].faults.present == FAULT_BIT(FAULT_EXCEPTION));
+	ASSERT_EQ(def->states[1].faults.by_kind[FAULT_EXCEPTION].exception_code == 4);
+	ASSERT_EQ(def->states[1].faults.by_kind[FAULT_EXCEPTION].percent == 100);
+	ASSERT_EQ(dev->points[1].kind == POINT_MACHINE);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 0);
+	effective = device_effective_faults(dev);
+	ASSERT_EQ(effective.present == FAULT_BIT(FAULT_DROP));
+	ASSERT_EQ(effective.by_kind[FAULT_DROP].percent == 100);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 2, 1, &word));
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 9);
+	ASSERT_EQ(dev->machines->current[0] == 0); /* on-write does not fire transitions */
+
+	device_tick(dev, dev->start_ms + 100);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 1);
+	effective = device_effective_faults(dev);
+	ASSERT_EQ(effective.present == FAULT_BIT(FAULT_EXCEPTION));
+	ASSERT_EQ(effective.by_kind[FAULT_EXCEPTION].exception_code == 4);
+}
+
+TEST(ConfigMachinePhase2Validation)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 1)"
+		     " (machine m (initial idle) (state idle) (state-register (holding 1))))",
+		     "state-register must immediately follow");
+	EXPECT_ERROR("(device (unit-id 1) (holding 1)"
+		     " (machine m (initial idle) (state-register (holding 1))"
+		     "  (state idle (on-enter (set! (holding 1) 1)))))",
+		     "state register cannot name a point driven by a machine");
+	EXPECT_ERROR("(device (unit-id 1) (holding 1)"
+		     " (machine m (initial idle) (on-write (holding 1) (set! (holding 0) 1))"
+		     "  (state idle)))",
+		     "on-write must follow states and precede transitions");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (holding 1)"
+		     " (machine m (initial idle) (state idle)"
+		     "  (on-write (holding 1) (set! (holding 0) 1))"
+		     "  (on-write (holding 1) (set! (holding 0) 2))))",
+		     "on-write is given more than once for the same point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (holding 1)"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (set! (holding 1) 1)))"
+		     "  (on-write (holding 1) (set! (holding 0) 2))))",
+		     "on-write cannot watch a machine-driven point");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind delay) (delay-ms 10))"
+				    "               (fault (kind delay) (delay-ms 20)))"),
+		     "state 'idle' already has a (fault (kind delay)");
+	EXPECT_ERROR("(server (mode ascii-pty))"
+		     " (device (unit-id 1) (holding 0)"
+		     "  (machine m (initial idle)"
+		     "   (state idle (fault (kind disconnect) (percent 100)))))",
+		     "(fault (kind disconnect)) is not valid in ascii-pty mode");
+	EXPECT_ERROR("(server (mode rtu-pty))"
+		     " (device (unit-id 1) (holding 0)"
+		     "  (machine m (initial idle)"
+		     "   (state idle) (state bad (fault (kind disconnect) (percent 100)))))",
+		     "(fault (kind disconnect)) is not valid in rtu-pty mode");
+}
+
+TEST(ConfigMachineInputStateRegisterLoads)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev = NULL;
+	u16		out = 0;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1) (input 3)"
+		" (machine m (initial idle) (state-register (input 3))"
+		"  (state idle) (state done)"
+		"  (transition idle done (after-ms 5))))", &config, err, sizeof(err)));
+	dev = config.devices[0];
+	ASSERT_EQ(dev->machines->defs[0].state_register_space == SPACE_INPUT);
+	ASSERT_EQ(dev->machines->defs[0].state_register_address == 3);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 3, 1, &out));
+	ASSERT_EQ(out == 0);
+	device_tick(dev, dev->start_ms + 5);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 3, 1, &out));
+	ASSERT_EQ(out == 1);
+}
+
+TEST(ConfigMachineStateRegisterValidation)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (var n 0) (state-register (holding 0))"
+		     "  (state idle)))",
+		     "state-register must immediately follow");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (state-register (holding 0))"
+		     "  (state-register (holding 0)) (state idle)))",
+		     "state-register must immediately follow");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0)"
+		     " (machine m (initial idle) (state-register (coil 0)) (state idle)))",
+		     "state register must name a holding or input point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u32))"
+		     " (machine m (initial idle) (state-register (holding 1)) (state idle)))",
+		     "state register must name the first address of a configured point");
+	EXPECT_ERROR("(device (unit-id 1)"
+		     " (holding 0 (ramp (from 0) (to 10) (every-ms 100)))"
+		     " (machine m (initial idle) (state-register (holding 0)) (state idle)))",
+		     "state register cannot name a ramp point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (state-register (holding 0))"
+		     "  (state idle) (state done (on-enter (set! (holding 0) 1)))))",
+		     "state register cannot name a point driven by a machine");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine a (initial idle) (state-register (holding 0)) (state idle))"
+		     " (machine b (initial idle) (state-register (holding 0)) (state idle)))",
+		     "state register point is already used by another machine");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (holding 1)"
+		     " (machine m (initial idle) (state-register (holding 1))"
+		     "  (state idle) (on-write (holding 1) (set! (holding 0) 1))))",
+		     "on-write cannot watch a machine-driven point");
+}
+
+TEST(ConfigMachineOnWriteValidation)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle)"
+		     "  (on-write (holding 0) (set! (holding 0) 1)) (state idle)))",
+		     "on-write must follow states and precede transitions");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (state idle)"
+		     "  (transition idle idle (after-ms 1))"
+		     "  (on-write (holding 0) (set! (holding 0) 1))))",
+		     "on-write must follow states and precede transitions");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (state idle)"
+		     "  (on-write (holding 0) (set! (holding 0) 1)) (state done)))",
+		     "state must precede on-write handlers");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (state idle)"
+		     "  (on-write (holding 1) (set! (holding 0) 1))))",
+		     "on-write target must name the first address of a configured point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u32))"
+		     " (machine m (initial idle) (state idle)"
+		     "  (on-write (holding 1) (set! (holding 0) 1))))",
+		     "on-write target must name the first address of a configured point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle) (state idle)"
+		     "  (on-write (holding 0))))",
+		     "expected (on-write POINT STATEMENT ...)");
+}
+
+TEST(ConfigMachineStateFaultOverlayValidation)
+{
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind exception) (percent 100)))"),
+		     "missing required option (code ...)");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind delay) (percent 100)))"),
+		     "missing required option (delay-ms ...)");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind drop) (code 2)))"),
+		     "code is only valid for kind exception");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind drop) (delay-ms 10)))"),
+		     "delay-ms is only valid for kind delay");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind exception) (code 9)))"),
+		     "code 9 is reserved");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind drop) (percent 101)))"),
+		     "must be between 0 and 100");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"
+				    " (state idle (fault (kind bogus) (percent 10)))"),
+		     "expected one of: delay, drop, exception, corrupt, disconnect");
+}
+
+TEST(ConfigMachinePhase2Ordering)
+{
+	EXPECT_ERROR(MACHINE_DEVICE("m (state idle)"), "expected (initial STATE)");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle) (var n 0)"),
+		     "var must precede states and transitions");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (after-ms 1)) (state done)"),
+		     "state must precede transitions");
+}
+
+TEST(ConfigMachineAcceptsTcpLikeDisconnectOverlay)
+{
+	static const char* const MODES[] = { "tcp", "rtu-tcp", "ascii-tcp" };
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[256] = "";
+
+	for (u32 i = 0; i < ARRAY_COUNT(MODES); i++)
+	{
+		snprintf(text, sizeof(text),
+			 "(server (mode %s))"
+			 " (device (unit-id 1) (holding 0)"
+			 "  (machine m (initial idle)"
+			 "   (state idle (fault (kind disconnect) (percent 100)))))",
+			 MODES[i]);
+		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+		ASSERT_EQ(device_machine_fault_present(config.devices[0], FAULT_DISCONNECT));
+	}
+}

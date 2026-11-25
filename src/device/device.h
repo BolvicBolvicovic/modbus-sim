@@ -172,6 +172,7 @@ struct device_t
 	u16		diag_overrun_count;	/* FC 08 subfunction 0x0012 */
 	bool		listen_only;		/* FC 08 subfunction 0x0004 */
 	u64		start_ms;		/* ramps count their time from here */
+	u64		now_ms;			/* last device_tick, or start_ms before the first tick */
 	fault_set_t	faults;
 	arena_t*	arena;			/* backing arena for dynamic config storage */
 	u32		point_count;
@@ -209,8 +210,8 @@ void		device_tick(device_t* dev, u64 now_ms);
 bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty, u16* out);
 
 /* Writes `qty` consecutive addresses. Fails (and writes nothing) if any address is
- * out of range or undefined. A written ramp point becomes static; a machine-driven
- * point keeps its kind. */
+ * out of range, undefined or machine-owned. A written ramp point becomes static.
+ * On success, runs any matching machine on-write handlers in the same request. */
 bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
 
 /* Reads/writes one decoded point value. Machine-driven points use these instead of

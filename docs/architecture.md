@@ -24,18 +24,20 @@
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
-4. `fault_decide` rolls every configured fault kind and the transport applies the combined
-   decision (drop, delay, exception, corrupt, or disconnect on TCP-like transports).
+4. `fault_decide` rolls every effective fault kind and the transport applies the combined
+   decision (drop, delay, exception, corrupt, or disconnect on TCP-like transports). Effective
+   faults are device faults with overlays from the machines' active states; the earliest declared
+   machine wins for each kind.
 
 ## Modules
 
 | Folder | Files | Responsibility |
 |---|---|---|
 | `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging |
-| `src/device` | `device`, `behaviour`, `encode`, `fault` | the device model; knows nothing about Modbus framing, TCP or Scheme |
+| `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
-| `src/config` | `form`, `config_device`, `config` | s7 reading, option checking, error messages |
+| `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
@@ -59,7 +61,9 @@ Headers sit next to their `.c` files.
   (`POINT_STATIC`, `POINT_RAMP` or `POINT_MACHINE`).
 - `ramp_value()` is a pure function of `(params, start, now)`. No state, so results are
   reproducible and tests need no clock.
-- A client write turns the owning point static (`device_write`) only when it is not machine-owned.
+- A client write turns the owning point static (`device_write`) only when it is not machine-owned;
+  a write touching a machine-owned point fails all-or-nothing with exception 02. A successful write
+  runs matching machine `on-write` handlers in the same request, after the raw values are applied.
 
 ## Memory
 
@@ -77,8 +81,9 @@ Headers sit next to their `.c` files.
 The config is read with `(read ...)` and walked as data. This keeps the user-facing format
 simple, gives precise error messages, and means a config file cannot run arbitrary code.
 Restricted `(machine ...)` forms are read by s7 at load time and compiled into flat
-expression/statement arrays; `s7_eval_c_string` is used only once to install a fixed read-all
-helper, no user config form is evaluated, and request handling never touches s7.
+expression/statement arrays, including on-write handlers, per-state fault overlays and optional
+state-register points; `s7_eval_c_string` is used only once to install a fixed read-all helper,
+no user config form is evaluated, and request handling never touches s7.
 
 ## The network loops
 
@@ -182,16 +187,6 @@ only outstanding work is listed here.
   models.
 - Add gradual sensor degradation as a model variant. Why: drift and progressive failure should be
   configurable models, not bespoke per-test logic.
-
-### Scripted machines, phase 2
-
-- On-write handlers. Why: let a machine react to client writes without waiting for the next tick.
-- Per-state fault overlays. Why: fault behavior should follow machine state instead of being fixed
-  per device.
-- A state-register view of the current state. Why: clients and tests need to observe machine state
-  directly.
-- Read-only machine-owned points. Why: clients should not briefly overwrite a machine-driven point
-  between ticks.
 
 ### Fault injection
 
