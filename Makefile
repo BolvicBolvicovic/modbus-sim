@@ -6,18 +6,16 @@ TESTS       = $(BIN)-tests
 ASAN_BIN    = mogbus-asan
 ASAN_TESTS  = mogbus-asan-tests
 
-# ccache, clang and mold are optional speed-ups: prefer the fast toolchain only
-# when all three are installed, otherwise use cc and the default linker.
-FAST_TOOLS  := $(shell command -v ccache >/dev/null 2>&1 && \
-                       command -v clang >/dev/null 2>&1 && \
-                       command -v mold >/dev/null 2>&1 && echo 1)
-
+# Prefer clang, fall back to gcc then cc. ccache and mold are independent
+# speed-ups, each used only when installed.
 # GNU make predefines CC with origin 'default'. Replace only that built-in value:
 # an explicit CC from the environment or command line must still win.
 ifeq ($(origin CC),default)
-ifneq ($(FAST_TOOLS),)
-CC          := ccache clang
-endif
+DEFAULT_CC  := $(shell if command -v clang >/dev/null 2>&1; then echo clang; \
+                       elif command -v gcc >/dev/null 2>&1; then echo gcc; \
+                       else echo cc; fi)
+CCACHE      := $(shell command -v ccache >/dev/null 2>&1 && echo ccache)
+CC          := $(if $(CCACHE),$(CCACHE) $(DEFAULT_CC),$(DEFAULT_CC))
 endif
 
 # BUILD=dev skips optimization and _FORTIFY_SOURCE (which warns without -O) and
@@ -48,7 +46,15 @@ CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow
 # Hardening applies to every link, even when LDFLAGS is overridden; skip flags
 # the user already supplied so overrides stay free of duplicates.
 HARDEN_LDFLAGS = -pie -Wl,-z,relro,-z,now
-LDFLAGS     ?= $(if $(FAST_TOOLS),-fuse-ld=mold)
+# Probe the chosen compiler (including a ccache prefix) before adding mold; old
+# gcc versions reject -fuse-ld=mold. An explicit LDFLAGS skips the probe entirely.
+ifeq ($(origin LDFLAGS),undefined)
+MOLD_LDFLAGS := $(shell if command -v mold >/dev/null 2>&1 && \
+                            printf 'int main(void){return 0;}\n' | $(CC) -x c - -fuse-ld=mold -o /dev/null >/dev/null 2>&1; then \
+                        echo -fuse-ld=mold; \
+                 fi)
+LDFLAGS     ?= $(MOLD_LDFLAGS)
+endif
 LINK_FLAGS   = $(LDFLAGS) $(filter-out $(LDFLAGS),$(HARDEN_LDFLAGS))
 DEPFLAGS    = -MMD -MP
 INC         = -I. -Isrc
@@ -152,6 +158,7 @@ $(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 tests: $(TESTS) $(BIN)
+	./tools/check_toolchain.sh
 	./tools/run_tests.sh ./$(TESTS)
 
 $(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(S7_OBJ)

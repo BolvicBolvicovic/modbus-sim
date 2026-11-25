@@ -43,12 +43,12 @@ loopback; set `MOGBUS_BIN` to test a different binary.
 
 ### Build options
 
-The default build uses `cc` and the system linker with hardening flags
-`-pie -Wl,-z,relro,-z,now`. If `clang`, `ccache` and `mold` are all on `PATH`, they are used as an
-optional speed-up (`CC='ccache clang'` and `-fuse-ld=mold`), matching CI; if any is missing, the
-build falls back to `cc` and the default linker. An explicit `CC` or `LDFLAGS` from the environment
-or command line wins (for example, `CC=gcc make`); hardening flags are still appended unless
-already present.
+The default build prefers `clang`, falling back to `gcc` and then `cc`, and uses the system linker
+with hardening flags `-pie -Wl,-z,relro,-z,now`. `ccache` and `mold` are independent optional
+speed-ups: `ccache` prefixes the chosen compiler when installed, and `-fuse-ld=mold` is used only
+when mold is installed and the compiler accepts it (as in CI, where all three are present). An
+explicit `CC` or `LDFLAGS` from the environment or command line wins (for example, `CC=gcc make`);
+hardening flags are still appended unless already present.
 
 `BUILD` controls optimization (`prod` by default, matching CI):
 
@@ -242,7 +242,7 @@ src/            the program, one folder per module (headers next to their .c fil
   util/         clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
-tools/          modbus_probe.py, check_doc_examples.sh, run_tests.sh
+tools/          modbus_probe.py, check_doc_examples.sh, check_toolchain.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 ```
