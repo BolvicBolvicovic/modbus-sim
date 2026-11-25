@@ -345,6 +345,125 @@ most 8192 points total (`DEVICE_MAX_POINTS`); a count that would exceed this is 
 (holding 10 (type u32) (count 3) (static 7)) ; addresses 10-11, 12-13, 14-15
 ```
 
+## `(machine ...)`
+
+A device can own up to eight scripted state machines. They are read by s7 as data at config load,
+compiled into flat expression/statement arrays and copied into the device arena. At request time
+`device_tick` only advances them: no s7 evaluation and no allocation.
+
+```scheme
+(machine NAME
+  (initial STATE)
+  (var NAME LITERAL) ...        ; zero or more, before any (state ...)
+  (state NAME                   ; one or more, before any (transition ...)
+    (on-enter STATEMENT ...)
+    (on-tick STATEMENT ...)
+    (on-exit STATEMENT ...)) ...
+  (transition FROM TO TRIGGER ...) ...)
+```
+
+Handlers are optional and may appear in any order within a state.
+
+Names use lowercase letters, digits and `-`, start with a letter, and are at most 63 characters.
+Machine names are unique per device; state and variable names are unique per machine.
+`(initial STATE)` is required and must name a state. Entries must be ordered as shown: variables,
+then states, then transitions. Each handler can appear at most once per state.
+
+Statements (usable in handlers and nested in guards):
+
+```scheme
+(set! TARGET EXPR)
+(when EXPR STATEMENT ...)
+(unless EXPR STATEMENT ...)
+```
+
+`TARGET` is a variable name or a point accessor. A guard runs its body when its condition is true
+(`when`) or false (`unless`); guards can nest.
+
+Expressions are finite numbers (`0`, `1200`, `0.5`), booleans (`#t`, `#f`), a variable symbol, a
+point accessor, `(now-ms)`, `(elapsed-ms)`, exactly-two-operand `(+ A B)`, `(- A B)`, `(* A B)`,
+`(/ A B)`, `(min A B)`, `(max A B)`, `(< A B)`, `(<= A B)`, `(> A B)`, `(>= A B)`, `(= A B)`,
+`(not A)`, or `(if COND THEN ELSE)`. `(and A B ...)` and `(or A B ...)` take at least two
+operands and short-circuit. `(now-ms)` is the current monotonic time; `(elapsed-ms)` is the time
+since this machine last ticked or changed state.
+
+There are exactly two types: **number** and **boolean**. There is no implicit conversion:
+arithmetic (`+`, `-`, `*`, `/`, `min`, `max`) and ordering comparisons (`<`, `<=`, `>`, `>=`) need
+numbers; `=` needs two values of the same type; `if` conditions, guards (`when`/`unless`), `not`,
+`and`, `or` and transition `(when ...)` conditions need booleans; `if` branches and `set!` need
+matching types. Integer and real literals are both numbers; a value assigned to a point is
+rounded/clamped to that point's configured type.
+
+Point accessors are `(coil ADDR)`, `(discrete ADDR)`, `(input ADDR)` and `(holding ADDR)`. Reads go
+through the configured point, so bit tables yield booleans and registers yield numbers with the
+point's type and word order applied. Both reads and `set!` targets must name the **first address of
+a configured point**; an undefined address or a continuation address of a 32-bit point is a load
+error. A machine can `set!` a static point but not a ramp point, and a point may be driven by at
+most one machine. A machine-driven point stays machine-owned: a client write changes the table
+value but does not freeze it, so the machine keeps driving it.
+
+Each transition has at least one trigger and at most one `(when EXPR)` and one `(after-ms ...)`:
+
+```scheme
+(transition FROM TO (when EXPR) (after-ms MS))
+(transition FROM TO (after-ms (random MIN MAX)))
+```
+
+`MS` is a whole number from 1 to 86400000 (24 hours). `(random MIN MAX)` needs whole-number bounds
+with `1 <= MIN <= MAX <= 86400000`; the deadline is drawn from that inclusive range. An `after-ms`
+transition with no `when` fires at its deadline; a `when` transition fires at the current time,
+gated by its optional deadline. Due after-only transitions win, earliest deadline first (ties in
+declaration order), then `when` transitions are tested in declaration order; the first match fires.
+Firing runs the old state's `on-exit`, switches state, redraws all deadlines from the firing time,
+then runs the new state's `on-enter`. If no transition fires, one `on-tick` runs. A machine fires at
+most 64 transitions per tick.
+
+All `(machine ...)` items are compiled while the device is read; points may be declared before or
+after them. After the last device item, config seeds the machine RNG from `(seed N)` in `(server ...)`
+(mixed with the device unit id), then finalizes: it validates types and point ownership, draws
+initial deadlines and runs the initial state's `on-enter` at simulator start time. The same seed and
+unit id therefore give the same random deadlines on every run.
+
+Limits are `MACHINE_MAX_MACHINES` 8 per device, `MACHINE_MAX_STATES` 16,
+`MACHINE_MAX_TRANSITIONS` 32, `MACHINE_MAX_VARS` 16, `MACHINE_MAX_STATEMENTS` 128 (including nested
+statements), `MACHINE_MAX_EXPR_NODES` 512 and `MACHINE_MAX_FIRINGS` 64 per tick.
+
+```scheme
+(device
+  (unit-id 1)
+  (coil     0)
+  (coil     1)
+  (discrete 0)
+  (input    0 (type u16))
+  (holding  0 (type u16) (static 1200))
+
+  (machine motor
+    (initial idle)
+    (var speed 0)
+
+    (state idle
+      (on-enter (set! (discrete 0) #f) (set! speed 0) (set! (input 0) 0)))
+
+    (state starting
+      (on-tick (set! speed (min (holding 0) (+ speed (/ (* 40 (elapsed-ms)) 1000))))
+               (set! (input 0) speed)))
+
+    (state running
+      (on-enter (set! (discrete 0) #t))
+      (on-tick  (set! (input 0) (holding 0))))
+
+    (state tripped
+      (on-enter (set! (discrete 0) #f) (set! speed 0) (set! (input 0) 0)))
+
+    (transition idle     starting (when (coil 0)))
+    (transition starting running  (after-ms 3000))
+    (transition running  idle     (when (not (coil 0))))
+    (transition running  tripped  (after-ms (random 60000 600000)))
+    (transition tripped  idle     (when (coil 1)))))
+```
+
+See also [`profiles/motor.scm`](../profiles/motor.scm).
+
 ## `(fault ...)`
 
 A device can have several faults. `(fault ...)` is repeatable, but **only one definition per

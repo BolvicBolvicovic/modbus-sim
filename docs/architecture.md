@@ -75,8 +75,10 @@ Headers sit next to their `.c` files.
 ## Why s7 reads data instead of running code
 
 The config is read with `(read ...)` and walked as data. This keeps the user-facing format
-simple, gives precise error messages, and means a config file cannot run code. When dynamic
-models arrive (below), expressions can be evaluated with `s7_eval` in a controlled way.
+simple, gives precise error messages, and means a config file cannot run arbitrary code.
+Restricted `(machine ...)` forms are read by s7 at load time and compiled into flat
+expression/statement arrays; `s7_eval_c_string` is used only once to install a fixed read-all
+helper, no user config form is evaluated, and request handling never touches s7.
 
 ## The network loops
 
@@ -169,22 +171,23 @@ The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s
 
 ## Roadmap and where it plugs in
 
-**Dynamic behaviour models.** Add a `POINT_MODEL` kind in `device/behaviour.c`: a function of
-time and of other points (first-order lag, noise, sine, a heater that follows its setpoint).
-The config gets a new entry next to `(static ...)` and `(ramp ...)`; `parse_behaviour` in
-`config_device.c` is the only parser that changes. Models that need expressions can evaluate
-them with s7 while the config is read, or keep an s7 environment alive and call it from
-`device_tick`.
+**Dynamic behaviour models.** `POINT_MODEL` in `device/behaviour.c` is still a future idea: a
+function of time and of other points (first-order lag, noise, sine, a heater that follows its
+setpoint) configured next to `(static ...)` and `(ramp ...)`. The restricted state-machine subset
+is already implemented as the `(machine ...)` entry below; it uses a compile-to-flat-arrays
+parser rather than an s7 environment at request time.
 
 The current documented behaviour mechanisms are:
 
 - Static register values.
 - Ramping values (wrap, bounce or hold).
 - Writing a register can freeze its ramp.
+- Scripted state machines that read and drive points.
 - Delayed and dropped responses.
 
 That is enough for basic communication testing, but real industrial equipment has more
-complicated behaviour. For example, a VFD should have:
+complicated behaviour. The restricted machines above already cover the simpler VFD needs; a richer
+model may still need:
 
 - Start/stop state transitions.
 - Acceleration and deceleration.
@@ -193,12 +196,14 @@ complicated behaviour. For example, a VFD should have:
 - Interlocks.
 - Dependencies between registers.
 
-**Scripted device machines (runtime implemented).** `src/device/machine.{h,c}` provides a bounded,
-deterministic machine runtime in the device layer; Scheme config binding is a separate step.
-`machine_def_t` is deep-copied into the device arena by `device_add_machine`, validated by
-`device_finalize_machines` (optionally after `device_seed_machines`), and advanced by `device_tick`
-after ramps. Per-device limits are 8 machines, and per machine 16 states, 32 transitions, 16
-variables, 128 statements and 512 expression nodes; transitions are capped at 64 firings per tick.
+**Scripted device machines (implemented).** `src/device/machine.{h,c}` provides a bounded,
+deterministic machine runtime in the device layer. `(machine ...)` is read by s7 when the config
+loads and compiled by `src/config/config_machine.c` into flat expression/statement arrays; the
+resulting `machine_def_t` is deep-copied into the device arena by `device_add_machine`, validated
+by `device_finalize_machines` (after `device_seed_machines`), and advanced by `device_tick` after
+ramps. No s7 interpreter or arena allocation is involved at request time. Per-device limits are
+8 machines, and per machine 16 states, 32 transitions, 16 variables, 128 statements and 512
+expression nodes; transitions are capped at 64 firings per tick.
 Expressions use `expr_eval` with one 1000-step budget shared by all statements of a handler and a
 fresh budget for each transition condition; a failed evaluation aborts the rest of that handler but
 preserves earlier effects, and logs one warning per handler and failure kind. After-only transitions
@@ -209,7 +214,9 @@ switches state, redraws all deadlines of the new state from the firing time, the
 Random deadlines use a private RNG seeded from the server seed mixed with the device unit id, so
 they are deterministic per device. A machine may write only the first address of a configured,
 non-ramp point and becomes that point's owner (`POINT_MACHINE`); expression reads still go through
-`device_get_point`, and variables are private to their machine.
+`device_get_point`, and variables are private to their machine. Phase 2 candidates (not
+implemented): on-write handlers, fault overlays, a state-register view of the current state, and
+read-only machine-owned points.
 
 **More fault injection (implemented).** `fault_t` held one fault in the original roadmap; it is
 now a kind-keyed `fault_set_t` and `fault_decide` returns the combined decision (delay, drop,
