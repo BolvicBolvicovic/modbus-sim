@@ -2046,6 +2046,11 @@ TEST(ConfigMachinePhase2Validation)
 		     "  (machine m (initial idle)"
 		     "   (state idle (fault (kind disconnect) (percent 100)))))",
 		     "(fault (kind disconnect)) is not valid in ascii-pty mode");
+	EXPECT_ERROR("(server (mode rtu-pty))"
+		     " (device (unit-id 1) (holding 0)"
+		     "  (machine m (initial idle)"
+		     "   (state idle) (state bad (fault (kind disconnect) (percent 100)))))",
+		     "(fault (kind disconnect)) is not valid in rtu-pty mode");
 }
 
 TEST(ConfigMachineInputStateRegisterLoads)
@@ -2169,16 +2174,22 @@ TEST(ConfigMachinePhase2Ordering)
 		     "state must precede transitions");
 }
 
-TEST(ConfigMachineAcceptsTcpDisconnectOverlay)
+TEST(ConfigMachineAcceptsTcpLikeDisconnectOverlay)
 {
+	static const char* const MODES[] = { "tcp", "rtu-tcp", "ascii-tcp" };
 	config_t	config = { 0 };
 	char		err[256] = "";
+	char		text[256] = "";
 
-	ASSERT_SUCCESS(load_text(
-		"(server (mode tcp))"
-		" (device (unit-id 1) (holding 0)"
-		"  (machine m (initial idle)"
-		"   (state idle (fault (kind disconnect) (percent 100)))))",
-		&config, err, sizeof(err)));
-	ASSERT_EQ(device_machine_fault_present(config.devices[0], FAULT_DISCONNECT));
+	for (u32 i = 0; i < ARRAY_COUNT(MODES); i++)
+	{
+		snprintf(text, sizeof(text),
+			 "(server (mode %s))"
+			 " (device (unit-id 1) (holding 0)"
+			 "  (machine m (initial idle)"
+			 "   (state idle (fault (kind disconnect) (percent 100)))))",
+			 MODES[i]);
+		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+		ASSERT_EQ(device_machine_fault_present(config.devices[0], FAULT_DISCONNECT));
+	}
 }

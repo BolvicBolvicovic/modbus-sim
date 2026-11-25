@@ -2749,3 +2749,58 @@ TEST(StateRegisterIsReadOnlyToModbusClients)
 	ASSERT_EQ(value == 0);
 	arena_release(arena);
 }
+
+TEST(OnWriteHandlerRunsInSuccessfulModbusWriteRequest)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	machine_def_t*		def   = ARENA_PUSH_STRUCT(arena, machine_def_t);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			write[] = { FC_WRITE_SINGLE_REGISTER, 0, 0, 0xAB, 0xCD };
+	u8			resp[MODBUS_MAX_PDU] = { 0 };
+	u16			written = 0;
+	u16			side_effect = 0;
+
+	ASSERT_SUCCESS(def != NULL);
+	memset(def, 0, sizeof(*def));
+	snprintf(def->name, sizeof(def->name), "on-write");
+	def->state_count = 2;
+	snprintf(def->states[0].name, sizeof(def->states[0].name), "idle");
+	snprintf(def->states[1].name, sizeof(def->states[1].name), "later");
+	def->transitions[0] = (machine_transition_def_t){
+		.from = 0, .to = 1, .after_kind = AFTER_LITERAL, .after_literal_ms = 1,
+	};
+	def->transition_count = 1;
+	def->nodes[0] = (expr_node_t){
+		.kind = EXPR_POINT, .a = EXPR_NO_CHILD, .b = EXPR_NO_CHILD, .c = EXPR_NO_CHILD,
+		.space = SPACE_HOLDING, .address = 0,
+	};
+	def->node_count = 1;
+	def->statements[0] = (machine_stmt_t){
+		.kind = STMT_SET, .target_kind = TARGET_POINT,
+		.space = SPACE_HOLDING, .address = 1,
+		.expr_root = 0, .first_child = EXPR_NO_CHILD,
+	};
+	def->statement_count = 1;
+	def->write_handlers[0] = (machine_write_handler_t){
+		.first = 0, .count = 1, .space = SPACE_HOLDING, .address = 0,
+	};
+	def->write_handler_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	ASSERT_SUCCESS(device_finalize_machines(dev) == NULL);
+
+	rng_seed(&rng, 1);
+	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, write, sizeof(write), resp, &decision) == 5);
+	ASSERT_EQ(memcmp(resp, write, sizeof(write)) == 0); /* normal echo response */
+	ASSERT_EQ(decision.exception_code == 0 && !decision.drop &&
+		  !decision.disconnect && !decision.corrupt);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &written));
+	ASSERT_EQ(written == 0xABCD);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &side_effect));
+	ASSERT_EQ(side_effect == 0xABCD); /* handler saw the just-written value */
+	ASSERT_EQ(dev->machines->current[0] == 0);
+	ASSERT_EQ(dev->machines->advanced_to[0] == 0);
+	ASSERT_EQ(dev->machines->entered_at[0] == 0);
+	arena_release(arena);
+}
