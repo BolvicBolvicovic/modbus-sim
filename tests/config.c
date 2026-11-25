@@ -1110,6 +1110,8 @@ TEST(ConfigIdleTimeoutRejectsInvalidValues)
 	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms -1)) (device (unit-id 1) (holding 0))", "between 0 and 86400000");
 	EXPECT_ERROR("(server (mode rtu-tcp) (idle-timeout-ms 86400001)) (device (unit-id 1) (holding 0))", "between 0 and 86400000");
 	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms nope)) (device (unit-id 1) (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-fd)) (device (unit-id 1) (holding 0))", "mode");
+	EXPECT_ERROR("(server (mode ascii-fd)) (device (unit-id 1) (holding 0))", "mode");
 }
 
 TEST(ConfigFrameGapIsParsed)

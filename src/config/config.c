@@ -26,9 +26,20 @@ static const char READ_ALL_FORMS[] =
 	"                   (object->string info))))))";
 
 static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "space" };
+/* Indexed by every server_mode_t so messages never read past the table; a config
+ * file may select only the first CONFIG_MODE_COUNT names (the _FD modes are host-only). */
 static const char* const MODE_NAMES[] = {
-	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp"
+	[SERVER_MODE_TCP]          = "tcp",
+	[SERVER_MODE_RTU_PTY]      = "rtu-pty",
+	[SERVER_MODE_RTU_DEVICE]   = "rtu-device",
+	[SERVER_MODE_RTU_TCP]      = "rtu-tcp",
+	[SERVER_MODE_ASCII_PTY]    = "ascii-pty",
+	[SERVER_MODE_ASCII_DEVICE] = "ascii-device",
+	[SERVER_MODE_ASCII_TCP]    = "ascii-tcp",
+	[SERVER_MODE_RTU_FD]       = "rtu-fd",
+	[SERVER_MODE_ASCII_FD]     = "ascii-fd",
 };
+enum { CONFIG_MODE_COUNT = SERVER_MODE_ASCII_TCP + 1 };
 #if WITH_TLS
 static const char* const TLS_VERSION_NAMES[] = { "tls1.2", "tls1.3" };
 #endif
@@ -195,7 +206,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return form_fail(ctx, "tls: built without TLS support");
 #endif
 
-	if (!form_opt_choice(ctx, options, "mode", MODE_NAMES, ARRAY_COUNT(MODE_NAMES), &mode))
+	if (!form_opt_choice(ctx, options, "mode", MODE_NAMES, CONFIG_MODE_COUNT, &mode))
 		return false;
 
 	if (!form_opt_string(ctx, options, "path", &path))
