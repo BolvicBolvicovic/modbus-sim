@@ -669,3 +669,185 @@ TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
 	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, -1e39, w) == 2);
 	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 }
+
+static void
+check_value_round_trip(value_type_t type, word_order_t order, f64 value)
+{
+	u16	words[2] = { 0, 0 };
+	f64	decoded = 0;
+
+	ASSERT_EQ(encode_value(type, order, value, words) == value_width(type));
+	decoded = decode_value(type, order, words);
+	if (isnan(value))
+		ASSERT_EQ(isnan(decoded));
+	else
+		ASSERT_EQ(decoded == value);
+}
+
+TEST(DecodeValueRoundTripsEveryTypeAndWordOrder)
+{
+	static const f64 values[VT_BOOL + 1][4] = {
+		{ 0, 1, 12345, 65535 },					/* VT_U16 */
+		{ -32768, -1, 0, 32767 },					/* VT_S16 */
+		{ 0, 123456789, 3735928559.0, 4294967295.0 },		/* VT_U32 */
+		{ -2147483648.0, -123456789, 0, 2147483647.0 },		/* VT_S32 */
+		{ -3.5, 0, 1.25, 12345.5 },					/* VT_F32 */
+		{ 0, 1, 0, 1 },						/* VT_BOOL */
+	};
+
+	for (u32 type = 0; type <= VT_BOOL; type++)
+	{
+		for (u32 order = 0; order <= WORDS_LOW_FIRST; order++)
+		{
+			for (u32 i = 0; i < ARRAY_COUNT(values[0]); i++)
+				check_value_round_trip((value_type_t)type, (word_order_t)order,
+						       values[type][i]);
+		}
+	}
+}
+
+TEST(DecodeValueHandlesNonFiniteAndWordOrder)
+{
+	u16	words[2] = { 0x1234, 0x5678 };
+
+	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, words) == 0x12345678u);
+	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, words) == 0x12345678);
+	words[0] = 0x5678;
+	words[1] = 0x1234;
+	ASSERT_EQ(decode_value(VT_U32, WORDS_LOW_FIRST, words) == 0x12345678u);
+	ASSERT_EQ(decode_value(VT_S32, WORDS_LOW_FIRST, words) == 0x12345678);
+
+	words[0] = 0xFFFF;
+	words[1] = 0xFFFF;
+	ASSERT_EQ(decode_value(VT_U16, WORDS_HIGH_FIRST, words) == 65535);
+	ASSERT_EQ(decode_value(VT_S16, WORDS_HIGH_FIRST, words) == -1);
+	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, words) == 4294967295u);
+	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, words) == -1);
+	ASSERT_EQ(decode_value(VT_BOOL, WORDS_HIGH_FIRST, words) == 1);
+	words[0] = 0;
+	ASSERT_EQ(decode_value(VT_BOOL, WORDS_HIGH_FIRST, words) == 0);
+
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, NAN, words) == 2);
+	ASSERT_EQ(isnan(decode_value(VT_F32, WORDS_HIGH_FIRST, words)));
+	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, INFINITY, words) == 2);
+	ASSERT_EQ(isinf(decode_value(VT_F32, WORDS_LOW_FIRST, words)));
+	ASSERT_EQ(decode_value(VT_F32, WORDS_LOW_FIRST, words) > 0);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, -INFINITY, words) == 2);
+	ASSERT_EQ(isinf(decode_value(VT_F32, WORDS_LOW_FIRST, words)));
+	ASSERT_EQ(decode_value(VT_F32, WORDS_LOW_FIRST, words) < 0);
+}
+
+TEST(DevicePointAccessOnlyAtFirstAddress)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		p     = static_point(SPACE_HOLDING, 10, VT_U32, 0x11223344u);
+	val_t		in    = { .type = VAL_NUM, .n = 99 };
+	val_t		out   = { 0 };
+	u16		words[2];
+
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 10, &out));
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 0x11223344u);
+	ASSERT_FAILURE(device_get_point(dev, SPACE_HOLDING, 11, &out));
+	ASSERT_FAILURE(device_get_point(dev, SPACE_HOLDING, 9, &out));
+	ASSERT_FAILURE(device_get_point(dev, SPACE_HOLDING, 65535, &out));
+	ASSERT_FAILURE(device_get_point(dev, SPACE_INPUT, 10, &out));
+
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_HOLDING, 10, &in));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_HOLDING, 11, &in));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_HOLDING, 9, &in));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_INPUT, 10, &in));
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 10, 2, words));
+	ASSERT_EQ(words[0] == 0 && words[1] == 99);
+	arena_release(arena);
+}
+
+TEST(DevicePointAccessEnforcesValueTypes)
+{
+	arena_t*	arena   = ARENA_ALLOC();
+	device_t*	dev     = fresh_device(arena);
+	point_t		coil    = static_point(SPACE_COIL, 1, VT_BOOL, 0);
+	point_t		reg     = static_point(SPACE_HOLDING, 2, VT_U16, 7);
+	val_t		num     = { .type = VAL_NUM, .n = 1 };
+	val_t		boolean = { .type = VAL_BOOL, .b = true };
+	val_t		bad     = { .type = (val_type_t)99, .n = 1 };
+	val_t		out     = { 0 };
+
+	ASSERT_EQ(device_add_point(dev, &coil) == NULL);
+	ASSERT_EQ(device_add_point(dev, &reg) == NULL);
+
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_COIL, 1, &out));
+	ASSERT_EQ(out.type == VAL_BOOL && !out.b && out.n == 0);
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 2, &out));
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 7 && !out.b);
+
+	ASSERT_FAILURE(device_set_point(dev, SPACE_COIL, 1, &num));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_HOLDING, 2, &boolean));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_COIL, 1, &bad));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_HOLDING, 2, &bad));
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_COIL, 1, &boolean));
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_HOLDING, 2, &num));
+
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_COIL, 1, &out));
+	ASSERT_EQ(out.type == VAL_BOOL && out.b);
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 2, &out));
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 1);
+	arena_release(arena);
+}
+
+TEST(MasterWriteKeepsMachinePointKind)
+{
+	arena_t*	arena  = ARENA_ALLOC();
+	device_t*	dev    = fresh_device(arena);
+	point_t		p      = static_point(SPACE_HOLDING, 0, VT_U32, 5);
+	val_t		in     = { .type = VAL_NUM, .n = 100 };
+	val_t		out    = { 0 };
+	u16		words[2] = { 1, 0 };
+
+	p.kind = POINT_MACHINE;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_HOLDING, 0, &in));
+	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 100);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 2, words));
+	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+	device_tick(dev, 5000);
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
+	ASSERT_EQ(out.type == VAL_NUM && out.n == 65536);
+	arena_release(arena);
+}
+
+TEST(MasterWriteFreezesRampWithoutAffectingMachineOrStatic)
+{
+	arena_t*	arena   = ARENA_ALLOC();
+	device_t*	dev     = fresh_device(arena);
+	point_t		ramp    = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	point_t		machine = static_point(SPACE_HOLDING, 1, VT_U16, 0);
+	point_t		fixed   = static_point(SPACE_HOLDING, 2, VT_U16, 0);
+	u16		words[3] = { 500, 600, 700 };
+	u16		out[3]   = { 0, 0, 0 };
+
+	ramp.kind = POINT_RAMP;
+	ramp.ramp = (ramp_params_t){ .from = 0, .to = 100, .step = 10,
+				     .every_ms = 1000, .mode = RAMP_WRAP };
+	machine.kind = POINT_MACHINE;
+	ASSERT_EQ(device_add_point(dev, &ramp) == NULL);
+	ASSERT_EQ(device_add_point(dev, &machine) == NULL);
+	ASSERT_EQ(device_add_point(dev, &fixed) == NULL);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 3, words));
+	ASSERT_EQ(dev->points[0].kind == POINT_STATIC);
+	ASSERT_EQ(dev->points[1].kind == POINT_MACHINE);
+	ASSERT_EQ(dev->points[2].kind == POINT_STATIC);
+
+	device_tick(dev, 7000);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 3, out));
+	ASSERT_EQ(out[0] == 500 && out[1] == 600 && out[2] == 700);
+	arena_release(arena);
+}
