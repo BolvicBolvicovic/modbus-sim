@@ -785,12 +785,29 @@ device_machines_advance(device_t* dev, u64 now_ms)
 }
 
 const char*
+device_machines_prepare(device_t* dev)
+{
+	if (!dev)
+		return "device has no machine storage";
+	if (dev->machines)
+		return NULL;
+	if (!dev->arena)
+		return "device has no arena for machine storage";
+	dev->machines = ARENA_PUSH_STRUCT(dev->arena, machine_system_t);
+	if (!dev->machines)
+		return "out of memory while creating machine storage";
+	return NULL;
+}
+
+const char*
 device_add_machine(device_t* dev, const machine_def_t* def)
 {
 	machine_system_t* sys = NULL;
+	const char* error = NULL;
 
-	if (!dev || !dev->machines)
-		return "device has no machine storage";
+	error = device_machines_prepare(dev);
+	if (error)
+		return error;
 	sys = dev->machines;
 	if (sys->finalized)
 		return "cannot add machines after finalization";
@@ -821,8 +838,10 @@ device_finalize_machines(device_t* dev)
 	machine_system_t* sys = NULL;
 	const char* error = NULL;
 
-	if (!dev || !dev->machines)
+	if (!dev)
 		return "device has no machine storage";
+	if (!dev->machines)
+		return NULL;
 	sys = dev->machines;
 	validation.dev  = dev;
 	validation.sys = sys;

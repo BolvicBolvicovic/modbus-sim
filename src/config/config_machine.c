@@ -1047,9 +1047,11 @@ config_machine_add(form_ctx_t* ctx, s7_pointer form, device_t* dev)
 	machine_def_t		def = { 0 };
 	machine_state_t*	state = NULL;
 	const char*		text = NULL;
+	const char*		error = NULL;
 
-	if (!dev || !dev->machines)
-		return form_fail(ctx, "device has no machine storage");
+	error = device_machines_prepare(dev);
+	if (error)
+		return form_fail(ctx, "%s", error);
 	if (dev->machines->count >= MACHINE_MAX_MACHINES)
 		return form_fail(ctx, "%s: too many machines on one device (max %d)",
 				 form_text(ctx, form), MACHINE_MAX_MACHINES);
