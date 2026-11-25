@@ -164,9 +164,8 @@ device_tick(device_t* dev, u64 now_ms)
 	device_machines_advance(dev, now_ms);
 }
 
-/* Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
-static u32
-find_point(const device_t* dev, space_kind_t space, u32 address)
+u32
+device_find_point(const device_t* dev, space_kind_t space, u32 address)
 {
 	const point_t*	point = NULL;
 	u16		owner = 0;
@@ -236,7 +235,7 @@ device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* ou
 {
 	const point_t*	point = NULL;
 	u16		words[2] = { 0, 0 };
-	u32		index = find_point(dev, space, address);
+	u32		index = device_find_point(dev, space, address);
 
 	if (index == DEVICE_MAX_POINTS || !out)
 		return false;
@@ -265,7 +264,7 @@ device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in
 {
 	const point_t*	point = NULL;
 	u16		words[2] = { 0, 0 };
-	u32		index = find_point(dev, space, address);
+	u32		index = device_find_point(dev, space, address);
 	f64		value = 0;
 
 	if (index == DEVICE_MAX_POINTS || !in)

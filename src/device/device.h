@@ -199,6 +199,9 @@ device_t*	device_new(arena_t* arena, u64 start_ms);
 /* Adds a point. Returns NULL on success, or a static error message. */
 const char*	device_add_point(device_t* dev, const point_t* point);
 
+/* Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
+u32		device_find_point(const device_t* dev, space_kind_t space, u32 address);
+
 /* Moves every ramp to its value at `now_ms`. Call before serving a read. */
 void		device_tick(device_t* dev, u64 now_ms);
 

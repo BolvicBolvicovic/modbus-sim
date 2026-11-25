@@ -764,6 +764,25 @@ TEST(DevicePointAccessOnlyAtFirstAddress)
 	arena_release(arena);
 }
 
+TEST(DeviceFindPointMatchesFirstAddressOnly)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		wide  = static_point(SPACE_HOLDING, 10, VT_U32, 0x11223344u);
+	point_t		next  = static_point(SPACE_HOLDING, 12, VT_U16, 5);
+
+	ASSERT_EQ(device_add_point(dev, &wide) == NULL);
+	ASSERT_EQ(device_add_point(dev, &next) == NULL);
+	ASSERT_EQ(device_find_point(dev, SPACE_HOLDING, 10) == 0);
+	ASSERT_EQ(device_find_point(dev, SPACE_HOLDING, 12) == 1);
+	ASSERT_EQ(device_find_point(dev, SPACE_HOLDING, 11) == DEVICE_MAX_POINTS);
+	ASSERT_EQ(device_find_point(dev, SPACE_HOLDING, 9) == DEVICE_MAX_POINTS);
+	ASSERT_EQ(device_find_point(dev, SPACE_INPUT, 10) == DEVICE_MAX_POINTS);
+	ASSERT_EQ(device_find_point(dev, SPACE_HOLDING, ADDRESS_SPACE_SIZE) == DEVICE_MAX_POINTS);
+	ASSERT_EQ(device_find_point(dev, (space_kind_t)SPACE_COUNT, 0) == DEVICE_MAX_POINTS);
+	arena_release(arena);
+}
+
 TEST(DevicePointAccessEnforcesValueTypes)
 {
 	arena_t*	arena   = ARENA_ALLOC();

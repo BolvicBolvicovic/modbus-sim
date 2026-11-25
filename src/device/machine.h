@@ -30,6 +30,22 @@ enum machine_target_kind_t
 	TARGET_VAR, TARGET_POINT,
 };
 
+typedef enum machine_target_status_t machine_target_status_t;
+enum machine_target_status_t
+{
+	MACHINE_TARGET_OK,
+	MACHINE_TARGET_NOT_FOUND,
+	MACHINE_TARGET_RAMP,
+	MACHINE_TARGET_CONFLICT,
+};
+
+typedef struct machine_target_result_t machine_target_result_t;
+struct machine_target_result_t
+{
+	u32			index;
+	machine_target_status_t	status;
+};
+
 typedef enum machine_after_kind_t machine_after_kind_t;
 enum machine_after_kind_t
 {
@@ -112,6 +128,11 @@ struct machine_system_t
 	u8		warned[MACHINE_MAX_MACHINES][MACHINE_MAX_STATES][4];
 	bool		cap_warned[MACHINE_MAX_MACHINES];
 };
+
+/* Checks one set! point target, rejecting ramps and points already claimed by
+ * another machine. On success, records `machine_id` as the point's owner. */
+machine_target_result_t machine_check_target_point(const device_t* dev, space_kind_t space,
+						   u32 address, u8* owners, u8 machine_id);
 
 /* Adds a machine copy to `dev`. Returns NULL on success or a static error text. */
 const char*	device_add_machine(device_t* dev, const machine_def_t* def);
