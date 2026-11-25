@@ -228,23 +228,34 @@ the same frames on TCP byte streams (up to 32 clients, with `idle-timeout-ms`); 
 rejected in `ascii-tcp`. FC 08 subfunction `0x0003` (Change ASCII Delimiter) is rejected with
 exception 03; `CR LF` framing is fixed.
 
+## Use as a library
+
+mogbus also builds as `libmogbus.a` / `libmogbus.so` (`make lib`) with a small C API in
+`include/mogbus.h`: create devices in code or from a config file, start any transport and step it
+from your own loop. See [docs/library.md](docs/library.md) and `examples/embed_tcp.c`.
+
 ## Documentation
 
 - [docs/config-reference.md](docs/config-reference.md) - every config entry, with examples and error help
 - [docs/profiles.md](docs/profiles.md) - the profiles, and how to write your own
 - [docs/modbus-support.md](docs/modbus-support.md) - what the server answers, exceptions, limits
+- [docs/library.md](docs/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
 - [docs/architecture.md](docs/architecture.md) - code layout, coding rules, roadmap
 
 ## Project layout
 
 ```
+include/        mogbus.h, the public C API of the library
+examples/       embed_tcp.c, a host program using only mogbus.h
 src/            the program, one folder per module (headers next to their .c files)
   build_config.h  WITH_TLS compile-time fallback shared by sources and tests
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
   net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, and ASCII-over-TCP network loops; OpenSSL TLS wrapper or no-TLS stub
-  util/         clock, random numbers, logging
+  api/          the public C API implementation (top layer)
+  server/       transport-independent server facade and the config adapter
+  util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
 tools/          modbus_probe.py, check_doc_examples.sh, check_toolchain.sh, run_tests.sh

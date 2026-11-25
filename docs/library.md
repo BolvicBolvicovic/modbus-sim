@@ -1,0 +1,97 @@
+# Using mogbus as a library
+
+The `mogbus` binary is one front end; the same code builds as `libmogbus.a` and `libmogbus.so`
+with a small C API, so a test harness or application can embed simulated Modbus devices and drive
+them from its own loop. The only header is [`include/mogbus.h`](../include/mogbus.h) (it needs just
+`<stdint.h>`, `<stdbool.h>` and `<stddef.h>`; every symbol is `mogbus_*` / `MOGBUS_*`). The current
+version is 0.1.0 (`MOGBUS_VERSION_*`, `mogbus_version()`).
+
+## Build and link
+
+```bash
+make -j$(nproc) lib          # libmogbus.a + libmogbus.so
+make -j$(nproc) lib-check    # also builds and runs examples/embed_tcp.c against both
+```
+
+`make` alone still builds only the `mogbus` binary; `make tests` runs `lib-check`. The `.a` contains
+every project object plus the vendored s7 parser and the arena implementation
+(`src/util/arena_impl.c`), so it is self-contained. The `.so` exports only `mogbus_*` symbols
+(`lib-check` fails otherwise); everything else is `-fvisibility=hidden`.
+
+```bash
+# shared (found at run time via rpath or LD_LIBRARY_PATH)
+cc -Iinclude app.c -L. -lmogbus -Wl,-rpath,'$ORIGIN' -o app
+# static: also link what the library needs (-lm, plus -lssl -lcrypto in a TLS build)
+cc -Iinclude app.c libmogbus.a -lm -lssl -lcrypto -o app
+```
+
+A `WITH_TLS=0` build has no OpenSSL dependency; creating a server with `tls_enabled` then fails
+with an error. Objects are compiled with `-fPIC` (valid inside the PIE binary too), so one object
+set serves the binary and both libraries.
+
+## API overview
+
+| Area | Calls |
+|---|---|
+| Context | `mogbus_create`, `mogbus_destroy`, `mogbus_load_config` |
+| Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point` |
+| Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded) |
+| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name` |
+| Logging | `mogbus_set_log_sink`, `mogbus_set_log_level` |
+
+A context holds up to `MOGBUS_MAX_DEVICES` (16) devices and `MOGBUS_MAX_SERVERS` (8) servers. A
+server serves every device the context has when it is created. Points support static values and
+ramps; machines and faults come only from config files (`mogbus_load_config`), and code-built and
+loaded devices can be mixed. All transports of the binary are available through
+`mogbus_server_options_t`, plus `MOGBUS_MODE_RTU_FD` / `MOGBUS_MODE_ASCII_FD`, which serve a byte
+stream you already own (a socketpair or PTY master) and never close it. Start from
+`mogbus_server_options_defaults()`, which matches the config defaults (TCP on `127.0.0.1:1502`, 8N1).
+
+`mogbus_device_write()` is what a client write does: it works on every space (the host plays the
+physical side), turns a ramp static and runs machine on-write handlers, but fails on points a
+machine drives. `mogbus_device_set_value()` is the host side of a point, like a machine output: it
+also works on read-only spaces, but the point becomes host-owned, so ramps stop and client writes to
+it get exception 02. Both address a point by its first address. Reads advance ramps to the current
+time first.
+
+## Lifetimes and threading
+
+- Not thread-safe: one thread at a time uses a context. The thread that calls
+  `mogbus_server_step()` is the one that may touch the devices. Only `mogbus_server_stop()` may be
+  called from another thread or a signal handler.
+- No `malloc`: memory is a `mmap`-backed arena owned by the context. Devices live until
+  `mogbus_destroy()`; servers live until `mogbus_server_close()` (destroy closes the rest), and a
+  closed server's slot is reused by the next create.
+- Strings you pass in are copied; strings the library returns are borrowed. Errors are written to
+  the optional `err`/`err_size` buffer.
+- Logging is process-wide: `mogbus_set_log_sink()` receives each line synchronously on the logging
+  thread; the default writes INFO/WARN lines to stderr.
+- The library installs no signal handlers. TLS writes can raise SIGPIPE: ignore it in the host.
+  `mogbus_server_stop()` is signal-safe, so a host handler can call it, as `main.c` does.
+
+## Example
+
+[`examples/embed_tcp.c`](../examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
+adds a device with one holding register, starts a TCP server on a free loopback port, connects as a
+raw MBAP client in the same process, calls `mogbus_server_step()` between client I/O, and checks the
+value it reads back. `make lib-check` builds it against `libmogbus.so` (rpath `$ORIGIN/..`) and
+`libmogbus.a` and runs both.
+
+```c
+mogbus_t* ctx = mogbus_create();
+mogbus_device_t* dev = mogbus_add_device(ctx, 1, "embedded", err, sizeof(err));
+mogbus_point_t point = { .space = MOGBUS_HOLDING, .address = 10, .type = MOGBUS_TYPE_U16, .value = 1234 };
+mogbus_device_add_point(dev, &point, err, sizeof(err));
+
+mogbus_server_options_t options = mogbus_server_options_defaults();
+options.port = 1502;
+mogbus_server_t* server = mogbus_server_create(ctx, &options, err, sizeof(err));
+while (mogbus_server_step(server, 10) == MOGBUS_STEP_CONTINUE)
+    /* host work here */;
+mogbus_server_close(server);
+mogbus_destroy(ctx);
+```
+
+The implementation is `src/api/mogbus.c`, the top layer: it depends on `server`, `server_config`,
+`config`, `device` and `util`, and nothing includes it. Public enums mirror the internal ones and
+are checked with `_Static_assert`.

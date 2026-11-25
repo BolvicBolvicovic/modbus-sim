@@ -39,16 +39,17 @@
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/util` | `clock`, `rng`, `log` | monotonic milliseconds, reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
+| `src/util` | `clock`, `rng`, `log`, `arena_impl` | monotonic milliseconds, reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
+| `src/api` | `mogbus.c` | the public C API behind `include/mogbus.h` (see [library.md](library.md)): context, devices and points, server handles, logging; the top layer, nothing includes it |
 | `src/main.c` | | command line, signal handlers, `--check` summary, printing the PTY slave name |
 
 Dependencies point one way: `server → net → modbus → device → util`, `config → device → util`,
-`server_config → server, config`, and `main → server_config, server, config`. `config` includes only
+`server_config → server, config`, `main → server_config, server, config`, and `api → server_config, server, config, device, util`. `config` includes only
 `server/server_mode.h` (the transport enum, kept in its own header so config does not pull in `net`).
 A host that builds `server_options_t` itself can drop `config/` and `server_config.c`.
 `net_tls` wraps OpenSSL and keeps its headers out of other modules; `net_tls_ctx_t` is a
@@ -83,11 +84,12 @@ Headers sit next to their `.c` files.
   (the config file text, released right after loading). Each server (`tcp_server_t`, `rtu_server_t`, ...,
   including its TLS session pool) is a caller-owned struct: a stack local in `main`, but a host may use
   static or arena storage. It must not move between init and close.
+- A library host gets one arena per `mogbus_t` context (`src/api`) holding devices and server slots; `mogbus_destroy` releases it.
 - Request handling uses fixed-size stack buffers. Nothing is allocated per request.
 - Exception: the s7 interpreter allocates internally. It exists only while the config is read
   and is freed with `s7_free` (s7 keeps a few hundred bytes of interned strings; that is
   s7's design and harmless for a one-shot read).
-- `ARENA_IMPL` is defined in `main.c` only. The test runner (`vlib/vtest.c`) defines it for tests.
+- `ARENA_IMPL` is defined in `src/util/arena_impl.c` only (so `libmogbus` is self-contained). The test runner (`vlib/vtest.c`) defines its own, so the test binary leaves `arena_impl` out.
 
 ## Why s7 reads data instead of running code
 
@@ -202,8 +204,11 @@ TCP MBAP behavior or RTU byte-stream behavior.
 
 ## Build and tests
 
-`make` builds `mogbus`. `make tests` builds both `mogbus` (used by integration tests)
-and `mogbus-tests`, and runs the tests through `tools/run_tests.sh`: vtest always exits 0
+`make` builds `mogbus`; `make lib` builds `libmogbus.a` and `libmogbus.so` from the same
+objects (compiled `-fPIC -fvisibility=hidden`, so only `MOGBUS_API` symbols are exported), and
+`make lib-check` builds `examples/embed_tcp.c` against both and checks the exported symbols.
+`make tests` builds both `mogbus` (used by integration tests)
+and `mogbus-tests`, and `lib-check`, and runs the tests through `tools/run_tests.sh`: vtest always exits 0
 for whole suites, so the script runs each test by
 name and fails if any one fails. `tests/tcp_server.c` starts the real binary on a private loopback
 port and exercises the documented protocol behaviour (routing, exceptions, faults, connection

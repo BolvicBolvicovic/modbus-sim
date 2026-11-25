@@ -10,3 +10,7 @@ compile_commands.json
 .ccache/
 scan-output/
 .worktrees/
+libmogbus.a
+libmogbus.so
+examples/embed_tcp_shared
+examples/embed_tcp_static

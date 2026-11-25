@@ -6,6 +6,8 @@ on:
   push:
     paths:
       - 'src/**'
+      - 'include/**'
+      - 'examples/**'
       - 'tests/**'
       - 'tools/**'
       - 'vlib/**'
@@ -16,6 +18,8 @@ on:
   pull_request:
     paths:
       - 'src/**'
+      - 'include/**'
+      - 'examples/**'
       - 'tests/**'
       - 'tools/**'
       - 'vlib/**'
