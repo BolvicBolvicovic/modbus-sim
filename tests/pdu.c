@@ -71,6 +71,23 @@ diagnostic_request(u8* req, u16 subfunction, u16 data)
 	return 5;
 }
 
+static void
+assert_exception_counters(device_t* dev, u16 exceptions, u16 busy, u16 nak)
+{
+	u8	req[5];
+	u8	resp[MODBUS_MAX_PDU];
+
+	diagnostic_request(req, DIAG_SUB_RETURN_BUS_EXCEPTION_ERROR_COUNT, 0);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == exceptions);
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_BUSY_COUNT, 0);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == busy);
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_NAK_COUNT, 0);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == nak);
+}
+
 TEST(ReadHoldingRegisters)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -2317,7 +2334,8 @@ TEST(ExceptionFaultReplacesResponseAfterProcessing)
 	ASSERT_EQ(decision.exception_code == EXC_SLAVE_DEVICE_BUSY && !decision.corrupt);
 	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &value));
 	ASSERT_EQ(value == 0xABCD);
-	ASSERT_EQ(dev->message_count == 1 && dev->com_event_count == 1);
+	ASSERT_EQ(dev->message_count == 1 && dev->com_event_count == 0);
+	ASSERT_EQ(dev->diag_exception_count == 1 && dev->diag_busy_count == 1);
 
 	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, NULL, 0, resp, &decision) == 2);
 	ASSERT_EQ(resp[0] == 0x80 && resp[1] == EXC_SLAVE_DEVICE_BUSY);
@@ -2419,5 +2437,188 @@ TEST(SilentRequestSuppressesDisconnectFault)
 	rng_seed(&rng, 24);
 	ASSERT_EQ(modbus_handle_request(dev, &rng, 0, read, sizeof(read), resp, &decision) == 0);
 	ASSERT_EQ(decision.drop && !decision.disconnect);
+	arena_release(arena);
+}
+
+TEST(InjectedBusyExceptionCountsAsException)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80));
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_BUSY && !decision.drop);
+	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+	assert_exception_counters(dev, 1, 1, 0);
+	arena_release(arena);
+}
+
+TEST(InjectedNakExceptionCountsAsException)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_DEVICE_NAK, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(resp[1] == EXC_DEVICE_NAK);
+	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+	assert_exception_counters(dev, 1, 0, 1);
+	arena_release(arena);
+}
+
+TEST(InjectedOtherExceptionOnlyCountsException)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(resp[1] == EXC_MEMORY_PARITY_ERROR);
+	assert_exception_counters(dev, 1, 0, 0);
+	arena_release(arena);
+}
+
+TEST(CorruptInjectedBusyExceptionKeepsInjectedCodeCounters)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	set_fault(dev, FAULT_CORRUPT, 0, 0, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(resp[1] == (EXC_SLAVE_DEVICE_BUSY ^ 0xFF));
+	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 0);
+	assert_exception_counters(dev, 1, 1, 0);
+	arena_release(arena);
+}
+
+TEST(InjectedExceptionReplacesRealExceptionAccounting)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			bad_addr[] = { FC_READ_HOLDING_REGISTERS, 0x7F, 0xFF, 0, 1 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, bad_addr, sizeof(bad_addr), resp, &decision) == 2);
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_BUSY);
+	assert_exception_counters(dev, 1, 1, 0);
+	arena_release(arena);
+}
+
+TEST(InjectedExceptionOnRestartIsCounted)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			restart[5];
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	rng_seed(&rng, 1);
+	diagnostic_request(restart, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
+	ASSERT_EQ(run_request(dev, &rng, restart, sizeof(restart), resp, &decision) == 2);
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_BUSY && !decision.drop);
+	ASSERT_EQ(dev->com_event_count == 0);
+	assert_exception_counters(dev, 1, 1, 0);
+	arena_release(arena);
+}
+
+TEST(InjectedExceptionInListenOnlyIsSilent)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			listen[5];
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	diagnostic_request(listen, DIAG_SUB_LISTEN_ONLY_MODE, 0x0000);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, listen, sizeof(listen), resp, &decision) == 0);
+	ASSERT_EQ(dev->listen_only && decision.drop);
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	decision = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_BUSY && decision.drop);
+	ASSERT_EQ(!decision.disconnect && dev->diag_no_response_count == 2);
+
+	dev->listen_only = false; /* test-only: allow counter reads while faulted */
+	assert_exception_counters(dev, 0, 0, 0);
+	arena_release(arena);
+}
+
+TEST(CorruptFaultDoesNotCountException)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_CORRUPT, 0, 0, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == (0x02 ^ 0xFF));
+	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 1);
+	assert_exception_counters(dev, 0, 0, 0);
+	arena_release(arena);
+}
+
+TEST(DroppedInjectedExceptionOnlyCountsNoResponse)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			req[5];
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_DROP, 0, 0, 100);
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(decision.drop && !decision.disconnect);
+	diagnostic_request(req, DIAG_SUB_RETURN_SLAVE_NO_RESPONSE_COUNT, 0);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(get_be16(resp + 3) == 1);
+	assert_exception_counters(dev, 0, 0, 0);
 	arena_release(arena);
 }
