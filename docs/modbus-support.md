@@ -299,11 +299,8 @@ injection (see [config-reference.md](config-reference.md)). Fault injection is a
 feature, not a Modbus protocol feature: a device may configure several kinds at once (at most one
 definition per kind), and each kind rolls independently for every response.
 
-A state machine may also configure faults inside its states. While a state is active, an overlay
-overrides or adds its kind; kinds not mentioned in the active state keep the device setting. If
-several machines are in states that define the same kind, the earliest declared machine wins for
-that kind. Overlays use the same options and transport restrictions as device faults, so serial
-modes reject `disconnect` overlays too.
+State-machine fault overlays follow the same transport restrictions as device faults: serial modes
+reject `disconnect` overlays too.
 
 A fired exception fault replaces the response that normal processing produced, including an
 exception response, and does not undo the request's effects; a sent injected exception is counted

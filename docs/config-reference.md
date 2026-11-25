@@ -537,11 +537,8 @@ Each kind rolls independently with the chance given by its `percent`.
 (fault (kind disconnect) (percent 10))              ; 1 in 10 answers closes the connection
 ```
 
-A state machine may repeat the same form inside `(state ...)`; see `(machine ...)` above. Such a
-fault is an overlay for that state: while the state is active it overrides or adds that kind, while
-unmentioned kinds keep the device setting. If several active states define the same kind, the
-earliest declared machine wins. Overlays are checked with the same rules, including the transport
-restriction below.
+A state machine may also put `(fault ...)` forms inside `(state ...)`; these are per-state overlays.
+See the `(machine ...)` section above for the full overlay rules.
 
 `(kind disconnect)` is valid only for TCP-like transports (`tcp`, `rtu-tcp`, `ascii-tcp`).
 It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty` and `ascii-device`; serial
