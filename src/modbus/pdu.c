@@ -955,6 +955,17 @@ encapsulated_interface_transport(device_t* dev, const u8* req, u32 req_len, u8* 
 	return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 }
 
+/* Applies or withdraws the counters for one exception response. */
+static void
+account_exception(device_t* dev, u8 code, int delta)
+{
+	dev->diag_exception_count = (u16)(dev->diag_exception_count + delta);
+	if (code == EXC_DEVICE_BUSY)
+		dev->diag_busy_count = (u16)(dev->diag_busy_count + delta);
+	else if (code == EXC_DEVICE_NAK)
+		dev->diag_nak_count = (u16)(dev->diag_nak_count + delta);
+}
+
 /* --- dispatch --- */
 
 static u32
@@ -1054,7 +1065,7 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 
 	if (req_len == 0)
 	{
-		dev->diag_exception_count = (u16)(dev->diag_exception_count + 1);
+		account_exception(dev, EXC_ILLEGAL_FUNCTION, 1);
 		return modbus_exception(resp, 0, EXC_ILLEGAL_FUNCTION);
 	}
 
@@ -1065,7 +1076,7 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 	handler = find_pdu_handler(fc);
 	if (!handler)
 	{
-		dev->diag_exception_count = (u16)(dev->diag_exception_count + 1);
+		account_exception(dev, EXC_ILLEGAL_FUNCTION, 1);
 		return modbus_exception(resp, fc, EXC_ILLEGAL_FUNCTION);
 	}
 
@@ -1074,11 +1085,7 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 		return 0;
 	if ((resp[0] & 0x80) != 0)
 	{
-		dev->diag_exception_count = (u16)(dev->diag_exception_count + 1);
-		if (resp[1] == EXC_DEVICE_BUSY)
-			dev->diag_busy_count = (u16)(dev->diag_busy_count + 1);
-		else if (resp[1] == EXC_DEVICE_NAK)
-			dev->diag_nak_count = (u16)(dev->diag_nak_count + 1);
+		account_exception(dev, resp[1], 1);
 	}
 	else if (!is_restart_request(req, req_len) &&
 	         fc != FC_GET_COM_EVENT_COUNTER &&
@@ -1092,8 +1099,14 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 		      const u8* req, u32 req_len, u8* resp,
 		      fault_decision_t* decision)
 {
-	u32	len = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
-	u8	fc  = (req_len == 0) ? 0 : req[0];
+	u32	len            = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
+	u8	fc             = (req_len == 0) ? 0 : req[0];
+	bool	real_exception = len >= 2 && (resp[0] & 0x80) != 0;
+	u8	real_code      = real_exception ? resp[1] : 0;
+	bool	counted_event  = len > 0 && !real_exception &&
+	                         !is_restart_request(req, req_len) &&
+	                         fc != FC_GET_COM_EVENT_COUNTER &&
+	                         fc != FC_GET_COM_EVENT_LOG;
 
 	*decision = fault_decide(&dev->faults, rng);
 
@@ -1107,6 +1120,17 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 		/* A silent reply cannot justify closing the client's connection. */
 		decision->drop        = true;
 		decision->disconnect  = false;
+	}
+	/* Counters follow the reply the master sees: a sent injected exception replaces
+	 * the real result's accounting, while a suppressed injected exception only counts
+	 * as silent. Real exception accounting is already done and is left unchanged. */
+	if (decision->exception_code != 0 && !decision->drop)
+	{
+		if (real_exception)
+			account_exception(dev, real_code, -1);
+		else if (counted_event)
+			dev->com_event_count = (u16)(dev->com_event_count - 1);
+		account_exception(dev, decision->exception_code, 1);
 	}
 	if (decision->drop)
 		dev->diag_no_response_count = (u16)(dev->diag_no_response_count + 1);

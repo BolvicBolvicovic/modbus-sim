@@ -383,7 +383,10 @@ server fds are never closed by a fault.
   other kinds produced.
 - Exception and corrupt faults also affect only the response: the request is still processed
   normally (writes apply, counters and ramp timing update). Exception faults replace the whole
-  response with `[FC|0x80][code]`. Corrupt faults flip `resp[1]`, typically the byte count or the
+  response with `[FC|0x80][code]`; a sent injected exception is counted like a real exception in
+  FC08 and is not an FC11 successful completion. A suppressed injected exception counts only as no
+  response; real exceptions keep their exception/busy/NAK accounting even when dropped. Busy/NAK
+  counts use the injected code before any corrupt flip. Corrupt faults flip `resp[1]`, typically the byte count or the
   first data byte after the function code (XOR with `0xFF`, or the function code itself for a
   one-byte response); the response length does not change. The transport computes CRC (RTU),
   LRC (ASCII), or the MBAP length (TCP) over the altered PDU, so receivers see a structurally valid

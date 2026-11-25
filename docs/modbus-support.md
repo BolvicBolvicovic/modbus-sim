@@ -217,15 +217,15 @@ Diagnostics (FC 08) takes a 2-byte subfunction and an N x 2-byte data field: req
 | `0x000A` | Clear Counters | Echoes the request and clears the FC 08 diagnostic counters and diagnostic register. It does not clear the FC 11/12 communication event counter or the FC 12 event log, and does not exit listen-only mode. Like every other request except restart, it is ignored while listen-only. |
 | `0x000B` | Return Bus Message Count | Returns the per-device `message_count` (also used by FC 12), including the counter-read request itself. |
 | `0x000C` | Return Bus Communication Error Count | Increments once for every device when a bad-CRC/invalid RTU frame or a malformed/bad-LRC/timed-out ASCII frame is discarded; TCP has no bus framing errors. Exception responses do not increment this counter. Starts at 0. |
-| `0x000D` | Return Bus Exception Error Count | Increments for every exception response, including address errors. Starts at 0. |
+| `0x000D` | Return Bus Exception Error Count | Increments for every exception response, including address errors and injected exception faults that are actually sent. Starts at 0. |
 | `0x000E` | Return Slave Message Count | Same per-device `message_count` as `0x000B`. |
 | `0x000F` | Return Slave No Response Count | Increments whenever a response is suppressed by listen-only mode, a configured drop fault, or a disconnect fault (which implies drop), including the listen-only and silent-restart requests themselves. Starts at 0. |
-| `0x0010` | Return Slave NAK Count | Always 0; no NAK response is modeled. |
-| `0x0011` | Return Slave Busy Count | Always 0; no busy exception is modeled. |
+| `0x0010` | Return Slave NAK Count | Increments for exception 07 (Negative Acknowledge) responses, including injected ones; otherwise 0. |
+| `0x0011` | Return Slave Busy Count | Increments for exception 06 (Device Busy) responses, including injected ones; otherwise 0. |
 | `0x0012` | Return Bus Character Overrun Count | Always 0; there is no UART character stream in which an overrun can occur. |
 | `0x0014` | Clear Overrun Counter and Flag | Requires data `0x0000`, then clears the bus character-overrun counter and diagnostic register bit `0x0001`, and echoes the request. Other counters and bits are unchanged. |
 
-The shared `message_count` follows the FC 12 rule: it increments once for every request PDU delivered to a device, including requests ignored in listen-only mode, exceptions, and FC 08/11/12 requests, and wraps at 65536. FC 08 `0x0001` (both data values) and `0x000A` reset it together with the other FC 08 diagnostic counters. The FC 11/12 `com_event_count` follows its own rule (successful completions only, excluding FC 11/12 and all Restart Communications requests) and is reset by either Restart Communications data value but not by `0x000A`. All FC 08 diagnostic counters start at 0 and wrap at 65536; the no-response counter (`0x000F`) also increments when a configured drop or disconnect fault suppresses a response.
+The shared `message_count` follows the FC 12 rule: it increments once for every request PDU delivered to a device, including requests ignored in listen-only mode, exceptions, and FC 08/11/12 requests, and wraps at 65536. FC 08 `0x0001` (both data values) and `0x000A` reset it together with the other FC 08 diagnostic counters. The FC 11/12 `com_event_count` follows its own rule (successful completions only, excluding FC 11/12 and all Restart Communications requests) and is reset by either Restart Communications data value but not by `0x000A`. A sent injected exception replaces the real result's accounting: it counts as one exception (with busy/NAK per the injected code) and not as a successful completion. All FC 08 diagnostic counters start at 0 and wrap at 65536; the no-response counter (`0x000F`) also increments when a configured drop or disconnect fault suppresses a response.
 
 Get Com Event Counter (FC 11 / 0x0B) is a serial-diagnostics function carried as a normal PDU over Modbus TCP. The request is the function code only (`0x0B`, 1 byte). A normal response is `[FC 0x0B][Status Hi][Status Lo][Event Count Hi][Event Count Lo]` (5 bytes). The status is configured per device with `(com-status N)`, where `N` is `0` (device ready) or `65535` (busy); the default is `0`. Each device keeps a 16-bit communication event counter that is incremented once for each successful message completion. It is not incremented for exception responses, poll commands, or Fetch Event Counter commands (FC 11). The response returns the current counter value; the counter wraps to 0 after 65535. Requests for an unknown unit are handled at the server level and do not increment any device counter. A request with any extra data is rejected with exception 03 (illegal data value). (Note: exception code 0x0B in this project means Gateway Target Device Failed to Respond; it is unrelated to FC 11.)
 
@@ -296,10 +296,13 @@ feature, not a Modbus protocol feature: a device may configure several kinds at 
 definition per kind), and each kind rolls independently for every response.
 
 A fired exception fault replaces the response that normal processing produced, including an
-exception response, and does not undo the request's effects. A fired corrupt fault instead flips
-`resp[1]` of the response, including an injected exception response; that is typically the byte
-count or the first data byte (XOR with `0xFF`, or the function code itself for a one-byte
-response). The transport computes CRC (RTU), LRC (ASCII), or the MBAP length (TCP) over the altered
+exception response, and does not undo the request's effects; a sent injected exception is counted
+like a real one, while a suppressed injected exception only increments the no-response counter
+(real exceptions keep their accounting even when dropped). Busy/NAK counts use the injected code,
+not the byte after a corrupt flip. A fired corrupt fault instead flips `resp[1]` of the response,
+including an injected exception response; that is
+typically the byte count or the first data byte (XOR with `0xFF`, or the function code itself for a
+one-byte response). The transport computes CRC (RTU), LRC (ASCII), or the MBAP length (TCP) over the altered
 PDU, so receivers see a structurally valid frame carrying wrong data: it is never rejected for a
 CRC/LRC error and does not increment the FC08 `0x000C` communication-error counters. A drop fault
 suppresses the response, and a disconnect fault implies a drop and closes the connection on
