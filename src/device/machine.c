@@ -513,6 +513,29 @@ collect_state_registers(validation_t* v)
 }
 
 static const char*
+validate_state_register_targets(const validation_t* v)
+{
+	for (u16 m = 0; m < v->sys->count; m++)
+	{
+		const machine_def_t* def = &v->sys->defs[m];
+
+		for (u32 i = 0; i < def->statement_count; i++)
+		{
+			const machine_stmt_t* stmt = &def->statements[i];
+			u32 index = 0;
+
+			if (stmt->kind != STMT_SET || stmt->target_kind != TARGET_POINT)
+				continue;
+			index = device_find_point(v->dev, (space_kind_t)stmt->space, stmt->address);
+			if (index != DEVICE_MAX_POINTS && v->reg_owner[index] != 0)
+				return machine_error(def->name, NULL,
+						     "state register cannot be driven by a machine");
+		}
+	}
+	return NULL;
+}
+
+static const char*
 validate_write_handlers(validation_t* v)
 {
 	for (u16 m = 0; m < v->sys->count; m++)
@@ -1065,6 +1088,9 @@ device_finalize_machines(device_t* dev)
 		if (error)
 			return error;
 	}
+	error = validate_state_register_targets(&validation);
+	if (error)
+		return error;
 	error = validate_write_handlers(&validation);
 	if (error)
 		return error;
