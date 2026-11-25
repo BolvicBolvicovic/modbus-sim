@@ -1,4 +1,5 @@
 #include "vtest.h"
+#include "device/machine.h"
 #include "modbus/pdu.h"
 #include "modbus/mbap.h"
 #include "modbus/bytes.h"
@@ -2620,5 +2621,131 @@ TEST(DroppedInjectedExceptionOnlyCountsNoResponse)
 	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
 	ASSERT_EQ(get_be16(resp + 3) == 1);
 	assert_exception_counters(dev, 0, 0, 0);
+	arena_release(arena);
+}
+
+TEST(WriteToMachineOwnedPointReturnsIllegalDataAddress)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = make_device(arena);
+	u8 req[] = { FC_WRITE_SINGLE_REGISTER, 0, 0, 0xAB, 0xCD };
+	u8 resp[MODBUS_MAX_PDU] = { 0 };
+	u16 value = 0;
+
+	dev->points[0].kind = POINT_MACHINE;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == (FC_WRITE_SINGLE_REGISTER | 0x80) &&
+		  resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &value));
+	ASSERT_EQ(value == 0x1234);
+	arena_release(arena);
+}
+
+TEST(StateFaultOverlayReplacesDeviceFaultInPduResponse)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	machine_def_t*		def   = ARENA_PUSH_STRUCT(arena, machine_def_t);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8			resp[MODBUS_MAX_PDU] = { 0 };
+
+	ASSERT_SUCCESS(def != NULL);
+	memset(def, 0, sizeof(*def));
+	snprintf(def->name, sizeof(def->name), "faulted");
+	def->states[0].name[0] = 'i';
+	def->state_count = 1;
+	def->states[0].faults.by_kind[FAULT_EXCEPTION] = (fault_t){
+		.exception_code = EXC_SLAVE_DEVICE_BUSY, .percent = 100,
+	};
+	def->states[0].faults.present |= FAULT_BIT(FAULT_EXCEPTION);
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_FAILURE, 100);
+	set_fault(dev, FAULT_DELAY, 12, 0, 100);
+	ASSERT_SUCCESS(device_finalize_machines(dev) == NULL);
+
+	rng_seed(&rng, 1);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+	ASSERT_EQ(decision.exception_code == EXC_SLAVE_DEVICE_BUSY);
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_BUSY);
+	ASSERT_EQ(decision.delay_ms == 12); /* unmentioned kinds keep the device fault */
+	arena_release(arena);
+}
+
+TEST(WriteMultipleRegistersWithMachinePointFailsAllOrNothing)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = make_device(arena);
+	machine_def_t* def = ARENA_PUSH_STRUCT(arena, machine_def_t);
+	u8 req[] = { FC_WRITE_MULTIPLE_REGISTERS, 0, 0, 0, 2, 4, 0, 0xAA, 0, 0xBB };
+	u8 resp[MODBUS_MAX_PDU] = { 0 };
+	u16 out[2] = { 0, 0 };
+
+	ASSERT_SUCCESS(def != NULL);
+	memset(def, 0, sizeof(*def));
+	snprintf(def->name, sizeof(def->name), "watched");
+	def->state_count = 1;
+	snprintf(def->states[0].name, sizeof(def->states[0].name), "idle");
+	def->var_count = 1;
+	snprintf(def->vars[0].name, sizeof(def->vars[0].name), "seen");
+	def->vars[0].initial = (val_t){ .type = VAL_NUM, .n = 0 };
+	def->nodes[0] = (expr_node_t){
+		.kind = EXPR_NUM, .a = EXPR_NO_CHILD, .b = EXPR_NO_CHILD, .c = EXPR_NO_CHILD,
+		.literal = { .type = VAL_NUM, .n = 99 },
+	};
+	def->node_count = 1;
+	def->statements[0] = (machine_stmt_t){
+		.kind = STMT_SET, .target_kind = TARGET_VAR, .var_index = 0,
+		.expr_root = 0, .first_child = EXPR_NO_CHILD,
+	};
+	def->statement_count = 1;
+	def->write_handlers[0] = (machine_write_handler_t){
+		.first = 0, .count = 1, .space = SPACE_HOLDING, .address = 0,
+	};
+	def->write_handler_count = 1;
+	dev->points[1].kind = POINT_MACHINE;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	ASSERT_SUCCESS(device_finalize_machines(dev) == NULL);
+
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == (FC_WRITE_MULTIPLE_REGISTERS | 0x80) &&
+		  resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 2, out));
+	ASSERT_EQ(out[0] == 0x1234 && out[1] == 0x5678);
+	ASSERT_EQ(dev->machines->vars[0][0].n == 0); /* rejected write runs no on-write handler */
+	arena_release(arena);
+}
+
+TEST(StateRegisterIsReadOnlyToModbusClients)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = make_device(arena);
+	machine_def_t* def = ARENA_PUSH_STRUCT(arena, machine_def_t);
+	u8 read[] = { FC_READ_HOLDING_REGISTERS, 0, 1, 0, 1 };
+	u8 write[] = { FC_WRITE_SINGLE_REGISTER, 0, 1, 0xAB, 0xCD };
+	u8 resp[MODBUS_MAX_PDU] = { 0 };
+	u16 value = 0;
+
+	ASSERT_SUCCESS(def != NULL);
+	memset(def, 0, sizeof(*def));
+	snprintf(def->name, sizeof(def->name), "state-view");
+	def->state_count = 1;
+	snprintf(def->states[0].name, sizeof(def->states[0].name), "idle");
+	def->has_state_register = true;
+	def->state_register_space = SPACE_HOLDING;
+	def->state_register_address = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	ASSERT_SUCCESS(device_finalize_machines(dev) == NULL);
+
+	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS &&
+		  resp[1] == 2 && resp[2] == 0 && resp[3] == 0);
+
+	ASSERT_EQ(run(dev, write, sizeof(write), resp) == 2);
+	ASSERT_EQ(resp[0] == (FC_WRITE_SINGLE_REGISTER | 0x80) &&
+		  resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &value));
+	ASSERT_EQ(value == 0);
 	arena_release(arena);
 }

@@ -1266,3 +1266,342 @@ TEST(DeviceWithoutMachinesTicksNormally)
 	ASSERT_EQ(dev->machines->count == 1);
 	arena_release(arena);
 }
+
+TEST(MachineOnWriteRunsInSameRequestWithoutTransition)
+{
+	enum { V_SEEN, V_COUNT };
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 1000);
+	machine_def_t* def = new_def(arena, "writer");
+	point_t watched = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	u16 statement = 0;
+	u16 word = 7;
+
+	ASSERT_SUCCESS(device_add_point(dev, &watched) == NULL);
+	add_state(def, "idle");
+	add_state(def, "done");
+	add_num_var(def, "seen", 0);
+	add_when(def, 0, 1, node_bool(def, true));
+	statement = set_var_stmt(def, V_SEEN,
+				 node_binary(def, EXPR_ADD, node_point(def, SPACE_HOLDING, 0),
+					     node_num(def, 1)));
+	def->write_handlers[0] = (machine_write_handler_t){
+		.first = statement, .count = 1, .space = SPACE_HOLDING, .address = 0,
+	};
+	def->write_handler_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	ASSERT_EQ(num_var_value(dev, 0, V_SEEN) == 0);
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, &word));
+	ASSERT_EQ(num_var_value(dev, 0, V_SEEN) == 8); /* sees the just-written value */
+	ASSERT_EQ(dev->machines->current[0] == 0);
+	ASSERT_EQ(dev->machines->advanced_to[0] == 1000); /* no tick happened */
+
+	device_tick(dev, 1100);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	arena_release(arena);
+}
+
+TEST(MachineOnWriteWatchesEveryWordOfPoint)
+{
+	enum { V_SEEN, V_COUNT };
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* def = new_def(arena, "wide");
+	point_t watched = static_point(SPACE_HOLDING, 0, VT_U32, 0);
+	u16 statement = 0;
+	u16 word = 1;
+
+	ASSERT_SUCCESS(device_add_point(dev, &watched) == NULL);
+	add_state(def, "idle");
+	add_num_var(def, "seen", 0);
+	statement = set_var_stmt(def, V_SEEN, node_point(def, SPACE_HOLDING, 0));
+	def->write_handlers[0] = (machine_write_handler_t){
+		.first = statement, .count = 1, .space = SPACE_HOLDING, .address = 0,
+	};
+	def->write_handler_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 1, 1, &word));
+	ASSERT_EQ(num_var_value(dev, 0, V_SEEN) == 1);
+	arena_release(arena);
+}
+
+TEST(MachineStateRegisterTracksTransitionsAndIsReadOnly)
+{
+	enum { V_SEEN, V_COUNT };
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 1000);
+	machine_def_t* def = new_def(arena, "state-view");
+	point_t register_point = static_point(SPACE_HOLDING, 1, VT_U16, 0);
+	u16 word = 42;
+	u16 out = 0;
+
+	ASSERT_SUCCESS(device_add_point(dev, &register_point) == NULL);
+	def->has_state_register = true;
+	def->state_register_space = SPACE_HOLDING;
+	def->state_register_address = 1;
+	add_state(def, "idle");
+	add_state(def, "done");
+	add_num_var(def, "seen", 0);
+	add_after(def, 0, 1, 100);
+	def->states[1].on_enter_first = set_var_stmt(def, V_SEEN,
+						    node_point(def, SPACE_HOLDING, 1));
+	def->states[1].on_enter_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 0);
+	device_tick(dev, 1100);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 1);
+	ASSERT_EQ(num_var_value(dev, 0, V_SEEN) == 1);
+	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+	ASSERT_FAILURE(device_write(dev, SPACE_HOLDING, 1, 1, &word));
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 1);
+	arena_release(arena);
+}
+
+TEST(EffectiveFaultsFollowActiveStateAndFirstMachineWins)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* first = new_def(arena, "first");
+	machine_def_t* second = new_def(arena, "second");
+	fault_set_t effective = { 0 };
+
+	dev->faults.by_kind[FAULT_DELAY] = (fault_t){ .delay_ms = 100, .percent = 100 };
+	dev->faults.present |= FAULT_BIT(FAULT_DELAY);
+	add_state(first, "idle");
+	add_state(first, "done");
+	add_after(first, 0, 1, 100);
+	first->states[0].faults.by_kind[FAULT_DROP] = (fault_t){ .percent = 100 };
+	first->states[0].faults.present |= FAULT_BIT(FAULT_DROP);
+	first->states[1].faults.by_kind[FAULT_EXCEPTION] = (fault_t){
+		.exception_code = 4, .percent = 100,
+	};
+	first->states[1].faults.present |= FAULT_BIT(FAULT_EXCEPTION);
+	add_state(second, "idle");
+	second->states[0].faults.by_kind[FAULT_DELAY] = (fault_t){ .delay_ms = 5, .percent = 100 };
+	second->states[0].faults.present |= FAULT_BIT(FAULT_DELAY);
+	second->states[0].faults.by_kind[FAULT_DROP] = (fault_t){ .percent = 0 };
+	second->states[0].faults.present |= FAULT_BIT(FAULT_DROP);
+	ASSERT_SUCCESS(device_add_machine(dev, first) == NULL);
+	ASSERT_SUCCESS(device_add_machine(dev, second) == NULL);
+	prepare(dev, 0);
+
+	effective = device_effective_faults(dev);
+	ASSERT_EQ(effective.by_kind[FAULT_DELAY].delay_ms == 5);
+	ASSERT_EQ(effective.by_kind[FAULT_DROP].percent == 100);
+	ASSERT_EQ((effective.present & FAULT_BIT(FAULT_EXCEPTION)) == 0);
+
+	device_tick(dev, 100);
+	effective = device_effective_faults(dev);
+	ASSERT_EQ(effective.by_kind[FAULT_DELAY].delay_ms == 5);
+	ASSERT_EQ(effective.by_kind[FAULT_DROP].percent == 0); /* second machine's overlay now applies */
+	ASSERT_EQ(effective.by_kind[FAULT_EXCEPTION].exception_code == 4);
+	ASSERT_EQ(device_machine_fault_present(dev, FAULT_DISCONNECT) == false);
+	arena_release(arena);
+}
+
+TEST(MachineOnWriteRunsMachinesInDeclarationOrder)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* first = new_def(arena, "first");
+	machine_def_t* second = new_def(arena, "second");
+	point_t watched0 = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	point_t watched1 = static_point(SPACE_HOLDING, 1, VT_U16, 0);
+	point_t shared = static_point(SPACE_HOLDING, 2, VT_U16, 0);
+	u16 words[2] = { 1, 2 };
+	u16 out = 0;
+	u16 stmt = 0;
+
+	ASSERT_SUCCESS(device_add_point(dev, &watched0) == NULL);
+	ASSERT_SUCCESS(device_add_point(dev, &watched1) == NULL);
+	ASSERT_SUCCESS(device_add_point(dev, &shared) == NULL);
+
+	add_state(first, "idle");
+	add_num_var(first, "seen", 0);
+	stmt = set_point_stmt(first, SPACE_HOLDING, 2, node_num(first, 7));
+	first->write_handlers[0] = (machine_write_handler_t){
+		.first = stmt, .count = 1, .space = SPACE_HOLDING, .address = 0,
+	};
+	first->write_handler_count = 1;
+
+	add_state(second, "idle");
+	add_num_var(second, "seen", 0);
+	stmt = set_var_stmt(second, 0, node_point(second, SPACE_HOLDING, 2));
+	second->write_handlers[0] = (machine_write_handler_t){
+		.first = stmt, .count = 1, .space = SPACE_HOLDING, .address = 1,
+	};
+	second->write_handler_count = 1;
+
+	ASSERT_SUCCESS(device_add_machine(dev, first) == NULL);
+	ASSERT_SUCCESS(device_add_machine(dev, second) == NULL);
+	prepare(dev, 0);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 2, words));
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 2, 1, &out));
+	ASSERT_EQ(out == 7); /* first machine ran before the second read the point */
+	ASSERT_EQ(num_var_value(dev, 1, 0) == 7);
+	arena_release(arena);
+}
+
+TEST(MachineOnWriteWarningsUseCurrentState)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* def = new_def(arena, "writer");
+	point_t watched = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	u16 word = 1;
+	u16 stmt = 0;
+
+	ASSERT_SUCCESS(device_add_point(dev, &watched) == NULL);
+	add_state(def, "idle");
+	add_state(def, "running");
+	def->initial_state = 1;
+	add_num_var(def, "seen", 0);
+	stmt = set_var_stmt(def, 0, node_binary(def, EXPR_DIV, node_num(def, 1), node_num(def, 0)));
+	def->write_handlers[0] = (machine_write_handler_t){
+		.first = stmt, .count = 1, .space = SPACE_HOLDING, .address = 0,
+	};
+	def->write_handler_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, &word));
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_EQ((dev->machines->warned[0][1][MACHINE_ROLE_WRITE] & 4) != 0);
+	ASSERT_EQ(dev->machines->warned[0][0][MACHINE_ROLE_WRITE] == 0);
+	ASSERT_EQ(dev->machines->warned[0][1][MACHINE_ROLE_TICK] == 0);
+	ASSERT_EQ(num_var_value(dev, 0, 0) == 0);
+	arena_release(arena);
+}
+
+TEST(MachineOnWriteUsesRequestTickTime)
+{
+	enum { V_NOW, V_ELAPSED, V_COUNT };
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 1000);
+	machine_def_t* def = new_def(arena, "clock");
+	point_t watched = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	u16 word = 1;
+	u16 first = 0;
+
+	ASSERT_SUCCESS(device_add_point(dev, &watched) == NULL);
+	add_state(def, "idle");
+	add_num_var(def, "now", 0);
+	add_num_var(def, "elapsed", 0);
+	first = def->statement_count;
+	set_var_stmt(def, V_NOW, node_time(def, false));
+	set_var_stmt(def, V_ELAPSED, node_time(def, true));
+	def->write_handlers[0] = (machine_write_handler_t){
+		.first = first, .count = 2, .space = SPACE_HOLDING, .address = 0,
+	};
+	def->write_handler_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	device_tick(dev, 2000);
+	device_tick(dev, 5000);
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, &word));
+	ASSERT_EQ(num_var_value(dev, 0, V_NOW) == 5000);
+	ASSERT_EQ(num_var_value(dev, 0, V_ELAPSED) == 0); /* elapsed counts from the same tick */
+	arena_release(arena);
+}
+
+TEST(MachineStateRegisterInitializesBeforeInitialOnEnter)
+{
+	enum { V_SEEN, V_COUNT };
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* def = new_def(arena, "state-view");
+	point_t register_point = static_point(SPACE_INPUT, 3, VT_U16, 0);
+	u16 out = 0;
+
+	ASSERT_SUCCESS(device_add_point(dev, &register_point) == NULL);
+	def->has_state_register = true;
+	def->state_register_space = SPACE_INPUT;
+	def->state_register_address = 3;
+	add_state(def, "idle");
+	add_state(def, "running");
+	def->initial_state = 1; /* zero-based state index, not state name order */
+	add_num_var(def, "seen", 0);
+	def->states[0].on_enter_first = set_var_stmt(def, V_SEEN,
+						node_point(def, SPACE_INPUT, 3));
+	def->states[0].on_enter_count = 1;
+	def->states[1].on_enter_first = set_var_stmt(def, V_SEEN,
+						node_point(def, SPACE_INPUT, 3));
+	def->states[1].on_enter_count = 1;
+	add_after(def, 1, 0, 10);
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 3, 1, &out));
+	ASSERT_EQ(out == 1);
+	ASSERT_EQ(num_var_value(dev, 0, V_SEEN) == 1);
+
+	device_tick(dev, 10);
+	ASSERT_EQ(dev->machines->current[0] == 0);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 3, 1, &out));
+	ASSERT_EQ(out == 0);
+	ASSERT_EQ(num_var_value(dev, 0, V_SEEN) == 0);
+	arena_release(arena);
+}
+
+TEST(MachineFinalizeRejectsStateRegisterSetTarget)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* def = new_def(arena, "conflict");
+	point_t register_point = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	const char* error = NULL;
+
+	ASSERT_SUCCESS(device_add_point(dev, &register_point) == NULL);
+	def->has_state_register = true;
+	def->state_register_space = SPACE_HOLDING;
+	def->state_register_address = 0;
+	add_state(def, "idle");
+	def->states[0].on_enter_first = set_point_stmt(def, SPACE_HOLDING, 0, node_num(def, 1));
+	def->states[0].on_enter_count = 1;
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	device_seed_machines(dev, 0);
+	error = device_finalize_machines(dev);
+	ASSERT_FAILURE(error == NULL);
+	ASSERT_EQ(strstr(error, "state register cannot be driven by a machine") != NULL);
+	arena_release(arena);
+}
+
+TEST(EffectiveFaultsKeepUnmentionedDeviceFaults)
+{
+	arena_t* arena = ARENA_ALLOC();
+	device_t* dev = device_new(arena, 0);
+	machine_def_t* def = new_def(arena, "overlay");
+	fault_set_t effective = { 0 };
+
+	dev->faults.by_kind[FAULT_DELAY] = (fault_t){ .delay_ms = 25, .percent = 100 };
+	dev->faults.present |= FAULT_BIT(FAULT_DELAY);
+	dev->faults.by_kind[FAULT_EXCEPTION] = (fault_t){ .exception_code = 8, .percent = 100 };
+	dev->faults.present |= FAULT_BIT(FAULT_EXCEPTION);
+	add_state(def, "idle");
+	def->states[0].faults.by_kind[FAULT_DROP] = (fault_t){ .percent = 100 };
+	def->states[0].faults.present |= FAULT_BIT(FAULT_DROP);
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 0);
+
+	effective = device_effective_faults(dev);
+	ASSERT_EQ(effective.by_kind[FAULT_DELAY].delay_ms == 25);
+	ASSERT_EQ(effective.by_kind[FAULT_EXCEPTION].exception_code == 8);
+	ASSERT_EQ(effective.by_kind[FAULT_DROP].percent == 100);
+	ASSERT_EQ(effective.present == (FAULT_BIT(FAULT_DELAY) |
+				       FAULT_BIT(FAULT_EXCEPTION) |
+				       FAULT_BIT(FAULT_DROP)));
+	arena_release(arena);
+}
