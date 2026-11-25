@@ -418,11 +418,13 @@ Firing runs the old state's `on-exit`, switches state, redraws all deadlines fro
 then runs the new state's `on-enter`. If no transition fires, one `on-tick` runs. A machine fires at
 most 64 transitions per tick.
 
-All `(machine ...)` items are compiled while the device is read; points may be declared before or
-after them. After the last device item, config seeds the machine RNG from `(seed N)` in `(server ...)`
-(mixed with the device unit id), then finalizes: it validates types and point ownership, draws
-initial deadlines and runs the initial state's `on-enter` at simulator start time. The same seed and
-unit id therefore give the same random deadlines on every run.
+All `(machine ...)` items are compiled while each device is read; points may be declared before or
+after them. At the end of that `(device ...)`, config checks deferred point references. After all
+top-level forms are read, it seeds each machine RNG from `(seed N)` in `(server ...)` (mixed with the
+device unit id) and finalizes: it validates types and point ownership, draws initial deadlines and
+runs the initial state's `on-enter` at simulator start time. With no `(server ...)` form the seed is
+0. Because seeding happens after all forms, the position of `(server ...)` does not matter. The same
+seed and unit id therefore give the same random deadlines on every run.
 
 Limits are `MACHINE_MAX_MACHINES` 8 per device, `MACHINE_MAX_STATES` 16,
 `MACHINE_MAX_TRANSITIONS` 32, `MACHINE_MAX_VARS` 16, `MACHINE_MAX_STATEMENTS` 128 (including nested
