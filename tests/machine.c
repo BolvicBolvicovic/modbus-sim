@@ -1255,8 +1255,14 @@ TEST(DeviceWithoutMachinesTicksNormally)
 	arena_t* arena = ARENA_ALLOC();
 	device_t* dev = device_new(arena, 0);
 
+	ASSERT_EQ(dev->machines == NULL);
 	ASSERT_SUCCESS(device_finalize_machines(dev) == NULL);
+	ASSERT_EQ(dev->machines == NULL);
 	device_tick(dev, 100);
-	ASSERT_EQ(dev->machines->count == 0);
+	ASSERT_EQ(dev->machines == NULL);
+
+	ASSERT_SUCCESS(device_add_machine(dev, simple_def(arena)) == NULL);
+	ASSERT_SUCCESS(dev->machines != NULL);
+	ASSERT_EQ(dev->machines->count == 1);
 	arena_release(arena);
 }

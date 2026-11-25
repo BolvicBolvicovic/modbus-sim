@@ -134,6 +134,10 @@ struct machine_system_t
 machine_target_result_t machine_check_target_point(const device_t* dev, space_kind_t space,
 						   u32 address, u8* owners, u8 machine_id);
 
+/* Ensures `dev` has machine storage, allocating it on first use. Returns NULL on
+ * success or a static error text. */
+const char*	device_machines_prepare(device_t* dev);
+
 /* Adds a machine copy to `dev`. Returns NULL on success or a static error text. */
 const char*	device_add_machine(device_t* dev, const machine_def_t* def);
 

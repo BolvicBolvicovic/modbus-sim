@@ -1679,6 +1679,26 @@ TEST(ConfigMachineLoadsCompiledDefinitionAndRuns)
 	ASSERT_EQ(out[0] == 42);
 }
 
+TEST(ConfigMachineStorageIsLazyPerDevice)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text(
+		"(server (seed 1))"
+		" (device (unit-id 1) (name \"plain\") (holding 0))"
+		" (device (unit-id 2) (name \"driven\") (holding 0)"
+		"  (machine m (initial idle)"
+		"    (state idle (on-tick (set! (holding 0) 7)))))", &config, err, sizeof(err)));
+
+	ASSERT_EQ(config.device_count == 2);
+	ASSERT_EQ(strcmp(config.devices[0]->name, "plain") == 0);
+	ASSERT_EQ(config.devices[0]->machines == NULL);
+	ASSERT_EQ(strcmp(config.devices[1]->name, "driven") == 0);
+	ASSERT_SUCCESS(config.devices[1]->machines != NULL);
+	ASSERT_EQ(config.devices[1]->machines->count == 1);
+}
+
 TEST(ConfigMachineSeedIgnoresServerFormOrder)
 {
 	config_t first = { 0 };

@@ -25,6 +25,9 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev)
 		return NULL;
 
+	dev->arena = arena;
+	dev->machines = NULL;
+
 	dev->points = ARENA_PUSH_ARRAY(arena, point_t, DEVICE_MAX_POINTS);
 	if (!dev->points)
 		return NULL;
@@ -42,11 +45,6 @@ device_new(arena_t* arena, u64 start_ms)
 	if (!dev->canopen_objects)
 		return NULL;
 
-	dev->machines = ARENA_PUSH_STRUCT(arena, struct machine_system_t);
-	if (!dev->machines)
-		return NULL;
-
-	dev->arena            = arena;
 	dev->unit_id          = 1;
 	dev->exception_status = 0;
 	dev->server_id        = 0;
