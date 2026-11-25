@@ -17,6 +17,8 @@
                   (s7 reads text)
 ```
 
+0. `main` turns the loaded config into `server_options_t` (`server_config`) and runs `server`, which
+   picks the transport below; a host can build the options itself and skip `config`.
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
 2. `net/tcp_server` (Modbus TCP MBAP, optionally TLS-wrapped via `net/net_tls`), `net/rtu_server` (RTU CRC-framed byte stream),
@@ -42,15 +44,19 @@
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
-| `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
+| `src/server` | `server`, `server_mode.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
+| `src/main.c` | | command line, signal handlers, `--check` summary, printing the PTY slave name |
 
-Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
+Dependencies point one way: `server → net → modbus → device → util`, `config → device → util`,
+`server_config → server, config`, and `main → server_config, server, config`. `config` includes only
+`server/server_mode.h` (the transport enum, kept in its own header so config does not pull in `net`).
+A host that builds `server_options_t` itself can drop `config/` and `server_config.c`.
 `net_tls` wraps OpenSSL and keeps its headers out of other modules; `net_tls_ctx_t` is a
 caller-owned struct holding the `SSL_CTX*` plus its own pool of 32 `net_tls_conn_t` sessions
 (handshake/want flags and deadline), so there is no process-global TLS state. In a no-TLS build `net_tls_stub.c`
 implements the same API without OpenSSL. `net_tcp_pool` owns only listener, accept, idle and
 poll-table bookkeeping for the three TCP transports; per-connection framing/TLS setup stays in
-the servers. `config` only supplies borrowed TLS strings through `tcp_server_options_t` and
+the servers. `server_config` only supplies borrowed TLS strings through `server_options_t` and `config`
 rejects `(tls ...)` at load time in no-TLS builds.
 `build_config.h` provides the `WITH_TLS` fallback for direct compilations. `device` and `modbus`
 can be tested alone, and are (see `tests/`).
@@ -110,8 +116,14 @@ several servers and drive them from its own loop:
   the flag at once.
 - `X_server_run(&s, &options)` is init + step loop + close for the binary.
 
-The net layer installs no signal handlers. `main.c` owns SIGINT/SIGTERM (no `SA_RESTART`, calling the
-active server's `X_server_stop`) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
+`server/server` wraps all five behind one `server_t` selected by `server_mode_t`: `server_init`
+opens the PTY/serial fd for the `*_pty`/`*_device` modes (and auto-detects a real tty's baud),
+`server_pty_name` exposes the PTY slave path, `server_close` also closes fds it opened, and
+`server_serve`/`server_run` are the step loop (exit 1 only on a poll error). The `*_fd` modes serve an
+fd the host already owns (socketpair, PTY master) and never close it; the config file cannot select them.
+
+The net layer installs no signal handlers. `main.c` owns SIGINT/SIGTERM (no `SA_RESTART`, calling
+`server_stop` on the running `server_t`) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
 byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
 embedding a TLS server must ignore SIGPIPE itself.
 

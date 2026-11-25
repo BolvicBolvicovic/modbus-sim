@@ -16,60 +16,27 @@
 #endif
 #include "vlib/sizes.h" // IWYU pragma: keep
 #include "config/config.h"
-#include "net/ascii_server.h"
-#include "net/ascii_tcp_server.h"
-#include "net/net_tls.h"
 #include "net/rtu_framer.h"
-#include "net/rtu_server.h"
-#include "net/rtu_tcp_server.h"
-#include "net/tcp_server.h"
+#include "server/server.h"
+#include "server/server_config.h"
 #include "util/log.h"
-#include "util/serial.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-/* The binary owns signal handling; the net layer only exposes X_server_stop().
- * The handler stops whichever server is currently running. */
-static void* volatile		g_active_server;
-static volatile sig_atomic_t	g_active_kind;
-enum
-{
-	ACTIVE_NONE,
-	ACTIVE_TCP,
-	ACTIVE_RTU,
-	ACTIVE_ASCII,
-	ACTIVE_RTU_TCP,
-	ACTIVE_ASCII_TCP,
-};
+/* The binary owns signal handling; the handler stops the running server. */
+static server_t* volatile	g_server;
 
 static void
 on_stop_signal(int signo)
 {
-	void* server = g_active_server;
+	server_t* server = g_server;
 
 	(void)signo;
-	if (!server)
-		return;
-	switch (g_active_kind)
-	{
-		case ACTIVE_TCP:		tcp_server_stop(server); break;
-		case ACTIVE_RTU:		rtu_server_stop(server); break;
-		case ACTIVE_ASCII:		ascii_server_stop(server); break;
-		case ACTIVE_RTU_TCP:		rtu_tcp_server_stop(server); break;
-		case ACTIVE_ASCII_TCP:		ascii_tcp_server_stop(server); break;
-		default:			break;
-	}
-}
-
-static void
-set_active_server(int kind, void* server)
-{
-	g_active_server = NULL;
-	g_active_kind   = kind;
-	g_active_server = server;
+	if (server)
+		server_stop(server);
 }
 
 typedef struct cli_t cli_t;
@@ -260,6 +227,9 @@ print_summary(const config_t* config)
 				       config->tls_require_client_certificate ? "required" : "optional");
 			putchar('\n');
 			break;
+		case SERVER_MODE_RTU_FD:
+		case SERVER_MODE_ASCII_FD:
+			break;	/* host-only, never loaded from config */
 	}
 
 	for (u32 i = 0; i < config->device_count; i++)
@@ -274,189 +244,13 @@ print_summary(const config_t* config)
 }
 
 
-static s32
-run_rtu(config_t* config)
-{
-	char	name[128] = { 0 };
-	int	slave_fd  = -1;
-	s32	status    = 1;
-	int	fd;
-
-	fd = open_serial_fd(config->mode == SERVER_MODE_RTU_PTY, "RTU", config->path,
-			    config->baud, 8, config->parity, config->stop_bits,
-			    &slave_fd, name, sizeof(name));
-	if (fd < 0)
-		return 1;
-	if (slave_fd >= 0)
-	{
-		printf("RTU PTY slave: %s\n", name);
-		fflush(stdout);
-	}
-	/* PTY master/slave have no real UART baud; only auto-detect on real tty devices. */
-	if (config->baud == 0 && config->mode == SERVER_MODE_RTU_DEVICE)
-		config->baud = serial_tty_baud(fd);
-
-	{
-		rtu_server_options_t	options = {
-			.fd                = fd,
-			.seed              = config->seed,
-			.frame_gap_ms      = config->frame_gap_ms,
-			.baud              = config->baud,
-			.strict_t15        = config->strict_t15,
-			.broadcast_execute = config->broadcast_execute,
-			.devices           = config->devices,
-			.device_count      = config->device_count,
-		};
-
-		rtu_server_t	server;
-
-		set_active_server(ACTIVE_RTU, &server);
-		status = rtu_server_run(&server, &options);
-		set_active_server(ACTIVE_NONE, NULL);
-	}
-
-	if (slave_fd >= 0)
-		close(slave_fd);
-	if (fd >= 0)
-		close(fd);
-	return status;
-}
-
-static s32
-run_ascii(config_t* config)
-{
-	char	name[128] = { 0 };
-	int	slave_fd  = -1;
-	s32	status    = 1;
-	int	fd;
-
-	/* Baud sets only the serial line speed here; it never affects ASCII framing. */
-	fd = open_serial_fd(config->mode == SERVER_MODE_ASCII_PTY, "ASCII", config->path,
-			    config->baud, config->data_bits, config->parity, config->stop_bits,
-			    &slave_fd, name, sizeof(name));
-	if (fd < 0)
-		return 1;
-	if (slave_fd >= 0)
-	{
-		printf("ASCII PTY slave: %s\n", name);
-		fflush(stdout);
-	}
-
-	{
-		ascii_server_options_t	options = {
-			.fd           = fd,
-			.seed         = config->seed,
-			.devices      = config->devices,
-			.device_count = config->device_count,
-		};
-
-		ascii_server_t	server;
-
-		set_active_server(ACTIVE_ASCII, &server);
-		status = ascii_server_run(&server, &options);
-		set_active_server(ACTIVE_NONE, NULL);
-	}
-
-	if (slave_fd >= 0)
-		close(slave_fd);
-	if (fd >= 0)
-		close(fd);
-	return status;
-}
-
-static s32
-run_ascii_tcp(config_t* config)
-{
-	ascii_tcp_server_options_t	options = {
-		.bind_address    = config->bind_address,
-		.port            = config->port,
-		.seed            = config->seed,
-		.idle_timeout_ms = config->idle_timeout_ms,
-		.devices         = config->devices,
-		.device_count    = config->device_count,
-	};
-
-	ascii_tcp_server_t	server;
-	s32			status;
-
-	set_active_server(ACTIVE_ASCII_TCP, &server);
-	status = ascii_tcp_server_run(&server, &options);
-	set_active_server(ACTIVE_NONE, NULL);
-	return status;
-}
-
-static s32
-run_rtu_tcp(config_t* config)
-{
-	rtu_tcp_server_options_t	options = {
-		.bind_address      = config->bind_address,
-		.port              = config->port,
-		.seed              = config->seed,
-		.idle_timeout_ms   = config->idle_timeout_ms,
-		.frame_gap_ms      = config->frame_gap_ms,
-		.baud              = config->baud,
-		.broadcast_execute = config->broadcast_execute,
-		.devices           = config->devices,
-		.device_count      = config->device_count,
-	};
-
-	rtu_tcp_server_t	server;
-	s32			status;
-
-	set_active_server(ACTIVE_RTU_TCP, &server);
-	status = rtu_tcp_server_run(&server, &options);
-	set_active_server(ACTIVE_NONE, NULL);
-	return status;
-}
-
-/* Shared by check mode (context creation only) and the TCP server startup. */
-static net_tls_config_t
-tls_config_from_config(const config_t* config)
-{
-	net_tls_config_t tls = {
-		.certificate = config->tls_certificate,
-		.private_key = config->tls_private_key,
-		.ca_certificate = config->tls_ca_certificate,
-		.require_client_certificate = config->tls_require_client_certificate,
-		.min_version = config->tls_min_version == CONFIG_TLS_VERSION_1_3 ?
-			       NET_TLS_VERSION_1_3 : NET_TLS_VERSION_1_2,
-		.tls1_2_ciphers = config->tls1_2_ciphers[0] ? config->tls1_2_ciphers : NULL,
-		.tls1_3_ciphersuites = config->tls1_3_ciphersuites[0] ?
-				       config->tls1_3_ciphersuites : NULL,
-	};
-
-	return tls;
-}
-
-static s32
-run_tcp(config_t* config)
-{
-	tcp_server_options_t	options = {
-		.bind_address    = config->bind_address,
-		.port            = config->port,
-		.seed            = config->seed,
-		.idle_timeout_ms = config->idle_timeout_ms,
-		.tls_enabled     = config->tls_enabled,
-		.tls_handshake_timeout_ms = config->tls_handshake_timeout_ms,
-		.tls             = tls_config_from_config(config),
-		.devices         = config->devices,
-		.device_count    = config->device_count,
-	};
-
-	tcp_server_t	server;
-	s32		status;
-
-	set_active_server(ACTIVE_TCP, &server);
-	status = tcp_server_run(&server, &options);
-	set_active_server(ACTIVE_NONE, NULL);
-	return status;
-}
-
 int
 main(int argc, char** argv)
 {
 	cli_t		cli     = { 0 };
 	config_t	config  = { 0 };
+	server_options_t options;
+	server_t	server;
 	char		error[512];
 	arena_t*	app     = NULL;
 	arena_t*	scratch = NULL;
@@ -494,20 +288,13 @@ main(int argc, char** argv)
 	scratch = NULL;
 
 	print_summary(&config);
+	options = server_options_from_config(&config);
 	if (cli.check_only)
 	{
-		if (config.tls_enabled)
+		if (!server_check_tls(&options, error, sizeof(error)))
 		{
-			net_tls_config_t tls = tls_config_from_config(&config);
-			net_tls_ctx_t    ctx;
-
-			if (!net_tls_ctx_init(&ctx, &tls, error, sizeof(error)))
-			{
-				fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path,
-					error);
-				goto cleanup;
-			}
-			net_tls_ctx_close(&ctx);
+			fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path, error);
+			goto cleanup;
 		}
 		puts("config OK");
 		status = 0;
@@ -523,26 +310,18 @@ main(int argc, char** argv)
 		signal(SIGPIPE, SIG_IGN);
 	}
 
-	switch (config.mode)
+	status = server_init(&server, &options);
+	if (status != 0)
+		goto cleanup;
+	g_server = &server;
+	if (server_pty_name(&server))
 	{
-		case SERVER_MODE_TCP:
-			status = run_tcp(&config);
-			break;
-		case SERVER_MODE_RTU_TCP:
-			status = run_rtu_tcp(&config);
-			break;
-		case SERVER_MODE_ASCII_TCP:
-			status = run_ascii_tcp(&config);
-			break;
-		case SERVER_MODE_RTU_PTY:
-		case SERVER_MODE_RTU_DEVICE:
-			status = run_rtu(&config);
-			break;
-		case SERVER_MODE_ASCII_PTY:
-		case SERVER_MODE_ASCII_DEVICE:
-			status = run_ascii(&config);
-			break;
+		printf("%s PTY slave: %s\n", config.mode == SERVER_MODE_RTU_PTY ? "RTU" : "ASCII",
+		       server_pty_name(&server));
+		fflush(stdout);
 	}
+	status = server_serve(&server);
+	g_server = NULL;
 
 cleanup:
 	if (scratch)

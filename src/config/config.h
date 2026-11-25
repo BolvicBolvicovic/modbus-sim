@@ -5,6 +5,7 @@
 #include "vlib/c_types.h"
 #include "vlib/arena.h"
 #include "device/device.h"
+#include "server/server_mode.h"
 #include "util/serial.h"
 #include <stdbool.h>
 
@@ -19,21 +20,6 @@
 #define CONFIG_TLS_PATH_MAX		256
 #define CONFIG_TLS_CIPHER_MAX		512
 #define CONFIG_DEFAULT_TLS_PORT		802	/* IANA mbap-s; plaintext TCP stays on 1502 */
-
-/* Name: server_mode_t
- * Description: transport selected by (server (mode NAME)).
- * */
-typedef enum server_mode_t server_mode_t;
-enum server_mode_t
-{
-	SERVER_MODE_TCP,
-	SERVER_MODE_RTU_PTY,
-	SERVER_MODE_RTU_DEVICE,
-	SERVER_MODE_RTU_TCP,
-	SERVER_MODE_ASCII_PTY,
-	SERVER_MODE_ASCII_DEVICE,
-	SERVER_MODE_ASCII_TCP,
-};
 
 /* Name: config_tls_version_t
  * Description: minimum TLS version accepted by a TLS-enabled TCP server.

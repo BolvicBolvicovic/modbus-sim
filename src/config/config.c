@@ -225,6 +225,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 			allowed = ascii_keys;
 			allowed_count = ARRAY_COUNT(ascii_keys);
 			break;
+		case SERVER_MODE_RTU_FD:
+		case SERVER_MODE_ASCII_FD:
+			break;	/* host-only modes; MODE_NAMES never yields them */
 	}
 	/* ASCII never executes broadcasts; call that out instead of relying on the
 	 * generic mode check below. */
