@@ -26,6 +26,16 @@ struct expr_node_t
 	val_t		literal;	/* EXPR_BOOL / EXPR_NUM */
 };
 
+typedef enum expr_failure_t expr_failure_t;
+enum expr_failure_t
+{
+	EXPR_FAIL_NONE,
+	EXPR_FAIL_BUDGET,
+	EXPR_FAIL_DIV_ZERO,
+	EXPR_FAIL_POINT,
+	EXPR_FAIL_TYPE,
+};
+
 typedef struct expr_ctx_t expr_ctx_t;
 struct expr_ctx_t
 {
@@ -34,6 +44,7 @@ struct expr_ctx_t
 	u64		now_ms;
 	u64		elapsed_ms;
 	u32		budget;		/* steps left; one per node evaluated */
+	expr_failure_t	failure;	/* reason of the last failed eval, for logging */
 };
 
 bool expr_eval(const expr_node_t* nodes, u16 root, expr_ctx_t* ctx, val_t* out);

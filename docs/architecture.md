@@ -193,8 +193,23 @@ complicated behaviour. For example, a VFD should have:
 - Interlocks.
 - Dependencies between registers.
 
-Proposed direction: introduce a state-machine or scripting mechanism for defining these
-relationships.
+**Scripted device machines (runtime implemented).** `src/device/machine.{h,c}` provides a bounded,
+deterministic machine runtime in the device layer; Scheme config binding is a separate step.
+`machine_def_t` is deep-copied into the device arena by `device_add_machine`, validated by
+`device_finalize_machines` (optionally after `device_seed_machines`), and advanced by `device_tick`
+after ramps. Per-device limits are 8 machines, and per machine 16 states, 32 transitions, 16
+variables, 128 statements and 512 expression nodes; transitions are capped at 64 firings per tick.
+Expressions use `expr_eval` with one 1000-step budget shared by all statements of a handler and a
+fresh budget for each transition condition; a failed evaluation aborts the rest of that handler but
+preserves earlier effects, and logs one warning per handler and failure kind. After-only transitions
+fire when their deadline is due, earliest deadline first with ties in declaration order, at the
+deadline timestamp; conditional transitions are checked in declaration order (with optional
+deadline) and fire at the current time. No transition means one on-tick. A firing runs on-exit,
+switches state, redraws all deadlines of the new state from the firing time, then runs on-enter.
+Random deadlines use a private RNG seeded from the server seed mixed with the device unit id, so
+they are deterministic per device. A machine may write only the first address of a configured,
+non-ramp point and becomes that point's owner (`POINT_MACHINE`); expression reads still go through
+`device_get_point`, and variables are private to their machine.
 
 **More fault injection (implemented).** `fault_t` held one fault in the original roadmap; it is
 now a kind-keyed `fault_set_t` and `fault_decide` returns the combined decision (delay, drop,

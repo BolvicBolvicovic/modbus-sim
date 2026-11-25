@@ -1,4 +1,5 @@
 #include "device/device.h"
+#include "device/machine.h"
 #include <math.h>
 #include <string.h>
 
@@ -39,6 +40,10 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->canopen_objects = ARENA_PUSH_ARRAY(arena, device_canopen_object_t,
 						DEVICE_MAX_CANOPEN_OBJECTS);
 	if (!dev->canopen_objects)
+		return NULL;
+
+	dev->machines = ARENA_PUSH_STRUCT(arena, struct machine_system_t);
+	if (!dev->machines)
 		return NULL;
 
 	dev->arena            = arena;
@@ -156,6 +161,7 @@ device_tick(device_t* dev, u64 now_ms)
 			continue;
 		point_apply(dev, &dev->points[i], now_ms);
 	}
+	device_machines_advance(dev, now_ms);
 }
 
 /* Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
