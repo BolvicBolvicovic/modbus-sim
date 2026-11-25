@@ -851,6 +851,22 @@ TEST(ConfigBindAcceptsValidIpv4)
 	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
 }
 
+TEST(ConfigTcpDefaultsToLoopbackAndAllowsExplicitWildcard)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
+	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"0.0.0.0\")) (device (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
+	ASSERT_EQ(strcmp(config.bind_address, "0.0.0.0") == 0);
+}
+
 TEST(ConfigBindRejectsHostname)
 {
 	config_t	config = { 0 };
@@ -1537,7 +1553,7 @@ TEST(ConfigAsciiTcpAcceptsListenOptions)
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_TCP);
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
-	ASSERT_EQ(strcmp(config.bind_address, "0.0.0.0") == 0);
+	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
 
 	ASSERT_SUCCESS(load_text(
 		"(server (mode ascii-tcp) (port 1503) (bind \"::1\") (seed 4) (idle-timeout-ms 500))"

@@ -49,7 +49,7 @@ static void
 config_set_defaults(config_t* config)
 {
 	memset(config, 0, sizeof(*config));
-	strcpy(config->bind_address, "0.0.0.0");
+	strcpy(config->bind_address, "127.0.0.1");
 	config->mode              = SERVER_MODE_TCP;
 	config->port              = CONFIG_DEFAULT_PORT;
 	config->idle_timeout_ms   = CONFIG_DEFAULT_IDLE_TIMEOUT_MS;

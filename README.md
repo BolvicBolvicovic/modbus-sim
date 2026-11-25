@@ -144,6 +144,10 @@ plaintext TCP default here is **1502**, or **802** when `(tls ...)` is enabled.
 Any other entry is rejected at load time, even when its value is the default. See
 [docs/config-reference.md](docs/config-reference.md) for ranges and defaults.
 
+TCP-family listeners (`tcp`, `rtu-tcp`, `ascii-tcp`) bind to loopback (`127.0.0.1`) by default, so
+they accept only local clients. Bind explicitly to `0.0.0.0` (or `::` for IPv6) to accept remote
+connections.
+
 ```scheme
 ; Modbus TCP (plaintext)
 (server (mode tcp) (port 1502) (bind "127.0.0.1") (idle-timeout-ms 5000))
