@@ -169,120 +169,64 @@ switching configurations without a clean rebuild is safe. s7 is compiled with it
 
 The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s7.h`.
 
-## Roadmap and where it plugs in
+## Roadmap
 
-**Dynamic behaviour models.** `POINT_MODEL` in `device/behaviour.c` is still a future idea: a
-function of time and of other points (first-order lag, noise, sine, a heater that follows its
-setpoint) configured next to `(static ...)` and `(ramp ...)`. The restricted state-machine subset
-is already implemented as the `(machine ...)` entry below; it uses a compile-to-flat-arrays
-parser rather than an s7 environment at request time.
+Implemented behaviour is documented in the transport, device-model and config sections above;
+only outstanding work is listed here.
 
-The current documented behaviour mechanisms are:
+### Dynamic behaviour models
 
-- Static register values.
-- Ramping values (wrap, bounce or hold).
-- Writing a register can freeze its ramp.
-- Scripted state machines that read and drive points.
-- Delayed and dropped responses.
+- Add declarative `POINT_MODEL` entries for continuous dependencies (first-order lag, noise,
+  sine, a heater following its setpoint). Why: machines and ramps can approximate smooth behavior
+  only through hand-written tick logic; they cannot express declarative time/point-dependent
+  models.
+- Add gradual sensor degradation as a model variant. Why: drift and progressive failure should be
+  configurable models, not bespoke per-test logic.
 
-That is enough for basic communication testing, but real industrial equipment has more
-complicated behaviour. The restricted machines above already cover the simpler VFD needs; a richer
-model may still need:
+### Scripted machines, phase 2
 
-- Start/stop state transitions.
-- Acceleration and deceleration.
-- Fault states.
-- Reset sequences.
-- Interlocks.
-- Dependencies between registers.
+- On-write handlers. Why: let a machine react to client writes without waiting for the next tick.
+- Per-state fault overlays. Why: fault behavior should follow machine state instead of being fixed
+  per device.
+- A state-register view of the current state. Why: clients and tests need to observe machine state
+  directly.
+- Read-only machine-owned points. Why: clients should not briefly overwrite a machine-driven point
+  between ticks.
 
-**Scripted device machines (implemented).** `src/device/machine.{h,c}` provides a bounded,
-deterministic machine runtime in the device layer. `(machine ...)` is read by s7 when the config
-loads and compiled by `src/config/config_machine.c` into flat expression/statement arrays; the
-resulting `machine_def_t` is deep-copied into the device arena by `device_add_machine`, validated
-by `device_finalize_machines` (after `device_seed_machines`), and advanced by `device_tick` after
-ramps. No s7 interpreter or arena allocation is involved at request time. Per-device limits are
-8 machines, and per machine 16 states, 32 transitions, 16 variables, 128 statements and 512
-expression nodes; transitions are capped at 64 firings per tick.
-Expressions use `expr_eval` with one 1000-step budget shared by all statements of a handler and a
-fresh budget for each transition condition; a failed evaluation aborts the rest of that handler but
-preserves earlier effects, and logs one warning per handler and failure kind. After-only transitions
-fire when their deadline is due, earliest deadline first with ties in declaration order, at the
-deadline timestamp; conditional transitions are checked in declaration order (with optional
-deadline) and fire at the current time. No transition means one on-tick. A firing runs on-exit,
-switches state, redraws all deadlines of the new state from the firing time, then runs on-enter.
-Catch-up gives intermediate states only on-exit/on-enter; just the final state gets one on-tick, and none runs at the firing cap.
-Random deadlines use a private RNG seeded from the server seed mixed with the device unit id, so
-they are deterministic per device. A machine may write only the first address of a configured,
-non-ramp point and becomes that point's owner (`POINT_MACHINE`); expression reads still go through
-`device_get_point`, and variables are private to their machine. Machines share one point table and
-advance in declaration order: any machine can read another machine's points, each point has at most
-one machine writer, and writes are visible to later machines in the same tick and to earlier ones on
-the next tick. Phase 2 candidates (not implemented): on-write handlers, fault overlays, a
-state-register view of the current state, and read-only machine-owned points.
+### Fault injection
 
-**More fault injection (implemented).** `fault_t` held one fault in the original roadmap; it is
-now a kind-keyed `fault_set_t` and `fault_decide` returns the combined decision (delay, drop,
-corrupt, wrong exception code, disconnect). `net/tcp_server.c` and `net/rtu_server.c` already
-acted on a `fault_decision_t`, so the new fields are applied in their response paths. A
-`(fault ...)` entry may be repeated, but only one definition per kind is allowed. Each kind
-rolls independently: drop suppresses the response, disconnect implies drop and closes the
-connection on TCP-like transports, an injected exception replaces the response, corrupt flips a
-payload byte, and delays are summed and capped at 60000 ms. Faults still change only the
-response, never request processing.
+- Distinct corruption modes for invalid register values and for transport checksum failures.
+  Why: `corrupt` flips one PDU byte and the transport recomputes CRC/LRC, so receivers never see a
+  bad frame.
+- Fault kinds for device restart and sensor disconnection. Why: current kinds cover response loss,
+  resets and exceptions, but not stateful device or sensor failures.
+- Configurable fault schedules (timing, count and sequence). Why: a seeded percent repeats one
+  random pattern but cannot express explicit timing, count and sequence of an outage.
 
-Further ideas, not implemented:
+### RTU timing
 
-- Already covered in generic form by the current kinds: intermittent communication failures
-  (`drop`), connection resets (`disconnect`), and Modbus exception responses (`exception`).
-- Distinct corruption modes would be needed for invalid register values and CRC errors; today
-  `corrupt` flips one PDU byte while the transport recomputes CRC/LRC.
-- New fault kinds would be needed for device restart and sensor disconnection.
-- Gradually degrading sensor measurements belong in the dynamic behaviour models above, with
-  dependencies between registers.
-- Configurable fault schedules would need timing/count/sequence config rather than a fixed
-  percent chance per response.
+- Model true UART character-level timing. Why: t3.5/t1.5 are derived from baud and read
+  boundaries, which cannot reproduce byte-time-sensitive serial framing. RTU-over-TCP needs no
+  change because it is an explicit separate transport.
 
-**RTU timing and RTU-over-TCP.** RTU derives inter-frame t3.5 from known baud rates and, in
-baud-derived auto mode, enforces t1.5 as a best-effort intra-frame read() boundary check on byte
-streams. `frame-gap-ms` remains an explicit inter-frame override/fallback for streams without UART
-timing. True UART character-level timing is still not modeled. RTU-over-TCP is implemented as a
-separate `(server (mode rtu-tcp))` transport/framing choice, not a silent change to existing TCP
-or RTU byte-stream behavior.
+### Operational observability
 
-### 4. Operational observability
+- Structured JSON logs and metrics for requests, errors, latency, active clients, device health
+  and fault statistics. Why: automated test platforms need machine-readable status.
+- Health/readiness and Prometheus endpoints. Why: container orchestration and monitoring need
+  standard probes and scrape targets.
 
-- Structured JSON logs.
-- Metrics for requests and errors.
-- Active client connections.
-- Request latency.
-- Device health status.
-- Fault injection statistics.
-- Prometheus metrics endpoint.
-- A health/readiness endpoint.
+### Deployment and portability
 
-Purpose: easier operation as part of an automated testing platform.
+- Docker image with deployment examples, container health checks, non-root execution and resource
+  limits. Why: safe, repeatable deployment.
+- Automated release builds with versioned binaries, reproducible builds and an SBOM. Why:
+  traceable and verifiable binaries.
 
-### 5. Deployment and portability
+### Protocol validation and compatibility
 
-The README explicitly identifies Linux as the supported platform. Wanted improvements:
-
-- Docker image and deployment examples.
-- Container health checks.
-- Non-root execution.
-- Resource limits.
-- Windows/macOS support if required.
-- Automated release builds and versioned binaries.
-- Reproducible builds and software bill of materials (SBOM).
-
-### 6. Protocol validation and compatibility
-
-The supported function codes are extensive, but supporting an FC does not guarantee
-interoperability with every implementation. Wanted work:
-
-- Independent Modbus conformance testing.
-- Interoperability testing against multiple commercial PLCs and SCADA products.
-- Fuzz testing of TCP and serial protocol parsers.
-- Long-running stability tests.
-- Performance tests with many clients and devices.
-- Testing of malformed and fragmented network frames.
+- Independent Modbus conformance and interoperability testing against commercial PLCs/SCADA
+  products. Why: supporting an FC does not prove interoperability.
+- Fuzz and malformed/fragmented-frame tests, long-running stability and multi-client/device
+  performance tests. Why: parser/transport robustness and capacity need evidence beyond unit
+  tests.
