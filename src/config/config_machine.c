@@ -85,24 +85,83 @@ struct compile_t
 	u16		emitted[MACHINE_MAX_STATEMENTS];
 };
 
-typedef struct name_value_t name_value_t;
-struct name_value_t
+#define EXPR_ARITY_ANY UINT8_MAX
+
+typedef enum operand_rule_t operand_rule_t;
+enum operand_rule_t
+{
+	OPERAND_NONE,
+	OPERAND_NUMBERS,
+	OPERAND_SAME_TYPE,
+	OPERAND_BOOLEANS,
+};
+
+typedef enum result_rule_t result_rule_t;
+enum result_rule_t
+{
+	RESULT_NUM,
+	RESULT_BOOL,
+	RESULT_BRANCHES,	/* IF: type of the compiled branches */
+};
+
+typedef struct expr_form_t expr_form_t;
+typedef bool (*expr_compile_fn)(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+
+struct expr_form_t
 {
 	const char*	name;
-	u32		value;
+	expr_kind_t	kind;
+	expr_compile_fn	compile;
+	operand_rule_t	operands;
+	result_rule_t	result;
+	space_kind_t	space;		/* SPACE_COUNT for non-point forms */
+	u8		min_len;
+	u8		max_len;	/* EXPR_ARITY_ANY for variadic forms */
 };
 
-static const name_value_t BINARY_OPS[] = {
-	{ "+",   EXPR_ADD }, { "-", EXPR_SUB }, { "*", EXPR_MUL }, { "/", EXPR_DIV },
-	{ "min", EXPR_MIN }, { "max", EXPR_MAX },
-	{ "<",   EXPR_LT  }, { "<=", EXPR_LE }, { ">", EXPR_GT }, { ">=", EXPR_GE },
-	{ "=",   EXPR_EQ  },
+static bool compile_point(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_nullary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_binary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_logical(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_not(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_if(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+
+/* Lengths are s7 list lengths including the head; point forms validate their own address form. */
+static const expr_form_t EXPR_FORMS[] = {
+	{ "coil",      EXPR_POINT,      compile_point,   OPERAND_NONE, RESULT_BOOL, SPACE_COIL,     2, 2 },
+	{ "discrete",  EXPR_POINT,      compile_point,   OPERAND_NONE, RESULT_BOOL, SPACE_DISCRETE, 2, 2 },
+	{ "input",     EXPR_POINT,      compile_point,   OPERAND_NONE, RESULT_NUM,  SPACE_INPUT,    2, 2 },
+	{ "holding",   EXPR_POINT,      compile_point,   OPERAND_NONE, RESULT_NUM,  SPACE_HOLDING,  2, 2 },
+	{ "now-ms",    EXPR_NOW_MS,     compile_nullary, OPERAND_NONE, RESULT_NUM,  SPACE_COUNT,    1, 1 },
+	{ "elapsed-ms", EXPR_ELAPSED_MS, compile_nullary, OPERAND_NONE, RESULT_NUM, SPACE_COUNT,    1, 1 },
+	{ "+",         EXPR_ADD,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "-",         EXPR_SUB,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "*",         EXPR_MUL,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "/",         EXPR_DIV,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "min",       EXPR_MIN,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "max",       EXPR_MAX,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "<",         EXPR_LT,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
+	{ "<=",        EXPR_LE,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
+	{ ">",         EXPR_GT,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
+	{ ">=",        EXPR_GE,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
+	{ "=",         EXPR_EQ,         compile_binary,  OPERAND_SAME_TYPE, RESULT_BOOL, SPACE_COUNT, 3, 3 },
+	{ "and",       EXPR_AND,        compile_logical, OPERAND_BOOLEANS, RESULT_BOOL, SPACE_COUNT, 3, EXPR_ARITY_ANY },
+	{ "or",        EXPR_OR,         compile_logical, OPERAND_BOOLEANS, RESULT_BOOL, SPACE_COUNT, 3, EXPR_ARITY_ANY },
+	{ "not",       EXPR_NOT,        compile_not,     OPERAND_BOOLEANS, RESULT_BOOL, SPACE_COUNT, 2, 2 },
+	/* IF's operand rule applies to its condition; branches only need matching types. */
+	{ "if",        EXPR_IF,         compile_if,      OPERAND_BOOLEANS, RESULT_BRANCHES, SPACE_COUNT, 4, 4 },
 };
 
-static const name_value_t POINT_HEADS[] = {
-	{ "coil", SPACE_COIL }, { "discrete", SPACE_DISCRETE },
-	{ "input", SPACE_INPUT }, { "holding", SPACE_HOLDING },
-};
+static const expr_form_t*
+find_expr_form(const char* head)
+{
+	for (u32 i = 0; i < ARRAY_COUNT(EXPR_FORMS); i++)
+	{
+		if (strcmp(head, EXPR_FORMS[i].name) == 0)
+			return &EXPR_FORMS[i];
+	}
+	return NULL;
+}
 
 static bool
 name_ok(const char* name)
@@ -275,19 +334,17 @@ static bool
 parse_point_form(compile_t* c, s7_pointer form, space_kind_t* space, u32* address)
 {
 	const char* head = form_head_name(form);
+	const expr_form_t* spec = NULL;
 	s7_pointer	addr = NULL;
 	s64		value = 0;
 
 	*space = SPACE_COUNT;
 	if (!head)
 		return fail_at(c, form, "expected a point like (holding 0)");
-	for (u32 i = 0; i < ARRAY_COUNT(POINT_HEADS); i++)
-	{
-		if (strcmp(head, POINT_HEADS[i].name) == 0)
-			*space = (space_kind_t)POINT_HEADS[i].value;
-	}
-	if (*space == SPACE_COUNT)
+	spec = find_expr_form(head);
+	if (!spec || spec->space == SPACE_COUNT)
 		return fail_at(c, form, "unknown point space");
+	*space = spec->space;
 	if (s7_list_length(c->ctx->sc, form) != 2 ||
 	    !s7_is_integer(s7_cadr(form)))
 		return fail_at(c, form, "expected a whole-number point address");
@@ -312,8 +369,66 @@ statement_form(s7_pointer form)
 static bool compile_expr(compile_t* c, s7_pointer form, val_type_t* type, u16* root);
 static bool compile_stmt(compile_t* c, s7_pointer form, bool top);
 
+static val_type_t
+form_type(const expr_form_t* spec, val_type_t branch_type)
+{
+	if (spec->result == RESULT_BOOL)
+		return VAL_BOOL;
+	if (spec->result == RESULT_BRANCHES)
+		return branch_type;
+	return VAL_NUM;
+}
+
 static bool
-compile_binary(compile_t* c, s7_pointer form, expr_kind_t kind, val_type_t want, u16* root)
+boolean_operand_ok(const expr_form_t* spec, val_type_t type)
+{
+	return spec->operands != OPERAND_BOOLEANS || type == VAL_BOOL;
+}
+
+static bool
+compile_point(compile_t* c, s7_pointer form, const expr_form_t* spec,
+	      val_type_t* type, u16* root)
+{
+	space_kind_t	space = SPACE_COUNT;
+	u32		address = 0;
+	u16		ref = 0;
+	expr_node_t	node = { 0 };
+
+	if (!parse_point_form(c, form, &space, &address) ||
+	    !add_point_ref(c, form, space, address, EMITTED_NONE, &ref))
+		return false;
+	node.kind = spec->kind;
+	node.space = (u8)space;
+	node.a = EXPR_NO_CHILD;
+	node.b = EXPR_NO_CHILD;
+	node.c = EXPR_NO_CHILD;
+	node.address = address;
+	*type = form_type(spec, VAL_NUM);
+	if (!add_node(c, form, node, root))
+		return false;
+	c->state->point_refs[ref - 1].expr_index = *root;
+	return true;
+}
+
+static bool
+compile_nullary(compile_t* c, s7_pointer form, const expr_form_t* spec,
+		val_type_t* type, u16* root)
+{
+	expr_node_t node = { 0 };
+
+	if (s7_list_length(c->ctx->sc, form) != spec->max_len)
+		return fail_at(c, form, "expected (%s) with no operands", spec->name);
+	node.kind = spec->kind;
+	node.a = EXPR_NO_CHILD;
+	node.b = EXPR_NO_CHILD;
+	node.c = EXPR_NO_CHILD;
+	*type = form_type(spec, VAL_NUM);
+	return add_node(c, form, node, root);
+}
+
+static bool
+compile_binary(compile_t* c, s7_pointer form, const expr_form_t* spec,
+	       val_type_t* type, u16* root)
 {
 	val_type_t	lhs = VAL_NUM;
 	val_type_t	rhs = VAL_NUM;
@@ -321,17 +436,106 @@ compile_binary(compile_t* c, s7_pointer form, expr_kind_t kind, val_type_t want,
 	u16		b = 0;
 	expr_node_t	node = { 0 };
 
+	if (s7_list_length(c->ctx->sc, form) != spec->max_len)
+		return fail_at(c, form, "expected exactly two operands");
 	if (!compile_expr(c, s7_cadr(form), &lhs, &a) ||
 	    !compile_expr(c, s7_caddr(form), &rhs, &b))
 		return false;
-	if (want == VAL_NUM && (lhs != VAL_NUM || rhs != VAL_NUM))
+	if (spec->operands == OPERAND_NUMBERS &&
+	    (lhs != VAL_NUM || rhs != VAL_NUM))
 		return fail_at(c, form, "operands must be numbers");
-	if (want == VAL_BOOL && lhs != rhs)
+	if (spec->operands == OPERAND_SAME_TYPE && lhs != rhs)
 		return fail_at(c, form, "equality operands must have the same type");
-	node.kind = kind;
+	node.kind = spec->kind;
 	node.a = a;
 	node.b = b;
 	node.c = EXPR_NO_CHILD;
+	*type = form_type(spec, VAL_NUM);
+	return add_node(c, form, node, root);
+}
+
+static bool
+compile_logical(compile_t* c, s7_pointer form, const expr_form_t* spec,
+		val_type_t* type, u16* root)
+{
+	val_type_t second_type = VAL_NUM;
+	u16	   next = 0;
+
+	if (s7_list_length(c->ctx->sc, form) < spec->min_len)
+		return fail_at(c, form, "expected at least two operands");
+	if (!compile_expr(c, s7_cadr(form), type, root))
+		return false;
+	if (!boolean_operand_ok(spec, *type))
+		return fail_at(c, s7_cadr(form), "logical operands must be booleans");
+	for (s7_pointer p = s7_cddr(form); s7_is_pair(p); p = s7_cdr(p))
+	{
+		s7_pointer  operand = s7_car(p);
+		expr_node_t node = { 0 };
+
+		if (!compile_expr(c, operand, &second_type, &next))
+			return false;
+		if (!boolean_operand_ok(spec, second_type))
+			return fail_at(c, operand, "logical operands must be booleans");
+		node.kind = spec->kind;
+		node.a = *root;
+		node.b = next;
+		node.c = EXPR_NO_CHILD;
+		if (!add_node(c, form, node, root))
+			return false;
+	}
+	*type = form_type(spec, VAL_NUM);
+	return true;
+}
+
+static bool
+compile_not(compile_t* c, s7_pointer form, const expr_form_t* spec,
+	    val_type_t* type, u16* root)
+{
+	val_type_t	first_type = VAL_NUM;
+	u16		first = 0;
+	expr_node_t	node = { 0 };
+
+	if (s7_list_length(c->ctx->sc, form) != spec->max_len)
+		return fail_at(c, form, "expected exactly one operand");
+	if (!compile_expr(c, s7_cadr(form), &first_type, &first))
+		return false;
+	if (!boolean_operand_ok(spec, first_type))
+		return fail_at(c, form, "NOT operand must be a boolean");
+	node.kind = spec->kind;
+	node.a = first;
+	node.b = EXPR_NO_CHILD;
+	node.c = EXPR_NO_CHILD;
+	*type = form_type(spec, VAL_NUM);
+	return add_node(c, form, node, root);
+}
+
+static bool
+compile_if(compile_t* c, s7_pointer form, const expr_form_t* spec,
+	   val_type_t* type, u16* root)
+{
+	val_type_t	cond_type = VAL_NUM;
+	val_type_t	then_type = VAL_NUM;
+	val_type_t	else_type = VAL_NUM;
+	u16		cond = 0;
+	u16		then_root = 0;
+	u16		else_root = 0;
+	expr_node_t	node = { 0 };
+
+	if (s7_list_length(c->ctx->sc, form) != spec->max_len)
+		return fail_at(c, form, "expected (if CONDITION THEN ELSE)");
+	if (!compile_expr(c, s7_cadr(form), &cond_type, &cond) ||
+	    !compile_expr(c, s7_caddr(form), &then_type, &then_root) ||
+	    !compile_expr(c, s7_caddr(s7_cdr(form)), &else_type, &else_root))
+		return false;
+	if (!boolean_operand_ok(spec, cond_type))
+		return fail_at(c, s7_cadr(form), "IF condition must be a boolean");
+	if (then_type != else_type)
+		return fail_at(c, form, "IF branches must have the same type");
+	node.kind = spec->kind;
+	node.a = cond;
+	node.b = then_root;
+	node.c = else_root;
+	*type = form_type(spec, then_type);
 	return add_node(c, form, node, root);
 }
 
@@ -341,12 +545,7 @@ compile_expr(compile_t* c, s7_pointer form, val_type_t* type, u16* root)
 	val_t		literal = { 0 };
 	expr_node_t	node = { 0 };
 	const char*	head = NULL;
-	s7_pointer	operand = NULL;
-	val_type_t	first_type = VAL_NUM;
-	val_type_t	second_type = VAL_NUM;
-	u16		first = 0;
-	u16		next = 0;
-	long		len = 0;
+	const expr_form_t* spec = NULL;
 
 	if (s7_is_boolean(form) ||
 	    s7_is_integer(form) ||
@@ -381,134 +580,10 @@ compile_expr(compile_t* c, s7_pointer form, val_type_t* type, u16* root)
 		return fail_at(c, form, "unknown expression");
 	if (statement_form(form))
 		return fail_at(c, form, "statement form used as expression");
-
-	for (u32 i = 0; i < ARRAY_COUNT(POINT_HEADS); i++)
-	{
-		space_kind_t	space = SPACE_COUNT;
-		u32		address = 0;
-		u16		ref = 0;
-
-		if (strcmp(head, POINT_HEADS[i].name) != 0)
-			continue;
-		if (!parse_point_form(c, form, &space, &address))
-			return false;
-		if (!add_point_ref(c, form, space, address, EMITTED_NONE, &ref))
-			return false;
-		node.kind = EXPR_POINT;
-		node.space = (u8)space;
-		node.a = EXPR_NO_CHILD;
-		node.b = EXPR_NO_CHILD;
-		node.c = EXPR_NO_CHILD;
-		node.address = address;
-		*type = space_is_bit(space) ? VAL_BOOL : VAL_NUM;
-		if (!add_node(c, form, node, root))
-			return false;
-		c->state->point_refs[ref - 1].expr_index = *root;
-		return true;
-	}
-
-	if (strcmp(head, "now-ms") == 0 || strcmp(head, "elapsed-ms") == 0)
-	{
-		if (s7_list_length(c->ctx->sc, form) != 1)
-			return fail_at(c, form, "expected (%s) with no operands", head);
-		node.kind = strcmp(head, "now-ms") == 0 ? EXPR_NOW_MS : EXPR_ELAPSED_MS;
-		node.a = EXPR_NO_CHILD;
-		node.b = EXPR_NO_CHILD;
-		node.c = EXPR_NO_CHILD;
-		*type = VAL_NUM;
-		return add_node(c, form, node, root);
-	}
-
-	len = s7_list_length(c->ctx->sc, form);
-	for (u32 i = 0; i < ARRAY_COUNT(BINARY_OPS); i++)
-	{
-		expr_kind_t kind = (expr_kind_t)BINARY_OPS[i].value;
-		val_type_t  want = kind == EXPR_EQ ? VAL_BOOL : VAL_NUM;
-
-		if (strcmp(head, BINARY_OPS[i].name) != 0)
-			continue;
-		if (len != 3)
-			return fail_at(c, form, "expected exactly two operands");
-		if (!compile_binary(c, form, kind, want, root))
-			return false;
-		*type = kind == EXPR_EQ || (kind >= EXPR_LT && kind <= EXPR_GE) ?
-			VAL_BOOL : VAL_NUM;
-		return true;
-	}
-
-	if (strcmp(head, "and") == 0 || strcmp(head, "or") == 0)
-	{
-		bool is_and = strcmp(head, "and") == 0;
-
-		if (len < 3)
-			return fail_at(c, form, "expected at least two operands");
-		if (!compile_expr(c, s7_cadr(form), type, root))
-			return false;
-		if (*type != VAL_BOOL)
-			return fail_at(c, s7_cadr(form), "logical operands must be booleans");
-		for (s7_pointer p = s7_cddr(form); s7_is_pair(p); p = s7_cdr(p))
-		{
-			operand = s7_car(p);
-			if (!compile_expr(c, operand, &second_type, &next))
-				return false;
-			if (second_type != VAL_BOOL)
-				return fail_at(c, operand, "logical operands must be booleans");
-			node = (expr_node_t){ 0 };
-			node.kind = is_and ? EXPR_AND : EXPR_OR;
-			node.a = *root;
-			node.b = next;
-			node.c = EXPR_NO_CHILD;
-			if (!add_node(c, form, node, root))
-				return false;
-		}
-		*type = VAL_BOOL;
-		return true;
-	}
-
-	if (strcmp(head, "not") == 0)
-	{
-		if (len != 2)
-			return fail_at(c, form, "expected exactly one operand");
-		if (!compile_expr(c, s7_cadr(form), &first_type, &first))
-			return false;
-		if (first_type != VAL_BOOL)
-			return fail_at(c, form, "NOT operand must be a boolean");
-		node.kind = EXPR_NOT;
-		node.a = first;
-		node.b = EXPR_NO_CHILD;
-		node.c = EXPR_NO_CHILD;
-		*type = VAL_BOOL;
-		return add_node(c, form, node, root);
-	}
-
-	if (strcmp(head, "if") == 0)
-	{
-		val_type_t	cond_type = VAL_NUM;
-		val_type_t	then_type = VAL_NUM;
-		val_type_t	else_type = VAL_NUM;
-		u16		cond = 0;
-		u16		then_root = 0;
-		u16		else_root = 0;
-
-		if (len != 4)
-			return fail_at(c, form, "expected (if CONDITION THEN ELSE)");
-		if (!compile_expr(c, s7_cadr(form), &cond_type, &cond) ||
-		    !compile_expr(c, s7_caddr(form), &then_type, &then_root) ||
-		    !compile_expr(c, s7_caddr(s7_cdr(form)), &else_type, &else_root))
-			return false;
-		if (cond_type != VAL_BOOL)
-			return fail_at(c, s7_cadr(form), "IF condition must be a boolean");
-		if (then_type != else_type)
-			return fail_at(c, form, "IF branches must have the same type");
-		node.kind = EXPR_IF;
-		node.a = cond;
-		node.b = then_root;
-		node.c = else_root;
-		*type = then_type;
-		return add_node(c, form, node, root);
-	}
-
-	return fail_at(c, form, "unknown expression form");
+	spec = find_expr_form(head);
+	if (!spec)
+		return fail_at(c, form, "unknown expression form");
+	return spec->compile(c, form, spec, type, root);
 }
 
 static bool

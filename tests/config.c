@@ -2025,6 +2025,89 @@ TEST(ConfigMachineRejectsTypeErrors)
 		     "unknown expression form");
 }
 
+typedef struct expr_case_t expr_case_t;
+struct expr_case_t
+{
+	const char*	expr;
+	expr_kind_t	kind;
+	val_type_t	type;
+	u16		nodes;
+};
+
+static bool
+load_expr_case(const expr_case_t* test_case, config_t* config, char* err, u32 err_size)
+{
+	char text[512];
+
+	snprintf(text, sizeof(text),
+		 "(device (unit-id 1) (coil 0) (discrete 0) (input 0) (holding 0)"
+		 " (machine m (initial idle) (var n 0) (var b #f)"
+		 "  (state idle (on-enter (set! %s %s)))))",
+		 test_case->type == VAL_NUM ? "n" : "b", test_case->expr);
+	return load_text(text, config, err, err_size);
+}
+
+TEST(ConfigMachineExpressionHeadsCompileFromTable)
+{
+	static const expr_case_t CASES[] = {
+		{ "(coil 0)",       EXPR_POINT,      VAL_BOOL, 1 },
+		{ "(discrete 0)",   EXPR_POINT,      VAL_BOOL, 1 },
+		{ "(input 0)",      EXPR_POINT,      VAL_NUM,  1 },
+		{ "(holding 0)",    EXPR_POINT,      VAL_NUM,  1 },
+		{ "(now-ms)",       EXPR_NOW_MS,     VAL_NUM,  1 },
+		{ "(elapsed-ms)",   EXPR_ELAPSED_MS, VAL_NUM,  1 },
+		{ "(+ 1 2)",        EXPR_ADD,        VAL_NUM,  3 },
+		{ "(- 1 2)",        EXPR_SUB,        VAL_NUM,  3 },
+		{ "(* 1 2)",        EXPR_MUL,        VAL_NUM,  3 },
+		{ "(/ 1 2)",        EXPR_DIV,        VAL_NUM,  3 },
+		{ "(min 1 2)",      EXPR_MIN,        VAL_NUM,  3 },
+		{ "(max 1 2)",      EXPR_MAX,        VAL_NUM,  3 },
+		{ "(< 1 2)",        EXPR_LT,         VAL_BOOL, 3 },
+		{ "(<= 1 2)",       EXPR_LE,         VAL_BOOL, 3 },
+		{ "(> 1 2)",        EXPR_GT,         VAL_BOOL, 3 },
+		{ "(>= 1 2)",       EXPR_GE,         VAL_BOOL, 3 },
+		{ "(= 1 2)",        EXPR_EQ,         VAL_BOOL, 3 },
+		{ "(and #t #f)",    EXPR_AND,        VAL_BOOL, 3 },
+		{ "(or #t #f)",     EXPR_OR,         VAL_BOOL, 3 },
+		{ "(not #f)",       EXPR_NOT,        VAL_BOOL, 2 },
+		{ "(if #t 1 2)",    EXPR_IF,         VAL_NUM,  4 },
+	};
+
+	for (u32 i = 0; i < ARRAY_COUNT(CASES); i++)
+	{
+		config_t		config = { 0 };
+		char			err[256] = "";
+		const machine_def_t*	def = NULL;
+
+		ASSERT_SUCCESS(load_expr_case(&CASES[i], &config, err, sizeof(err)));
+		ASSERT_SUCCESS(config.device_count == 1 &&
+			       config.devices[0]->machines != NULL &&
+			       config.devices[0]->machines->count == 1);
+		def = &config.devices[0]->machines->defs[0];
+		ASSERT_EQ(def->node_count == CASES[i].nodes);
+		ASSERT_EQ(def->nodes[def->node_count - 1].kind == CASES[i].kind);
+	}
+}
+
+TEST(ConfigMachineExpressionArityErrors)
+{
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (+ 1))))"),
+		     "expected exactly two operands");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (now-ms 1))))"),
+		     "expected (now-ms) with no operands");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (not))))"),
+		     "expected exactly one operand");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (if #t 1))))"),
+		     "expected (if CONDITION THEN ELSE)");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when (and #t) (set! n 1))))"),
+		     "expected at least two operands");
+}
+
 TEST(ConfigMachineRejectsBadPointReferences)
 {
 	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
