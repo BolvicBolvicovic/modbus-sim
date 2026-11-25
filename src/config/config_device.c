@@ -1,4 +1,5 @@
 #include "config/config_device.h"
+#include "config/config_machine.h"
 #include "vlib/macros.h"
 #include <math.h>
 #include <string.h>
@@ -697,6 +698,12 @@ parse_fifo(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+static bool
+parse_machine(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	return config_machine_add(ctx, item, dev);
+}
+
 /* --- device --- */
 
 typedef bool (*item_parser_t)(form_ctx_t*, s7_pointer, device_t*);
@@ -734,6 +741,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "file",             parse_file             },
 	{ "fifo",             parse_fifo             },
 	{ "canopen-object",   parse_canopen_object   },
+	{ "machine",          parse_machine          },
 };
 
 static const item_entry_t*
@@ -762,13 +770,14 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 				 "run-indicator, server-id-additional-data, com-status, com-event, vendor-name, "
 				 "product-code, major-minor-revision, vendor-url, product-name, model-name, "
 				 "user-application-name, device-id-object, fault, note, coil, discrete, input, "
-				 "holding, file, fifo or canopen-object", head);
+				 "holding, file, fifo, canopen-object or machine", head);
 
 	return entry->parse(ctx, item, dev);
 }
 
 bool
-config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 start_ms, device_t** out)
+config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
+		    u64 start_ms, u64 seed, device_t** out)
 {
 	device_t*	dev = device_new(arena, start_ms);
 
@@ -781,6 +790,10 @@ config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 start_
 		if (!parse_item(ctx, s7_car(p), dev))
 			return false;
 	}
+
+	device_seed_machines(dev, seed);
+	if (!config_machine_finalize(ctx, dev))
+		return false;
 
 	*out = dev;
 	return true;

@@ -414,7 +414,8 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 	if (config->device_count >= CONFIG_MAX_DEVICES)
 		return form_fail(ctx, "too many devices (max %d)", CONFIG_MAX_DEVICES);
 
-	return config_parse_device(ctx, form, arena, now_ms, &config->devices[config->device_count++]);
+	return config_parse_device(ctx, form, arena, now_ms, config->seed,
+				   &config->devices[config->device_count++]);
 }
 
 static bool
@@ -458,7 +459,10 @@ bool
 config_load(arena_t* persistent, arena_t* scratch, const char* path,
 	    config_t* out, char* err, u32 err_size)
 {
-	form_ctx_t	ctx    = { .sc = NULL, .err = err, .err_size = err_size };
+	form_ctx_t	ctx    = {
+		.sc = NULL, .err = err, .err_size = err_size,
+		.scratch = scratch, .machine_state = NULL,
+	};
 	s7_pointer	forms  = NULL;
 	char*		text   = readfile(scratch, path);
 	bool		ok     = false;

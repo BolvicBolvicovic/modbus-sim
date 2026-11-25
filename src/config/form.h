@@ -8,6 +8,7 @@
  * Every function reports problems in ctx->err in plain words and returns false.
  * The opt_* functions leave `out` untouched when the option is absent. */
 
+#include "vlib/arena.h"
 #include "vlib/c_types.h"
 #include "third_party/s7/s7.h"
 #include <stdbool.h>
@@ -18,6 +19,8 @@ struct form_ctx_t
 	s7_scheme*	sc;
 	char*		err;
 	u32		err_size;
+	arena_t*	scratch;	/* temporary storage for copied form text */
+	void*		machine_state;	/* opaque config_machine parser state */
 };
 
 /* Writes a printf-style message in ctx->err. Always returns false. */
