@@ -2,11 +2,16 @@
  * with devices built in code (no config), plus the config -> options adapter. */
 #define _GNU_SOURCE
 #include "vtest.h"
+#include "build_config.h"
+#if WITH_CONFIG
 #include "config/config.h"
+#endif
 #include "device/device.h"
 #include "modbus/pdu.h"
 #include "server/server.h"
+#if WITH_CONFIG
 #include "server/server_config.h"
+#endif
 #include "tests/tests_utils/test_support.h"
 #include "util/clock.h"
 #include "vlib/arena.h"
@@ -188,6 +193,7 @@ TEST(ServerFacadeCheckTlsOnlyValidatesWhenEnabled)
 	ASSERT_EQ(err[0] != '\0');
 }
 
+#if WITH_CONFIG
 static bool
 load_text(const char* text, config_t* config, char* err, u32 err_size)
 {
@@ -249,3 +255,4 @@ TEST(ServerOptionsFromConfigMapsEachTransport)
 	o = server_options_from_config(&c);
 	ASSERT_EQ(o.mode == SERVER_MODE_ASCII_TCP && o.port == 1999);
 }
+#endif

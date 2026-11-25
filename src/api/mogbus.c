@@ -1,14 +1,18 @@
-/* Public C API (include/mogbus.h): a thin top layer over config, device, server
+/* Public C API (include/mogbus.h): a thin top layer over config (optional), device, server
  * and util. Nothing else includes this module. Handles are structs pushed on the
  * context arena, so the API itself never calls malloc. */
 #include "mogbus.h"
-#include "config/config.h"
+#include "build_config.h"
 #include "device/device.h"
 #include "server/server.h"
-#include "server/server_config.h"
+#include "server/server_limits.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "vlib/arena.h"
+#if WITH_CONFIG
+#include "config/config.h"
+#include "server/server_config.h"
+#endif
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -53,7 +57,7 @@ _Static_assert((int)MOGBUS_LOG_DEBUG == (int)LOG_LEVEL_DEBUG &&
 _Static_assert(MOGBUS_STEP_CONTINUE == NET_STEP_CONTINUE &&
 	       MOGBUS_STEP_DONE == NET_STEP_DONE &&
 	       MOGBUS_STEP_ERROR == NET_STEP_ERROR, "step results");
-_Static_assert(MOGBUS_MAX_DEVICES == CONFIG_MAX_DEVICES, "device limit");
+_Static_assert(MOGBUS_MAX_DEVICES == SERVER_MAX_DEVICES, "device limit");
 
 #define VERSION_STRING_(a, b, c)	#a "." #b "." #c
 #define VERSION_STRING(a, b, c)		VERSION_STRING_(a, b, c)
@@ -67,21 +71,23 @@ struct mogbus_server_t
 	server_t	server;
 	mogbus_t*	ctx;
 	bool		in_use;
-	char		bind[CONFIG_BIND_MAX];
-	char		path[CONFIG_PATH_MAX];
-	char		certificate[CONFIG_TLS_PATH_MAX];
-	char		private_key[CONFIG_TLS_PATH_MAX];
-	char		ca_certificate[CONFIG_TLS_PATH_MAX];
-	char		tls1_2_ciphers[CONFIG_TLS_CIPHER_MAX];
-	char		tls1_3_ciphersuites[CONFIG_TLS_CIPHER_MAX];
+	char		bind[SERVER_BIND_MAX];
+	char		path[SERVER_PATH_MAX];
+	char		certificate[SERVER_TLS_PATH_MAX];
+	char		private_key[SERVER_TLS_PATH_MAX];
+	char		ca_certificate[SERVER_TLS_PATH_MAX];
+	char		tls1_2_ciphers[SERVER_TLS_CIPHER_MAX];
+	char		tls1_3_ciphersuites[SERVER_TLS_CIPHER_MAX];
 };
 
 struct mogbus_t
 {
 	arena_t*	arena;
+#if WITH_CONFIG
 	config_t	config;		/* last loaded file: server section only is used */
 	bool		has_config;
-	device_t*	devices[CONFIG_MAX_DEVICES];
+#endif
+	device_t*	devices[SERVER_MAX_DEVICES];
 	u32		device_count;
 	mogbus_server_t* servers[MOGBUS_MAX_SERVERS];
 };
@@ -146,6 +152,7 @@ find_device(const mogbus_t* ctx, u8 unit)
 	return NULL;
 }
 
+#if WITH_CONFIG
 bool
 mogbus_load_config(mogbus_t* ctx, const char* path, char* err, size_t err_size)
 {
@@ -167,9 +174,9 @@ mogbus_load_config(mogbus_t* ctx, const char* path, char* err, size_t err_size)
 	}
 	if (!config_load(ctx->arena, scratch, path, &loaded, err, (u32)err_size))
 		goto done;
-	if (ctx->device_count + loaded.device_count > CONFIG_MAX_DEVICES)
+	if (ctx->device_count + loaded.device_count > SERVER_MAX_DEVICES)
 	{
-		set_err(err, err_size, "too many devices (max %d per context)", CONFIG_MAX_DEVICES);
+		set_err(err, err_size, "too many devices (max %d per context)", SERVER_MAX_DEVICES);
 		goto done;
 	}
 	for (u32 i = 0; i < loaded.device_count; i++)
@@ -194,15 +201,25 @@ done:
 	arena_release(scratch);
 	return ok;
 }
+#else
+bool
+mogbus_load_config(mogbus_t* ctx, const char* path, char* err, size_t err_size)
+{
+	(void)ctx;
+	(void)path;
+	set_err(err, err_size, "built without config support");
+	return false;
+}
+#endif
 
 mogbus_device_t*
 mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name, char* err, size_t err_size)
 {
 	device_t*	dev = NULL;
 
-	if (ctx->device_count >= CONFIG_MAX_DEVICES)
+	if (ctx->device_count >= SERVER_MAX_DEVICES)
 	{
-		set_err(err, err_size, "too many devices (max %d per context)", CONFIG_MAX_DEVICES);
+		set_err(err, err_size, "too many devices (max %d per context)", SERVER_MAX_DEVICES);
 		return NULL;
 	}
 	if (find_device(ctx, unit_id))
@@ -362,14 +379,14 @@ mogbus_server_options_defaults(void)
 	return (mogbus_server_options_t){
 		.mode                           = MOGBUS_MODE_TCP,
 		.bind_address                   = "127.0.0.1",
-		.port                           = CONFIG_DEFAULT_PORT,
+		.port                           = SERVER_DEFAULT_PORT,
 		.fd                             = -1,
-		.idle_timeout_ms                = CONFIG_DEFAULT_IDLE_TIMEOUT_MS,
-		.baud                           = CONFIG_DEFAULT_BAUD,
+		.idle_timeout_ms                = SERVER_DEFAULT_IDLE_TIMEOUT_MS,
+		.baud                           = SERVER_DEFAULT_BAUD,
 		.data_bits                      = 8,
 		.parity                         = MOGBUS_PARITY_NONE,
 		.stop_bits                      = 1,
-		.tls_handshake_timeout_ms       = CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS,
+		.tls_handshake_timeout_ms       = SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS,
 		.tls_require_client_certificate = true,
 		.tls_min_version                = MOGBUS_TLS_1_2,
 	};
@@ -524,6 +541,7 @@ mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* in, char* err
 	return create_server(ctx, o, err, err_size);
 }
 
+#if WITH_CONFIG
 mogbus_server_t*
 mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size)
 {
@@ -534,6 +552,15 @@ mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size)
 	}
 	return create_server(ctx, server_options_from_config(&ctx->config), err, err_size);
 }
+#else
+mogbus_server_t*
+mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size)
+{
+	(void)ctx;
+	set_err(err, err_size, "built without config support");
+	return NULL;
+}
+#endif
 
 int
 mogbus_server_step(mogbus_server_t* server, int max_wait_ms)

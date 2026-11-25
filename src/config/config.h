@@ -5,20 +5,12 @@
 #include "vlib/c_types.h"
 #include "vlib/arena.h"
 #include "device/device.h"
+#include "server/server_limits.h"
 #include "server/server_mode.h"
 #include "util/serial.h"
 #include <stdbool.h>
 
-#define CONFIG_MAX_DEVICES		16
-#define CONFIG_DEFAULT_PORT		1502
-#define CONFIG_DEFAULT_IDLE_TIMEOUT_MS	0
-#define CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS 10000
 #define CONFIG_DEFAULT_FRAME_GAP_MS	20	/* fallback when baud is unknown and no explicit gap is set */
-#define CONFIG_DEFAULT_BAUD		0	/* 0 = unknown; derive RTU timing from tty when possible */
-#define CONFIG_BIND_MAX			128
-#define CONFIG_PATH_MAX			256
-#define CONFIG_TLS_PATH_MAX		256
-#define CONFIG_TLS_CIPHER_MAX		512
 #define CONFIG_DEFAULT_TLS_PORT		802	/* IANA mbap-s; plaintext TCP stays on 1502 */
 
 /* Name: config_tls_version_t
@@ -39,8 +31,8 @@ typedef struct config_t config_t;
 struct config_t
 {
 	server_mode_t	mode;
-	char		bind_address[CONFIG_BIND_MAX];
-	char		path[CONFIG_PATH_MAX];
+	char		bind_address[SERVER_BIND_MAX];
+	char		path[SERVER_PATH_MAX];
 	u16		port;
 	u32		seed;			/* seed for fault dice; 0 = fixed default */
 	u32		idle_timeout_ms;	/* close idle connections after N ms; 0 = disabled */
@@ -53,15 +45,15 @@ struct config_t
 	u32		stop_bits;		/* RTU and ASCII byte streams: 1 or 2 */
 	bool		tls_enabled;		/* tcp mode only: wrap MBAP in TLS */
 	u32		tls_handshake_timeout_ms;	/* TLS only: deadline from accept to handshake completion */
-	char		tls_certificate[CONFIG_TLS_PATH_MAX];
-	char		tls_private_key[CONFIG_TLS_PATH_MAX];
-	char		tls_ca_certificate[CONFIG_TLS_PATH_MAX];
+	char		tls_certificate[SERVER_TLS_PATH_MAX];
+	char		tls_private_key[SERVER_TLS_PATH_MAX];
+	char		tls_ca_certificate[SERVER_TLS_PATH_MAX];
 	bool		tls_require_client_certificate;
 	config_tls_version_t tls_min_version;
-	char		tls1_2_ciphers[CONFIG_TLS_CIPHER_MAX];
-	char		tls1_3_ciphersuites[CONFIG_TLS_CIPHER_MAX];
+	char		tls1_2_ciphers[SERVER_TLS_CIPHER_MAX];
+	char		tls1_3_ciphersuites[SERVER_TLS_CIPHER_MAX];
 	u32		device_count;
-	device_t*	devices[CONFIG_MAX_DEVICES];
+	device_t*	devices[SERVER_MAX_DEVICES];
 };
 
 /* Maps a parity name to its enum value. */

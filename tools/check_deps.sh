@@ -4,6 +4,11 @@ set -eu
 # Enforce documented dependency direction:
 #   net -> modbus -> device -> util
 #   config -> device -> util
+#   server -> net, config -> server (server_mode.h, server_limits.h only)
+#   api -> config, device, server, util
+# Only src/server/server_config.{c,h} may use config/, and config/ may use only
+# server_mode.h and server_limits.h from server/, so WITH_CONFIG=0 leaves out
+# config/ and server_config.c and nothing else changes.
 #
 # Any internal module include not explicitly allowed is rejected.
 # net->util and modbus->util are allowed as existing practical edges;
@@ -17,7 +22,7 @@ check_layer() {
 	[ -d "$dir" ] || return 0
 
 	bad=$(grep -rnE \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|util)/[^">]+)[">]' \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|util)/[^">]+)[">]' \
 		"$dir" 2>/dev/null || true)
 	[ -n "$bad" ] || return 0
 
@@ -29,7 +34,7 @@ check_layer() {
 		IFS=$old_ifs
 		[ -n "$line" ] || continue
 		include=$(printf '%s\n' "$line" | sed -nE \
-			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|util)/[^">]+))[">].*!\1!p')
+			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|util)/[^">]+))[">].*!\1!p')
 		target=$(printf '%s\n' "$include" | sed -E 's!^(\.\./)*!!; s!/.*!!')
 		case " $allowed " in
 		*" $target "*) ;;
@@ -57,11 +62,30 @@ check_file_forbidden_include() {
 	exit 1
 }
 
+check_dir_forbidden_include() {
+	dir=$1
+	pattern=$2
+	reason=$3
+	exclude=${4:-}
+	[ -d "$dir" ] || return 0
+	bad=$(grep -rnE ${exclude:+--exclude="$exclude"} "$pattern" "$dir" 2>/dev/null || true)
+	[ -n "$bad" ] || return 0
+	printf 'Forbidden dependency include found (%s):\n' "$reason" >&2
+	printf '%s\n' "$bad" >&2
+	exit 1
+}
+
 check_extra_rules() {
 	root=$1
 	# Issue 50: RTU timing/framing helpers live in rtu_framer; the TCP RTU server
 	# is a peer of the byte-stream RTU server, not its client.
 	check_file_forbidden_include "$root/src/net/rtu_tcp_server.c" 		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)net/rtu_server\.h[">]' 		"rtu_tcp_server.c must not include rtu_server.h"
+	check_dir_forbidden_include "$root/src/server" \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)config/' \
+		"only server_config.{c,h} may include config/" 'server_config.*'
+	check_dir_forbidden_include "$root/src/config" \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)server/(server|server_config)\.h[">]' \
+		"config/ may include only server_mode.h and server_limits.h from server/"
 }
 
 check_tree() {
@@ -69,7 +93,9 @@ check_tree() {
 	check_layer "$root" net    "net modbus util"
 	check_layer "$root" modbus "modbus device util"
 	check_layer "$root" device "device util"
-	check_layer "$root" config "config device util"
+	check_layer "$root" config "config device server util"
+	check_layer "$root" server "server net modbus device util config"
+	check_layer "$root" api    "api config device server util"
 	check_layer "$root" util   "util"
 	check_extra_rules "$root"
 }
@@ -79,8 +105,12 @@ self_test() {
 	trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 	clean=$tmp/clean
-	mkdir -p "$clean/src/config" "$clean/src/device" \
+	mkdir -p "$clean/src/config" "$clean/src/device" "$clean/src/server" "$clean/src/api" \
 		 "$clean/src/modbus" "$clean/src/net" "$clean/src/util"
+	printf '#include "server/server_mode.h"\n' >"$clean/src/config/ok-server.c"
+	printf '#include "config/config.h"\n#include "net/net_common.h"\n' >"$clean/src/server/server_config.c"
+	printf '#include "net/net_common.h"\n' >"$clean/src/server/ok.c"
+	printf '#include "server/server.h"\n#include "config/config.h"\n' >"$clean/src/api/ok.c"
 	printf '#include "device/device.h"\n' >"$clean/src/config/ok.c"
 	printf '#include "util/log.h"\n'       >"$clean/src/config/ok-util.c"
 	printf '#include "util/log.h"\n'       >"$clean/src/device/ok.c"
@@ -120,6 +150,11 @@ self_test() {
 	expect_fail util-modbus     util   "modbus/pdu.h"
 	expect_fail util-config     util   "config/config.h"
 	expect_fail util-relative   util   "../modbus/rtu.h"
+
+	expect_fail net-server      net    "server/server.h"
+	expect_fail device-api      device "api/x.h"
+	expect_fail config-server   config "server/server.h"
+	expect_fail server-config   server "config/config.h"
 
 	# Issue 50 acceptance fixture.
 	mkdir -p "$tmp/rtu-tcp-server-peer/src/net"

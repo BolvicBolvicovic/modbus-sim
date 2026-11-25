@@ -63,10 +63,10 @@ config_set_defaults(config_t* config)
 	memset(config, 0, sizeof(*config));
 	strcpy(config->bind_address, "127.0.0.1");
 	config->mode              = SERVER_MODE_TCP;
-	config->port              = CONFIG_DEFAULT_PORT;
-	config->idle_timeout_ms   = CONFIG_DEFAULT_IDLE_TIMEOUT_MS;
+	config->port              = SERVER_DEFAULT_PORT;
+	config->idle_timeout_ms   = SERVER_DEFAULT_IDLE_TIMEOUT_MS;
 	config->frame_gap_ms      = 0; /* auto: derive from baud, else default gap */
-	config->baud              = CONFIG_DEFAULT_BAUD;
+	config->baud              = SERVER_DEFAULT_BAUD;
 	config->strict_t15        = false;
 	config->broadcast_execute = false;
 	config->data_bits         = 8;
@@ -74,7 +74,7 @@ config_set_defaults(config_t* config)
 	config->stop_bits         = 1;
 	config->tls_require_client_certificate = true;
 	config->tls_min_version   = CONFIG_TLS_VERSION_1_2;
-	config->tls_handshake_timeout_ms = CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
+	config->tls_handshake_timeout_ms = SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
 }
 
 #if WITH_TLS
@@ -83,9 +83,9 @@ check_tls_path(form_ctx_t* ctx, const char* key, const char* value)
 {
 	if (!value[0])
 		return form_fail(ctx, "tls: %s path must not be empty", key);
-	if (strlen(value) >= CONFIG_TLS_PATH_MAX)
+	if (strlen(value) >= SERVER_TLS_PATH_MAX)
 		return form_fail(ctx, "tls: %s path is too long (max %d characters)",
-				 key, CONFIG_TLS_PATH_MAX - 1);
+				 key, SERVER_TLS_PATH_MAX - 1);
 	return true;
 }
 
@@ -104,7 +104,7 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 	const char*	ciphersuites = NULL;
 	bool		require_client = true;
 	u32		version = CONFIG_TLS_VERSION_1_2;
-	s64		handshake_timeout = CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
+	s64		handshake_timeout = SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "tls"))
 		return false;
@@ -129,17 +129,17 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 	{
 		if (!ciphers[0])
 			return form_fail(ctx, "tls: tls1-2-ciphers must not be empty");
-		if (strlen(ciphers) >= CONFIG_TLS_CIPHER_MAX)
+		if (strlen(ciphers) >= SERVER_TLS_CIPHER_MAX)
 			return form_fail(ctx, "tls: tls1-2-ciphers is too long (max %d characters)",
-					 CONFIG_TLS_CIPHER_MAX - 1);
+					 SERVER_TLS_CIPHER_MAX - 1);
 	}
 	if (ciphersuites)
 	{
 		if (!ciphersuites[0])
 			return form_fail(ctx, "tls: tls1-3-ciphersuites must not be empty");
-		if (strlen(ciphersuites) >= CONFIG_TLS_CIPHER_MAX)
+		if (strlen(ciphersuites) >= SERVER_TLS_CIPHER_MAX)
 			return form_fail(ctx, "tls: tls1-3-ciphersuites is too long (max %d characters)",
-					 CONFIG_TLS_CIPHER_MAX - 1);
+					 SERVER_TLS_CIPHER_MAX - 1);
 	}
 
 	if (!form_opt_int(ctx, options, "handshake-timeout-ms", 1, 86400000, &handshake_timeout))
@@ -313,8 +313,8 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (!form_opt_string(ctx, options, "bind", &bind))
 		return false;
 
-	if (bind && strlen(bind) >= CONFIG_BIND_MAX)
-		return form_fail(ctx, "server: bind address is too long (max %d characters)", CONFIG_BIND_MAX - 1);
+	if (bind && strlen(bind) >= SERVER_BIND_MAX)
+		return form_fail(ctx, "server: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
 
 	if (bind && !ip_is_literal(bind))
 		return form_fail(ctx, "server: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
@@ -328,8 +328,8 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	    mode != SERVER_MODE_ASCII_DEVICE)
 		return form_fail(ctx, "server: (path ...) is only valid in rtu-device and ascii-device modes");
 
-	if (path && strlen(path) >= CONFIG_PATH_MAX)
-		return form_fail(ctx, "server: path is too long (max %d characters)", CONFIG_PATH_MAX - 1);
+	if (path && strlen(path) >= SERVER_PATH_MAX)
+		return form_fail(ctx, "server: path is too long (max %d characters)", SERVER_PATH_MAX - 1);
 
 	if (bind)
 		strcpy(config->bind_address, bind);
@@ -436,8 +436,8 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 	if (strcmp(head, "device") != 0)
 		return form_fail(ctx, "unknown top-level form '%s'. Use (server ...) or (device ...)", head);
 
-	if (config->device_count >= CONFIG_MAX_DEVICES)
-		return form_fail(ctx, "too many devices (max %d)", CONFIG_MAX_DEVICES);
+	if (config->device_count >= SERVER_MAX_DEVICES)
+		return form_fail(ctx, "too many devices (max %d)", SERVER_MAX_DEVICES);
 
 	return config_parse_device(ctx, form, arena, now_ms,
 				   &config->devices[config->device_count++]);

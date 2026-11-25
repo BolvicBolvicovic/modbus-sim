@@ -25,9 +25,23 @@ cc -Iinclude app.c -L. -lmogbus -Wl,-rpath,'$ORIGIN' -o app
 cc -Iinclude app.c libmogbus.a -lm -lssl -lcrypto -o app
 ```
 
+`make` alone still builds only the `mogbus` binary in a default build, but `make WITH_CONFIG=0` builds the libraries (there is no binary then).
+
 A `WITH_TLS=0` build has no OpenSSL dependency; creating a server with `tls_enabled` then fails
 with an error. Objects are compiled with `-fPIC` (valid inside the PIE binary too), so one object
 set serves the binary and both libraries.
+
+### Build options
+
+- `WITH_TLS=auto|0|1` (default `auto`): OpenSSL support, see the README.
+- `WITH_CONFIG=1|0` (default `1`): `0` leaves out the Scheme config loader (`src/config`,
+  `src/server/server_config.c`) and the vendored s7, so the libraries hold no s7 code and serve only
+  devices built in code. The header and the exported symbols are identical, so the ABI does not
+  change: `mogbus_load_config()` returns false and `mogbus_server_create_from_config()` returns NULL,
+  both with the error `built without config support`. A `WITH_CONFIG=0` build has no `mogbus` binary
+  (it needs a config), so `make` builds `libmogbus.a`/`.so`; `make WITH_CONFIG=0 tests` runs the tests
+  that do not need the config loader or the binary, and still runs `lib-check`. Combine freely with
+  `WITH_TLS=0`; objects of each combination are kept apart (`.nocfg`, `.notls`).
 
 ## API overview
 

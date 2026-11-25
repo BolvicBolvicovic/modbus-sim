@@ -110,6 +110,12 @@ jobs:
       - name: Check doc examples without TLS
         run: ./tools/check_doc_examples.sh ./mogbus
 
+      - name: Unit tests without config loader
+        run: make -j$(nproc) WITH_CONFIG=0 tests
+
+      - name: Unit tests without config loader and TLS
+        run: make -j$(nproc) WITH_CONFIG=0 WITH_TLS=0 tests
+
   dev:
     runs-on: ubuntu-latest
     timeout-minutes: 15

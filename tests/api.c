@@ -1,6 +1,7 @@
 /* Public C API (include/mogbus.h), driven in-process the way an embedding host would. */
 #define _GNU_SOURCE
 #include "vtest.h"
+#include "build_config.h"
 #include "mogbus.h"
 #include "modbus/pdu.h"
 #include "tests/tests_utils/test_support.h"
@@ -214,6 +215,7 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 	mogbus_destroy(ctx);	/* closes `other` */
 }
 
+#if WITH_CONFIG
 TEST(ApiLoadsConfigAndServesFromIt)
 {
 	char		path[] = "/tmp/mogbus-api-XXXXXX";
@@ -270,6 +272,21 @@ TEST(ApiLoadsConfigAndServesFromIt)
 	mogbus_destroy(ctx);
 	unlink(path);
 }
+#else
+TEST(ApiConfigFunctionsFailWithoutConfigSupport)
+{
+	mogbus_t*	ctx = mogbus_create();
+	char		err[256] = "";
+
+	ASSERT_EQ(ctx != NULL);
+	ASSERT_EQ(!mogbus_load_config(ctx, "/nonexistent/mogbus.scm", err, sizeof(err)));
+	ASSERT_EQ(strcmp(err, "built without config support") == 0);
+	err[0] = '\0';
+	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err)) == NULL);
+	ASSERT_EQ(strcmp(err, "built without config support") == 0);
+	mogbus_destroy(ctx);
+}
+#endif
 
 TEST(ApiServesAnExistingFdInRtuAndAsciiModes)
 {

@@ -120,8 +120,8 @@ TEST(ConfigDefaults)
 	char		err[256] = "";
 
 	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
-	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
-	ASSERT_EQ(config.idle_timeout_ms == CONFIG_DEFAULT_IDLE_TIMEOUT_MS);
+	ASSERT_EQ(config.port == SERVER_DEFAULT_PORT);
+	ASSERT_EQ(config.idle_timeout_ms == SERVER_DEFAULT_IDLE_TIMEOUT_MS);
 	ASSERT_EQ(config.frame_gap_ms == 0);
 	ASSERT_EQ(config.baud == 0);
 	ASSERT_EQ(config.strict_t15 == false);
@@ -1080,10 +1080,10 @@ TEST(ConfigBindRejectsOverlongString)
 	config_t	config = { 0 };
 	char		err[256] = "";
 	char		text[320];
-	char		bind[CONFIG_BIND_MAX + 8];
+	char		bind[SERVER_BIND_MAX + 8];
 
-	memset(bind, 'a', CONFIG_BIND_MAX);
-	bind[CONFIG_BIND_MAX] = '\0';
+	memset(bind, 'a', SERVER_BIND_MAX);
+	bind[SERVER_BIND_MAX] = '\0';
 	snprintf(text, sizeof(text),
 		 "(server (mode tcp) (bind \"%s\")) (device (unit-id 1) (holding 0))",
 		 bind);
@@ -1320,17 +1320,17 @@ TEST(ConfigServerPathLengthIsValidated)
 {
 	config_t	config = { 0 };
 	char		err[256] = "";
-	char		path[CONFIG_PATH_MAX + 1];
-	char		text[CONFIG_PATH_MAX + 128];
+	char		path[SERVER_PATH_MAX + 1];
+	char		text[SERVER_PATH_MAX + 128];
 
-	memset(path, 'x', CONFIG_PATH_MAX - 1);
-	path[CONFIG_PATH_MAX - 1] = '\0';
+	memset(path, 'x', SERVER_PATH_MAX - 1);
+	path[SERVER_PATH_MAX - 1] = '\0';
 	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (unit-id 1) (holding 0))", path);
 	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
-	ASSERT_EQ(strlen(config.path) == CONFIG_PATH_MAX - 1);
+	ASSERT_EQ(strlen(config.path) == SERVER_PATH_MAX - 1);
 
-	memset(path, 'x', CONFIG_PATH_MAX);
-	path[CONFIG_PATH_MAX] = '\0';
+	memset(path, 'x', SERVER_PATH_MAX);
+	path[SERVER_PATH_MAX] = '\0';
 	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (unit-id 1) (holding 0))", path);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "path is too long") != NULL);
@@ -1380,7 +1380,7 @@ TEST(ConfigTlsDefaultsAndExplicitPort)
 	ASSERT_EQ(config.tls_enabled);
 	ASSERT_EQ(config.tls_require_client_certificate == true);
 	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
-	ASSERT_EQ(config.tls_handshake_timeout_ms == CONFIG_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS);
+	ASSERT_EQ(config.tls_handshake_timeout_ms == SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS);
 	ASSERT_EQ(config.tls1_2_ciphers[0] == '\0');
 	ASSERT_EQ(config.tls1_3_ciphersuites[0] == '\0');
 
@@ -1448,7 +1448,7 @@ TEST(ConfigPlaintextTcpPortIsUnchanged)
 	char		err[256] = "";
 
 	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
-	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
+	ASSERT_EQ(config.port == SERVER_DEFAULT_PORT);
 	ASSERT_EQ(config.tls_enabled == false);
 }
 
@@ -1509,8 +1509,8 @@ TEST(ConfigTlsValidatesCipherStrings)
 
 TEST(ConfigTlsValidatesNestedKeysDuplicatesAndPathLength)
 {
-	char	path[CONFIG_TLS_PATH_MAX + 2];
-	char	text[CONFIG_TLS_PATH_MAX + 160];
+	char	path[SERVER_TLS_PATH_MAX + 2];
+	char	text[SERVER_TLS_PATH_MAX + 160];
 
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		     "(unknown 1))) (device (unit-id 1) (holding 0))", "unknown option 'unknown'");
@@ -1518,8 +1518,8 @@ TEST(ConfigTlsValidatesNestedKeysDuplicatesAndPathLength)
 		     "(private-key \"key.pem\"))) (device (unit-id 1) (holding 0))",
 		     "option 'certificate' is given more than once");
 
-	memset(path, 'x', CONFIG_TLS_PATH_MAX);
-	path[CONFIG_TLS_PATH_MAX] = '\0';
+	memset(path, 'x', SERVER_TLS_PATH_MAX);
+	path[SERVER_TLS_PATH_MAX] = '\0';
 	snprintf(text, sizeof(text),
 		 "(server (tls (certificate \"%s\") (private-key \"key.pem\"))) "
 		 "(device (unit-id 1) (holding 0))", path);
@@ -1738,7 +1738,7 @@ TEST(ConfigAsciiTcpAcceptsListenOptions)
 	ASSERT_SUCCESS(load_text("(server (mode ascii-tcp)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_TCP);
-	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
+	ASSERT_EQ(config.port == SERVER_DEFAULT_PORT);
 	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
 
 	ASSERT_SUCCESS(load_text(

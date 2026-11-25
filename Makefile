@@ -85,7 +85,15 @@ $(error WITH_TLS must be auto, 0 or 1 (got '$(WITH_TLS)'))
 endif
 endif
 
-TLS_CFLAGS  = -DWITH_TLS=$(WITH_TLS)
+# WITH_CONFIG=0 leaves out the Scheme config loader and vendored s7: the libraries
+# then serve only devices built in code, and there is no mogbus binary (it needs a
+# config), so `all` builds the libraries instead.
+WITH_CONFIG ?= 1
+ifneq ($(filter-out 0 1,$(WITH_CONFIG)),)
+$(error WITH_CONFIG must be 0 or 1 (got '$(WITH_CONFIG)'))
+endif
+
+TLS_CFLAGS  = -DWITH_TLS=$(WITH_TLS) -DWITH_CONFIG=$(WITH_CONFIG)
 LIBS        = -lm
 ifeq ($(WITH_TLS),1)
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl)
@@ -101,16 +109,21 @@ ifeq ($(WITH_TLS),0)
 TLS_OBJ_TAG = .notls
 endif
 
+CONFIG_OBJ_TAG =
+ifeq ($(WITH_CONFIG),0)
+CONFIG_OBJ_TAG = .nocfg
+endif
+
 # SAN=1 and BUILD=dev build separate objects and link their runtimes/flags.
 SAN ?= 0
 
 ifeq ($(SAN),1)
-OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG).asan.o
+OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG).asan.o
 BIN         = $(ASAN_BIN)
 TESTS       = $(ASAN_TESTS)
 SAN_FLAGS   = -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=undefined,float-cast-overflow -fno-omit-frame-pointer
 else
-OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG).o
+OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG).o
 SAN_FLAGS   =
 endif
 
@@ -124,26 +137,39 @@ SRCS        = $(filter-out $(SRC_DIR)/net/net_tls.c,$(TREE_SRCS))
 endif
 OBJS        = $(SRCS:.c=$(OBJEXT)) $(MAIN:.c=$(OBJEXT))
 
-TEST_MAIN   = vlib/vtest.c
-ALL_TEST_SRCS = $(wildcard tests/*.c tests/tests_utils/*.c)
-ifeq ($(WITH_TLS),1)
-TEST_SRCS   = $(ALL_TEST_SRCS)
-else
-TEST_SRCS   = $(filter-out tests/tests_utils/tls_client.c,$(ALL_TEST_SRCS))
-endif
-# vtest.c defines the arena implementation itself, so the project's is left out.
-TEST_OBJS   = $(filter-out $(SRC_DIR)/util/arena_impl$(OBJEXT),$(SRCS:.c=$(OBJEXT))) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OBJEXT))
-
 # s7 is third-party code: built with its own relaxed flags, without sanitizers.
 # UBSan reports a misaligned load in its local_strncmp (third_party/s7/s7.c:4028).
 # It only parses config at startup, so -O0 avoids paying most of the build cost.
 S7_OBJ      = third_party/s7/s7$(OBJEXT)
 S7_FLAGS    = -std=gnu11 -O0 -w -fstack-protector-strong -fPIC -fvisibility=hidden -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0
 
-# Everything but main.c, plus s7 so the library is self-contained.
-LIB_OBJS    = $(SRCS:.c=$(OBJEXT)) $(S7_OBJ)
+# Without config there is no binary, no s7 and nothing that loads a config file.
+ifeq ($(WITH_CONFIG),0)
+SRCS        := $(filter-out $(SRC_DIR)/config/% $(SRC_DIR)/server/server_config.c,$(SRCS))
+CFG_S7_OBJ  =
+else
+CFG_S7_OBJ  = $(S7_OBJ)
+endif
 
-# Relink when switching BUILD even though the binary name stays the same.
+TEST_MAIN   = vlib/vtest.c
+ALL_TEST_SRCS = $(wildcard tests/*.c tests/tests_utils/*.c)
+TEST_SRCS   = $(ALL_TEST_SRCS)
+ifneq ($(WITH_TLS),1)
+TEST_SRCS   := $(filter-out tests/tests_utils/tls_client.c,$(TEST_SRCS))
+endif
+# These tests start the real binary or call config_load; the others run unchanged.
+ifeq ($(WITH_CONFIG),0)
+TEST_SRCS   := $(filter-out tests/config.c tests/ascii_cli.c tests/rtu_cli.c tests/tcp_server.c \
+                            tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c,$(TEST_SRCS))
+endif
+# vtest.c defines the arena implementation itself, so the project's is left out.
+TEST_OBJS   = $(filter-out $(SRC_DIR)/util/arena_impl$(OBJEXT),$(SRCS:.c=$(OBJEXT))) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OBJEXT))
+
+# Everything but main.c, plus s7 so the library is self-contained.
+LIB_OBJS    = $(SRCS:.c=$(OBJEXT)) $(CFG_S7_OBJ)
+
+# Relink when switching BUILD, WITH_TLS or WITH_CONFIG even though the output
+# names stay the same (objects of every variant may already be up to date).
 BUILD_STAMP = .build-mode
 
 # -MMD writes a .d file next to every object; -MP adds dummy rules so renaming a
@@ -151,12 +177,19 @@ BUILD_STAMP = .build-mode
 DEPS        = $(foreach obj,$(OBJS) $(TEST_OBJS) $(S7_OBJ),$(basename $(obj)).d)
 # Include every object variant so clean always removes the other configurations.
 ALL_SRCS    = $(TREE_SRCS) $(MAIN) $(TEST_MAIN) $(ALL_TEST_SRCS) third_party/s7/s7.c
-ALL_OBJ_SUFFIXES = .o .notls.o .asan.o .notls.asan.o .dev.o .dev.notls.o .dev.asan.o .dev.notls.asan.o
+ALL_OBJ_SUFFIXES = $(foreach d,.- .dev,$(foreach t,.- .notls,$(foreach c,.- .nocfg,$(foreach a,.o .asan.o,$(subst .-,,$d)$(subst .-,,$t)$(subst .-,,$c)$a))))
 ALL_OBJS    = $(foreach suffix,$(ALL_OBJ_SUFFIXES),$(ALL_SRCS:.c=$(suffix)))
 ALL_DEPS    = $(ALL_OBJS:.o=.d)
 
 # `all` builds only the binary; `make lib` adds libmogbus.a and libmogbus.so.
+# Without config there is no binary, so `all` builds the libraries.
+ifeq ($(WITH_CONFIG),1)
+PROGRAMS    = $(BIN)
 all: $(BIN)
+else
+PROGRAMS    =
+all: lib
+endif
 
 lib: $(LIB_STATIC) $(LIB_SHARED)
 
@@ -169,11 +202,15 @@ dev:
 	@:
 endif
 
+ifeq ($(WITH_CONFIG),1)
 $(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+endif
 
-tests: $(TESTS) $(BIN) lib-check
+tests: $(TESTS) $(PROGRAMS) lib-check
+ifeq ($(WITH_CONFIG),1)
 	./tools/check_toolchain.sh
+endif
 	./tools/run_tests.sh ./$(TESTS)
 
 # ar only adds members, so start from scratch to drop objects of another build mode.
@@ -203,14 +240,15 @@ lib-check: $(EXAMPLE_SO) $(EXAMPLE_A)
 	./$(EXAMPLE_SO)
 	./$(EXAMPLE_A)
 
-$(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(S7_OBJ)
+$(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(CFG_S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD_STAMP): FORCE
-	@printf '%s\n' '$(BUILD)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(BUILD)' > $@
+	@printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG)' | cmp -s - $@ 2>/dev/null || \
+		printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG)' > $@
 
 tests/%$(OBJEXT): tests/%.c
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) -Ivlib -c $< -o $@
@@ -225,7 +263,7 @@ vlib/vtest$(OBJEXT): vlib/vtest.c
 # Leak detection is off: the config tests intentionally keep arenas alive because
 # the parsed config points into them. UBSan failures abort (-fno-sanitize-recover).
 asan:
-	$(MAKE) SAN=1 $(ASAN_BIN) $(ASAN_TESTS)
+	$(MAKE) SAN=1 $(if $(PROGRAMS),$(ASAN_BIN)) $(ASAN_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MOGBUS_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
 
 clean:

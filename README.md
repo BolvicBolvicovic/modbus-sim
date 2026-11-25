@@ -82,6 +82,12 @@ in `--check` mode. Serial, RTU, ASCII and plaintext TCP configs behave identical
 work as expected. Documentation examples containing `(tls ...)` are skipped by `check_doc_examples.sh`
 when checking a no-TLS binary.
 
+`WITH_CONFIG=1|0` (default `1`) controls the Scheme config loader. `make WITH_CONFIG=0` compiles without
+`src/config`, `src/server/server_config.c` and the vendored s7, and builds only `libmogbus.a`/`libmogbus.so`
+(there is no `mogbus` binary); the config functions of the C API then fail with `built without config
+support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or the binary. See
+[docs/library.md](docs/library.md).
+
 ## What it does today
 
 | Feature | Details |
@@ -248,7 +254,7 @@ from your own loop. See [docs/library.md](docs/library.md) and `examples/embed_t
 include/        mogbus.h, the public C API of the library
 examples/       embed_tcp.c, a host program using only mogbus.h
 src/            the program, one folder per module (headers next to their .c files)
-  build_config.h  WITH_TLS compile-time fallback shared by sources and tests
+  build_config.h  WITH_TLS and WITH_CONFIG compile-time fallbacks shared by sources and tests
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
