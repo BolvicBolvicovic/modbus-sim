@@ -1,6 +1,7 @@
 #include "vtest.h"
 #include "build_config.h"
 #include "config/config.h"
+#include "device/machine.h"
 #include "vlib/macros.h"
 #include <math.h>
 #include <stdio.h>
@@ -1610,4 +1611,259 @@ TEST(ConfigNonFloatStaticRejectsNonFinite)
 	EXPECT_ERROR("(device (holding 0 (type u16) (static +nan.0)))", "only float32");
 	EXPECT_ERROR("(device (holding 0 (type u16) (static +inf.0)))", "only float32");
 	EXPECT_ERROR("(device (holding 0 (type s32) (static -inf.0)))", "only float32");
+}
+
+#define MACHINE_DEVICE(body) "(device (unit-id 1) (holding 0) (machine " body "))"
+
+TEST(ConfigMachineLoadsCompiledDefinitionAndRuns)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev = NULL;
+	const machine_def_t* def = NULL;
+	u16		out[1] = { 0 };
+
+	ASSERT_SUCCESS(load_text(
+		"(server (seed 123))"
+		" (device (unit-id 1) (holding 0)"
+		"  (machine m (initial idle)"
+		"    (var n 5) (var flag #t)"
+		"    (state idle (on-enter (set! (holding 0) n)))"
+		"    (state done (on-enter (set! (holding 0) 42)))"
+		"    (transition idle done (after-ms 10))))", &config, err, sizeof(err)));
+
+	dev = config.devices[0];
+	ASSERT_EQ(dev->machines->count == 1 && dev->machines->seed == 123);
+	def = &dev->machines->defs[0];
+	ASSERT_EQ(strcmp(def->name, "m") == 0 && def->initial_state == 0);
+	ASSERT_EQ(def->var_count == 2 && strcmp(def->vars[0].name, "n") == 0);
+	ASSERT_EQ(def->vars[0].initial.n == 5 && def->vars[1].initial.b == true);
+	ASSERT_EQ(def->state_count == 2 && def->transition_count == 1);
+	ASSERT_EQ(def->transitions[0].from == 0 && def->transitions[0].to == 1);
+	ASSERT_EQ(def->transitions[0].after_kind == AFTER_LITERAL);
+	ASSERT_EQ(def->transitions[0].after_literal_ms == 10);
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, out));
+	ASSERT_EQ(out[0] == 5);
+	device_tick(dev, dev->start_ms + 20);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, out));
+	ASSERT_EQ(out[0] == 42);
+}
+
+TEST(ConfigMachineResolvesForwardPointsAndNestedGuards)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		out[1] = { 0 };
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)"
+		"  (machine m (initial idle)"
+		"    (var n 0)"
+		"    (state idle"
+		"      (on-tick (when #t (set! n 3) (when #f (set! n 9))"
+		"                 (set! (holding 0) n)))))"
+		"  (holding 0))", &config, err, sizeof(err)));
+
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 1, out));
+	ASSERT_EQ(out[0] == 0);
+	device_tick(config.devices[0], config.devices[0]->start_ms);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 1, out));
+	ASSERT_EQ(out[0] == 3); /* the nested false guard did not run */
+}
+
+TEST(ConfigMachineRejectsUnknownAndDuplicateNames)
+{
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (bogus) (state idle)"),
+		     "unknown machine form");
+	EXPECT_ERROR(MACHINE_DEVICE("M (initial idle) (state idle)"), "bad machine name");
+	EXPECT_ERROR("(device (holding 0)"
+		     " (machine m (initial idle) (state idle))"
+		     " (machine m (initial idle) (state idle)))",
+		     "defined more than once");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0) (var n 1) (state idle)"),
+		     "duplicate variable name");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle) (state idle)"),
+		     "duplicate state name");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle (on-tick) (on-tick))"),
+		     "given more than once");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial missing) (state idle)"),
+		     "unknown initial state");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle missing (after-ms 1))"),
+		     "unknown initial or transition state");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle)"),
+		     "(machine m (initial idle)): machine has no states");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (bogus))"),
+		     "unknown transition trigger");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle)"),
+		     "state 'idle', (transition idle): expected (transition FROM TO TRIGGER ...)");
+}
+
+TEST(ConfigMachineRejectsTypeErrors)
+{
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (+ #t 1))))"),
+		     "operands must be numbers");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when (< #t #f) (set! n 1))))"),
+		     "operands must be numbers");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when (= #t 0) (set! n 1))))"),
+		     "equality operands must have the same type");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when (and #t 1) (set! n 1))))"),
+		     "logical operands must be booleans");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when (not 1) (set! n 1))))"),
+		     "NOT operand must be a boolean");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (if 1 2 3))))"),
+		     "IF condition must be a boolean");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (if #t 1 #f))))"),
+		     "IF branches must have the same type");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n #t)))"),
+		     "assignment value has the wrong type");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0) (holding 0)"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (set! (coil 0) 1)))))",
+		     "assignment value has the wrong type");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when 1 (set! n 2))))"),
+		     "condition must be a boolean");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (when (set! n 1) (set! n 2))))"),
+		     "statement form used as expression");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-tick (+ n 1)))"),
+		     "expression form used as statement");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (var n 0)"
+				    " (state idle (on-enter (set! n (foo))))"),
+		     "unknown expression form");
+}
+
+TEST(ConfigMachineRejectsBadPointReferences)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (when (< (holding 5) 1) (set! (holding 0) 2))))))",
+		     "(holding 5)");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u32))"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (set! (holding 1) 3)))))",
+		     "not the first address of a configured point");
+	EXPECT_ERROR("(device (unit-id 1)"
+		     " (holding 0 (ramp (from 0) (to 10) (every-ms 100)))"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (set! (holding 0) 3)))))",
+		     "(holding 0): machine 'm', state 'idle': machine cannot drive a ramp point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine a (initial idle)"
+		     "  (state idle (on-enter (set! (holding 0) 1))))"
+		     " (machine b (initial idle)"
+		     "  (state idle (on-enter (set! (holding 0) 2)))))",
+		     "(holding 0): machine 'b', state 'idle': point holding 0 is already driven by another machine");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
+		     " (machine a (initial idle)"
+		     "  (state idle (on-enter (set! (holding 0) (holding 0))))))"
+		     " (device (unit-id 2) (holding 0)"
+		     " (machine b (initial running)"
+		     "  (state running (on-enter (set! (holding 0) (holding 8))))))",
+		     "(holding 8)");
+}
+
+TEST(ConfigMachineRejectsBadTimingAndTriggers)
+{
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (after-ms 0))"),
+		     "(after-ms 0): after-ms must be between 1 and 86400000");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (after-ms 86400001))"),
+		     "(after-ms 86400001): after-ms must be between 1 and 86400000");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (after-ms (random 1 2.5)))"),
+		     "random bounds must be whole numbers");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (after-ms (random 10 5)))"),
+		     "MIN must not be greater than MAX");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle)"),
+		     "(transition idle idle): transition has no trigger");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (when #t) (when #f))"),
+		     "duplicate (when ...) trigger");
+	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (state idle)"
+				    " (transition idle idle (after-ms 1) (after-ms 2))"),
+		     "duplicate (after-ms ...) trigger");
+}
+
+TEST(ConfigMachineRejectsLimitViolations)
+{
+	char	text[16384];
+	size_t	used = 0;
+
+	text[0] = '\0';
+	used += (size_t)snprintf(text + used, sizeof(text) - used,
+				 "(device (unit-id 1) (holding 0) (machine m (initial idle)");
+	for (u32 i = 0; i <= MACHINE_MAX_VARS; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used, " (var v%u 0)", i);
+	used += (size_t)snprintf(text + used, sizeof(text) - used, " (state idle)))");
+	EXPECT_ERROR(text, "MACHINE_MAX_VARS exceeded");
+
+	text[0] = '\0';
+	used = 0;
+	used += (size_t)snprintf(text + used, sizeof(text) - used,
+				 "(device (unit-id 1) (holding 0) (machine m (initial idle)");
+	for (u32 i = 0; i <= MACHINE_MAX_STATES; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used, " (state s%u)", i);
+	used += (size_t)snprintf(text + used, sizeof(text) - used, "))");
+	EXPECT_ERROR(text, "MACHINE_MAX_STATES exceeded");
+
+	text[0] = '\0';
+	used = 0;
+	used += (size_t)snprintf(text + used, sizeof(text) - used,
+				 "(device (unit-id 1) (holding 0) (machine m (initial idle)"
+				 " (state idle)");
+	for (u32 i = 0; i <= MACHINE_MAX_TRANSITIONS; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used,
+					 " (transition idle idle (after-ms 1))");
+	used += (size_t)snprintf(text + used, sizeof(text) - used, "))");
+	EXPECT_ERROR(text, "MACHINE_MAX_TRANSITIONS exceeded");
+
+	text[0] = '\0';
+	used = 0;
+	used += (size_t)snprintf(text + used, sizeof(text) - used,
+				 "(device (unit-id 1) (holding 0) (machine m (initial idle)"
+				 " (var n 0) (state idle (on-enter");
+	for (u32 i = 0; i <= MACHINE_MAX_STATEMENTS; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used, " (set! n 1)");
+	used += (size_t)snprintf(text + used, sizeof(text) - used, "))))");
+	EXPECT_ERROR(text, "MACHINE_MAX_STATEMENTS exceeded");
+
+	text[0] = '\0';
+	used = 0;
+	used += (size_t)snprintf(text + used, sizeof(text) - used,
+				 "(device (unit-id 1) (holding 0) (machine m (initial idle)"
+				 " (var n 0) (state idle (on-enter");
+	for (u32 i = 0; i < 120; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used,
+					 " (set! n (+ (+ (+ 1 2) 3) 4))");
+	used += (size_t)snprintf(text + used, sizeof(text) - used, "))))");
+	EXPECT_ERROR(text, "MACHINE_MAX_EXPR_NODES exceeded");
+
+	text[0] = '\0';
+	used = 0;
+	used += (size_t)snprintf(text + used, sizeof(text) - used, "(device (unit-id 1) (holding 0)");
+	for (u32 i = 0; i <= MACHINE_MAX_MACHINES; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used,
+					 " (machine m%u (initial idle)"
+					 " (state idle (on-enter (set! (holding 0) 1))))", i);
+	used += (size_t)snprintf(text + used, sizeof(text) - used, ")");
+	EXPECT_ERROR(text,
+		     "(machine m8 (initial idle) (state idle (on-enter (set! (holding 0) 1)))): "
+		     "too many machines on one device (max 8)");
 }

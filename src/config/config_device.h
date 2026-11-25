@@ -9,6 +9,6 @@
  * On failure returns false and ctx->err says what is wrong.
  * */
 bool	config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
-			    u64 start_ms, device_t** out);
+			    u64 start_ms, u64 seed, device_t** out);
 
 #endif
