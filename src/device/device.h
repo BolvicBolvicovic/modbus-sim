@@ -51,6 +51,7 @@ struct point_t
 	value_type_t	type;
 	word_order_t	order;
 	point_kind_t	kind;
+	point_kind_t	configured_kind;	/* kind as configured, before client writes */
 	f64		static_value;
 	ramp_params_t	ramp;
 };
@@ -174,6 +175,7 @@ struct device_t
 	u64		start_ms;		/* ramps count their time from here */
 	u64		now_ms;			/* last device_tick, or start_ms before the first tick */
 	fault_set_t	faults;
+	fault_runtime_t	fault_runtime;
 	arena_t*	arena;			/* backing arena for dynamic config storage */
 	u32		point_count;
 	point_t*	points;			/* DEVICE_MAX_POINTS entries */
@@ -205,6 +207,13 @@ u32		device_find_point(const device_t* dev, space_kind_t space, u32 address);
 
 /* Moves every ramp to its value at `now_ms`. Call before serving a read. */
 void		device_tick(device_t* dev, u64 now_ms);
+
+/* Restarts the device at `now_ms`: restores every point to its configured kind
+ * and initial value, restarts ramp timelines, resets machine runtimes (initial
+ * state, vars, timers and on-enter), and re-arms fault schedules from `now_ms`
+ * except for the restart kind, which keeps its progress. Protocol counters,
+ * files, FIFOs, the RNG seed and configured data stay unchanged. */
+void		device_restart(device_t* dev, u64 now_ms);
 
 /* Reads `qty` consecutive addresses. Fails if any address is out of range or undefined. */
 bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty, u16* out);

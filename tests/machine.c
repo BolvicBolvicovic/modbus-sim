@@ -1579,6 +1579,77 @@ TEST(MachineFinalizeRejectsStateRegisterSetTarget)
 	arena_release(arena);
 }
 
+TEST(DeviceRestartResetsMachineStateVarsTimersAndKeepsRng)
+{
+	enum { V_COUNTER };
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev = device_new(arena, 1000);
+	machine_def_t*	def = new_def(arena, "restartable");
+	point_t		state_reg = static_point(SPACE_HOLDING, 0, VT_U16, 0);
+	point_t		output = static_point(SPACE_HOLDING, 1, VT_U16, 0);
+	rng_t		rng_before;
+	u16		out = 0;
+	u16		stmt = 0;
+
+	ASSERT_SUCCESS(device_add_point(dev, &state_reg) == NULL);
+	ASSERT_SUCCESS(device_add_point(dev, &output) == NULL);
+	def->has_state_register = true;
+	def->state_register_space = SPACE_HOLDING;
+	def->state_register_address = 0;
+	add_state(def, "idle");
+	add_state(def, "running");
+	add_num_var(def, "counter", 0);
+
+	stmt = set_var_stmt(def, V_COUNTER, node_num(def, 7));
+	def->states[0].on_enter_first = stmt;
+	def->states[0].on_enter_count = 2;
+	(void)set_point_stmt(def, SPACE_HOLDING, 1, node_num(def, 11));
+
+	stmt = set_var_stmt(def, V_COUNTER, node_num(def, 55));
+	def->states[1].on_enter_first = stmt;
+	def->states[1].on_enter_count = 2;
+	(void)set_point_stmt(def, SPACE_HOLDING, 1, node_num(def, 22));
+	add_after(def, 0, 1, 1000);
+	ASSERT_SUCCESS(device_add_machine(dev, def) == NULL);
+	prepare(dev, 42);
+
+	ASSERT_EQ(dev->machines->current[0] == 0);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 0);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 11);
+	ASSERT_EQ(num_var_value(dev, 0, V_COUNTER) == 7);
+
+	device_tick(dev, 2000);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 22);
+	ASSERT_EQ(num_var_value(dev, 0, V_COUNTER) == 55);
+
+	rng_before = dev->machines->rng;
+	device_restart(dev, 5000);
+	ASSERT_EQ(dev->start_ms == 5000 && dev->now_ms == 5000);
+	ASSERT_EQ(dev->machines->current[0] == 0);
+	ASSERT_EQ(dev->machines->entered_at[0] == 5000);
+	ASSERT_EQ(dev->machines->advanced_to[0] == 5000);
+	ASSERT_EQ(memcmp(&rng_before, &dev->machines->rng, sizeof(rng_before)) == 0);
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 0);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, &out));
+	ASSERT_EQ(out == 11);
+	ASSERT_EQ(num_var_value(dev, 0, V_COUNTER) == 7);
+	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+	ASSERT_EQ(dev->points[1].kind == POINT_MACHINE);
+
+	device_tick(dev, 6000);
+	ASSERT_EQ(dev->machines->current[0] == 1);
+	ASSERT_EQ(dev->machines->entered_at[0] == 6000);
+	arena_release(arena);
+}
+
 TEST(EffectiveFaultsKeepUnmentionedDeviceFaults)
 {
 	arena_t* arena = ARENA_ALLOC();

@@ -162,6 +162,21 @@ add_fault(fault_set_t* set, fault_kind_t kind, u32 delay_ms, u8 code, u32 percen
 	set->present |= FAULT_BIT(kind);
 }
 
+static void
+add_scheduled_fault(fault_set_t* set, fault_kind_t kind,
+		    const fault_schedule_step_t* steps, u8 step_count, u64 schedule_id)
+{
+	fault_t* fault = &set->by_kind[kind];
+
+	*fault = (fault_t){
+		.schedule_count = step_count,
+		.schedule_id    = schedule_id,
+	};
+	for (u8 i = 0; i < step_count; i++)
+		fault->schedule[i] = steps[i];
+	set->present |= FAULT_BIT(kind);
+}
+
 TEST(FaultNoneNeverFires)
 {
 	rng_t		rng;
@@ -386,6 +401,209 @@ TEST(FaultDecisionsAreDeterministicForSeed)
 		ASSERT_EQ(a.drop == b.drop && a.disconnect == b.disconnect);
 		ASSERT_EQ(a.delay_ms == b.delay_ms);
 	}
+}
+
+TEST(FaultCorruptModeDefaultsToPduAndReportsConfiguredMode)
+{
+	rng_t			rng;
+	fault_set_t		set = { 0 };
+	fault_decision_t	d = { 0 };
+
+	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
+	rng_seed(&rng, 1);
+	d = fault_decide(&set, &rng);
+	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_PDU);
+
+	set.by_kind[FAULT_CORRUPT].corrupt_mode = FAULT_CORRUPT_REGISTER;
+	d = fault_decide(&set, &rng);
+	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_REGISTER);
+
+	set.by_kind[FAULT_CORRUPT].corrupt_mode = FAULT_CORRUPT_CHECKSUM;
+	d = fault_decide(&set, &rng);
+	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_CHECKSUM);
+
+	set.by_kind[FAULT_CORRUPT].percent = 0;
+	d = fault_decide(&set, &rng);
+	ASSERT_EQ(d.corrupt == FAULT_CORRUPT_NONE);
+}
+
+TEST(FaultRestartAndSensorDisconnectDoNotDrop)
+{
+	rng_t			rng;
+	fault_set_t		set = { 0 };
+	fault_decision_t	d = { 0 };
+
+	add_fault(&set, FAULT_RESTART, 0, 0, 100);
+	rng_seed(&rng, 2);
+	d = fault_decide(&set, &rng);
+	ASSERT_EQ(d.restart && !d.sensor_disconnect);
+	ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0);
+	ASSERT_EQ(d.exception_code == 0 && d.corrupt == FAULT_CORRUPT_NONE);
+
+	set.present = 0;
+	add_fault(&set, FAULT_SENSOR_DISCONNECT, 0, 0, 100);
+	d = fault_decide(&set, &rng);
+	ASSERT_EQ(d.sensor_disconnect && !d.restart);
+	ASSERT_EQ(!d.drop && !d.disconnect && d.delay_ms == 0);
+	ASSERT_EQ(d.exception_code == 0 && d.corrupt == FAULT_CORRUPT_NONE);
+}
+
+TEST(FaultScheduleFiresExactStepCountsFromStart)
+{
+	rng_t				rng;
+	fault_set_t			set = { 0 };
+	fault_runtime_t			runtime = { 0 };
+	const fault_schedule_step_t	steps[] = {
+		{ .after_ms = 100, .count = 2 },
+		{ .after_ms = 50,  .count = 1 },
+	};
+	const u64			start = 1000;
+
+	add_scheduled_fault(&set, FAULT_DROP, steps, ARRAY_COUNT(steps), 1);
+	rng_seed(&rng, 3);
+
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 99, start).drop);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, start + 100, start).drop);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, start + 101, start).drop);
+	/* The second step waits after the request that completed the first one. */
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 150, start).drop);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, start + 151, start).drop);
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 152, start).drop);
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 5000, start).drop);
+}
+
+TEST(FaultScheduleResetsOnKindAbsenceAndDefinitionChange)
+{
+	rng_t				rng;
+	fault_set_t			set = { 0 };
+	fault_runtime_t			runtime = { 0 };
+	const fault_schedule_step_t	steps[] = { { .after_ms = 100, .count = 3 } };
+	const u64			start = 1000;
+	fault_schedule_state_t*		state = &runtime.by_kind[FAULT_DROP];
+
+	add_scheduled_fault(&set, FAULT_DROP, steps, ARRAY_COUNT(steps), 7);
+	rng_seed(&rng, 4);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, start + 100, start).drop);
+	ASSERT_EQ(state->remaining == 2);
+
+	/* Removing the kind clears its progress; re-adding arms from start again. */
+	set.present &= (u8)~FAULT_BIT(FAULT_DROP);
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 100, start).drop);
+	ASSERT_EQ(state->schedule_id == 0 && state->step == 0 && state->remaining == 0);
+	set.present |= FAULT_BIT(FAULT_DROP);
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 99, start).drop);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, start + 100, start).drop);
+	ASSERT_EQ(state->remaining == 2);
+
+	/* A changed definition id restarts that kind's progress. */
+	set.by_kind[FAULT_DROP].schedule_id = 8;
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, start + 50, start).drop);
+	ASSERT_EQ(state->schedule_id == 8 && state->remaining == 0);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, start + 100, start).drop);
+}
+
+TEST(FaultScheduleOverridesPercent)
+{
+	rng_t				rng;
+	fault_set_t			set = { 0 };
+	fault_runtime_t			runtime = { 0 };
+	const fault_schedule_step_t	steps[] = { { .after_ms = 100, .count = 1 } };
+	const u64			start = 0;
+
+	add_scheduled_fault(&set, FAULT_DROP, steps, ARRAY_COUNT(steps), 9);
+	set.by_kind[FAULT_DROP].percent = 100;
+	rng_seed(&rng, 5);
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, 99, start).drop);
+	ASSERT_EQ(fault_decide_at(&set, &rng, &runtime, 100, start).drop);
+
+	set.by_kind[FAULT_DROP].percent = 0;
+	ASSERT_EQ(!fault_decide_at(&set, &rng, &runtime, 101, start).drop);
+}
+
+TEST(DeviceRestartRestoresPointsAndClearsScheduleRuntime)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 1000);
+	point_t		static_p = static_point(SPACE_HOLDING, 0, VT_U16, 10);
+	point_t		ramp_p   = static_point(SPACE_INPUT, 1, VT_U16, 0);
+	u16			written = 99;
+	u16			out     = 0;
+	const fault_schedule_step_t	steps[] = { { .after_ms = 0, .count = 2 } };
+
+	ramp_p.kind = POINT_RAMP;
+	ramp_p.ramp = (ramp_params_t){
+		.from = 0, .to = 100, .step = 10, .every_ms = 1000, .mode = RAMP_HOLD,
+	};
+	ASSERT_SUCCESS(device_add_point(dev, &static_p) == NULL);
+	ASSERT_SUCCESS(device_add_point(dev, &ramp_p) == NULL);
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, &written));
+	device_tick(dev, 2000);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 1, 1, &out));
+	ASSERT_EQ(out == 10);
+
+	add_scheduled_fault(&dev->faults, FAULT_DROP, steps, ARRAY_COUNT(steps), 11);
+	{
+		rng_t rng;
+
+		rng_seed(&rng, 6);
+		ASSERT_EQ(fault_decide_at(&dev->faults, &rng, &dev->fault_runtime,
+					  2000, dev->start_ms).drop);
+		ASSERT_EQ(fault_decide_at(&dev->faults, &rng, &dev->fault_runtime,
+					  2000, dev->start_ms).drop);
+	}
+	dev->message_count = 7;
+	dev->diag_exception_count = 3;
+
+	device_restart(dev, 5000);
+	ASSERT_EQ(dev->start_ms == 5000 && dev->now_ms == 5000);
+	ASSERT_EQ(dev->message_count == 7 && dev->diag_exception_count == 3);
+	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
+	{
+		ASSERT_EQ(dev->fault_runtime.by_kind[i].schedule_id == 0);
+		ASSERT_EQ(dev->fault_runtime.by_kind[i].step == 0);
+		ASSERT_EQ(dev->fault_runtime.by_kind[i].remaining == 0);
+	}
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 10);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 1, 1, &out));
+	ASSERT_EQ(out == 0);
+	device_tick(dev, 6000);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 1, 1, &out));
+	ASSERT_EQ(out == 10);
+	arena_release(arena);
+}
+
+TEST(DeviceRestartPreservesRestartScheduleProgressOnly)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = device_new(arena, 0);
+	rng_t		rng;
+	fault_decision_t d = { 0 };
+	const fault_schedule_step_t restart_steps[] = { { .after_ms = 100, .count = 2 } };
+	const fault_schedule_step_t sensor_steps[]  = { { .after_ms = 100, .count = 2 } };
+
+	add_scheduled_fault(&dev->faults, FAULT_RESTART, restart_steps,
+			    ARRAY_COUNT(restart_steps), 21);
+	add_scheduled_fault(&dev->faults, FAULT_SENSOR_DISCONNECT, sensor_steps,
+			    ARRAY_COUNT(sensor_steps), 22);
+	rng_seed(&rng, 7);
+
+	d = fault_decide_at(&dev->faults, &rng, &dev->fault_runtime, 100, dev->start_ms);
+	ASSERT_EQ(d.restart && d.sensor_disconnect);
+	device_restart(dev, 100);
+
+	/* The restart kind keeps its progress: the second of two requests fires now. */
+	d = fault_decide_at(&dev->faults, &rng, &dev->fault_runtime, 100, dev->start_ms);
+	ASSERT_EQ(d.restart && !d.sensor_disconnect);
+	device_restart(dev, 100);
+
+	/* The restart schedule is finished and does not re-arm; the other kind waits again. */
+	d = fault_decide_at(&dev->faults, &rng, &dev->fault_runtime, 199, dev->start_ms);
+	ASSERT_EQ(!d.restart && !d.sensor_disconnect);
+	d = fault_decide_at(&dev->faults, &rng, &dev->fault_runtime, 200, dev->start_ms);
+	ASSERT_EQ(!d.restart && d.sensor_disconnect);
+	arena_release(arena);
 }
 
 TEST(FileRecordStoreAndRead)

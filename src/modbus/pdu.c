@@ -1110,13 +1110,48 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 	                         fc != FC_GET_COM_EVENT_COUNTER &&
 	                         fc != FC_GET_COM_EVENT_LOG;
 
-	*decision = fault_decide(&faults, rng);
+	*decision = fault_decide_at(&faults, rng, &dev->fault_runtime, now_ms, dev->start_ms);
 
 	/* The request was already processed above; faults only alter the response. */
 	if (decision->exception_code != 0)
 		len = modbus_exception(resp, fc, decision->exception_code);
-	if (decision->corrupt)
-		resp[len > 1 ? 1 : 0] ^= 0xFF;
+	/* A sensor disconnect fails successful reads of the input tables only. A
+	 * generic configured exception takes precedence over it. */
+	if (decision->exception_code == 0 &&
+	    !real_exception &&
+	    decision->sensor_disconnect &&
+	    (fc == FC_READ_DISCRETE_INPUTS || fc == FC_READ_INPUT_REGISTERS))
+	{
+		len = modbus_exception(resp, fc, EXC_SLAVE_DEVICE_FAILURE);
+		decision->exception_code = EXC_SLAVE_DEVICE_FAILURE;
+	}
+
+	switch (decision->corrupt)
+	{
+	case FAULT_CORRUPT_PDU:
+		if (len > 0)
+			resp[len > 1 ? 1 : 0] ^= 0xFF;
+		break;
+	case FAULT_CORRUPT_REGISTER:
+		/* Only register values/echoes are targeted; exceptions and bit
+		 * responses keep their shape, and the tables are never modified. */
+		if (len > 2 &&
+		    (resp[0] & 0x80) == 0 &&
+		    (fc == FC_READ_HOLDING_REGISTERS ||
+		     fc == FC_READ_INPUT_REGISTERS ||
+		     fc == FC_READ_WRITE_MULTIPLE_REGISTERS))
+			resp[2] ^= 0xFF;
+		else if (len > 3 &&
+		         (resp[0] & 0x80) == 0 &&
+		         fc == FC_WRITE_SINGLE_REGISTER)
+			resp[3] ^= 0xFF;
+		break;
+	case FAULT_CORRUPT_CHECKSUM:
+		/* Applied by the transport after framing. */
+		break;
+	case FAULT_CORRUPT_NONE:
+		break;
+	}
 	if (len == 0 || dev->listen_only)
 	{
 		/* A silent reply cannot justify closing the client's connection. */
@@ -1136,5 +1171,9 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 	}
 	if (decision->drop)
 		dev->diag_no_response_count = (u16)(dev->diag_no_response_count + 1);
+	/* Restart never replaces the response, and still happens if that response
+	 * is dropped or delayed. */
+	if (decision->restart)
+		device_restart(dev, now_ms);
 	return len;
 }

@@ -48,7 +48,8 @@ struct rtu_framer_ctx_t
 
 void	rtu_framer_init(rtu_framer_t* framer);
 void	rtu_framer_consume(rtu_framer_t* framer, u32 n);
-bool	rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len, u64 due_ms);
+bool	rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len,
+			 u64 due_ms, bool bad_checksum);
 
 /* Processes complete frames after a gap/EOF. Returns true when an incomplete
  * frame was kept for one extra gap window (baud-derived auto mode only). */

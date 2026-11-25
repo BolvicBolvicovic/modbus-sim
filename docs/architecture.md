@@ -10,7 +10,8 @@
  ASCII/TCP client ──same frames──► net/ascii_tcp_server ┘
                       │                                       fault_decide()
                       ▼
-     device/fault (drop / delay / exception / corrupt / disconnect)
+     device/fault (delay / drop / exception / corrupt / disconnect /
+                   restart / sensor-disconnect)
 
  config file ──► config/config ──► config/config_device ──► device/device
                   (s7 reads text)
@@ -24,10 +25,13 @@
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
-4. `fault_decide` rolls every effective fault kind and the transport applies the combined
-   decision (drop, delay, exception, corrupt, or disconnect on TCP-like transports). Effective
-   faults are device faults with overlays from the machines' active states; the earliest declared
-   machine wins for each kind.
+4. `fault_decide` evaluates every effective fault kind (a percent roll or a schedule step) and the
+   transport applies the combined decision (drop, delay, exception, pdu/register/checksum corrupt,
+   or disconnect on TCP-like transports). Effective faults are device faults with overlays from the
+   machines' active states; the earliest declared machine wins for each kind. A fired
+   `sensor-disconnect` replaces successful FC 02/04 reads with exception 04 before sending, and a
+   fired `restart` resets the device after the response is built. Schedule timing and limits are in
+   [config-reference.md](config-reference.md#fault-).
 
 ## Modules
 
@@ -187,16 +191,6 @@ only outstanding work is listed here.
   models.
 - Add gradual sensor degradation as a model variant. Why: drift and progressive failure should be
   configurable models, not bespoke per-test logic.
-
-### Fault injection
-
-- Distinct corruption modes for invalid register values and for transport checksum failures.
-  Why: `corrupt` flips one PDU byte and the transport recomputes CRC/LRC, so receivers never see a
-  bad frame.
-- Fault kinds for device restart and sensor disconnection. Why: current kinds cover response loss,
-  resets and exceptions, but not stateful device or sensor failures.
-- Configurable fault schedules (timing, count and sequence). Why: a seeded percent repeats one
-  random pattern but cannot express explicit timing, count and sequence of an outage.
 
 ### RTU timing
 

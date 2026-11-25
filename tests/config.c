@@ -271,6 +271,172 @@ TEST(ConfigDisconnectFaultModeRestrictions)
 	}
 }
 
+TEST(ConfigFaultRestartAndSensorDisconnectAreParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (fault (kind restart) (percent 40)) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_RESTART));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_RESTART].percent == 40);
+
+	ASSERT_SUCCESS(load_text("(device (fault (kind sensor-disconnect) (percent 60)) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_SENSOR_DISCONNECT));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_SENSOR_DISCONNECT].percent == 60);
+}
+
+TEST(ConfigFaultCorruptModesAreParsed)
+{
+	static const struct {
+		const char*		text;
+		fault_corrupt_mode_t	mode;
+	} cases[] = {
+		{ "(device (fault (kind corrupt) (percent 10)) (holding 0))",
+		  FAULT_CORRUPT_PDU },
+		{ "(device (fault (kind corrupt) (mode pdu) (percent 10)) (holding 0))",
+		  FAULT_CORRUPT_PDU },
+		{ "(device (fault (kind corrupt) (mode register) (percent 10)) (holding 0))",
+		  FAULT_CORRUPT_REGISTER },
+	};
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		ASSERT_SUCCESS(load_text(cases[i].text, &config, err, sizeof(err)));
+		ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_CORRUPT));
+		ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].corrupt_mode ==
+			  cases[i].mode);
+	}
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-tcp))"
+		" (device (fault (kind corrupt) (mode checksum) (percent 10)) (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].corrupt_mode ==
+		  FAULT_CORRUPT_CHECKSUM);
+}
+
+TEST(ConfigFaultModeRejectedForNonCorruptKinds)
+{
+	EXPECT_ERROR("(device (fault (kind drop) (mode pdu)) (holding 0))",
+		     "mode is only valid for kind corrupt");
+	EXPECT_ERROR("(device (fault (kind restart) (mode register)) (holding 0))",
+		     "mode is only valid for kind corrupt");
+}
+
+TEST(ConfigCorruptChecksumModeRestrictions)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	char		text[256];
+
+	for (u32 i = 0; i < ARRAY_COUNT(SERVER_MODES); i++)
+	{
+		snprintf(text, sizeof(text),
+			 "(server (mode %s)%s) (device (fault (kind corrupt) (mode checksum)) (holding 0))",
+			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
+		if (SERVER_MODES[i].mode == SERVER_MODE_TCP)
+		{
+			ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
+			ASSERT_EQ(strstr(err, "checksum is not valid in tcp mode") != NULL);
+		}
+		else
+		{
+			ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
+			ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].corrupt_mode ==
+				  FAULT_CORRUPT_CHECKSUM);
+		}
+	}
+}
+
+TEST(ConfigRejectsChecksumOverlayInTcpEvenWhenInactive)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	EXPECT_ERROR(
+		"(server (mode tcp)) (device (unit-id 1) (holding 0)"
+		" (machine m (initial idle)"
+		"  (state idle (fault (kind corrupt) (mode checksum)))))",
+		"checksum is not valid in tcp mode");
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-tcp)) (device (unit-id 1) (holding 0)"
+		" (machine m (initial idle)"
+		"  (state idle (fault (kind corrupt) (mode checksum)))))",
+		&config, err, sizeof(err)));
+	{
+		const fault_set_t* overlay =
+			&config.devices[0]->machines->defs[0].states[0].faults;
+
+		ASSERT_EQ(overlay->by_kind[FAULT_CORRUPT].corrupt_mode ==
+			  FAULT_CORRUPT_CHECKSUM);
+	}
+}
+
+TEST(ConfigFaultScheduleIsParsed)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	fault_t*	fault  = NULL;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (fault (kind drop)"
+		" (schedule (step (after-ms 100) (count 2))"
+		"           (step (after-ms 50) (count 3)))) (holding 0))",
+		&config, err, sizeof(err)));
+	fault = &config.devices[0]->faults.by_kind[FAULT_DROP];
+	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_DROP));
+	ASSERT_EQ(fault->schedule_count == 2 && fault->schedule_id != 0);
+	ASSERT_EQ(fault->schedule[0].after_ms == 100 && fault->schedule[0].count == 2);
+	ASSERT_EQ(fault->schedule[1].after_ms == 50 && fault->schedule[1].count == 3);
+}
+
+TEST(ConfigFaultScheduleRejectsBadShapes)
+{
+	char	text[1024];
+	size_t	used = 0;
+
+	EXPECT_ERROR("(device (fault (kind drop) (schedule)) (holding 0))",
+		     "schedule needs at least one");
+	EXPECT_ERROR("(device (fault (kind drop) (schedule (step (count 1)))) (holding 0))",
+		     "missing required option (after-ms ...)");
+	EXPECT_ERROR("(device (fault (kind drop) (schedule (step (after-ms 1)))) (holding 0))",
+		     "missing required option (count ...)");
+	EXPECT_ERROR("(device (fault (kind drop)"
+		     " (schedule (step (after-ms 1) (count 1) (bogus 2)))) (holding 0))",
+		     "unknown option 'bogus'");
+	EXPECT_ERROR("(device (fault (kind drop)"
+		     " (schedule (step (after-ms 1) (after-ms 2) (count 1)))) (holding 0))",
+		     "given more than once");
+	EXPECT_ERROR("(device (fault (kind drop)"
+		     " (schedule (step (after-ms -1) (count 1)))) (holding 0))",
+		     "between 0 and 86400000");
+	EXPECT_ERROR("(device (fault (kind drop)"
+		     " (schedule (step (after-ms 86400001) (count 1)))) (holding 0))",
+		     "between 0 and 86400000");
+	EXPECT_ERROR("(device (fault (kind drop)"
+		     " (schedule (step (after-ms 1) (count 0)))) (holding 0))",
+		     "between 1 and 1000000");
+	EXPECT_ERROR("(device (fault (kind drop)"
+		     " (schedule (step (after-ms 1) (count 1000001)))) (holding 0))",
+		     "between 1 and 1000000");
+	EXPECT_ERROR("(device (fault (kind drop) (percent 5)"
+		     " (schedule (step (after-ms 1) (count 1)))) (holding 0))",
+		     "percent cannot be combined with schedule");
+
+	used = (size_t)snprintf(text, sizeof(text),
+				"(device (fault (kind drop) (schedule");
+	for (u32 i = 0; i < FAULT_MAX_SCHEDULE_STEPS + 1; i++)
+		used += (size_t)snprintf(text + used, sizeof(text) - used,
+					 " (step (after-ms 1) (count 1))");
+	snprintf(text + used, sizeof(text) - used, ")) (holding 0))");
+	EXPECT_ERROR(text, "schedule has more than 8 steps");
+}
+
 TEST(ConfigExceptionStatusIsParsed)
 {
 	config_t	config = { 0 };

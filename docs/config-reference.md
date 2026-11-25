@@ -61,7 +61,7 @@ on both families at once; there is no dual-stack option.
 |---|---|---|---|
 | `(port N)` | TCP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces (explicit opt-in for remote clients), `"127.0.0.1"` = this machine over IPv4 only (default), `"::"` = all IPv6 interfaces (explicit opt-in), `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"127.0.0.1"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
-| `(seed N)` | Seed for the random dice used by faults and by `(after-ms (random MIN MAX))` machine deadlines, 0-4294967295. Same seed gives the same sequences | `0` (a fixed built-in seed) | all modes |
+| `(seed N)` | Seed for the random dice used by `percent`-based faults and by `(after-ms (random MIN MAX))` machine deadlines, 0-4294967295. Same seed gives the same sequences | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
 | `(frame-gap-ms N)` | Explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) | `rtu-pty`, `rtu-device`, `rtu-tcp` |
@@ -439,8 +439,9 @@ the machine's last tick or state change.
 
 A `(fault ...)` inside `(state ...)` overlays the device faults while that state is active. It uses
 the same options and one-definition-per-kind rule as a device-level fault, and a `(kind disconnect)`
-overlay is rejected in serial modes for the same reason. An active overlay overrides or adds its
-kind; kinds not mentioned keep the device setting. If several machines are in states that define the
+overlay is rejected in serial modes for the same reason. A checksum-corrupt overlay is rejected in
+`tcp` mode even when that state is never entered. An active overlay overrides or adds its kind;
+kinds not mentioned keep the device setting. If several machines are in states that define the
 same kind, the earliest declared machine wins for that kind.
 
 Machines on the same device share one point table: any machine can read any configured point,
@@ -520,29 +521,73 @@ See also [`profiles/motor.scm`](../profiles/motor.scm).
 
 A device can have several faults. `(fault ...)` is repeatable, but **only one definition per
 kind** is allowed: a second `(fault (kind X) ...)` for the same kind is rejected at config load.
-Each kind rolls independently with the chance given by its `percent`.
+A fault fires either by its `percent` chance or by its `schedule`; the two are mutually exclusive.
+
+```scheme
+(fault
+  (kind delay|drop|exception|corrupt|disconnect|restart|sensor-disconnect)
+  [(delay-ms N)]                  ; delay only
+  [(code N)]                      ; exception only
+  [(mode pdu|register|checksum)]  ; corrupt only, default pdu
+  [(percent N)]                   ; not allowed together with schedule
+  [(schedule (step (after-ms N) (count N)) ...)])
+```
+
+| Kind | Effect |
+|---|---|
+| `delay` | Send the response late. |
+| `drop` | Never send the response. |
+| `exception` | Replace the response with a Modbus exception. |
+| `corrupt` | Corrupt the response in the selected `mode`. |
+| `disconnect` | Drop the response and close the client connection (TCP-like transports only). |
+| `restart` | Restart the device after the response is built. |
+| `sensor-disconnect` | Replace successful FC 02 and FC 04 reads with exception 04. |
 
 | Entry | Meaning | Default |
 |---|---|---|
-| `(kind delay)`, `(kind drop)`, `(kind exception)`, `(kind corrupt)` or `(kind disconnect)` | required. `delay` sends the response late, `drop` never sends it, `exception` replaces it with a Modbus exception, `corrupt` flips a byte of the PDU response, `disconnect` drops the response and closes the client connection | - |
-| `(delay-ms N)` | for `delay` only: how late, 1-60000 ms. Required for `delay`, rejected for other kinds | - |
-| `(code N)` | for `exception` only: exception code to return, one of 1-8, 10 or 11 (decimal). Required for `exception`, rejected for other kinds; 9 is reserved | - |
-| `(percent N)` | chance per response, 0-100 | `100` |
+| `(kind NAME)` | Required. One of the kinds above. | - |
+| `(delay-ms N)` | For `delay` only: how late, 1-60000 ms. Required for `delay`, rejected for other kinds. | - |
+| `(code N)` | For `exception` only: exception code to return, one of 1-8, 10 or 11 (decimal). Required for `exception`, rejected for other kinds; 9 is reserved. | - |
+| `(mode pdu\|register\|checksum)` | For `corrupt` only, see below. `pdu` flips one PDU payload byte; `register` flips a register data value in FC 03/04/23 read responses and the echoed value of FC 06; `checksum` corrupts the emitted RTU CRC or ASCII LRC after framing. Rejected for other kinds. | `pdu` |
+| `(percent N)` | Chance per response, 0-100. Not allowed together with `schedule`. | `100` |
+| `(schedule (step ...) ...)` | Non-repeating schedule of at most 8 steps; each step needs `(after-ms N)` (0-86400000) and `(count N)` (1-1000000). Not allowed together with `percent`. | none (percent roll) |
+
+Schedule timing: the first step becomes active `after-ms` after device start. Each later step
+becomes active `after-ms` after the request that completes the previous step. A step fires exactly
+`count` consecutive requests, then the next step waits; after the last step the schedule stops.
+Schedules never repeat. Progress restarts when the active fault definition or schedule changes (for
+example a machine state overlay becoming active) and on a device restart, except that the restart
+kind keeps its own progress so a scheduled restart does not re-arm itself.
+
+`corrupt` modes: `pdu` (the default) flips `resp[1]` (the byte count or first data byte; the
+function code for a one-byte response) with XOR `0xFF`, so the response length does not change.
+`register` changes a register data value in successful FC 03/04/23 read responses and the echoed
+value of FC 06; it leaves other response shapes unchanged. `checksum` deliberately corrupts the
+RTU CRC or ASCII LRC after the frame is built, so the receiver rejects the frame. MBAP/TCP has
+no checksum, so `checksum` is rejected in `tcp` mode and allowed in `rtu-pty`, `rtu-device`,
+`rtu-tcp`, `ascii-pty`, `ascii-device` and `ascii-tcp`.
 
 ```scheme
 (fault (kind delay) (delay-ms 1500) (percent 30))   ; 3 in 10 answers arrive 1.5 s late
 (fault (kind drop) (percent 20))                    ; 1 in 5 answers never arrives
 (fault (kind exception) (code 4) (percent 100))     ; every answer becomes exception 04
-(fault (kind corrupt) (percent 50))                 ; half of the answers get a flipped PDU byte
+(fault (kind corrupt) (mode register) (percent 50)) ; half of the register reads carry a wrong value
 (fault (kind disconnect) (percent 10))              ; 1 in 10 answers closes the connection
+(fault (kind sensor-disconnect)                     ; sensor reads fail during 600 requests
+  (schedule (step (after-ms 5000) (count 600))))    ; after 5 s, then recover
+(fault (kind restart)                               ; one restart on the first request after 60 s
+  (schedule (step (after-ms 60000) (count 1))))
 ```
 
 A state machine may also put `(fault ...)` forms inside `(state ...)`; these are per-state overlays.
-See the `(machine ...)` section above for the full overlay rules.
+See the `(machine ...)` section above for the full overlay rules; an overlay changes the active
+fault definition and therefore restarts that kind's schedule progress.
 
 `(kind disconnect)` is valid only for TCP-like transports (`tcp`, `rtu-tcp`, `ascii-tcp`).
 It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty` and `ascii-device`; serial
-server fds are never closed by a fault.
+server fds are never closed by a fault. `(kind corrupt) (mode checksum)` is rejected in `tcp` and
+accepted in the other six modes. `mode` is accepted only for `corrupt`; `delay`, `drop`,
+`exception`, `restart` and `sensor-disconnect` are valid in every mode.
 
 - Delays do not block the server: other clients are served while a response waits. A configured
   delay is capped at 60000 ms.
@@ -552,20 +597,39 @@ server fds are never closed by a fault.
   request has been processed. A plain `drop` only suppresses the response and leaves the
   connection open. Silent responses (listen-only mode and requests that produce no response)
   never close the connection.
-- Fault kinds combine independently: a fired exception replaces the response and `corrupt` still
-  applies to that injected exception; `drop` (including `disconnect`) suppresses whatever the other
-  kinds produced.
-- Faults only alter the response: the request is already processed (writes apply, counters and ramp
-  timing update). An exception replaces the response with `[FC|0x80][code]`. A sent injected
-  exception is counted like a real exception and not as an FC11 successful completion; a suppressed
-  injected exception counts only as no response. Real exceptions keep their accounting even when
-  dropped, and busy/NAK counts use the injected code before any corrupt flip.
-- A `corrupt` fault flips `resp[1]` (the byte count or first data byte; the function code for a
-  one-byte response) with XOR `0xFF`; the response length does not change. The transport recomputes
-  CRC (RTU), LRC (ASCII), or MBAP length (TCP), so receivers see a structurally valid frame with
-  wrong data: never a CRC/LRC error and no FC08 `0x000C` communication-error count. See
-  [modbus-support.md](modbus-support.md) for the exception codes this simulator otherwise emits.
-- Use `(seed N)` in `(server ...)` to repeat the exact same pattern of faults on every run.
+- `restart` runs after the request is processed and the response is built, and does not replace the
+  response; it still happens when that response is dropped or delayed. It resets configured points
+  to their configured kinds and initial values (undoing client writes), restarts ramp timelines,
+  resets all machines to their initial states, variables and timers and runs the initial `on-enter`
+  (state registers included), and re-arms fault schedules from the restart time. The restart kind
+  keeps its own schedule progress, so a scheduled restart advances through its steps and stops
+  instead of re-arming itself forever. It does not clear FC 08/FC 11 diagnostic counters, the
+  FC 12 event log, file records, FIFO contents, listen-only mode, or the RNG seed.
+- `sensor-disconnect` replaces a successful FC 02 (discrete inputs) or FC 04 (input registers) read
+  with exception 04 (slave device failure). Other function codes and error responses are
+  unaffected, the connection stays open, and the request is still processed normally. If a generic
+  `exception` fault also fires, its configured code wins. Scheduling it, as above, models a
+  persistent sensor outage.
+- Fault kinds combine: a fired exception replaces the response; `pdu` or `checksum` corruption then
+  still applies to that injected exception, while `register` corruption leaves non-register
+  response shapes unchanged. `drop` (including `disconnect`) suppresses the response the other
+  kinds produced. A `sensor-disconnect` read also yields to a fired generic `exception` code.
+- Faults do not change how the request itself is processed: writes apply, and counters and ramp
+  timing update before the response is built. `delay`, `drop`, `exception`, `corrupt` and
+  `disconnect` then alter only that response. `restart` additionally resets device state, and
+  `sensor-disconnect` changes successful sensor reads by design. An exception replaces the response
+  with `[FC|0x80][code]`. A sent injected exception is counted like a real exception and not as an
+  FC11 successful completion; a suppressed injected exception counts only as no response. Real
+  exceptions keep their accounting even when dropped, and busy/NAK counts use the injected code
+  before any corrupt flip.
+- `pdu` and `register` corruption keep the response length and leave the transport checksum valid:
+  the transport recomputes CRC (RTU), LRC (ASCII), or MBAP length (TCP), so receivers see a
+  structurally valid frame with wrong data, never a CRC/LRC error and no FC08 `0x000C`
+  communication-error count. `checksum` corruption is the opposite: the frame reaches the wire with
+  a deliberately wrong CRC/LRC. See [modbus-support.md](modbus-support.md) for the exception codes
+  this simulator otherwise emits.
+- Use `(seed N)` in `(server ...)` to repeat the exact same pattern of `percent`-based faults on
+  every run. Schedules are deterministic and do not use the random dice.
 
 ## `(file ...)` (File Records, FC 20/21)
 
@@ -694,6 +758,15 @@ is wrong and show the entry. Common ones:
 | `missing required option (code ...)` | `(kind exception)` needs `(code N)` |
 | `code is only valid for kind exception` | Remove `(code ...)` from other fault kinds |
 | `delay-ms is only valid for kind delay` | Remove `(delay-ms ...)` from other fault kinds |
+| `mode is only valid for kind corrupt` | Remove `(mode ...)` from other fault kinds |
+| `corrupt mode checksum is not valid in tcp mode (MBAP frames have no checksum)` | MBAP/TCP has no checksum; use `pdu`/`register` or a serial/RTU transport |
+| `percent cannot be combined with schedule` | Choose a fixed percent chance or a schedule, not both |
+| `schedule has more than 8 steps` | Shorten the schedule |
+| `schedule needs at least one (step ...)` | Add a step |
+| `expected (step (after-ms N) (count N))` | Each schedule entry must be a `(step ...)` form |
+| `schedule step: missing required option (after-ms ...)` | Every step needs both `after-ms` and `count` |
+| `(after-ms ...): must be between 0 and 86400000` | Fix the step delay |
+| `(count ...): must be between 1 and 1000000` | Fix the number of requests per step |
 | `code 9 is reserved` | Use one of 1-8, 10 or 11 |
 | `(fault (kind disconnect)) is not valid in ... mode` | Use `tcp`, `rtu-tcp` or `ascii-tcp`, or remove the fault; this also applies to state overlays |
 | `state-register must immediately follow` | Put the optional state register directly after `(initial STATE)` |

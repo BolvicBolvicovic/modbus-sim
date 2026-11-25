@@ -63,6 +63,7 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->diag_busy_count        = 0;
 	dev->diag_overrun_count     = 0;
 	dev->listen_only            = false;
+	dev->fault_runtime          = (fault_runtime_t){ 0 };
 	dev->start_ms               = start_ms;
 	dev->now_ms                 = start_ms;
 	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "mogbus");
@@ -142,6 +143,7 @@ device_add_point(device_t* dev, const point_t* point)
 		return error;
 
 	dev->points[index] = *point;
+	dev->points[index].configured_kind = point->kind;
 	dev->point_count++;
 
 	for (u32 i = 0; i < width; i++)
@@ -162,6 +164,33 @@ device_tick(device_t* dev, u64 now_ms)
 		point_apply(dev, &dev->points[i], now_ms);
 	}
 	device_machines_advance(dev, now_ms);
+}
+
+void
+device_restart(device_t* dev, u64 now_ms)
+{
+	dev->start_ms = now_ms;
+	dev->now_ms   = now_ms;
+	for (u32 i = 0; i < dev->point_count; i++)
+	{
+		point_t*	point = &dev->points[i];
+		point_kind_t	kind  = point->configured_kind;
+
+		if (point->kind == POINT_MACHINE)
+			kind = POINT_MACHINE;
+		point->kind = kind;
+		point_apply(dev, point, now_ms);
+	}
+	/* Reboot re-arms every fault schedule from the new start time. The restart
+	 * kind keeps its own progress so a scheduled restart advances through its
+	 * steps and stops instead of re-arming itself forever. */
+	{
+		fault_schedule_state_t restart_state = dev->fault_runtime.by_kind[FAULT_RESTART];
+
+		dev->fault_runtime = (fault_runtime_t){ 0 };
+		dev->fault_runtime.by_kind[FAULT_RESTART] = restart_state;
+	}
+	device_machines_restart(dev, now_ms);
 }
 
 u32

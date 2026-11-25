@@ -66,12 +66,17 @@ rtu_framer_consume(rtu_framer_t* framer, u32 n)
 }
 
 bool
-rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len, u64 due_ms)
+rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len,
+		 u64 due_ms, bool bad_checksum)
 {
 	u32 len = modbus_rtu_encode(framer->pending.buf, addr, pdu, pdu_len);
 
 	if (len == 0)
 		return false;
+	/* Flip the last CRC byte so the frame stays well-formed but the receiver's
+	 * CRC check fails. */
+	if (bad_checksum)
+		framer->pending.buf[len - 1] ^= 0xFF;
 	framer->pending.active = true;
 	framer->pending.len = len;
 	framer->pending.sent = 0;
@@ -136,7 +141,8 @@ handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
 	}
 	if (decision.drop || resp_len == 0)
 		return;
-	(void)rtu_framer_queue(framer, addr, resp, resp_len, now_ms + decision.delay_ms);
+	(void)rtu_framer_queue(framer, addr, resp, resp_len, now_ms + decision.delay_ms,
+			       decision.corrupt == FAULT_CORRUPT_CHECKSUM);
 }
 
 bool

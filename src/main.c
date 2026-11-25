@@ -112,6 +112,15 @@ count_points(const device_t* dev, space_kind_t space)
 	return count;
 }
 
+static void
+fault_trigger(const fault_t* fault, char* buf, u32 size)
+{
+	if (fault->schedule_id != 0)
+		snprintf(buf, size, "by schedule");
+	else
+		snprintf(buf, size, "%u%% of responses", fault->percent);
+}
+
 static const char*
 fault_text(const fault_set_t* set, char* buf, u32 size)
 {
@@ -121,22 +130,24 @@ fault_text(const fault_set_t* set, char* buf, u32 size)
 	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
 	{
 		char	part[80];
+		char	trigger[40];
 		u32	written;
 
 		if ((set->present & FAULT_BIT(i)) == 0)
 			continue;
+		fault_trigger(&set->by_kind[i], trigger, sizeof(trigger));
 		switch ((fault_kind_t)i)
 		{
-			case FAULT_DROP       : snprintf(part, sizeof(part), "drop %u%% of responses",
-							 set->by_kind[i].percent); break;
-			case FAULT_DELAY      : snprintf(part, sizeof(part), "delay %u%% of responses by %u ms",
-							 set->by_kind[i].percent, set->by_kind[i].delay_ms); break;
-			case FAULT_EXCEPTION  : snprintf(part, sizeof(part), "exception %u on %u%% of responses",
-							 set->by_kind[i].exception_code, set->by_kind[i].percent); break;
-			case FAULT_CORRUPT    : snprintf(part, sizeof(part), "corrupt %u%% of responses",
-							 set->by_kind[i].percent); break;
-			case FAULT_DISCONNECT : snprintf(part, sizeof(part), "disconnect %u%% of responses",
-							 set->by_kind[i].percent); break;
+			case FAULT_DROP       : snprintf(part, sizeof(part), "drop %s", trigger); break;
+			case FAULT_DELAY      : snprintf(part, sizeof(part), "delay %s by %u ms",
+							 trigger, set->by_kind[i].delay_ms); break;
+			case FAULT_EXCEPTION  : snprintf(part, sizeof(part), "exception %u on %s",
+							 set->by_kind[i].exception_code, trigger); break;
+			case FAULT_CORRUPT    : snprintf(part, sizeof(part), "corrupt %s", trigger); break;
+			case FAULT_DISCONNECT : snprintf(part, sizeof(part), "disconnect %s", trigger); break;
+			case FAULT_RESTART    : snprintf(part, sizeof(part), "restart %s", trigger); break;
+			case FAULT_SENSOR_DISCONNECT :
+				snprintf(part, sizeof(part), "sensor-disconnect %s", trigger); break;
 			default: continue;
 		}
 		written = (u32)snprintf(buf + used, size - used, "%s%s",

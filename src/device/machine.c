@@ -1017,6 +1017,38 @@ device_machine_fault_present(const device_t* dev, fault_kind_t kind)
 	return false;
 }
 
+bool
+device_machine_corrupt_mode_present(const device_t* dev, fault_corrupt_mode_t mode)
+{
+	const machine_system_t* sys = NULL;
+	u8 bit = FAULT_BIT(FAULT_CORRUPT);
+
+	if (!dev ||
+	    !dev->machines ||
+	    mode == FAULT_CORRUPT_NONE)
+		return false;
+	sys = dev->machines;
+	for (u16 m = 0; m < sys->count; m++)
+	{
+		const machine_def_t* def = &sys->defs[m];
+
+		for (u16 s = 0; s < def->state_count; s++)
+		{
+			const fault_set_t*	faults = &def->states[s].faults;
+			fault_corrupt_mode_t	configured = FAULT_CORRUPT_NONE;
+
+			if ((faults->present & bit) == 0)
+				continue;
+			configured = faults->by_kind[FAULT_CORRUPT].corrupt_mode;
+			if (configured == FAULT_CORRUPT_NONE)
+				configured = FAULT_CORRUPT_PDU;
+			if (configured == mode)
+				return true;
+		}
+	}
+	return false;
+}
+
 const char*
 device_machines_prepare(device_t* dev)
 {
@@ -1064,6 +1096,37 @@ device_seed_machines(device_t* dev, u64 server_seed)
 	rng_seed(&sys->rng, server_seed ^ ((u64)dev->unit_id * MACHINE_SEED_FACTOR));
 }
 
+static void
+reset_machine_runtime(device_t* dev, machine_system_t* sys, u64 now_ms)
+{
+	for (u16 m = 0; m < sys->count; m++)
+	{
+		const machine_def_t* def = &sys->defs[m];
+
+		sys->current[m]     = def->initial_state;
+		sys->entered_at[m]  = now_ms;
+		sys->advanced_to[m] = now_ms;
+		for (u16 v = 0; v < def->var_count; v++)
+			sys->vars[m][v] = def->vars[v].initial;
+		memset(sys->warned[m], 0, sizeof(sys->warned[m]));
+		sys->cap_warned[m] = false;
+		draw_deadlines(sys, m, def->initial_state, now_ms);
+		set_state_register(dev, sys, m, def->initial_state);
+		run_handler(dev, sys, m, def->initial_state, MACHINE_ROLE_ENTER, now_ms, 0);
+		sys->advanced_to[m] = now_ms;
+	}
+}
+
+void
+device_machines_restart(device_t* dev, u64 now_ms)
+{
+	if (!dev ||
+	    !dev->machines ||
+	    !dev->machines->finalized)
+		return;
+	reset_machine_runtime(dev, dev->machines, now_ms);
+}
+
 const char*
 device_finalize_machines(device_t* dev)
 {
@@ -1097,22 +1160,7 @@ device_finalize_machines(device_t* dev)
 	mark_point_owners(dev, sys);
 	rng_seed(&sys->rng, sys->seed ^ ((u64)dev->unit_id * MACHINE_SEED_FACTOR));
 
-	for (u16 m = 0; m < sys->count; m++)
-	{
-		const machine_def_t* def = &sys->defs[m];
-
-		sys->current[m]    = def->initial_state;
-		sys->entered_at[m] = dev->start_ms;
-		sys->advanced_to[m] = dev->start_ms;
-		for (u16 v = 0; v < def->var_count; v++)
-			sys->vars[m][v] = def->vars[v].initial;
-		memset(sys->warned[m], 0, sizeof(sys->warned[m]));
-		sys->cap_warned[m] = false;
-		draw_deadlines(sys, m, def->initial_state, dev->start_ms);
-		set_state_register(dev, sys, m, def->initial_state);
-		run_handler(dev, sys, m, def->initial_state, MACHINE_ROLE_ENTER, dev->start_ms, 0);
-		sys->advanced_to[m] = dev->start_ms;
-	}
+	reset_machine_runtime(dev, sys, dev->start_ms);
 	sys->finalized = true;
 	return NULL;
 }

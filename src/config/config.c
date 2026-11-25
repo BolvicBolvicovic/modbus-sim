@@ -378,17 +378,25 @@ check_fault_modes(form_ctx_t* ctx, const config_t* config)
 			config->mode == SERVER_MODE_RTU_TCP ||
 			config->mode == SERVER_MODE_ASCII_TCP;
 
-	if (tcp_like)
-		return true;
 	for (u32 i = 0; i < config->device_count; i++)
 	{
 		const device_t* dev = config->devices[i];
+		bool base_checksum =
+			(dev->faults.present & FAULT_BIT(FAULT_CORRUPT)) != 0 &&
+			dev->faults.by_kind[FAULT_CORRUPT].corrupt_mode == FAULT_CORRUPT_CHECKSUM;
+		bool base_disconnect =
+			(dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) != 0;
 
-		if ((dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) == 0 &&
-		    !device_machine_fault_present(dev, FAULT_DISCONNECT))
-			continue;
-		return form_fail(ctx, "device '%s': (fault (kind disconnect)) is not valid in %s mode (TCP-like transports only)",
-				 dev->name, MODE_NAMES[config->mode]);
+		if (config->mode == SERVER_MODE_TCP &&
+		    (base_checksum ||
+		     device_machine_corrupt_mode_present(dev, FAULT_CORRUPT_CHECKSUM)))
+			return form_fail(ctx, "device '%s': corrupt mode checksum is not valid in tcp mode (MBAP frames have no checksum)",
+					 dev->name);
+		if (!tcp_like &&
+		    (base_disconnect ||
+		     device_machine_fault_present(dev, FAULT_DISCONNECT)))
+			return form_fail(ctx, "device '%s': (fault (kind disconnect)) is not valid in %s mode (TCP-like transports only)",
+					 dev->name, MODE_NAMES[config->mode]);
 	}
 	return true;
 }

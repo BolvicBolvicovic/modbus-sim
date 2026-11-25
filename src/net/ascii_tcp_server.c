@@ -110,7 +110,7 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 
 	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
 	LOG_DEBUG("ascii-tcp client=%s unit=%u fc=0x%02X -> %s%s", conn->base.peer, addr, pdu[0],
-		  (resp[0] & 0x80) ? "exception" : "ok",
+		  resp_len == 0 ? "silent" : (resp[0] & 0x80) ? "exception" : "ok",
 		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
 	if (decision.disconnect)
 	{
@@ -123,6 +123,9 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 	frame_len = modbus_ascii_encode(conn->pending.buf, addr, resp, resp_len);
 	if (frame_len == 0)
 		return;
+	/* A checksum fault only damages the emitted LRC; the PDU stays intact. */
+	if (decision.corrupt == FAULT_CORRUPT_CHECKSUM)
+		modbus_ascii_corrupt_lrc(conn->pending.buf, frame_len);
 	conn->pending.active = true;
 	conn->pending.len = frame_len;
 	conn->pending.sent = 0;

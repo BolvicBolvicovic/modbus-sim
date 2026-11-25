@@ -63,6 +63,23 @@ modbus_ascii_encode(u8* buf, u8 addr, const u8* pdu, u32 pdu_len)
 	return pos;
 }
 
+void
+modbus_ascii_corrupt_lrc(u8* frame, u32 len)
+{
+	u8* digit;
+
+	if (len < 5)
+		return;
+	digit = frame + len - 3;
+	if (*digit == '9')
+		*digit = 'A';
+	else if (*digit == 'F')
+		*digit = '0';
+	else if ((*digit >= '0' && *digit <= '8') ||
+		 (*digit >= 'A' && *digit <= 'E'))
+		*digit = (u8)(*digit + 1);
+}
+
 bool
 modbus_ascii_decode(const u8* frame, u32 len, u8* out, u8* addr,
 		    const u8** pdu, u32* pdu_len)

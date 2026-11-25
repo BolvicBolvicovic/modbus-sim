@@ -18,6 +18,31 @@ set_fault(device_t* dev, fault_kind_t kind, u32 delay_ms, u8 code, u32 percent)
 	dev->faults.present |= FAULT_BIT(kind);
 }
 
+static void
+set_corrupt_fault(device_t* dev, fault_corrupt_mode_t mode, u32 percent)
+{
+	dev->faults.by_kind[FAULT_CORRUPT] = (fault_t){
+		.corrupt_mode = mode,
+		.percent      = percent,
+	};
+	dev->faults.present |= FAULT_BIT(FAULT_CORRUPT);
+}
+
+static void
+set_scheduled_fault(device_t* dev, fault_kind_t kind,
+		    const fault_schedule_step_t* steps, u8 step_count, u64 schedule_id)
+{
+	fault_t* fault = &dev->faults.by_kind[kind];
+
+	*fault = (fault_t){
+		.schedule_count = step_count,
+		.schedule_id    = schedule_id,
+	};
+	for (u8 i = 0; i < step_count; i++)
+		fault->schedule[i] = steps[i];
+	dev->faults.present |= FAULT_BIT(kind);
+}
+
 /* Builds a device with: holding 0 = 0x1234, holding 1 = 0x5678, input 0 = 7,
  * coils 0..9 off, discrete 0..2 = on,off,on. */
 static device_t*
@@ -55,6 +80,13 @@ run_request(device_t* dev, rng_t* rng, const u8* req, u32 len, u8* resp,
 	    fault_decision_t* decision)
 {
 	return modbus_handle_request(dev, rng, 0, req, len, resp, decision);
+}
+
+static u32
+run_request_at(device_t* dev, rng_t* rng, u64 now_ms, const u8* req, u32 len, u8* resp,
+	       fault_decision_t* decision)
+{
+	return modbus_handle_request(dev, rng, now_ms, req, len, resp, decision);
 }
 
 static bool
@@ -2599,6 +2631,249 @@ TEST(CorruptFaultDoesNotCountException)
 	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
 	ASSERT_EQ(get_be16(resp + 3) == 1);
 	assert_exception_counters(dev, 0, 0, 0);
+	arena_release(arena);
+}
+
+TEST(RegisterCorruptFlipsRegisterValuesWithoutMutatingTables)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read_holding[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x02 };
+	u8			read_input[]   = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			read_write[]   = { FC_READ_WRITE_MULTIPLE_REGISTERS,
+						   0x00, 0x00, 0x00, 0x01,
+						   0x00, 0x01, 0x00, 0x01,
+						   0x02, 0x11, 0x22 };
+	u8			write[]        = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x01, 0xAB, 0xCD };
+	u8			coils[]        = { FC_READ_COILS, 0x00, 0x00, 0x00, 0x03 };
+	u8			normal_coils[3];
+	u8			resp[MODBUS_MAX_PDU];
+	u16			out[2] = { 0, 0 };
+	u32			len = 0;
+
+	ASSERT_EQ(run(dev, coils, sizeof(coils), normal_coils) == 3);
+	set_corrupt_fault(dev, FAULT_CORRUPT_REGISTER, 100);
+	rng_seed(&rng, 31);
+
+	len = run_request(dev, &rng, read_holding, sizeof(read_holding), resp, &decision);
+	ASSERT_EQ(len == 6);
+	ASSERT_EQ(decision.corrupt == FAULT_CORRUPT_REGISTER);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == 0x04);
+	ASSERT_EQ(resp[2] == (0x12 ^ 0xFF) && resp[3] == 0x34);
+	ASSERT_EQ(resp[4] == 0x56 && resp[5] == 0x78);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 2, out));
+	ASSERT_EQ(out[0] == 0x1234 && out[1] == 0x5678);
+
+	len = run_request(dev, &rng, read_input, sizeof(read_input), resp, &decision);
+	ASSERT_EQ(len == 4);
+	ASSERT_EQ(resp[0] == FC_READ_INPUT_REGISTERS && resp[1] == 0x02);
+	ASSERT_EQ(resp[2] == (0x00 ^ 0xFF) && resp[3] == 0x07);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 0, 1, out));
+	ASSERT_EQ(out[0] == 7);
+
+	len = run_request(dev, &rng, read_write, sizeof(read_write), resp, &decision);
+	ASSERT_EQ(len == 4);
+	ASSERT_EQ(resp[2] == (0x12 ^ 0xFF) && resp[3] == 0x34);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, out));
+	ASSERT_EQ(out[0] == 0x1122);
+
+	len = run_request(dev, &rng, write, sizeof(write), resp, &decision);
+	ASSERT_EQ(len == 5 && resp[0] == FC_WRITE_SINGLE_REGISTER);
+	ASSERT_EQ(resp[3] == (0xAB ^ 0xFF) && resp[4] == 0xCD);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 1, 1, out));
+	ASSERT_EQ(out[0] == 0xABCD);
+
+	len = run_request(dev, &rng, coils, sizeof(coils), resp, &decision);
+	ASSERT_EQ(len == 3 && memcmp(resp, normal_coils, 3) == 0);
+	arena_release(arena);
+}
+
+TEST(SensorDisconnectFailsInputReadsOnly)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read_discrete[] = { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x03 };
+	u8			read_input[]    = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			read_holding[]  = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			bad_input[]     = { FC_READ_INPUT_REGISTERS, 0x7F, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_SENSOR_DISCONNECT, 0, 0, 100);
+	rng_seed(&rng, 32);
+
+	ASSERT_EQ(run_request(dev, &rng, read_discrete, sizeof(read_discrete), resp,
+			      &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_DISCRETE_INPUTS | 0x80));
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_FAILURE);
+	ASSERT_EQ(decision.sensor_disconnect);
+	ASSERT_EQ(decision.exception_code == EXC_SLAVE_DEVICE_FAILURE);
+
+	ASSERT_EQ(run_request(dev, &rng, read_input, sizeof(read_input), resp,
+			      &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_INPUT_REGISTERS | 0x80));
+	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_FAILURE);
+
+	ASSERT_EQ(run_request(dev, &rng, read_holding, sizeof(read_holding), resp,
+			      &decision) == 4);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == 0x02);
+	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x34);
+	ASSERT_EQ(decision.sensor_disconnect && decision.exception_code == 0);
+
+	/* A real exception is never replaced by the sensor-disconnect fault. */
+	ASSERT_EQ(run_request(dev, &rng, bad_input, sizeof(bad_input), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_INPUT_REGISTERS | 0x80));
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_EQ(decision.exception_code == 0);
+	arena_release(arena);
+}
+
+TEST(SensorDisconnectYieldsToGenericException)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			read_input[] = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_GATEWAY_TARGET_FAILED, 100);
+	set_fault(dev, FAULT_SENSOR_DISCONNECT, 0, 0, 100);
+	rng_seed(&rng, 33);
+	ASSERT_EQ(run_request(dev, &rng, read_input, sizeof(read_input), resp, &decision) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_INPUT_REGISTERS | 0x80));
+	ASSERT_EQ(resp[1] == EXC_GATEWAY_TARGET_FAILED);
+	ASSERT_EQ(decision.exception_code == EXC_GATEWAY_TARGET_FAILED);
+	ASSERT_EQ(decision.sensor_disconnect);
+	arena_release(arena);
+}
+
+TEST(RestartFaultKeepsResponseAndResetsDeviceAfterwards)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			write[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0xAB, 0xCD };
+	u8			read[]  = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+	u16			out = 0;
+
+	rng_seed(&rng, 34);
+	ASSERT_EQ(run(dev, write, sizeof(write), resp) == 5);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 0xABCD);
+	dev->diag_exception_count = 5;
+
+	set_fault(dev, FAULT_RESTART, 0, 0, 100);
+	ASSERT_EQ(run_request_at(dev, &rng, 2000, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == 0x02);
+	ASSERT_EQ(resp[2] == 0xAB && resp[3] == 0xCD);
+	ASSERT_EQ(decision.restart && !decision.drop && !decision.disconnect);
+	ASSERT_EQ(dev->start_ms == 2000);
+
+	decision = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request_at(dev, &rng, 3000, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x34);
+	ASSERT_EQ(decision.restart);
+	ASSERT_EQ(dev->message_count == 3);
+	ASSERT_EQ(dev->diag_exception_count == 5);
+	arena_release(arena);
+}
+
+TEST(RestartFaultAppliesEvenWhenResponseIsDroppedOrDelayed)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			write[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0xAB, 0xCD };
+	u8			read[]  = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+	u16			out = 0;
+
+	rng_seed(&rng, 37);
+	ASSERT_EQ(run(dev, write, sizeof(write), resp) == 5);
+	set_fault(dev, FAULT_RESTART, 0, 0, 100);
+	set_fault(dev, FAULT_DROP, 0, 0, 100);
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(decision.restart && decision.drop);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 0x1234);
+
+	ASSERT_EQ(run(dev, write, sizeof(write), resp) == 5);
+	dev->faults.present &= (u8)~FAULT_BIT(FAULT_DROP);
+	set_fault(dev, FAULT_DELAY, 250, 0, 100);
+	decision = (fault_decision_t){ 0 };
+	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(decision.restart && decision.delay_ms == 250 && !decision.drop);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 0x1234);
+	arena_release(arena);
+}
+
+TEST(ScheduledFaultFiresThroughRepeatedRequests)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	const fault_schedule_step_t steps[] = { { .after_ms = 10, .count = 2 } };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_scheduled_fault(dev, FAULT_DROP, steps, ARRAY_COUNT(steps), 41);
+	rng_seed(&rng, 35);
+
+	ASSERT_EQ(run_request_at(dev, &rng, 5, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.drop);
+	ASSERT_EQ(run_request_at(dev, &rng, 10, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(run_request_at(dev, &rng, 11, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(decision.drop);
+	ASSERT_EQ(run_request_at(dev, &rng, 12, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.drop);
+	ASSERT_EQ(run_request_at(dev, &rng, 1000, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.drop);
+	arena_release(arena);
+}
+
+TEST(ScheduledRestartFiresExactlyCountAndDoesNotRearm)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = make_device(arena);
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	const fault_schedule_step_t restart_steps[] = { { .after_ms = 10, .count = 2 } };
+	const fault_schedule_step_t sensor_steps[]  = { { .after_ms = 10, .count = 2 } };
+	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+
+	set_scheduled_fault(dev, FAULT_RESTART, restart_steps, ARRAY_COUNT(restart_steps), 42);
+	set_scheduled_fault(dev, FAULT_SENSOR_DISCONNECT, sensor_steps,
+			    ARRAY_COUNT(sensor_steps), 43);
+	rng_seed(&rng, 36);
+
+	ASSERT_EQ(run_request_at(dev, &rng, 5, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.restart && !decision.sensor_disconnect);
+
+	ASSERT_EQ(run_request_at(dev, &rng, 10, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(decision.restart && decision.sensor_disconnect);
+
+	/* The restart preserved its own progress, but reset the other kind. */
+	ASSERT_EQ(run_request_at(dev, &rng, 10, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(decision.restart && !decision.sensor_disconnect);
+	ASSERT_EQ(run_request_at(dev, &rng, 19, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.restart && !decision.sensor_disconnect);
+	ASSERT_EQ(run_request_at(dev, &rng, 20, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.restart && decision.sensor_disconnect);
+	ASSERT_EQ(run_request_at(dev, &rng, 21, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.restart && decision.sensor_disconnect);
+	ASSERT_EQ(run_request_at(dev, &rng, 1000, read, sizeof(read), resp, &decision) == 4);
+	ASSERT_EQ(!decision.restart && !decision.sensor_disconnect);
 	arena_release(arena);
 }
 

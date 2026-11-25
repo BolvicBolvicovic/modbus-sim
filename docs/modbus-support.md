@@ -14,7 +14,9 @@ clients requires an explicit `(bind "0.0.0.0")` or `(bind "::")`. IPv6 listen so
 used: a config may contain at most one `(server ...)` block (defaults apply if omitted), there is
 no dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
 config validator. This default
-applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`).
+applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`). MBAP has no checksum field, so
+`(fault (kind corrupt) (mode checksum))` is rejected in `tcp` mode; the RTU and ASCII transports
+carry checksums and accept it.
 
 `(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
 frames and receive the same unit routing, fault handling, and PDU answers. TLS is an optional build
@@ -56,9 +58,11 @@ existing serial-like device). The same PDU handlers and device model are used as
 framing/transport differ.
 
 Frame format: `[addr][PDU...][CRC lo][CRC hi]` (2-byte Modbus CRC-16, low byte first). A valid
-frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. Device-mode paths are opened with
-`O_NONBLOCK` so startup does not hang on a blocking open (for example, a FIFO with no writer);
-`mogbus` keeps the fd non-blocking for the poll loop. When the fd is a tty, `mogbus`
+frame contains 1 address byte, 1..253 PDU bytes, and 2 CRC bytes. A `(fault (kind corrupt)
+(mode checksum))` response is sent with a deliberately wrong CRC, so the receiver must reject it
+as a bad frame; `pdu` and `register` corruption leave the recomputed CRC valid. Device-mode paths
+are opened with `O_NONBLOCK` so startup does not hang on a blocking open (for example, a FIFO with
+no writer); `mogbus` keeps the fd non-blocking for the poll loop. When the fd is a tty, `mogbus`
 configures raw mode (`CS8`, `CLOCAL|CREAD`, no flow control) with the selected parity and stop bits,
 and preserves the existing baud rate. The default is 8N1 (no parity, 1 stop bit); config
 `(server (parity even))` / `(server (stop-bits 2))` select `none|even|odd|mark|space` parity and 1 or
@@ -106,7 +110,9 @@ Frame format on the wire is `:` + uppercase hex digits for `[addr][PDU...][LRC]`
 `addr` is one byte, the PDU is 1..253 bytes, and the LRC is one byte:
 `LRC = (u8)(0 - sum(addr through PDU))`, excluding the LRC itself. A valid frame therefore has an
 even number of hex digits. Responses use uppercase hex; received frames accept upper- or lowercase
-hex. The maximum encoded frame is `1 + 2 + 2*253 + 2 + 2 = 513` bytes.
+hex. The maximum encoded frame is `1 + 2 + 2*253 + 2 + 2 = 513` bytes. A `(fault (kind corrupt)
+(mode checksum))` response carries a deliberately damaged LRC, so the receiver rejects it as a
+bad frame; `pdu` and `register` corruption leave the recomputed LRC valid.
 
 Framing is delimiter-based: a frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5,
 `frame-gap-ms`, or `strict-t15` behavior for ASCII; complete frames are dispatched immediately,
@@ -284,7 +290,7 @@ Any other function code gets exception 01.
 | 01 | Illegal Function | the function code is not in the table above |
 | 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535), or a write targets a machine-owned point such as a state register |
 | 03 | Illegal Data Value | quantity is 0 or above the limit, the request has the wrong length or byte count, or a single-coil value is not `FF00` / `0000` |
-| 04 | Slave Device Failure | only via `(fault (kind exception) (code 4))` |
+| 04 | Slave Device Failure | successful FC 02/04 reads via `(fault (kind sensor-disconnect))`, or any response via `(fault (kind exception) (code 4))` |
 | 05 | Acknowledge | only via `(fault (kind exception) (code 5))` |
 | 06 | Slave Device Busy | only via `(fault (kind exception) (code 6))` |
 | 07 | Negative Acknowledge | only via `(fault (kind exception) (code 7))` |
@@ -294,29 +300,44 @@ Any other function code gets exception 01.
 | 0B (11) | Gateway Target Device Failed to Respond | no device has the requested unit id; also available via `(fault (kind exception) (code 11))` |
 
 Checks run in this order: function, request shape and quantity (03), then addresses (02). Codes
-04-08 and 0A are never produced by the simulator's own validation: they exist only for fault
-injection (see [config-reference.md](config-reference.md)). Fault injection is a simulator testing
-feature, not a Modbus protocol feature: a device may configure several kinds at once (at most one
-definition per kind), and each kind rolls independently for every response.
+05-08 and 0A are never produced by the simulator's own validation: they exist only for fault
+injection (see [config-reference.md](config-reference.md#fault-)); 04 is also produced by a fired
+`sensor-disconnect`. Fault injection is a simulator testing feature, not a Modbus protocol
+feature: a device may configure several kinds at once (at most one definition per kind), and each
+kind fires from its `percent` chance or its non-repeating `schedule`; schedule timing and limits
+are canonical in [config-reference.md](config-reference.md#fault-).
 
 State-machine fault overlays follow the same transport restrictions as device faults: serial modes
-reject `disconnect` overlays too.
+reject `disconnect` overlays too, and a checksum-corrupt overlay is rejected in `tcp` mode even if
+its state is never active.
 
 A fired exception fault replaces the response that normal processing produced, including an
 exception response, and does not undo the request's effects; a sent injected exception is counted
 like a real one, while a suppressed injected exception only increments the no-response counter
 (real exceptions keep their accounting even when dropped). Busy/NAK counts use the injected code,
-not the byte after a corrupt flip. A fired corrupt fault instead flips `resp[1]` of the response,
-including an injected exception response; that is
-typically the byte count or the first data byte (XOR with `0xFF`, or the function code itself for a
-one-byte response). The transport computes CRC (RTU), LRC (ASCII), or the MBAP length (TCP) over the altered
-PDU, so receivers see a structurally valid frame carrying wrong data: it is never rejected for a
-CRC/LRC error and does not increment the FC08 `0x000C` communication-error counters. A drop fault
-suppresses the response, and a disconnect fault implies a drop and closes the connection on
-`tcp`, `rtu-tcp` and `ascii-tcp` (serial modes reject disconnect). A configured delay is capped at
-60000 ms. Silent responses (listen-only and requests with no response) are always
-suppressed without disconnecting. All faults change only the response: the request is still
-processed normally, and silent/broadcast/unknown-unit paths never trigger a disconnect.
+not the byte after a corrupt flip. A fired `sensor-disconnect` turns a successful FC 02 or FC 04
+read into exception 04; other function codes and error responses are unchanged, the connection
+stays open, and a fired generic `exception` code wins over it.
+
+`corrupt` has three modes. `pdu` (the default) flips `resp[1]` of the response, including an
+injected exception response; that is typically the byte count or the first data byte (XOR with
+`0xFF`, or the function code itself for a one-byte response). `register` flips a register data
+value in successful FC 03/04/23 read responses and the echoed value of FC 06, leaving other
+response shapes unchanged. In both modes the transport computes CRC (RTU), LRC (ASCII), or the
+MBAP length (TCP) over the altered PDU, so receivers see a structurally valid frame carrying wrong
+data: it is never rejected for a CRC/LRC error and does not increment the FC08 `0x000C`
+communication-error counters. `checksum` instead corrupts the emitted RTU CRC or ASCII LRC after
+framing, so the receiver sees a bad frame; MBAP/TCP has no checksum and rejects this mode at load.
+
+A drop fault suppresses the response, and a disconnect fault implies a drop and closes the
+connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes reject disconnect). A fired `restart`
+leaves the current response intact, even when it is dropped or delayed, but resets configured
+points, ramp timelines and machines after the response is built and re-arms fault schedules from
+the restart time (the restart kind keeps its own schedule progress); it does not clear protocol
+diagnostic counters, event logs, files, FIFOs, listen-only mode or the RNG seed.
+A configured delay is capped at 60000 ms. Silent responses (listen-only and requests with no
+response) are always suppressed without disconnecting. Faults do not change request processing: the
+request still runs normally, and silent/broadcast/unknown-unit paths never trigger a disconnect.
 
 ## Writes are all-or-nothing
 
@@ -376,10 +397,11 @@ limited to object-dictionary SDO upload/download). All other MEI types return ex
 reserved and vendor-defined FCs.
 
 Normal validation emits exception codes 01, 02, 03, and 0B, plus FC 43 / MEI 0x0D extended
-exceptions (`AB FF ... 0D AE/CE ...`). Codes 04-08 and 0A are available only through the
-simulator's repeatable `(fault (kind exception) (code N))` injection; 09 is reserved. The other
-fault kinds (delay, drop, corrupt, disconnect) are simulator-side response manipulation, not
-Modbus exceptions, and disconnect is allowed only on TCP-like transports.
+exceptions (`AB FF ... 0D AE/CE ...`). Codes 05-08 and 0A are available only through the
+simulator's repeatable `(fault (kind exception) (code N))` injection; 04 is also emitted by a
+`sensor-disconnect` fault; 09 is reserved. The remaining fault kinds (delay, drop, corrupt,
+disconnect, restart) are simulator-side behavior, not Modbus exceptions, and disconnect is allowed
+only on TCP-like transports.
 
 Notable remaining gaps include simplified serial-line diagnostics and config-backed data that is not
 created dynamically or persisted, plus the limits in [Not supported (yet)](#not-supported-yet) and

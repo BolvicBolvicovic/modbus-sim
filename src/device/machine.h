@@ -172,6 +172,10 @@ void		device_seed_machines(device_t* dev, u64 server_seed);
 /* Advances every machine in declaration order. Called by device_tick. */
 void		device_machines_advance(device_t* dev, u64 now_ms);
 
+/* Resets every machine to its initial state, vars and timers at `now_ms` and
+ * runs the initial on-enter handler. Does nothing before finalization. */
+void		device_machines_restart(device_t* dev, u64 now_ms);
+
 /* Runs on-write handlers whose point overlaps [address, address + qty) after a
  * successful client write. Does not fire transitions. */
 void		device_machines_on_write(device_t* dev, space_kind_t space, u32 address,
@@ -183,5 +187,11 @@ fault_set_t	device_effective_faults(const device_t* dev);
 
 /* True if any machine state configures `kind`, even if that state is inactive. */
 bool		device_machine_fault_present(const device_t* dev, fault_kind_t kind);
+
+/* True if any machine state overlay configures FAULT_CORRUPT with `mode`, even
+ * if that state is inactive. A corrupt overlay with FAULT_CORRUPT_NONE counts
+ * as FAULT_CORRUPT_PDU. */
+bool		device_machine_corrupt_mode_present(const device_t* dev,
+						    fault_corrupt_mode_t mode);
 
 #endif

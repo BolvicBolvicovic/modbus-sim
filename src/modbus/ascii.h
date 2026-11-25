@@ -22,6 +22,11 @@ u8	modbus_ascii_lrc(const u8* buf, u32 len);
  * */
 u32	modbus_ascii_encode(u8* buf, u8 addr, const u8* pdu, u32 pdu_len);
 
+/* Changes the low LRC hex digit of an encoded uppercase frame to the next hex
+ * digit, cycling 9 -> A and F -> 0. The frame stays well-formed but its LRC no
+ * longer matches. No-op for short or unexpected input. */
+void	modbus_ascii_corrupt_lrc(u8* frame, u32 len);
+
 /* Name: modbus_ascii_decode
  * Description: validates a complete ASCII frame and decodes its hex digits
  * into `out`, which must hold MODBUS_MAX_PDU + 2 bytes and must not alias

@@ -64,6 +64,52 @@ TEST(AsciiEncodeRejectsEmptyAndOversizedPdu)
 	ASSERT_EQ(modbus_ascii_encode(buf, 1, pdu, sizeof(pdu)) == 0);
 }
 
+TEST(AsciiCorruptLrcChangesLrcAndKeepsUppercaseHex)
+{
+	const u8	pdu[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
+	u8		frame[MODBUS_ASCII_MAX_FRAME];
+	u8		decoded[MODBUS_MAX_PDU + 2];
+	const u8*	out = NULL;
+	u8		addr = 0;
+	u8		old_low = 0;
+	u32		pdu_len = 0;
+	u32		len = modbus_ascii_encode(frame, 0x01, pdu, sizeof(pdu));
+
+	ASSERT_EQ(len == 17);
+	old_low = frame[len - 3];
+	modbus_ascii_corrupt_lrc(frame, len);
+	ASSERT_EQ(frame[len - 3] != old_low);
+	ASSERT_EQ(frame[len - 3] == (u8)(old_low + 1));
+	ASSERT_EQ(frame[0] == ':' && frame[len - 2] == '\r' && frame[len - 1] == '\n');
+	for (u32 i = 1; i + 2 < len; i++)
+	{
+		ASSERT_EQ((frame[i] >= '0' && frame[i] <= '9') ||
+			  (frame[i] >= 'A' && frame[i] <= 'F'));
+	}
+	ASSERT_FAILURE(modbus_ascii_decode(frame, len, decoded, &addr, &out, &pdu_len));
+}
+
+TEST(AsciiCorruptLrcCyclesNineAndFifteen)
+{
+	u8	nine[]    = ":0009\r\n";
+	u8	fifteen[] = ":000F\r\n";
+	u8	zero[]    = ":0000\r\n";
+	u8	letter[]  = ":000A\r\n";
+	u8	short_frame[] = ":0\r\n";
+
+	modbus_ascii_corrupt_lrc(nine, sizeof(nine) - 1);
+	ASSERT_EQ(nine[4] == 'A');
+	modbus_ascii_corrupt_lrc(fifteen, sizeof(fifteen) - 1);
+	ASSERT_EQ(fifteen[4] == '0');
+	modbus_ascii_corrupt_lrc(zero, sizeof(zero) - 1);
+	ASSERT_EQ(zero[4] == '1');
+	modbus_ascii_corrupt_lrc(letter, sizeof(letter) - 1);
+	ASSERT_EQ(letter[4] == 'B');
+
+	modbus_ascii_corrupt_lrc(short_frame, sizeof(short_frame) - 1);
+	ASSERT_EQ(short_frame[1] == '0');
+}
+
 TEST(AsciiPendingResponseBufferHoldsMaximumFrame)
 {
 	pending_response_t pending = { 0 };

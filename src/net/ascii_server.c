@@ -75,7 +75,7 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 
 	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
 	LOG_DEBUG("ascii unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
-		  (resp[0] & 0x80) ? "exception" : "ok",
+		  resp_len == 0 ? "silent" : (resp[0] & 0x80) ? "exception" : "ok",
 		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
 	if (decision.drop)
 		return;
@@ -83,6 +83,9 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 	frame_len = modbus_ascii_encode(server->pending.buf, addr, resp, resp_len);
 	if (frame_len == 0)
 		return;
+	/* A checksum fault only damages the emitted LRC; the PDU stays intact. */
+	if (decision.corrupt == FAULT_CORRUPT_CHECKSUM)
+		modbus_ascii_corrupt_lrc(server->pending.buf, frame_len);
 	server->pending.active = true;
 	server->pending.len = frame_len;
 	server->pending.sent = 0;

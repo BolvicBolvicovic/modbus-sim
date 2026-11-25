@@ -4,6 +4,16 @@
 #include "net/rtu_framer.h"
 #include <string.h>
 
+static void
+set_corrupt_mode(device_t* dev, fault_corrupt_mode_t mode)
+{
+	dev->faults.by_kind[FAULT_CORRUPT] = (fault_t){
+		.corrupt_mode = mode,
+		.percent      = 100,
+	};
+	dev->faults.present |= FAULT_BIT(FAULT_CORRUPT);
+}
+
 TEST(RtuCrcKnownVector)
 {
 	/* Modbus over Serial Line spec, Appendix B example: 01 03 00 00 00 0A */
@@ -99,6 +109,92 @@ TEST(RtuDecodeExceptionFrame)
 	ASSERT_EQ(addr == 0x04);
 	ASSERT_EQ(out_len == 2);
 	ASSERT_EQ(out[0] == 0x83 && out[1] == 0x02);
+}
+
+TEST(RtuChecksumCorruptDamagesCrcButNotPdu)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = device_new(arena, 0);
+	point_t			p     = { 0 };
+	rtu_framer_t		framer;
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+	u8			expected[MODBUS_RTU_MAX_FRAME];
+	u8			addr = 0;
+	const u8*		pdu = NULL;
+	u32			resp_len = 0;
+	u32			expected_len = 0;
+	u32			pdu_len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	p.space = SPACE_HOLDING;
+	p.address = 0;
+	p.type = VT_U16;
+	p.kind = POINT_STATIC;
+	p.static_value = 0x1234;
+	ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	set_corrupt_mode(dev, FAULT_CORRUPT_CHECKSUM);
+	rng_seed(&rng, 1);
+
+	resp_len = modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision);
+	ASSERT_EQ(resp_len == 4);
+	ASSERT_EQ(decision.corrupt == FAULT_CORRUPT_CHECKSUM);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == 0x02);
+	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x34);
+
+	rtu_framer_init(&framer);
+	ASSERT_EQ(rtu_framer_queue(&framer, 1, resp, resp_len, 0,
+				   decision.corrupt == FAULT_CORRUPT_CHECKSUM));
+	expected_len = modbus_rtu_encode(expected, 1, resp, resp_len);
+	ASSERT_EQ(framer.pending.active && framer.pending.len == expected_len);
+	ASSERT_EQ(memcmp(framer.pending.buf + 1, resp, resp_len) == 0);
+	ASSERT_EQ(memcmp(framer.pending.buf, expected, expected_len - 1) == 0);
+	ASSERT_EQ(framer.pending.buf[expected_len - 1] ==
+		  (u8)(expected[expected_len - 1] ^ 0xFF));
+	ASSERT_FAILURE(modbus_rtu_decode(framer.pending.buf, framer.pending.len,
+					 &addr, &pdu, &pdu_len));
+	arena_release(arena);
+}
+
+TEST(RtuPduCorruptKeepsValidCrcWithWrongData)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev   = device_new(arena, 0);
+	point_t			p     = { 0 };
+	rng_t			rng;
+	fault_decision_t	decision = { 0 };
+	u8			req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8			resp[MODBUS_MAX_PDU];
+	u8			frame[MODBUS_RTU_MAX_FRAME];
+	u8			addr = 0;
+	const u8*		pdu = NULL;
+	u32			resp_len = 0;
+	u32			frame_len = 0;
+	u32			pdu_len = 0;
+
+	ASSERT_EQ(dev != NULL);
+	p.space = SPACE_HOLDING;
+	p.address = 0;
+	p.type = VT_U16;
+	p.kind = POINT_STATIC;
+	p.static_value = 0x1234;
+	ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	set_corrupt_mode(dev, FAULT_CORRUPT_PDU);
+	rng_seed(&rng, 2);
+
+	resp_len = modbus_handle_request(dev, &rng, 0, req, sizeof(req), resp, &decision);
+	ASSERT_EQ(resp_len == 4);
+	ASSERT_EQ(decision.corrupt == FAULT_CORRUPT_PDU);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && resp[1] == (0x02 ^ 0xFF));
+	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x34);
+
+	frame_len = modbus_rtu_encode(frame, 1, resp, resp_len);
+	ASSERT_SUCCESS(modbus_rtu_decode(frame, frame_len, &addr, &pdu, &pdu_len));
+	ASSERT_EQ(addr == 1 && pdu_len == resp_len);
+	ASSERT_EQ(memcmp(pdu, resp, resp_len) == 0);
+	arena_release(arena);
 }
 
 TEST(RtuRequestLenSupportedFunctionCodes)
