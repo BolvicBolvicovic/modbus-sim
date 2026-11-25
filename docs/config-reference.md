@@ -47,14 +47,15 @@ that is present but not allowed is rejected at load time, even if its value woul
 
 `bind` must be a plain IPv4 or IPv6 literal: no hostnames and no zone/scoped link-local suffix such
 as `"fe80::1%eth0"` (the validator uses `inet_pton()`, which does not accept `%iface`). IPv6 listen
-sockets set `IPV6_V6ONLY`, so `"::"` serves IPv6 clients only and the default `"0.0.0.0"` serves IPv4
-clients only. A config file contains exactly one `(server ...)` block, so there is no way to listen on
-both families at once; there is no dual-stack option.
+sockets set `IPV6_V6ONLY`, so `"::"` serves IPv6 clients only. TCP-family listeners default to
+`"127.0.0.1"` (loopback); remote connections require an explicit `(bind "0.0.0.0")` for all IPv4
+interfaces or `(bind "::")` for all IPv6 interfaces. A config file contains exactly one `(server ...)`
+block, so there is no way to listen on both families at once; there is no dual-stack option.
 
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
 | `(port N)` | TCP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp` |
-| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces, `"127.0.0.1"` = this machine over IPv4 only, `"::"` = all IPv6 interfaces, `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"0.0.0.0"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
+| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces (explicit opt-in for remote clients), `"127.0.0.1"` = this machine over IPv4 only (default), `"::"` = all IPv6 interfaces (explicit opt-in), `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"127.0.0.1"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(seed N)` | Seed for the random dice used by faults, 0-4294967295. Same seed gives the same sequence of faults | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |

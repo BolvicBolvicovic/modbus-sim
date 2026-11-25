@@ -8,10 +8,12 @@ A 7-byte MBAP header (transaction id, protocol id 0, length, unit id) followed b
 Clients may keep a connection open and send several requests; they are answered one after another
 in order. A client that sends a header with a protocol id other than 0, or an impossible length,
 is disconnected. `port` and `bind` select the listen socket; `bind` accepts a plain IPv4 or IPv6
-literal address. IPv6 listen sockets set `IPV6_V6ONLY`, so `"0.0.0.0"` and `"::"` listen on separate
-address families and cannot both be used: a config contains one `(server ...)` block, there is no
-dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
-config validator.
+literal address and defaults to `"127.0.0.1"` (loopback, local clients only). Accepting remote
+clients requires an explicit `(bind "0.0.0.0")` or `(bind "::")`. IPv6 listen sockets set
+`IPV6_V6ONLY`, so `"0.0.0.0"` and `"::"` listen on separate address families and cannot both be
+used: a config contains one `(server ...)` block, there is no dual-stack option, and scoped
+link-local literals such as `"fe80::1%eth0"` are rejected by the config validator. This default
+applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`).
 
 `(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
 frames and receive the same unit routing, fault handling, and PDU answers. TLS is an optional build
@@ -144,8 +146,9 @@ serial line settings are accepted only in the PTY/device modes.
 
 `(server (mode ascii-tcp))` serves the same raw ASCII frames on TCP byte streams: `:` + uppercase
 hex `[addr][PDU][LRC]` + `CR LF`, with no MBAP header and no TLS. `port` and `bind` select the listen
-socket (defaults `1502` and `"0.0.0.0"`); `bind` accepts IPv4 or IPv6 literals, with IPv6 sockets
-IPv6-only, as for Modbus TCP. Up to 32 clients are served by one poll loop, each with its own RX
+socket (defaults `1502` and `"127.0.0.1"`); `bind` accepts IPv4 or IPv6 literals, with IPv6 sockets
+IPv6-only, as for Modbus TCP. Bind explicitly to `"0.0.0.0"` or `"::"` to accept remote clients.
+Up to 32 clients are served by one poll loop, each with its own RX
 buffer and delayed-response slot; `idle-timeout-ms` closes connections with no I/O progress.
 Framing, resynchronization, error counting, unit routing, and fault behavior are identical to the
 serial ASCII modes, except that `(fault (kind disconnect) ...)` is accepted here and closes the
