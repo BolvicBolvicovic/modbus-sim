@@ -796,16 +796,17 @@ TEST(MachineDivisionByZeroAbortsHandler)
 	arena_release(arena);
 }
 
-TEST(MachineAbortedConditionCountsAsFalse)
+TEST(MachineAbortedGuardSkipsBody)
 {
 	arena_t* arena = ARENA_ALLOC();
 	device_t* when_dev = device_new(arena, 0);
 	device_t* unless_dev = device_new(arena, 0);
 	machine_def_t* when_def = new_def(arena, "when-conditions");
 	machine_def_t* unless_def = new_def(arena, "unless-conditions");
-	u16 when_vars[2];
-	u16 unless_vars[2];
+	u16 when_vars[3];
+	u16 unless_vars[3];
 	u16 bad = 0;
+	u16 two = 0;
 	u16 three = 0;
 	u16 four = 0;
 	u16 child = 0;
@@ -814,28 +815,34 @@ TEST(MachineAbortedConditionCountsAsFalse)
 	bad = node_binary(when_def, EXPR_GT,
 			  node_binary(when_def, EXPR_DIV, node_num(when_def, 1), node_num(when_def, 0)),
 			  node_num(when_def, 0));
+	two = node_num(when_def, 2);
 	three = node_num(when_def, 3);
 	when_vars[0] = add_num_var(when_def, "child", 0);
 	when_vars[1] = add_num_var(when_def, "after", 0);
-	child = set_var_stmt(when_def, when_vars[0], three);
+	when_vars[2] = add_num_var(when_def, "before", 0);
+	child = set_var_stmt(when_def, when_vars[0], three); /* guarded body, outside the handler range */
+	set_var_stmt(when_def, when_vars[2], two);
 	guard_stmt(when_def, STMT_WHEN, bad, child, 1);
 	set_var_stmt(when_def, when_vars[1], three);
 	when_def->states[0].on_tick_first = 1;
-	when_def->states[0].on_tick_count = 2;
+	when_def->states[0].on_tick_count = 3;
 
 	add_state(unless_def, "s");
 	bad = node_binary(unless_def, EXPR_GT,
 			  node_binary(unless_def, EXPR_DIV, node_num(unless_def, 1), node_num(unless_def, 0)),
 			  node_num(unless_def, 0));
+	two = node_num(unless_def, 2);
 	three = node_num(unless_def, 3);
 	four = node_num(unless_def, 4);
 	unless_vars[0] = add_num_var(unless_def, "child", 0);
 	unless_vars[1] = add_num_var(unless_def, "after", 0);
-	child = set_var_stmt(unless_def, unless_vars[0], three);
+	unless_vars[2] = add_num_var(unless_def, "before", 0);
+	child = set_var_stmt(unless_def, unless_vars[0], three); /* guarded body */
+	set_var_stmt(unless_def, unless_vars[2], two);
 	guard_stmt(unless_def, STMT_UNLESS, bad, child, 1);
 	set_var_stmt(unless_def, unless_vars[1], four);
 	unless_def->states[0].on_tick_first = 1;
-	unless_def->states[0].on_tick_count = 2;
+	unless_def->states[0].on_tick_count = 3;
 
 	ASSERT_SUCCESS(device_add_machine(when_dev, when_def) == NULL);
 	ASSERT_SUCCESS(device_add_machine(unless_dev, unless_def) == NULL);
@@ -843,11 +850,15 @@ TEST(MachineAbortedConditionCountsAsFalse)
 	prepare(unless_dev, 0);
 
 	device_tick(when_dev, 1);
-	ASSERT_EQ(num_var_value(when_dev, 0, when_vars[0]) == 0); /* WHEN false, child skipped */
+	ASSERT_EQ(num_var_value(when_dev, 0, when_vars[2]) == 2); /* earlier effect kept */
+	ASSERT_EQ(num_var_value(when_dev, 0, when_vars[0]) == 0); /* WHEN body skipped */
 	ASSERT_EQ(num_var_value(when_dev, 0, when_vars[1]) == 0); /* handler aborted */
+	ASSERT_EQ(when_dev->machines->warned[0][0][1] & 4); /* division warning */
 	device_tick(unless_dev, 1);
-	ASSERT_EQ(num_var_value(unless_dev, 0, unless_vars[0]) == 3); /* UNLESS false, child ran */
-	ASSERT_EQ(num_var_value(unless_dev, 0, unless_vars[1]) == 0); /* handler aborted afterwards */
+	ASSERT_EQ(num_var_value(unless_dev, 0, unless_vars[2]) == 2); /* earlier effect kept */
+	ASSERT_EQ(num_var_value(unless_dev, 0, unless_vars[0]) == 0); /* aborted UNLESS skips body */
+	ASSERT_EQ(num_var_value(unless_dev, 0, unless_vars[1]) == 0); /* handler aborted */
+	ASSERT_EQ(unless_dev->machines->warned[0][0][1] & 4); /* division warning */
 	arena_release(arena);
 }
 

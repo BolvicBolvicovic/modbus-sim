@@ -416,7 +416,10 @@ gated by its optional deadline. Due after-only transitions win, earliest deadlin
 declaration order), then `when` transitions are tested in declaration order; the first match fires.
 Firing runs the old state's `on-exit`, switches state, redraws all deadlines from the firing time,
 then runs the new state's `on-enter`. If no transition fires, one `on-tick` runs. A machine fires at
-most 64 transitions per tick.
+most 64 transitions per tick. When one tick catches up through several due transitions, intermediate
+states get `on-exit`/`on-enter` but no `on-tick`; only the final state gets one `on-tick` at request
+time (none if the 64-firing cap is reached). Ramps or accumulators that need to advance through
+skipped states should update in `on-exit` using `elapsed-ms` instead.
 
 All `(machine ...)` items are compiled while each device is read; points may be declared before or
 after them. At the end of that `(device ...)`, config checks deferred point references. After all
