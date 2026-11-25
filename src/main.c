@@ -25,10 +25,52 @@
 #include "net/tcp_server.h"
 #include "util/log.h"
 #include "util/serial.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* The binary owns signal handling; the net layer only exposes X_server_stop().
+ * The handler stops whichever server is currently running. */
+static void* volatile		g_active_server;
+static volatile sig_atomic_t	g_active_kind;
+enum
+{
+	ACTIVE_NONE,
+	ACTIVE_TCP,
+	ACTIVE_RTU,
+	ACTIVE_ASCII,
+	ACTIVE_RTU_TCP,
+	ACTIVE_ASCII_TCP,
+};
+
+static void
+on_stop_signal(int signo)
+{
+	void* server = g_active_server;
+
+	(void)signo;
+	if (!server)
+		return;
+	switch (g_active_kind)
+	{
+		case ACTIVE_TCP:		tcp_server_stop(server); break;
+		case ACTIVE_RTU:		rtu_server_stop(server); break;
+		case ACTIVE_ASCII:		ascii_server_stop(server); break;
+		case ACTIVE_RTU_TCP:		rtu_tcp_server_stop(server); break;
+		case ACTIVE_ASCII_TCP:		ascii_tcp_server_stop(server); break;
+		default:			break;
+	}
+}
+
+static void
+set_active_server(int kind, void* server)
+{
+	g_active_server = NULL;
+	g_active_kind   = kind;
+	g_active_server = server;
+}
 
 typedef struct cli_t cli_t;
 struct cli_t
@@ -266,7 +308,11 @@ run_rtu(config_t* config)
 			.device_count      = config->device_count,
 		};
 
-		status = rtu_server_run(&options);
+		rtu_server_t	server;
+
+		set_active_server(ACTIVE_RTU, &server);
+		status = rtu_server_run(&server, &options);
+		set_active_server(ACTIVE_NONE, NULL);
 	}
 
 	if (slave_fd >= 0)
@@ -304,7 +350,11 @@ run_ascii(config_t* config)
 			.device_count = config->device_count,
 		};
 
-		status = ascii_server_run(&options);
+		ascii_server_t	server;
+
+		set_active_server(ACTIVE_ASCII, &server);
+		status = ascii_server_run(&server, &options);
+		set_active_server(ACTIVE_NONE, NULL);
 	}
 
 	if (slave_fd >= 0)
@@ -326,7 +376,13 @@ run_ascii_tcp(config_t* config)
 		.device_count    = config->device_count,
 	};
 
-	return ascii_tcp_server_run(&options);
+	ascii_tcp_server_t	server;
+	s32			status;
+
+	set_active_server(ACTIVE_ASCII_TCP, &server);
+	status = ascii_tcp_server_run(&server, &options);
+	set_active_server(ACTIVE_NONE, NULL);
+	return status;
 }
 
 static s32
@@ -344,7 +400,13 @@ run_rtu_tcp(config_t* config)
 		.device_count      = config->device_count,
 	};
 
-	return rtu_tcp_server_run(&options);
+	rtu_tcp_server_t	server;
+	s32			status;
+
+	set_active_server(ACTIVE_RTU_TCP, &server);
+	status = rtu_tcp_server_run(&server, &options);
+	set_active_server(ACTIVE_NONE, NULL);
+	return status;
 }
 
 /* Shared by check mode (context creation only) and the TCP server startup. */
@@ -381,7 +443,13 @@ run_tcp(config_t* config)
 		.device_count    = config->device_count,
 	};
 
-	return tcp_server_run(&options);
+	tcp_server_t	server;
+	s32		status;
+
+	set_active_server(ACTIVE_TCP, &server);
+	status = tcp_server_run(&server, &options);
+	set_active_server(ACTIVE_NONE, NULL);
+	return status;
 }
 
 int
@@ -431,19 +499,28 @@ main(int argc, char** argv)
 		if (config.tls_enabled)
 		{
 			net_tls_config_t tls = tls_config_from_config(&config);
-			net_tls_ctx_t*   ctx = net_tls_ctx_create(&tls, error, sizeof(error));
+			net_tls_ctx_t    ctx;
 
-			if (!ctx)
+			if (!net_tls_ctx_init(&ctx, &tls, error, sizeof(error)))
 			{
 				fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path,
 					error);
 				goto cleanup;
 			}
-			net_tls_ctx_destroy(ctx);
+			net_tls_ctx_close(&ctx);
 		}
 		puts("config OK");
 		status = 0;
 		goto cleanup;
+	}
+
+	{
+		struct sigaction sa = { 0 };
+
+		sa.sa_handler = on_stop_signal;	/* no SA_RESTART: poll() must wake up */
+		sigaction(SIGINT, &sa, NULL);
+		sigaction(SIGTERM, &sa, NULL);
+		signal(SIGPIPE, SIG_IGN);
 	}
 
 	switch (config.mode)

@@ -1,15 +1,11 @@
 #include "net/net_tls.h"
 #include <stdio.h>
+#include <string.h>
 
 /* Built when WITH_TLS=0: the API stays linkable for the shared net/tcp_server
  * code, but no TLS session can ever be created. Config loading rejects
  * (tls ...) before this is reached; the error text is kept here too so direct
  * callers get the same explanation. */
-
-struct net_tls_conn_t
-{
-	bool unused;
-};
 
 static void
 tls_unavailable(char* err, u32 err_size)
@@ -18,16 +14,17 @@ tls_unavailable(char* err, u32 err_size)
 		snprintf(err, err_size, "%s", "built without TLS support");
 }
 
-net_tls_ctx_t*
-net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size)
+bool
+net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config, char* err, u32 err_size)
 {
 	(void)config;
+	memset(ctx, 0, sizeof(*ctx));
 	tls_unavailable(err, err_size);
-	return NULL;
+	return false;
 }
 
 void
-net_tls_ctx_destroy(net_tls_ctx_t* ctx)
+net_tls_ctx_close(net_tls_ctx_t* ctx)
 {
 	(void)ctx;
 }

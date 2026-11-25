@@ -10,16 +10,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static volatile sig_atomic_t* volatile	g_stop_flag = NULL;
-
-static void
-on_stop_signal(int signo)
-{
-	(void)signo;
-	if (g_stop_flag)
-		*g_stop_flag = 1;
-}
-
 device_t*
 net_find_device(device_t** devices, u32 count, u8 unit)
 {
@@ -29,18 +19,6 @@ net_find_device(device_t** devices, u32 count, u8 unit)
 			return devices[i];
 	}
 	return NULL;
-}
-
-void
-net_install_stop_handlers(volatile sig_atomic_t* stop_flag)
-{
-	struct sigaction	sa = { 0 };
-
-	g_stop_flag = stop_flag;
-	sa.sa_handler = on_stop_signal;	/* no SA_RESTART: poll() must wake up */
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
-	signal(SIGPIPE, SIG_IGN);
 }
 
 u32

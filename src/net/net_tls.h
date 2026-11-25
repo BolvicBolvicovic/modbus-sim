@@ -13,6 +13,12 @@
  * (both headers define __counted_by). */
 
 typedef struct ssl_ctx_st SSL_CTX;
+typedef struct ssl_st SSL;
+
+enum
+{
+	NET_TLS_MAX_SESSIONS = 32,	/* matches the TCP servers' connection slots */
+};
 
 typedef enum net_tls_version_t net_tls_version_t;
 enum net_tls_version_t
@@ -45,14 +51,34 @@ struct net_tls_config_t
 	const char*	tls1_3_ciphersuites;	/* NULL = OpenSSL default */
 };
 
-typedef SSL_CTX net_tls_ctx_t;
-
-/* Opaque per-connection state: SSL object, handshake/want flags and deadline. */
+/* Per-connection state: SSL object, handshake/want flags and deadline. Only
+ * net_tls touches the members; the struct is public so the context can embed
+ * its session pool without allocation. */
 typedef struct net_tls_conn_t net_tls_conn_t;
+struct net_tls_conn_t
+{
+	SSL*	ssl;
+	bool	handshake_done;
+	bool	want_read;
+	bool	want_write;
+	u64	handshake_deadline_ms;
+};
 
-/* Returns NULL and fills `err` when OpenSSL cannot set up the server context. */
-net_tls_ctx_t*	net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size);
-void		net_tls_ctx_destroy(net_tls_ctx_t* ctx);
+/* Caller-owned TLS context: the OpenSSL context plus this context's own session
+ * pool (no process-global state, so several servers can each have one). Must
+ * stay at a stable address while sessions exist. Zero-initialize before init. */
+typedef struct net_tls_ctx_t net_tls_ctx_t;
+struct net_tls_ctx_t
+{
+	SSL_CTX*	ssl_ctx;
+	net_tls_conn_t	conns[NET_TLS_MAX_SESSIONS];
+};
+
+/* Returns false and fills `err` when OpenSSL cannot set up the server context. */
+bool		net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config,
+				 char* err, u32 err_size);
+/* Closes any live sessions and frees the OpenSSL context. Idempotent. */
+void		net_tls_ctx_close(net_tls_ctx_t* ctx);
 
 /* Creates an accept-side session on a nonblocking socket. The handshake deadline
  * is measured from accept; 0 disables it. NULL and `err` on failure. */

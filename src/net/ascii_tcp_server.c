@@ -10,7 +10,6 @@
 #include "vlib/macros.h"
 #include <errno.h>
 #include <poll.h>
-#include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -18,34 +17,6 @@
 /* Raw Modbus ASCII over TCP byte streams. Framing is CR LF, not silence timing,
  * so a partial frame is expired only after one second without a new byte. Each
  * connection owns its rx buffer and delayed response; devices are borrowed. */
-
-enum
-{
-	ASCII_TCP_MAX_CONNECTIONS   = 32,
-	ASCII_TCP_INTERCHAR_TIMEOUT_MS = 1000,
-};
-
-typedef struct ascii_tcp_conn_t ascii_tcp_conn_t;
-struct ascii_tcp_conn_t
-{
-	net_tcp_conn_t	base;
-	u8		rx[MODBUS_ASCII_MAX_FRAME];
-	u32		rx_len;
-	u64		last_rx_ms;
-	pending_response_t pending;
-	bool		read_closed;
-};
-
-typedef struct ascii_tcp_server_t ascii_tcp_server_t;
-struct ascii_tcp_server_t
-{
-	ascii_tcp_server_options_t	options;
-	net_tcp_pool_t			pool;
-	rng_t				rng;
-	ascii_tcp_conn_t		conns[ASCII_TCP_MAX_CONNECTIONS];
-};
-
-static volatile sig_atomic_t	g_ascii_tcp_stop = 0;
 
 static void
 conn_close(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
@@ -368,73 +339,103 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, short re
 }
 
 s32
-ascii_tcp_server_run(const ascii_tcp_server_options_t* options)
+ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 {
-	ascii_tcp_server_t	server = { 0 };
-	struct pollfd		fds[ASCII_TCP_MAX_CONNECTIONS + 1];
-	net_tcp_conn_t*		owners[ASCII_TCP_MAX_CONNECTIONS + 1];
+	struct pollfd	fds[ASCII_TCP_MAX_CONNECTIONS + 1];
+	net_tcp_conn_t*	owners[ASCII_TCP_MAX_CONNECTIONS + 1];
+	u32		count;
+	int		timeout;
+	u64		now_ms = clock_now_ms();
 
-	server.options = *options;
-	server.pool.conns = (net_tcp_conn_t*)server.conns;
-	server.pool.conn_count = ARRAY_COUNT(server.conns);
-	server.pool.conn_size = sizeof(server.conns[0]);
-	server.pool.idle_timeout_ms = options->idle_timeout_ms;
-	server.pool.listen_fd = -1;
-	server.pool.ctx = &server;
-	server.pool.on_close = conn_on_close;
-	server.pool.skip_idle = conn_skip_idle;
-	rng_seed(&server.rng, options->seed);
-	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
-		server.conns[i].base.fd = -1;
+	if (server->stop)
+		return NET_STEP_DONE;
 
-	g_ascii_tcp_stop = 0;
-	net_install_stop_handlers(&g_ascii_tcp_stop);
-	if (net_tcp_pool_listen(&server.pool, options->bind_address, options->port) < 0)
+	net_tcp_pool_close_idle(&server->pool, now_ms);
+	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
+	{
+		if (server->conns[i].base.fd >= 0)
+			conn_process(server, &server->conns[i], now_ms);
+	}
+
+	count = build_poll_table(server, fds, owners, now_ms, &timeout);
+	if (max_wait_ms >= 0)
+		timeout = MIN(timeout, max_wait_ms);
+	if (poll(fds, count, timeout) < 0)
+	{
+		if (errno == EINTR)
+			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
+		LOG_WARN("ASCII-over-TCP poll failed: %s", strerror(errno));
+		return NET_STEP_ERROR;
+	}
+	now_ms = clock_now_ms();
+	net_tcp_pool_close_idle(&server->pool, now_ms);
+	for (u32 i = 0; i < count; i++)
+	{
+		ascii_tcp_conn_t* conn = (ascii_tcp_conn_t*)owners[i];
+		short revents = fds[i].revents;
+
+		if (revents == 0)
+			continue;
+		if (!conn)
+		{
+			net_tcp_pool_accept(&server->pool);
+			continue;
+		}
+		conn_handle_revents(server, conn, revents, now_ms);
+	}
+	return NET_STEP_CONTINUE;
+}
+
+void
+ascii_tcp_server_stop(ascii_tcp_server_t* server)
+{
+	server->stop = 1;
+}
+
+s32
+ascii_tcp_server_init(ascii_tcp_server_t* server, const ascii_tcp_server_options_t* options)
+{
+	memset(server, 0, sizeof(*server));
+	server->options = *options;
+	server->pool.conns = (net_tcp_conn_t*)server->conns;
+	server->pool.conn_count = ARRAY_COUNT(server->conns);
+	server->pool.conn_size = sizeof(server->conns[0]);
+	server->pool.idle_timeout_ms = options->idle_timeout_ms;
+	server->pool.listen_fd = -1;
+	server->pool.ctx = server;
+	server->pool.on_close = conn_on_close;
+	server->pool.skip_idle = conn_skip_idle;
+	rng_seed(&server->rng, options->seed);
+	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
+		server->conns[i].base.fd = -1;
+
+	if (net_tcp_pool_listen(&server->pool, options->bind_address, options->port) < 0)
 		return 2;
 	LOG_INFO("ASCII-over-TCP listening on %s:%u (%u device%s). Ctrl-C to stop.",
 		 options->bind_address, options->port, options->device_count,
 		 options->device_count == 1 ? "" : "s");
-
-	while (!g_ascii_tcp_stop)
-	{
-		u32 count;
-		int timeout;
-		u64 now_ms = clock_now_ms();
-
-		net_tcp_pool_close_idle(&server.pool, now_ms);
-		for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
-		{
-			if (server.conns[i].base.fd >= 0)
-				conn_process(&server, &server.conns[i], now_ms);
-		}
-
-		count = build_poll_table(&server, fds, owners, now_ms, &timeout);
-		if (poll(fds, count, timeout) < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			LOG_WARN("ASCII-over-TCP poll failed: %s", strerror(errno));
-			return 1;
-		}
-		now_ms = clock_now_ms();
-		net_tcp_pool_close_idle(&server.pool, now_ms);
-		for (u32 i = 0; i < count; i++)
-		{
-			ascii_tcp_conn_t* conn = (ascii_tcp_conn_t*)owners[i];
-			short revents = fds[i].revents;
-
-			if (revents == 0)
-				continue;
-			if (!conn)
-			{
-				net_tcp_pool_accept(&server.pool);
-				continue;
-			}
-			conn_handle_revents(&server, conn, revents, now_ms);
-		}
-	}
-
-	net_tcp_pool_close_all(&server.pool);
-	LOG_INFO("ASCII-over-TCP stopped");
 	return 0;
+}
+
+void
+ascii_tcp_server_close(ascii_tcp_server_t* server)
+{
+	bool was_listening = server->pool.listen_fd >= 0;
+
+	net_tcp_pool_close_all(&server->pool);
+	if (was_listening)
+		LOG_INFO("ASCII-over-TCP stopped");
+}
+
+s32
+ascii_tcp_server_run(ascii_tcp_server_t* server, const ascii_tcp_server_options_t* options)
+{
+	s32 rc = ascii_tcp_server_init(server, options);
+
+	if (rc != 0)
+		return rc;
+	while ((rc = ascii_tcp_server_step(server, -1)) == NET_STEP_CONTINUE)
+		;
+	ascii_tcp_server_close(server);
+	return rc == NET_STEP_ERROR ? 1 : 0;
 }

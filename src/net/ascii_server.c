@@ -6,9 +6,9 @@
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
+#include "vlib/macros.h"
 #include <errno.h>
 #include <poll.h>
-#include <signal.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -22,20 +22,6 @@ enum
 {
 	ASCII_INTERCHAR_TIMEOUT_MS = 1000,
 };
-
-typedef struct ascii_server_t ascii_server_t;
-struct ascii_server_t
-{
-	ascii_server_options_t	options;
-	rng_t			rng;
-	u8			rx[MODBUS_ASCII_MAX_FRAME];
-	u32			rx_len;
-	u64			last_rx_ms;
-	pending_response_t	pending;
-	bool			read_closed;
-};
-
-static volatile sig_atomic_t	g_ascii_stop = 0;
 
 static void
 ascii_consume(ascii_server_t* server, u32 n)
@@ -278,36 +264,65 @@ ascii_log_startup(const ascii_server_options_t* options)
 }
 
 s32
-ascii_server_run(const ascii_server_options_t* options)
+ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 {
-	ascii_server_t server;
+	struct pollfd	pfd = { 0 };
+	int		timeout = 0;
+	u64		now_ms = clock_now_ms();
 
-	memset(&server, 0, sizeof(server));
-	server.options = *options;
-	rng_seed(&server.rng, options->seed);
-	g_ascii_stop = 0;
-	net_install_stop_handlers(&g_ascii_stop);
-	ascii_log_startup(options);
+	if (server->stop)
+		return NET_STEP_DONE;
 
-	while (!g_ascii_stop)
+	ascii_build_poll(server, &pfd, &timeout, now_ms);
+	if (max_wait_ms >= 0)
+		timeout = MIN(timeout, max_wait_ms);
+	if (poll(&pfd, 1, timeout) < 0)
 	{
-		struct pollfd	pfd = { 0 };
-		int		timeout = 0;
-		u64		now_ms = clock_now_ms();
-
-		ascii_build_poll(&server, &pfd, &timeout, now_ms);
-		if (poll(&pfd, 1, timeout) < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			LOG_WARN("ASCII poll failed: %s", strerror(errno));
-			return 1;
-		}
-		now_ms = clock_now_ms();
-		if (!ascii_handle_revents(&server, pfd.revents, now_ms))
-			break;
+		if (errno == EINTR)
+			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
+		LOG_WARN("ASCII poll failed: %s", strerror(errno));
+		return NET_STEP_ERROR;
 	}
+	now_ms = clock_now_ms();
+	return ascii_handle_revents(server, pfd.revents, now_ms) ?
+	       NET_STEP_CONTINUE : NET_STEP_DONE;
+}
 
-	LOG_INFO("ASCII stopped");
+void
+ascii_server_stop(ascii_server_t* server)
+{
+	server->stop = 1;
+}
+
+s32
+ascii_server_init(ascii_server_t* server, const ascii_server_options_t* options)
+{
+	memset(server, 0, sizeof(*server));
+	server->options = *options;
+	rng_seed(&server->rng, options->seed);
+	ascii_log_startup(options);
+	server->open = true;
 	return 0;
+}
+
+void
+ascii_server_close(ascii_server_t* server)
+{
+	if (!server->open)
+		return;
+	server->open = false;
+	LOG_INFO("ASCII stopped");
+}
+
+s32
+ascii_server_run(ascii_server_t* server, const ascii_server_options_t* options)
+{
+	s32 rc = ascii_server_init(server, options);
+
+	if (rc != 0)
+		return rc;
+	while ((rc = ascii_server_step(server, -1)) == NET_STEP_CONTINUE)
+		;
+	ascii_server_close(server);
+	return rc == NET_STEP_ERROR ? 1 : 0;
 }

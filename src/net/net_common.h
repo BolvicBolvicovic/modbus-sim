@@ -3,7 +3,6 @@
 
 #include "modbus/ascii.h"
 #include "vlib/c_types.h"
-#include <signal.h>
 #include <stdbool.h>
 
 typedef struct device_t device_t;
@@ -23,12 +22,18 @@ struct pending_response_t
 	u64	due_ms;
 };
 
+/* Result of every X_server_step(). The net layer never installs signal
+ * handlers; a host stops a server with X_server_stop() and keeps stepping
+ * until a non-zero result. */
+enum
+{
+	NET_STEP_CONTINUE = 0,
+	NET_STEP_DONE     = 1,	/* stopped, or the byte-stream peer went away */
+	NET_STEP_ERROR    = 2,	/* poll failed */
+};
+
 /* Returns the device with the given unit id, or NULL. */
 device_t*	net_find_device(device_t** devices, u32 count, u8 unit);
-
-/* Installs SIGINT/SIGTERM handlers that set *stop_flag and ignores SIGPIPE.
- * The flag must remain valid for the lifetime of signal handling. */
-void		net_install_stop_handlers(volatile sig_atomic_t* stop_flag);
 
 /* Runs the PDU against the device and decides the response fault. */
 u32		net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms,

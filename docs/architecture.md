@@ -45,8 +45,9 @@
 | `src/main.c` | | command line, wiring, RTU/ASCII PTY/device open |
 
 Dependencies point one way: `net → modbus → device → util`, and `config → device → util`.
-`net_tls` wraps OpenSSL and keeps its headers out of other modules; its opaque `net_tls_conn_t`
-owns each session's handshake/want flags and deadline. In a no-TLS build `net_tls_stub.c`
+`net_tls` wraps OpenSSL and keeps its headers out of other modules; `net_tls_ctx_t` is a
+caller-owned struct holding the `SSL_CTX*` plus its own pool of 32 `net_tls_conn_t` sessions
+(handshake/want flags and deadline), so there is no process-global TLS state. In a no-TLS build `net_tls_stub.c`
 implements the same API without OpenSSL. `net_tcp_pool` owns only listener, accept, idle and
 poll-table bookkeeping for the three TCP transports; per-connection framing/TLS setup stays in
 the servers. `config` only supplies borrowed TLS strings through `tcp_server_options_t` and
@@ -73,7 +74,9 @@ Headers sit next to their `.c` files.
 
 - No `malloc` or `free` in this code base. Everything lives in vlib arenas (`ARENA_ALLOC`, `ARENA_PUSH_STRUCT`, `ARENA_PUSH_ARRAY`).
 - `main` creates two arenas: `app` (devices, lives until exit) and `scratch`
-  (the config file text, released right after loading). Server state is a stack local.
+  (the config file text, released right after loading). Each server (`tcp_server_t`, `rtu_server_t`, ...,
+  including its TLS session pool) is a caller-owned struct: a stack local in `main`, but a host may use
+  static or arena storage. It must not move between init and close.
 - Request handling uses fixed-size stack buffers. Nothing is allocated per request.
 - Exception: the s7 interpreter allocates internally. It exists only while the config is read
   and is freed with `s7_free` (s7 keeps a few hundred bytes of interned strings; that is
@@ -90,6 +93,27 @@ state-register points; `s7_eval_c_string` is used only once to install a fixed r
 no user config form is evaluated, and request handling never touches s7.
 
 ## The network loops
+
+### Server objects, signals and SIGPIPE
+
+Every transport is a self-contained object with no process-global state, so one process can host
+several servers and drive them from its own loop:
+
+- `X_server_init(&s, &options)` sets up the listener/TLS (0 on success, 2 if a TCP listener or TLS
+  context could not be created) and `X_server_close(&s)` releases it (idempotent; devices and the
+  RTU/ASCII fd stay the caller's).
+- `X_server_step(&s, max_wait_ms)` runs one poll iteration (`-1` = until the server's next deadline,
+  at most 1 s; `0` = nonblocking) and returns `NET_STEP_CONTINUE`, `NET_STEP_DONE` (stopped, or the
+  RTU/ASCII peer closed the fd) or `NET_STEP_ERROR` (RTU/ASCII poll failure).
+- `X_server_stop(&s)` only sets a `volatile sig_atomic_t`, so it is async-signal-safe; the next step
+  returns `NET_STEP_DONE`. A signal that interrupts `poll()` makes the step return, so a run loop sees
+  the flag at once.
+- `X_server_run(&s, &options)` is init + step loop + close for the binary.
+
+The net layer installs no signal handlers. `main.c` owns SIGINT/SIGTERM (no `SA_RESTART`, calling the
+active server's `X_server_stop`) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
+byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
+embedding a TLS server must ignore SIGPIPE itself.
 
 ### TCP (`net/tcp_server.c`)
 

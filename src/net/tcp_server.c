@@ -15,45 +15,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define TCP_SERVER_MAX_CONNECTIONS	32
-
-/* Name: conn_t
- * Description: one client connection. A connection handles one request at a time:
- * while a response is waiting to be sent (tx_len > 0) no new request is read.
- * */
-typedef struct conn_t conn_t;
-struct conn_t
-{
-	net_tcp_conn_t	base;
-	u8		rx[MBAP_MAX_FRAME];
-	u32		rx_len;
-	u8		tx[MBAP_MAX_FRAME];
-	u32		tx_len;
-	u32		tx_sent;
-	u64		tx_due_ms;	/* do not send before this time (delay fault) */
-	net_tls_conn_t*	tls;		/* NULL for plaintext connections */
-};
-
-typedef struct tcp_server_t tcp_server_t;
-struct tcp_server_t
-{
-	tcp_server_options_t	options;
-	net_tls_ctx_t*		tls;
-	net_tcp_pool_t		pool;
-	rng_t			rng;
-	conn_t			conns[TCP_SERVER_MAX_CONNECTIONS];
-};
-
-static volatile sig_atomic_t	g_stop = 0;
-
 static void
-conn_close(tcp_server_t* server, conn_t* conn)
+conn_close(tcp_server_t* server, tcp_conn_t* conn)
 {
 	net_tcp_pool_close_conn(&server->pool, &conn->base);
 }
 
 static bool
-conn_tls_handshake(tcp_server_t* server, conn_t* conn)
+conn_tls_handshake(tcp_server_t* server, tcp_conn_t* conn)
 {
 	char			tls_err[256];
 	char			subject[512];
@@ -79,7 +48,7 @@ conn_tls_handshake(tcp_server_t* server, conn_t* conn)
 static void
 conn_on_close(void* ctx, net_tcp_conn_t* base)
 {
-	conn_t* conn = (conn_t*)base;
+	tcp_conn_t* conn = (tcp_conn_t*)base;
 
 	(void)ctx;
 	if (conn->tls)
@@ -95,15 +64,15 @@ static void
 conn_on_accept(void* ctx, net_tcp_conn_t* base, u64 now_ms)
 {
 	tcp_server_t*	server = ctx;
-	conn_t*		conn   = (conn_t*)base;
+	tcp_conn_t*		conn   = (tcp_conn_t*)base;
 	char		tls_err[256];
 	u64		deadline_ms = 0;
 
 	if (server->options.tls_handshake_timeout_ms > 0)
 		deadline_ms = now_ms + server->options.tls_handshake_timeout_ms;
-	if (server->tls)
+	if (server->tls.ssl_ctx)
 	{
-		conn->tls = net_tls_conn_new(server->tls, base->fd, deadline_ms,
+		conn->tls = net_tls_conn_new(&server->tls, base->fd, deadline_ms,
 					     tls_err, sizeof(tls_err));
 		if (!conn->tls)
 		{
@@ -118,7 +87,7 @@ conn_on_accept(void* ctx, net_tcp_conn_t* base, u64 now_ms)
 static bool
 conn_skip_idle(void* ctx, const net_tcp_conn_t* base)
 {
-	const conn_t* conn = (const conn_t*)base;
+	const tcp_conn_t* conn = (const tcp_conn_t*)base;
 
 	(void)ctx;
 	return conn->tx_len > 0;
@@ -126,7 +95,7 @@ conn_skip_idle(void* ctx, const net_tcp_conn_t* base)
 
 /* Removes the first `size` bytes of the receive buffer. */
 static void
-conn_consume(conn_t* conn, u32 size)
+conn_consume(tcp_conn_t* conn, u32 size)
 {
 	memmove(conn->rx, conn->rx + size, conn->rx_len - size);
 	conn->rx_len -= size;
@@ -134,7 +103,7 @@ conn_consume(conn_t* conn, u32 size)
 
 /* Runs the request found at the start of conn->rx and queues the response (if any). */
 static void
-handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u64 now_ms)
+handle_frame(tcp_server_t* server, tcp_conn_t* conn, const mbap_header_t* header, u64 now_ms)
 {
 	u8			pdu[MODBUS_MAX_PDU];
 	device_t*		dev      = net_find_device(server->options.devices,
@@ -178,7 +147,7 @@ handle_frame(tcp_server_t* server, conn_t* conn, const mbap_header_t* header, u6
 
 /* Handles every complete request waiting in the receive buffer, one at a time. */
 static void
-conn_process(tcp_server_t* server, conn_t* conn)
+conn_process(tcp_server_t* server, tcp_conn_t* conn)
 {
 	mbap_header_t	header = { 0 };
 	u32		frame  = 0;
@@ -205,7 +174,7 @@ conn_process(tcp_server_t* server, conn_t* conn)
 }
 
 static void
-conn_tx_advance(tcp_server_t* server, conn_t* conn, u32 sent)
+conn_tx_advance(tcp_server_t* server, tcp_conn_t* conn, u32 sent)
 {
 	conn->tx_sent         += sent;
 	conn->base.last_activity_ms = clock_now_ms();
@@ -218,7 +187,7 @@ conn_tx_advance(tcp_server_t* server, conn_t* conn, u32 sent)
 }
 
 static void
-conn_read(tcp_server_t* server, conn_t* conn)
+conn_read(tcp_server_t* server, tcp_conn_t* conn)
 {
 	ssize_t	got;
 
@@ -268,7 +237,7 @@ conn_read(tcp_server_t* server, conn_t* conn)
 }
 
 static void
-conn_write(tcp_server_t* server, conn_t* conn)
+conn_write(tcp_server_t* server, tcp_conn_t* conn)
 {
 	ssize_t	sent;
 
@@ -317,12 +286,12 @@ close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
 {
 	u32 timeout_ms = server->options.tls_handshake_timeout_ms;
 
-	if (!server->tls || timeout_ms == 0)
+	if (!server->tls.ssl_ctx || timeout_ms == 0)
 		return;
 
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
-		conn_t*	conn     = &server->conns[i];
+		tcp_conn_t*	conn     = &server->conns[i];
 		u64	deadline = net_tls_conn_handshake_deadline(conn->tls);
 
 		if (conn->base.fd < 0 ||
@@ -340,7 +309,7 @@ close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
 /* OpenSSL may hold decrypted request bytes even when the socket has nothing to read.
  * Only synthesize a wakeup while no response is pending, so delayed faults are honored. */
 static bool
-conn_tls_has_buffered_input(const conn_t* conn)
+conn_tls_has_buffered_input(const tcp_conn_t* conn)
 {
 	return conn->tls &&
 	       net_tls_conn_handshake_done(conn->tls) &&
@@ -357,7 +326,7 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owne
 
 	for (u32 i = 1; i < count; i++)
 	{
-		conn_t*	conn         = (conn_t*)owners[i];
+		tcp_conn_t*	conn         = (tcp_conn_t*)owners[i];
 		short	tls_events   = conn->tls ? net_tls_conn_poll_events(conn->tls) : 0;
 		u64	handshake_deadline;
 		short	events = POLLIN;
@@ -409,7 +378,7 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owne
 static void
 serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner, u64 now_ms)
 {
-	conn_t*	conn          = (conn_t*)owner;
+	tcp_conn_t*	conn          = (tcp_conn_t*)owner;
 	bool	buffered_input = owner && conn_tls_has_buffered_input(conn);
 	short	tls_events;
 
@@ -476,81 +445,105 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner
 		conn_read(server, conn);
 }
 
-static void
-serve_loop(tcp_server_t* server)
+s32
+tcp_server_step(tcp_server_t* server, s32 max_wait_ms)
 {
 	struct pollfd		fds[TCP_SERVER_MAX_CONNECTIONS + 1];
 	net_tcp_conn_t*		owners[TCP_SERVER_MAX_CONNECTIONS + 1];
 	u32		count   = 0;
 	int		timeout = 0;
-	u64		now_ms  = 0;
+	u64		now_ms  = clock_now_ms();
 
-	while (!g_stop)
-	{
-		now_ms = clock_now_ms();
-		net_tcp_pool_close_idle(&server->pool, now_ms);
-		close_stalled_handshakes(server, now_ms);
-		count = build_poll_table(server, fds, owners, now_ms, &timeout);
-		if (poll(fds, count, timeout) < 0)
-			continue;
+	if (server->stop)
+		return NET_STEP_DONE;
 
-		now_ms = clock_now_ms();
-		net_tcp_pool_close_idle(&server->pool, now_ms);
-		close_stalled_handshakes(server, now_ms);
-		for (u32 i = 0; i < count; i++)
-			serve_ready(server, &fds[i], owners[i], now_ms);
-	}
+	net_tcp_pool_close_idle(&server->pool, now_ms);
+	close_stalled_handshakes(server, now_ms);
+	count = build_poll_table(server, fds, owners, now_ms, &timeout);
+	if (max_wait_ms >= 0)
+		timeout = MIN(timeout, max_wait_ms);
+	if (poll(fds, count, timeout) < 0)
+		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
+
+	now_ms = clock_now_ms();
+	net_tcp_pool_close_idle(&server->pool, now_ms);
+	close_stalled_handshakes(server, now_ms);
+	for (u32 i = 0; i < count; i++)
+		serve_ready(server, &fds[i], owners[i], now_ms);
+	return NET_STEP_CONTINUE;
+}
+
+void
+tcp_server_stop(tcp_server_t* server)
+{
+	server->stop = 1;
 }
 
 s32
-tcp_server_run(const tcp_server_options_t* options)
+tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 {
-	tcp_server_t		server = { 0 };
 	char			tls_err[256];
 
-	server.options = *options;
-	server.pool.conns = (net_tcp_conn_t*)server.conns;
-	server.pool.conn_count = ARRAY_COUNT(server.conns);
-	server.pool.conn_size = sizeof(server.conns[0]);
-	server.pool.idle_timeout_ms = options->idle_timeout_ms;
-	server.pool.listen_fd = -1;
-	server.pool.ctx = &server;
-	server.pool.on_accept = conn_on_accept;
-	server.pool.on_close = conn_on_close;
-	server.pool.skip_idle = conn_skip_idle;
-	rng_seed(&server.rng, options->seed);
-	for (u32 i = 0; i < ARRAY_COUNT(server.conns); i++)
-		server.conns[i].base.fd = -1;
+	memset(server, 0, sizeof(*server));
+	server->options = *options;
+	server->pool.conns = (net_tcp_conn_t*)server->conns;
+	server->pool.conn_count = ARRAY_COUNT(server->conns);
+	server->pool.conn_size = sizeof(server->conns[0]);
+	server->pool.idle_timeout_ms = options->idle_timeout_ms;
+	server->pool.listen_fd = -1;
+	server->pool.ctx = server;
+	server->pool.on_accept = conn_on_accept;
+	server->pool.on_close = conn_on_close;
+	server->pool.skip_idle = conn_skip_idle;
+	rng_seed(&server->rng, options->seed);
+	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
+		server->conns[i].base.fd = -1;
 
 	if (options->tls_enabled)
 	{
-		server.tls = net_tls_ctx_create(&options->tls, tls_err, sizeof(tls_err));
-		if (!server.tls)
+		if (!net_tls_ctx_init(&server->tls, &options->tls, tls_err, sizeof(tls_err)))
 		{
 			LOG_WARN("cannot configure TLS: %s", tls_err);
 			return 2;
 		}
 	}
 
-	g_stop = 0;
-	net_install_stop_handlers(&g_stop);
-	if (net_tcp_pool_listen(&server.pool, options->bind_address, options->port) < 0)
+	if (net_tcp_pool_listen(&server->pool, options->bind_address, options->port) < 0)
 	{
-		net_tls_ctx_destroy(server.tls);
+		tcp_server_close(server);
 		return 2;
 	}
 
 	LOG_INFO("listening on %s:%u (%u device%s). Ctrl-C to stop.", options->bind_address,
 		 options->port, options->device_count, options->device_count == 1 ? "" : "s");
-	if (server.tls)
+	if (server->tls.ssl_ctx)
 		LOG_INFO("TLS enabled: certificate=%s private-key=%s CA=%s client-certificate=%s",
 			 options->tls.certificate, options->tls.private_key,
 			 options->tls.ca_certificate ? options->tls.ca_certificate : "(none)",
 			 options->tls.require_client_certificate ? "required" : "optional");
-	serve_loop(&server);
+	return 0;
+}
 
-	net_tcp_pool_close_all(&server.pool);
-	net_tls_ctx_destroy(server.tls);
-	LOG_INFO("stopped");
+void
+tcp_server_close(tcp_server_t* server)
+{
+	bool was_listening = server->pool.listen_fd >= 0;
+
+	net_tcp_pool_close_all(&server->pool);
+	net_tls_ctx_close(&server->tls);
+	if (was_listening)
+		LOG_INFO("stopped");
+}
+
+s32
+tcp_server_run(tcp_server_t* server, const tcp_server_options_t* options)
+{
+	s32 rc = tcp_server_init(server, options);
+
+	if (rc != 0)
+		return rc;
+	while (tcp_server_step(server, -1) == NET_STEP_CONTINUE)
+		;
+	tcp_server_close(server);
 	return 0;
 }

@@ -99,7 +99,7 @@ rtu_child_start_opts(rtu_child_t* child, device_t** devices, u32 device_count, u
 		};
 
 		close(fds[0]);
-		(void)rtu_server_run(&opts);
+		{ rtu_server_t srv; (void)rtu_server_run(&srv, &opts); }
 		close(fds[1]);
 		_exit(0);
 	}
@@ -141,7 +141,7 @@ rtu_child_start_opts_flags(rtu_child_t* child, device_t** devices, u32 device_co
 		};
 
 		close(fds[0]);
-		(void)rtu_server_run(&opts);
+		{ rtu_server_t srv; (void)rtu_server_run(&srv, &opts); }
 		close(fds[1]);
 		_exit(0);
 	}

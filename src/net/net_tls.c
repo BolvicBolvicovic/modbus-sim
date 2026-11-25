@@ -9,20 +9,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define NET_TLS_MAX_SESSIONS	32
-
-struct net_tls_conn_t
-{
-	SSL*	ssl;
-	bool	handshake_done;
-	bool	want_read;
-	bool	want_write;
-	u64	handshake_deadline_ms;
-};
-
-/* No per-session allocation: the TCP server owns at most 32 connection slots. */
-static net_tls_conn_t g_conns[NET_TLS_MAX_SESSIONS];
-
 static void
 copy_last_error(char* out, u32 size)
 {
@@ -37,31 +23,33 @@ copy_last_error(char* out, u32 size)
 	ERR_clear_error();
 }
 
-static net_tls_ctx_t*
-tls_fail(net_tls_ctx_t* ctx, char* err, u32 err_size, const char* what)
+static bool
+tls_fail(SSL_CTX* ctx, char* err, u32 err_size, const char* what)
 {
 	char detail[256];
 
 	copy_last_error(detail, sizeof(detail));
 	snprintf(err, err_size, "%s: %s", what, detail);
 	if (ctx)
-		net_tls_ctx_destroy(ctx);
-	return NULL;
+		SSL_CTX_free(ctx);
+	return false;
 }
 
-net_tls_ctx_t*
-net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size)
+bool
+net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config, char* err, u32 err_size)
 {
 	char			cipher_list[1024];
 	int			len;
 	long			options = 0;
 	int			verify  = SSL_VERIFY_NONE;
-	net_tls_ctx_t*		ctx     = NULL;
+	SSL_CTX*		ctx     = NULL;
+
+	memset(out, 0, sizeof(*out));
 
 	if (config->require_client_certificate && !config->ca_certificate)
 	{
 		snprintf(err, err_size, "client certificates are required but no CA certificate is configured");
-		return NULL;
+		return false;
 	}
 
 	ctx = SSL_CTX_new(TLS_server_method());
@@ -96,8 +84,8 @@ net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size)
 	if (len < 0 || (size_t)len >= sizeof(cipher_list))
 	{
 		snprintf(err, err_size, "TLS 1.2 cipher list is too long");
-		net_tls_ctx_destroy(ctx);
-		return NULL;
+		SSL_CTX_free(ctx);
+		return false;
 	}
 	if (SSL_CTX_set_cipher_list(ctx, cipher_list) != 1)
 		return tls_fail(ctx, err, err_size, "invalid TLS 1.2 cipher list");
@@ -129,14 +117,8 @@ net_tls_ctx_create(const net_tls_config_t* config, char* err, u32 err_size)
 	}
 	SSL_CTX_set_verify(ctx, verify, NULL);
 	SSL_CTX_set_verify_depth(ctx, 4);
-	return ctx;
-}
-
-void
-net_tls_ctx_destroy(net_tls_ctx_t* ctx)
-{
-	if (ctx)
-		SSL_CTX_free(ctx);
+	out->ssl_ctx = ctx;
+	return true;
 }
 
 net_tls_conn_t*
@@ -147,9 +129,9 @@ net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, char* er
 
 	for (u32 i = 0; i < NET_TLS_MAX_SESSIONS; i++)
 	{
-		if (!g_conns[i].ssl)
+		if (!ctx->conns[i].ssl)
 		{
-			conn = &g_conns[i];
+			conn = &ctx->conns[i];
 			break;
 		}
 	}
@@ -158,7 +140,7 @@ net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, char* er
 		snprintf(err, err_size, "too many TLS sessions");
 		return NULL;
 	}
-	ssl = SSL_new(ctx);
+	ssl = SSL_new(ctx->ssl_ctx);
 	if (!ssl)
 	{
 		copy_last_error(err, err_size);
@@ -196,6 +178,16 @@ net_tls_conn_close(net_tls_conn_t* conn)
 		return;
 	ssl_close(conn->ssl);
 	memset(conn, 0, sizeof(*conn));
+}
+
+void
+net_tls_ctx_close(net_tls_ctx_t* ctx)
+{
+	for (u32 i = 0; i < NET_TLS_MAX_SESSIONS; i++)
+		net_tls_conn_close(&ctx->conns[i]);
+	if (ctx->ssl_ctx)
+		SSL_CTX_free(ctx->ssl_ctx);
+	ctx->ssl_ctx = NULL;
 }
 
 bool

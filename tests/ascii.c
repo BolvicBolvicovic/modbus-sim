@@ -527,7 +527,7 @@ ascii_child_start(ascii_child_t* child, device_t** devices, u32 device_count)
 		};
 
 		close(fds[0]);
-		(void)ascii_server_run(&opts);
+		{ ascii_server_t srv; (void)ascii_server_run(&srv, &opts); }
 		close(fds[1]);
 		_exit(0);
 	}

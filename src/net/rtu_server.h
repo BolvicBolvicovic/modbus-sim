@@ -1,7 +1,11 @@
 #ifndef RTU_SERVER_H
 #define RTU_SERVER_H
 
+#include "net/net_common.h"
+#include "net/rtu_framer.h"
+#include "util/rng.h"
 #include "vlib/c_types.h"
+#include <signal.h>
 #include <stdbool.h>
 
 typedef struct device_t device_t;
@@ -30,11 +34,49 @@ struct rtu_server_options_t
 	u32		device_count;
 };
 
-/* Name: rtu_server_run
- * Description: serves Modbus RTU on options->fd until SIGINT or SIGTERM, or until
- * the peer closes the fd. Single thread, poll-based like the TCP server.
- * Returns 0 after a clean stop, non-zero on startup/runtime error.
+/* Name: rtu_server_t
+ * Description: all state of one RTU server; the caller owns the storage and
+ * keeps it at a stable address between init and close. No global state.
  * */
-s32	rtu_server_run(const rtu_server_options_t* options);
+typedef struct rtu_server_t rtu_server_t;
+struct rtu_server_t
+{
+	rtu_server_options_t	options;
+	rtu_framer_ctx_t	ctx;
+	rng_t			rng;
+	rtu_framer_t		framer;
+	bool			read_closed;
+	bool			open;
+	volatile sig_atomic_t	stop;
+};
+
+/* Name: rtu_server_init
+ * Description: resets *server for options->fd (borrowed, not closed). Returns 0.
+ * */
+s32	rtu_server_init(rtu_server_t* server, const rtu_server_options_t* options);
+
+/* Name: rtu_server_step
+ * Description: one poll iteration, waiting at most max_wait_ms (-1 = until the
+ * next frame/response deadline, at most 1 s; 0 = nonblocking). Returns
+ * NET_STEP_CONTINUE; NET_STEP_DONE after rtu_server_stop or when the peer
+ * closed the fd; NET_STEP_ERROR if poll failed.
+ * */
+s32	rtu_server_step(rtu_server_t* server, s32 max_wait_ms);
+
+/* Name: rtu_server_stop
+ * Description: async-signal-safe; only sets a flag. The next step returns NET_STEP_DONE.
+ * */
+void	rtu_server_stop(rtu_server_t* server);
+
+/* Name: rtu_server_close
+ * Description: ends the session (the fd stays the caller's). Idempotent.
+ * */
+void	rtu_server_close(rtu_server_t* server);
+
+/* Name: rtu_server_run
+ * Description: init, step until stopped or the peer closes the fd, close.
+ * Returns 0 after a clean stop, non-zero on runtime error.
+ * */
+s32	rtu_server_run(rtu_server_t* server, const rtu_server_options_t* options);
 
 #endif

@@ -10,7 +10,6 @@
 #include "vlib/macros.h"
 #include <errno.h>
 #include <poll.h>
-#include <signal.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -21,18 +20,6 @@
  * boundaries in baud-derived auto mode. Otherwise fall back to a fixed
  * conservative silence gap. frame_gap_ms remains an explicit inter-frame
  * override for compatibility and deterministic testing. */
-
-typedef struct rtu_server_t rtu_server_t;
-struct rtu_server_t
-{
-	rtu_server_options_t	options;
-	rtu_framer_ctx_t	ctx;
-	rng_t			rng;
-	rtu_framer_t		framer;
-	bool			read_closed;
-};
-
-static volatile sig_atomic_t	g_rtu_stop = 0;
 
 static void
 rtu_server_init_ctx(rtu_server_t* server)
@@ -230,42 +217,72 @@ rtu_process_gap_due(rtu_server_t* server, u64 now_ms)
 }
 
 s32
-rtu_server_run(const rtu_server_options_t* options)
+rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 {
-	rtu_server_t	server;
-	u32		gap_ms = rtu_effective_gap_ms(options->frame_gap_ms, options->baud);
+	struct pollfd	pfd = { 0 };
+	int		timeout = 0;
+	u32		gap_ms = rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud);
+	u64		now_ms = clock_now_ms();
 
-	memset(&server, 0, sizeof(server));
-	server.options = *options;
-	rng_seed(&server.rng, options->seed);
-	rtu_framer_init(&server.framer);
-	rtu_server_init_ctx(&server);
-	g_rtu_stop = 0;
-	net_install_stop_handlers(&g_rtu_stop);
-	rtu_log_startup(options, gap_ms);
+	if (server->stop)
+		return NET_STEP_DONE;
 
-	while (!g_rtu_stop)
+	rtu_process_gap_due(server, now_ms);
+	rtu_build_poll(server, &pfd, &timeout, now_ms, gap_ms);
+	if (max_wait_ms >= 0)
+		timeout = MIN(timeout, max_wait_ms);
+	if (poll(&pfd, 1, timeout) < 0)
 	{
-		struct pollfd	pfd = { 0 };
-		int		timeout = 0;
-		u64		now_ms = clock_now_ms();
-
-		rtu_process_gap_due(&server, now_ms);
-		rtu_build_poll(&server, &pfd, &timeout, now_ms, gap_ms);
-		if (poll(&pfd, 1, timeout) < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			LOG_WARN("RTU poll failed: %s", strerror(errno));
-			return 1;
-		}
-
-		now_ms = clock_now_ms();
-		if (!rtu_handle_revents(&server, pfd.revents, now_ms))
-			break;
-		rtu_process_gap_due(&server, now_ms);
+		if (errno == EINTR)
+			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
+		LOG_WARN("RTU poll failed: %s", strerror(errno));
+		return NET_STEP_ERROR;
 	}
 
-	LOG_INFO("RTU stopped");
+	now_ms = clock_now_ms();
+	if (!rtu_handle_revents(server, pfd.revents, now_ms))
+		return NET_STEP_DONE;
+	rtu_process_gap_due(server, now_ms);
+	return NET_STEP_CONTINUE;
+}
+
+void
+rtu_server_stop(rtu_server_t* server)
+{
+	server->stop = 1;
+}
+
+s32
+rtu_server_init(rtu_server_t* server, const rtu_server_options_t* options)
+{
+	memset(server, 0, sizeof(*server));
+	server->options = *options;
+	rng_seed(&server->rng, options->seed);
+	rtu_framer_init(&server->framer);
+	rtu_server_init_ctx(server);
+	rtu_log_startup(options, rtu_effective_gap_ms(options->frame_gap_ms, options->baud));
+	server->open = true;
 	return 0;
+}
+
+void
+rtu_server_close(rtu_server_t* server)
+{
+	if (!server->open)
+		return;
+	server->open = false;
+	LOG_INFO("RTU stopped");
+}
+
+s32
+rtu_server_run(rtu_server_t* server, const rtu_server_options_t* options)
+{
+	s32 rc = rtu_server_init(server, options);
+
+	if (rc != 0)
+		return rc;
+	while ((rc = rtu_server_step(server, -1)) == NET_STEP_CONTINUE)
+		;
+	rtu_server_close(server);
+	return rc == NET_STEP_ERROR ? 1 : 0;
 }
