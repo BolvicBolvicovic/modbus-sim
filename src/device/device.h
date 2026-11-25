@@ -6,6 +6,7 @@
 #include "device/behaviour.h"
 #include "device/encode.h"
 #include "device/fault.h"
+#include "device/value.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -201,8 +202,17 @@ void		device_tick(device_t* dev, u64 now_ms);
 bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty, u16* out);
 
 /* Writes `qty` consecutive addresses. Fails (and writes nothing) if any address is
- * out of range or undefined. A written ramp point becomes static. */
+ * out of range or undefined. A written ramp point becomes static; a machine-driven
+ * point keeps its kind. */
 bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
+
+/* Reads/writes one decoded point value. Machine-driven points use these instead of
+ * raw register access. */
+bool		device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out);
+bool		device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in);
+
+/* Inverse of encode_value(): decodes the first value of a point from raw words. */
+f64		decode_value(value_type_t type, word_order_t order, const u16* words);
 
 /* Adds `length` consecutive file-record register values starting at `record`
  * in file `file_no`. Values are copied into the device arena. Returns NULL on
