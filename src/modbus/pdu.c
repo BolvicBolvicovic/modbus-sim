@@ -1,4 +1,5 @@
 #include "modbus/pdu.h"
+#include "device/machine.h"
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
 #include "modbus/mei_canopen.h"
@@ -1100,6 +1101,7 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 		      fault_decision_t* decision)
 {
 	u32	len            = modbus_handle_pdu(dev, now_ms, req, req_len, resp);
+	fault_set_t faults = device_effective_faults(dev);
 	u8	fc             = (req_len == 0) ? 0 : req[0];
 	bool	real_exception = len >= 2 && (resp[0] & 0x80) != 0;
 	u8	real_code      = real_exception ? resp[1] : 0;
@@ -1108,7 +1110,7 @@ modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 	                         fc != FC_GET_COM_EVENT_COUNTER &&
 	                         fc != FC_GET_COM_EVENT_LOG;
 
-	*decision = fault_decide(&dev->faults, rng);
+	*decision = fault_decide(&faults, rng);
 
 	/* The request was already processed above; faults only alter the response. */
 	if (decision->exception_code != 0)

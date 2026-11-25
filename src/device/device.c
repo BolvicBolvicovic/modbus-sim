@@ -64,6 +64,7 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->diag_overrun_count     = 0;
 	dev->listen_only            = false;
 	dev->start_ms               = start_ms;
+	dev->now_ms                 = start_ms;
 	strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], "mogbus");
 	strcpy(dev->device_id[DEVICE_ID_PRODUCT_CODE], "mogbus");
 	strcpy(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "1.0");
@@ -153,6 +154,7 @@ device_add_point(device_t* dev, const point_t* point)
 void
 device_tick(device_t* dev, u64 now_ms)
 {
+	dev->now_ms = now_ms;
 	for (u32 i = 0; i < dev->point_count; i++)
 	{
 		if (dev->points[i].kind != POINT_RAMP)
@@ -212,19 +214,27 @@ device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty, u16* 
 bool
 device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in)
 {
-	space_t*	table = &dev->spaces[space];
+	space_t* table = &dev->spaces[space];
 
 	if (!range_is_defined(table, address, qty))
 		return false;
+	for (u32 i = 0; i < qty; i++)
+	{
+		u16 owner = table->owner[address + i];
+
+		if (dev->points[owner - 1].kind == POINT_MACHINE)
+			return false;
+	}
 
 	for (u32 i = 0; i < qty; i++)
 	{
-		u16	owner = table->owner[address + i];
+		u16 owner = table->owner[address + i];
 
 		table->value[address + i] = in[i];
 		if (dev->points[owner - 1].kind != POINT_MACHINE)
 			dev->points[owner - 1].kind = POINT_STATIC;
 	}
+	device_machines_on_write(dev, space, address, qty, dev->now_ms);
 	return true;
 }
 

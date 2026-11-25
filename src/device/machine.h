@@ -13,8 +13,16 @@
 #define MACHINE_MAX_STATEMENTS    128
 #define MACHINE_MAX_EXPR_NODES    512
 #define MACHINE_MAX_FIRINGS       64
+#define MACHINE_MAX_WRITE_HANDLERS 16
 #define MACHINE_EVAL_BUDGET       1000
 #define MACHINE_NAME_MAX          64
+
+typedef enum machine_role_t machine_role_t;
+enum machine_role_t
+{
+	MACHINE_ROLE_ENTER, MACHINE_ROLE_TICK, MACHINE_ROLE_EXIT,
+	MACHINE_ROLE_WHEN, MACHINE_ROLE_WRITE, MACHINE_ROLE_COUNT,
+};
 
 /* Machine runtime descriptions. T4 fills these while reading the config; the
  * runtime deep-copies them into the device arena and never touches s7. */
@@ -72,6 +80,14 @@ struct machine_stmt_t
 	u16	child_count;		/* number of child statements */
 };
 
+typedef struct machine_write_handler_t machine_write_handler_t;
+struct machine_write_handler_t
+{
+	u16	first, count;	/* statements run on a successful client write */
+	u8	space;		/* configured point to watch */
+	u32	address;
+};
+
 typedef struct machine_state_def_t machine_state_def_t;
 struct machine_state_def_t
 {
@@ -79,6 +95,7 @@ struct machine_state_def_t
 	u16	on_enter_first, on_enter_count;
 	u16	on_tick_first,  on_tick_count;
 	u16	on_exit_first,  on_exit_count;
+	fault_set_t faults;	/* active-state overlay on the device faults */
 };
 
 typedef struct machine_transition_def_t machine_transition_def_t;
@@ -97,10 +114,15 @@ struct machine_def_t
 {
 	char	name[MACHINE_NAME_MAX];
 	u16	initial_state;
+	bool	has_state_register;
+	u8	state_register_space;
+	u32	state_register_address;
 	u16	var_count;
 	machine_var_def_t vars[MACHINE_MAX_VARS];
 	u16	state_count;
 	machine_state_def_t states[MACHINE_MAX_STATES];
+	u16	write_handler_count;
+	machine_write_handler_t write_handlers[MACHINE_MAX_WRITE_HANDLERS];
 	u16	transition_count;
 	machine_transition_def_t transitions[MACHINE_MAX_TRANSITIONS];
 	u16	statement_count;
@@ -124,8 +146,8 @@ struct machine_system_t
 	u64		advanced_to[MACHINE_MAX_MACHINES];
 	val_t		vars[MACHINE_MAX_MACHINES][MACHINE_MAX_VARS];
 	u64		deadline[MACHINE_MAX_MACHINES][MACHINE_MAX_TRANSITIONS];
-	/* [machine][state][handler] bitmask of failure kinds already warned about. */
-	u8		warned[MACHINE_MAX_MACHINES][MACHINE_MAX_STATES][4];
+	/* [machine][state][role] bitmask of failure kinds already warned about. */
+	u8		warned[MACHINE_MAX_MACHINES][MACHINE_MAX_STATES][MACHINE_ROLE_COUNT];
 	bool		cap_warned[MACHINE_MAX_MACHINES];
 };
 
@@ -149,5 +171,17 @@ void		device_seed_machines(device_t* dev, u64 server_seed);
 
 /* Advances every machine in declaration order. Called by device_tick. */
 void		device_machines_advance(device_t* dev, u64 now_ms);
+
+/* Runs on-write handlers whose point overlaps [address, address + qty) after a
+ * successful client write. Does not fire transitions. */
+void		device_machines_on_write(device_t* dev, space_kind_t space, u32 address,
+					 u32 qty, u64 now_ms);
+
+/* Device faults overridden by the active state of each machine, in declaration
+ * order (the earliest machine wins for each kind). */
+fault_set_t	device_effective_faults(const device_t* dev);
+
+/* True if any machine state configures `kind`, even if that state is inactive. */
+bool		device_machine_fault_present(const device_t* dev, fault_kind_t kind);
 
 #endif
