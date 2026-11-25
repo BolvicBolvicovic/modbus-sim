@@ -358,7 +358,7 @@ request modifies no file records. FC 21 can update only configured file-record r
 
 ## Unit ids
 
-Each `(device ...)` answers to its own `(unit-id N)`. There is no "any unit id" mode: a client
+Each `(device ...)` must set `(unit-id N)` and answers only to that id. There is no "any unit id" mode: a client
 using the wrong id gets exception 0B. If a client sends 255 or 0 by default, set the device's
 `unit-id` to match.
 

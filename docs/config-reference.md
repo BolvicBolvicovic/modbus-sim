@@ -172,7 +172,7 @@ carries the same frames over TCP and accepts only `mode`, `port`, `bind`, `seed`
 | Entry | Meaning | Default |
 |---|---|---|
 | `(name "Text")` | Name shown in logs and `--check`, up to 63 characters | `"unnamed"` |
-| `(unit-id N)` | Modbus unit id (slave address). TCP: 0-255. RTU/ASCII: 1-247 (`0` is broadcast, `248-255` reserved by Modbus serial spec) | `1` |
+| `(unit-id N)` | Modbus unit id (slave address). TCP: 0-255. RTU/ASCII: 1-247 (`0` is broadcast, `248-255` reserved by Modbus serial spec). Required, at most once per device | required |
 | `(exception-status N)` | Byte returned by Read Exception Status (FC 07), 0-255 | `0` |
 | `(server-id N)` | Server ID byte returned by Report Server ID (FC 17), 0-255 | `0` |
 | `(run-indicator N)` | Run Indicator Status byte returned by Report Server ID (FC 17), 0-255 (`0xFF` ON/run, `0x00` OFF by convention) | `255` |
@@ -207,7 +207,7 @@ The mandatory objects and optional regular objects use `(vendor-name "Text")`,
 Extended objects use this exact syntax and may be repeated in any order:
 
 ```scheme
-(device
+(device (unit-id 1)
   (holding 0)
   (device-id-object 128 "First extended object")
   (device-id-object 255 "Last extended object"))
@@ -237,7 +237,7 @@ Every configured object is readable and writable through MEI `0x0D` SDO transfer
 offset within its configured data. Undefined objects and out-of-range transfers are rejected.
 
 ```scheme
-(device
+(device (unit-id 1)
   (canopen-object 5 #x6041 0 "17020000")
   (canopen-object 5 #x6041 1 "AABB"))
 ```
@@ -719,7 +719,7 @@ conditions.
 ```
 
 ```scheme
-(device
+(device (unit-id 1)
   (com-status 0)
   (com-event 128)
   (com-event 255)
@@ -759,6 +759,8 @@ is wrong and show the entry. Common ones:
 | `server: broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)` | ASCII never executes broadcasts; remove the entry |
 | `server: (path ...) is required in rtu-device and ascii-device modes` | Add `(path "PATH")` |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
+| `device 'A': missing (unit-id N); every device must set its Modbus unit id` | Add `(unit-id N)` to the device |
+| `device 'A': unit-id is given more than once` | Keep a single `(unit-id N)` entry |
 | `only one is allowed per kind` | A fault kind may be defined only once per device or per state; combine different kinds instead |
 | `missing required option (code ...)` | `(kind exception)` needs `(code N)` |
 | `code is only valid for kind exception` | Remove `(code ...)` from other fault kinds |

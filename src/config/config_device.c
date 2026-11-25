@@ -712,7 +712,8 @@ bool
 config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
 		    u64 start_ms, device_t** out)
 {
-	device_t*	dev = device_new(arena, start_ms);
+	device_t*	dev         = device_new(arena, start_ms);
+	bool		has_unit_id = false;
 
 	if (!dev)
 		return form_fail(ctx, "out of memory while creating a device");
@@ -720,9 +721,21 @@ config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
 	strcpy(dev->name, "unnamed");
 	for (s7_pointer p = s7_cdr(form); s7_is_pair(p); p = s7_cdr(p))
 	{
+		const char* head = form_head_name(s7_car(p));
+
+		if (head && strcmp(head, "unit-id") == 0)
+		{
+			if (has_unit_id)
+				return form_fail(ctx, "device '%s': unit-id is given more than once", dev->name);
+			has_unit_id = true;
+		}
 		if (!parse_item(ctx, s7_car(p), dev))
 			return false;
 	}
+	/* Clients address devices by unit id, so it is never implied. */
+	if (!has_unit_id)
+		return form_fail(ctx, "device '%s': missing (unit-id N); every device must set its Modbus unit id",
+				 dev->name);
 
 	if (!config_machine_check_points(ctx, dev))
 		return false;

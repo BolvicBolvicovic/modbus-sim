@@ -92,7 +92,7 @@ TEST(ConfigCountExpandsConsecutiveAddresses)
 	char		err[256] = "";
 	u16		out[16];
 
-	ASSERT_SUCCESS(load_text("(device (coil 0 (count 16) (static on)) (holding 10 (type u32) (count 2) (static 7)))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (coil 0 (count 16) (static on)) (holding 10 (type u32) (count 2) (static 7)))",
 				 &config, err, sizeof(err)));
 	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_COIL, 0, 16, out));
 	ASSERT_EQ(out[15] == 1);
@@ -119,7 +119,7 @@ TEST(ConfigDefaults)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
 	ASSERT_EQ(config.idle_timeout_ms == CONFIG_DEFAULT_IDLE_TIMEOUT_MS);
 	ASSERT_EQ(config.frame_gap_ms == 0);
@@ -132,20 +132,38 @@ TEST(ConfigDefaults)
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 }
 
+TEST(ConfigDeviceRequiresUnitId)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_FAILURE(load_text("(device (name \"pump\") (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "device 'pump': missing (unit-id N)") != NULL);
+	ASSERT_FAILURE(load_text("(device)", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "missing (unit-id N)") != NULL);
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (holding 0)) (device (holding 1))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "missing (unit-id N)") != NULL);
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (unit-id 2) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "unit-id is given more than once") != NULL);
+	ASSERT_SUCCESS(load_text("(device (unit-id 0) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->unit_id == 0);
+}
+
 TEST(ConfigRampBounceStepLimitBoundaries)
 {
 	config_t	config = { 0 };
 	char		err[256] = "";
 
 	ASSERT_SUCCESS(load_text(
-		"(device (holding 0 (ramp (from 0) (to 4611686018427387904.0) (step 1) (mode bounce))))",
+		"(device (unit-id 1) (holding 0 (ramp (from 0) (to 4611686018427387904.0) (step 1) (mode bounce))))",
 		&config, err, sizeof(err)));
 	ASSERT_FAILURE(load_text(
-		"(device (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))",
+		"(device (unit-id 1) (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "ramp range is too large for the step") != NULL);
 	ASSERT_FAILURE(load_text(
-		"(device (holding 0 (ramp (from 0) (to 9223372036854777856.0) (step 1) (mode bounce))))",
+		"(device (unit-id 1) (holding 0 (ramp (from 0) (to 9223372036854777856.0) (step 1) (mode bounce))))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "ramp range is too large for the step") != NULL);
 }
@@ -155,7 +173,7 @@ TEST(ConfigFaultIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (fault (kind delay) (delay-ms 300) (percent 40)) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (fault (kind delay) (delay-ms 300) (percent 40)) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_DELAY));
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_DELAY].delay_ms == 300);
@@ -167,13 +185,13 @@ TEST(ConfigFaultExceptionAndCorruptAreParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (fault (kind exception) (code 4)) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (fault (kind exception) (code 4)) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_EXCEPTION));
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].exception_code == 4);
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].percent == 100);
 
-	ASSERT_SUCCESS(load_text("(device (fault (kind corrupt) (percent 25)) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (fault (kind corrupt) (percent 25)) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_CORRUPT));
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].exception_code == 0);
@@ -189,7 +207,7 @@ TEST(ConfigFaultAcceptsEveryStandardExceptionCode)
 
 	for (u32 i = 0; i < sizeof(codes) / sizeof(codes[0]); i++)
 	{
-		snprintf(text, sizeof(text), "(device (fault (kind exception) (code %u)) (holding 0))",
+		snprintf(text, sizeof(text), "(device (unit-id 1) (fault (kind exception) (code %u)) (holding 0))",
 			 codes[i]);
 		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 		ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_EXCEPTION].exception_code == codes[i]);
@@ -202,7 +220,7 @@ TEST(ConfigAcceptsMultipleDifferentFaultKinds)
 	char		err[256] = "";
 
 	ASSERT_SUCCESS(load_text(
-		"(device (fault (kind delay) (delay-ms 200) (percent 30))"
+		"(device (unit-id 1) (fault (kind delay) (delay-ms 200) (percent 30))"
 		" (fault (kind drop) (percent 20))"
 		" (fault (kind exception) (code 4) (percent 10))"
 		" (fault (kind corrupt) (percent 5))"
@@ -223,11 +241,11 @@ TEST(ConfigAcceptsMultipleDifferentFaultKinds)
 TEST(ConfigRejectsDuplicateFaultKind)
 {
 	static const char* const texts[] = {
-		"(device (fault (kind delay) (delay-ms 1)) (fault (kind delay) (delay-ms 2)))",
-		"(device (fault (kind drop)) (fault (kind drop)))",
-		"(device (fault (kind exception) (code 2)) (fault (kind exception) (code 3)))",
-		"(device (fault (kind corrupt)) (fault (kind corrupt)))",
-		"(device (fault (kind disconnect)) (fault (kind disconnect)))",
+		"(device (unit-id 1) (fault (kind delay) (delay-ms 1)) (fault (kind delay) (delay-ms 2)))",
+		"(device (unit-id 1) (fault (kind drop)) (fault (kind drop)))",
+		"(device (unit-id 1) (fault (kind exception) (code 2)) (fault (kind exception) (code 3)))",
+		"(device (unit-id 1) (fault (kind corrupt)) (fault (kind corrupt)))",
+		"(device (unit-id 1) (fault (kind disconnect)) (fault (kind disconnect)))",
 	};
 	static const char* const kinds[] = { "delay", "drop", "exception", "corrupt", "disconnect" };
 	config_t	config = { 0 };
@@ -254,7 +272,7 @@ TEST(ConfigDisconnectFaultModeRestrictions)
 				SERVER_MODES[i].mode == SERVER_MODE_ASCII_TCP;
 
 		snprintf(text, sizeof(text),
-			 "(server (mode %s)%s) (device (fault (kind disconnect) (percent 20)) (holding 0))",
+			 "(server (mode %s)%s) (device (unit-id 1) (fault (kind disconnect) (percent 20)) (holding 0))",
 			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
 		if (tcp_like)
 		{
@@ -276,12 +294,12 @@ TEST(ConfigFaultRestartAndSensorDisconnectAreParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (fault (kind restart) (percent 40)) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (fault (kind restart) (percent 40)) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_RESTART));
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_RESTART].percent == 40);
 
-	ASSERT_SUCCESS(load_text("(device (fault (kind sensor-disconnect) (percent 60)) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (fault (kind sensor-disconnect) (percent 60)) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->faults.present == FAULT_BIT(FAULT_SENSOR_DISCONNECT));
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_SENSOR_DISCONNECT].percent == 60);
@@ -293,11 +311,11 @@ TEST(ConfigFaultCorruptModesAreParsed)
 		const char*		text;
 		fault_corrupt_mode_t	mode;
 	} cases[] = {
-		{ "(device (fault (kind corrupt) (percent 10)) (holding 0))",
+		{ "(device (unit-id 1) (fault (kind corrupt) (percent 10)) (holding 0))",
 		  FAULT_CORRUPT_PDU },
-		{ "(device (fault (kind corrupt) (mode pdu) (percent 10)) (holding 0))",
+		{ "(device (unit-id 1) (fault (kind corrupt) (mode pdu) (percent 10)) (holding 0))",
 		  FAULT_CORRUPT_PDU },
-		{ "(device (fault (kind corrupt) (mode register) (percent 10)) (holding 0))",
+		{ "(device (unit-id 1) (fault (kind corrupt) (mode register) (percent 10)) (holding 0))",
 		  FAULT_CORRUPT_REGISTER },
 	};
 	config_t	config = { 0 };
@@ -313,7 +331,7 @@ TEST(ConfigFaultCorruptModesAreParsed)
 
 	ASSERT_SUCCESS(load_text(
 		"(server (mode rtu-tcp))"
-		" (device (fault (kind corrupt) (mode checksum) (percent 10)) (holding 0))",
+		" (device (unit-id 1) (fault (kind corrupt) (mode checksum) (percent 10)) (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->faults.by_kind[FAULT_CORRUPT].corrupt_mode ==
 		  FAULT_CORRUPT_CHECKSUM);
@@ -321,9 +339,9 @@ TEST(ConfigFaultCorruptModesAreParsed)
 
 TEST(ConfigFaultModeRejectedForNonCorruptKinds)
 {
-	EXPECT_ERROR("(device (fault (kind drop) (mode pdu)) (holding 0))",
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (mode pdu)) (holding 0))",
 		     "mode is only valid for kind corrupt");
-	EXPECT_ERROR("(device (fault (kind restart) (mode register)) (holding 0))",
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind restart) (mode register)) (holding 0))",
 		     "mode is only valid for kind corrupt");
 }
 
@@ -336,7 +354,7 @@ TEST(ConfigCorruptChecksumModeRestrictions)
 	for (u32 i = 0; i < ARRAY_COUNT(SERVER_MODES); i++)
 	{
 		snprintf(text, sizeof(text),
-			 "(server (mode %s)%s) (device (fault (kind corrupt) (mode checksum)) (holding 0))",
+			 "(server (mode %s)%s) (device (unit-id 1) (fault (kind corrupt) (mode checksum)) (holding 0))",
 			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
 		if (SERVER_MODES[i].mode == SERVER_MODE_TCP)
 		{
@@ -384,7 +402,7 @@ TEST(ConfigFaultScheduleIsParsed)
 	fault_t*	fault  = NULL;
 
 	ASSERT_SUCCESS(load_text(
-		"(device (fault (kind drop)"
+		"(device (unit-id 1) (fault (kind drop)"
 		" (schedule (step (after-ms 100) (count 2))"
 		"           (step (after-ms 50) (count 3)))) (holding 0))",
 		&config, err, sizeof(err)));
@@ -400,36 +418,36 @@ TEST(ConfigFaultScheduleRejectsBadShapes)
 	char	text[1024];
 	size_t	used = 0;
 
-	EXPECT_ERROR("(device (fault (kind drop) (schedule)) (holding 0))",
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (schedule)) (holding 0))",
 		     "schedule needs at least one");
-	EXPECT_ERROR("(device (fault (kind drop) (schedule (step (count 1)))) (holding 0))",
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (schedule (step (count 1)))) (holding 0))",
 		     "missing required option (after-ms ...)");
-	EXPECT_ERROR("(device (fault (kind drop) (schedule (step (after-ms 1)))) (holding 0))",
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (schedule (step (after-ms 1)))) (holding 0))",
 		     "missing required option (count ...)");
-	EXPECT_ERROR("(device (fault (kind drop)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)"
 		     " (schedule (step (after-ms 1) (count 1) (bogus 2)))) (holding 0))",
 		     "unknown option 'bogus'");
-	EXPECT_ERROR("(device (fault (kind drop)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)"
 		     " (schedule (step (after-ms 1) (after-ms 2) (count 1)))) (holding 0))",
 		     "given more than once");
-	EXPECT_ERROR("(device (fault (kind drop)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)"
 		     " (schedule (step (after-ms -1) (count 1)))) (holding 0))",
 		     "between 0 and 86400000");
-	EXPECT_ERROR("(device (fault (kind drop)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)"
 		     " (schedule (step (after-ms 86400001) (count 1)))) (holding 0))",
 		     "between 0 and 86400000");
-	EXPECT_ERROR("(device (fault (kind drop)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)"
 		     " (schedule (step (after-ms 1) (count 0)))) (holding 0))",
 		     "between 1 and 1000000");
-	EXPECT_ERROR("(device (fault (kind drop)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)"
 		     " (schedule (step (after-ms 1) (count 1000001)))) (holding 0))",
 		     "between 1 and 1000000");
-	EXPECT_ERROR("(device (fault (kind drop) (percent 5)"
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (percent 5)"
 		     " (schedule (step (after-ms 1) (count 1)))) (holding 0))",
 		     "percent cannot be combined with schedule");
 
 	used = (size_t)snprintf(text, sizeof(text),
-				"(device (fault (kind drop) (schedule");
+				"(device (unit-id 1) (fault (kind drop) (schedule");
 	for (u32 i = 0; i < FAULT_MAX_SCHEDULE_STEPS + 1; i++)
 		used += (size_t)snprintf(text + used, sizeof(text) - used,
 					 " (step (after-ms 1) (count 1))");
@@ -442,11 +460,11 @@ TEST(ConfigExceptionStatusIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (exception-status 255) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (exception-status 255) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->exception_status == 255);
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->exception_status == 0);
 }
 
@@ -455,7 +473,7 @@ TEST(ConfigExceptionStatusRejectsOutOfRange)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(device (exception-status 256) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (exception-status 256) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
 }
 
@@ -464,12 +482,12 @@ TEST(ConfigReportServerIdIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (server-id 42) (run-indicator 0) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (server-id 42) (run-indicator 0) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->server_id == 42);
 	ASSERT_EQ(config.devices[0]->run_indicator == 0);
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->server_id == 0);
 	ASSERT_EQ(config.devices[0]->run_indicator == 0xFF);
 }
@@ -479,10 +497,10 @@ TEST(ConfigReportServerIdRejectsOutOfRange)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(device (server-id 256) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (server-id 256) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
 
-	ASSERT_FAILURE(load_text("(device (run-indicator 256) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (run-indicator 256) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "between 0 and 255") != NULL);
 }
 
@@ -491,7 +509,7 @@ TEST(ConfigServerIdAdditionalDataIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (server-id-additional-data \"00fFa510\") (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (server-id-additional-data \"00fFa510\") (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == 4);
 	ASSERT_EQ(config.devices[0]->server_id_additional_data[0] == 0x00);
@@ -499,11 +517,11 @@ TEST(ConfigServerIdAdditionalDataIsParsed)
 	ASSERT_EQ(config.devices[0]->server_id_additional_data[2] == 0xA5);
 	ASSERT_EQ(config.devices[0]->server_id_additional_data[3] == 0x10);
 
-	ASSERT_SUCCESS(load_text("(device (server-id-additional-data \"\") (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (server-id-additional-data \"\") (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == 0);
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == 0);
 }
 
@@ -517,7 +535,7 @@ TEST(ConfigServerIdAdditionalDataAcceptsMaxLength)
 	for (u32 i = 0; i < 2 * DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX; i++)
 		hex[i] = (i % 2 == 0) ? 'A' : (char)('0' + (i / 2) % 10);
 	hex[2 * DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX] = '\0';
-	snprintf(text, sizeof(text), "(device (server-id-additional-data \"%s\"))", hex);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (server-id-additional-data \"%s\"))", hex);
 
 	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->server_id_additional_data_len == DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX);
@@ -530,13 +548,13 @@ TEST(ConfigServerIdAdditionalDataRejectsInvalidHex)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(device (server-id-additional-data \"abc\"))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (server-id-additional-data \"abc\"))", &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "even number of hex digits") != NULL);
 
-	ASSERT_FAILURE(load_text("(device (server-id-additional-data \"00gg\"))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (server-id-additional-data \"00gg\"))", &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "invalid hex digit") != NULL);
 
-	ASSERT_FAILURE(load_text("(device (server-id-additional-data 1234))", &config, err, sizeof(err)));
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (server-id-additional-data 1234))", &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "expected text in double quotes") != NULL);
 }
 
@@ -549,7 +567,7 @@ TEST(ConfigServerIdAdditionalDataRejectsOverLength)
 
 	memset(hex, '0', sizeof(hex) - 1);
 	hex[sizeof(hex) - 1] = '\0';
-	snprintf(text, sizeof(text), "(device (server-id-additional-data \"%s\"))", hex);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (server-id-additional-data \"%s\"))", hex);
 
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too many hex digits") != NULL);
@@ -561,30 +579,30 @@ TEST(ConfigComStatusIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (com-status 65535) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (com-status 65535) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->com_status == 0xFFFF);
 
-	ASSERT_SUCCESS(load_text("(device (com-status 0) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (com-status 0) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->com_status == 0);
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->com_status == 0);
 }
 
 TEST(ConfigComStatusRejectsOtherValues)
 {
-	EXPECT_ERROR("(device (com-status 1) (holding 0))", "must be 0 (ready) or 65535 (busy)");
-	EXPECT_ERROR("(device (com-status 65534) (holding 0))", "must be 0 (ready) or 65535 (busy)");
-	EXPECT_ERROR("(device (com-status -1) (holding 0))", "between 0 and 65535");
-	EXPECT_ERROR("(device (com-status 65536) (holding 0))", "between 0 and 65535");
-	EXPECT_ERROR("(device (com-status \"busy\") (holding 0))", "whole number");
+	EXPECT_ERROR("(device (unit-id 1) (com-status 1) (holding 0))", "must be 0 (ready) or 65535 (busy)");
+	EXPECT_ERROR("(device (unit-id 1) (com-status 65534) (holding 0))", "must be 0 (ready) or 65535 (busy)");
+	EXPECT_ERROR("(device (unit-id 1) (com-status -1) (holding 0))", "between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (com-status 65536) (holding 0))", "between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (com-status \"busy\") (holding 0))", "whole number");
 }
 
-/* Builds (device (holding 0) (com-event 0) ... ) with `count` event entries. */
+/* Builds (device (unit-id 1) (holding 0) (com-event 0) ... ) with `count` event entries. */
 static void
 make_com_event_config(char* buf, u32 size, u32 count)
 {
-	u32	used = (u32)snprintf(buf, size, "(device (holding 0)");
+	u32	used = (u32)snprintf(buf, size, "(device (unit-id 1) (holding 0)");
 
 	for (u32 i = 0; i < count; i++)
 		used += (u32)snprintf(buf + used, size - used, " (com-event %u)", i);
@@ -596,14 +614,14 @@ TEST(ConfigComEventsAreParsedInOrder)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (com-event 0) (com-event 255) (com-event 7) (holding 0))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (com-event 0) (com-event 255) (com-event 7) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->com_event_log_count == 3);
 	ASSERT_EQ(config.devices[0]->com_events[0] == 0);
 	ASSERT_EQ(config.devices[0]->com_events[1] == 255);
 	ASSERT_EQ(config.devices[0]->com_events[2] == 7);
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->com_event_log_count == 0);
 }
 
@@ -630,9 +648,9 @@ TEST(ConfigComEventsRejectOverMaxAndInvalidValues)
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too many (com-event ...) entries (max 64)") != NULL);
 
-	EXPECT_ERROR("(device (com-event 256) (holding 0))", "between 0 and 255");
-	EXPECT_ERROR("(device (com-event -1) (holding 0))", "between 0 and 255");
-	EXPECT_ERROR("(device (com-event \"x\") (holding 0))", "whole number");
+	EXPECT_ERROR("(device (unit-id 1) (com-event 256) (holding 0))", "between 0 and 255");
+	EXPECT_ERROR("(device (unit-id 1) (com-event -1) (holding 0))", "between 0 and 255");
+	EXPECT_ERROR("(device (unit-id 1) (com-event \"x\") (holding 0))", "whole number");
 }
 
 TEST(ConfigDeviceIdentificationDefaultsAndOverrides)
@@ -640,14 +658,14 @@ TEST(ConfigDeviceIdentificationDefaultsAndOverrides)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME], "mogbus") == 0);
 	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_PRODUCT_CODE], "mogbus") == 0);
 	ASSERT_EQ(strcmp(config.devices[0]->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], "1.0") == 0);
 	ASSERT_EQ(config.devices[0]->device_id[DEVICE_ID_VENDOR_URL][0] == '\0');
 
 	ASSERT_SUCCESS(load_text(
-		"(device (vendor-name \"Acme\") (product-code \"P1\") (major-minor-revision \"2.3\")"
+		"(device (unit-id 1) (vendor-name \"Acme\") (product-code \"P1\") (major-minor-revision \"2.3\")"
 		"        (vendor-url \"https://acme.invalid\") (product-name \"Sim\")"
 		"        (model-name \"M\") (user-application-name \"App\") (holding 0))",
 		&config, err, sizeof(err)));
@@ -669,7 +687,7 @@ TEST(ConfigDeviceIdentificationRejectsTooLong)
 
 	memset(longv, 'x', 245);
 	longv[245] = '\0';
-	snprintf(text, sizeof(text), "(device (vendor-name \"%s\") (holding 0))", longv);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (vendor-name \"%s\") (holding 0))", longv);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "vendor-name is too long") != NULL);
 	ASSERT_EQ(strstr(err, "FC 43 / 0x2B MEI 14") != NULL);
@@ -684,7 +702,7 @@ TEST(ConfigDeviceIdentificationAcceptsMaxSize)
 
 	memset(maxv, 'V', 244);
 	maxv[244] = '\0';
-	snprintf(text, sizeof(text), "(device (vendor-name \"%s\") (holding 0))", maxv);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (vendor-name \"%s\") (holding 0))", maxv);
 	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strlen(config.devices[0]->device_id[DEVICE_ID_VENDOR_NAME]) == 244);
 }
@@ -694,11 +712,11 @@ TEST(ConfigDeviceIdObjectDefaultsAndAscendingOrder)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->extended_id_count == 0);
 
 	ASSERT_SUCCESS(load_text(
-		"(device (device-id-object 200 \"last\") (device-id-object 128 \"first\")"
+		"(device (unit-id 1) (device-id-object 200 \"last\") (device-id-object 128 \"first\")"
 		"        (device-id-object 150 \"middle\") (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.devices[0]->extended_id_count == 3);
@@ -718,7 +736,7 @@ TEST(ConfigDeviceIdObjectMaxCount)
 	u32		off = 0;
 	char		buf[80];
 
-	off += (u32)snprintf(text + off, sizeof(text) - off, "(device");
+	off += (u32)snprintf(text + off, sizeof(text) - off, "(device (unit-id 1)");
 	for (u32 i = 0; i < DEVICE_MAX_EXTENDED_IDS; i++)
 		off += (u32)snprintf(text + off, sizeof(text) - off,
 				    " (device-id-object %u \"v%u\")", 128 + i, i);
@@ -732,7 +750,7 @@ TEST(ConfigDeviceIdObjectMaxCount)
 
 	config = (config_t){ 0 };
 	off = 0;
-	off += (u32)snprintf(text + off, sizeof(text) - off, "(device");
+	off += (u32)snprintf(text + off, sizeof(text) - off, "(device (unit-id 1)");
 	for (u32 i = 0; i <= DEVICE_MAX_EXTENDED_IDS; i++)
 		off += (u32)snprintf(text + off, sizeof(text) - off,
 				    " (device-id-object %u \"v%u\")", 128 + i, i);
@@ -746,11 +764,11 @@ TEST(ConfigDeviceIdObjectRejectsInvalidIds)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(device (device-id-object 127 \"x\") (holding 0))",
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (device-id-object 127 \"x\") (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "device-id-object ID must be between 128 and 255") != NULL);
 
-	ASSERT_FAILURE(load_text("(device (device-id-object 256 \"x\") (holding 0))",
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (device-id-object 256 \"x\") (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "device-id-object ID must be between 128 and 255") != NULL);
 }
@@ -761,7 +779,7 @@ TEST(ConfigDeviceIdObjectRejectsDuplicateIds)
 	char		err[256] = "";
 
 	ASSERT_FAILURE(load_text(
-		"(device (device-id-object 200 \"a\") (device-id-object 200 \"b\") (holding 0))",
+		"(device (unit-id 1) (device-id-object 200 \"a\") (device-id-object 200 \"b\") (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "device-id-object 200 is configured more than once") != NULL);
 }
@@ -773,32 +791,32 @@ TEST(ConfigDeviceIdObjectRejectsEmptyAndOverlongText)
 	char		text[512];
 	char		longv[246];
 
-	ASSERT_FAILURE(load_text("(device (device-id-object 128 \"\") (holding 0))",
+	ASSERT_FAILURE(load_text("(device (unit-id 1) (device-id-object 128 \"\") (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "device-id-object text must not be empty") != NULL);
 
 	memset(longv, 'x', 245);
 	longv[245] = '\0';
-	snprintf(text, sizeof(text), "(device (device-id-object 128 \"%s\") (holding 0))", longv);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (device-id-object 128 \"%s\") (holding 0))", longv);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "device-id-object text is too long") != NULL);
 }
 
 TEST(ConfigErrorsAreReadable)
 {
-	EXPECT_ERROR("(device (holding 0 (static 1))", "syntax error");
-	EXPECT_ERROR("(device (holding 0 (statik 1)))", "unknown option 'statik'");
-	EXPECT_ERROR("(device (holding 70000))", "between 0 and 65535");
-	EXPECT_ERROR("(device (holding 0 (static \"x\")))", "expected a number");
-	EXPECT_ERROR("(device (coil 0 (ramp (from 0) (to 1))))", "can only be (static on/off)");
-	EXPECT_ERROR("(device (holding 0 (ramp (from 0))))", "missing required option (to");
-	EXPECT_ERROR("(device (holding 0) (holding 0))", "already used");
-	EXPECT_ERROR("(device (fault (kind drop)) (fault (kind drop)))", "only one is allowed");
-	EXPECT_ERROR("(device (holding 0) (frobnicate 1))", "unknown item 'frobnicate'");
-	EXPECT_ERROR("(server (port 1)) (server (port 2)) (device (holding 0))", "more than one (server");
-	EXPECT_ERROR("(device (holding 0 (ramp (from 0) (to 1e30))))", "too large for the step");
-	EXPECT_ERROR("(device (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))", "too large for the step");
-	EXPECT_ERROR("(device (holding 0 (ramp (from 0) (to 9223372036854777856.0) (step 1) (mode bounce))))", "too large for the step");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (static 1))", "syntax error");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (statik 1)))", "unknown option 'statik'");
+	EXPECT_ERROR("(device (unit-id 1) (holding 70000))", "between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (static \"x\")))", "expected a number");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (ramp (from 0) (to 1))))", "can only be (static on/off)");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (ramp (from 0))))", "missing required option (to");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (holding 0))", "already used");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop)) (fault (kind drop)))", "only one is allowed");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (frobnicate 1))", "unknown item 'frobnicate'");
+	EXPECT_ERROR("(server (port 1)) (server (port 2)) (device (unit-id 1) (holding 0))", "more than one (server");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (ramp (from 0) (to 1e30))))", "too large for the step");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))", "too large for the step");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (ramp (from 0) (to 9223372036854777856.0) (step 1) (mode bounce))))", "too large for the step");
 	EXPECT_ERROR("(server (port 1))", "no (device");
 	EXPECT_ERROR("(device (unit-id 1)) (device (unit-id 1))", "both use unit-id 1");
 	EXPECT_ERROR("(oops)", "unknown top-level form 'oops'");
@@ -806,20 +824,20 @@ TEST(ConfigErrorsAreReadable)
 
 TEST(ConfigFaultValidationErrorsAreReadable)
 {
-	EXPECT_ERROR("(device (fault (kind exception)) (holding 0))", "missing required option (code ...)");
-	EXPECT_ERROR("(device (fault (kind exception) (code 9)) (holding 0))", "code 9 is reserved");
-	EXPECT_ERROR("(device (fault (kind exception) (code 12)) (holding 0))", "must be between 1 and 11");
-	EXPECT_ERROR("(device (fault (kind exception) (code 0)) (holding 0))", "must be between 1 and 11");
-	EXPECT_ERROR("(device (fault (kind exception) (code \"4\")) (holding 0))", "expected a whole number");
-	EXPECT_ERROR("(device (fault (kind drop) (code 4)) (holding 0))", "code is only valid for kind exception");
-	EXPECT_ERROR("(device (fault (kind corrupt) (code 4)) (holding 0))", "code is only valid for kind exception");
-	EXPECT_ERROR("(device (fault (kind drop) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
-	EXPECT_ERROR("(device (fault (kind exception) (code 4) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
-	EXPECT_ERROR("(device (fault (kind corrupt) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
-	EXPECT_ERROR("(device (fault (kind exception) (code 4) (code 5)) (holding 0))", "given more than once");
-	EXPECT_ERROR("(device (fault (kind disconnect) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
-	EXPECT_ERROR("(device (fault (kind disconnect) (code 4)) (holding 0))", "code is only valid for kind exception");
-	EXPECT_ERROR("(device (fault (kind disconnect) (percent 101)) (holding 0))", "between 0 and 100");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception)) (holding 0))", "missing required option (code ...)");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception) (code 9)) (holding 0))", "code 9 is reserved");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception) (code 12)) (holding 0))", "must be between 1 and 11");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception) (code 0)) (holding 0))", "must be between 1 and 11");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception) (code \"4\")) (holding 0))", "expected a whole number");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (code 4)) (holding 0))", "code is only valid for kind exception");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind corrupt) (code 4)) (holding 0))", "code is only valid for kind exception");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind drop) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception) (code 4) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind corrupt) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind exception) (code 4) (code 5)) (holding 0))", "given more than once");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind disconnect) (delay-ms 100)) (holding 0))", "delay-ms is only valid for kind delay");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind disconnect) (code 4)) (holding 0))", "code is only valid for kind exception");
+	EXPECT_ERROR("(device (unit-id 1) (fault (kind disconnect) (percent 101)) (holding 0))", "between 0 and 100");
 }
 
 TEST(ConfigMissingFileIsAnError)
@@ -841,7 +859,7 @@ TEST(ConfigBoolWords)
 	char		err[256] = "";
 	u16		out = 9;
 
-	ASSERT_SUCCESS(load_text("(device (coil 0 (static yes)) (coil 1 (static #f)) (coil 2 (static 1)))",
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (coil 0 (static yes)) (coil 1 (static #f)) (coil 2 (static 1)))",
 				 &config, err, sizeof(err)));
 	device_read(config.devices[0], SPACE_COIL, 0, 1, &out);
 	ASSERT_EQ(out == 1);
@@ -857,7 +875,7 @@ TEST(ConfigFileRecordsAreParsed)
 	char		err[256] = "";
 	u16		out[3] = { 0, 0, 0 };
 
-	ASSERT_SUCCESS(load_text("(device"
+	ASSERT_SUCCESS(load_text("(device (unit-id 1)"
 				 "  (file 1 (record 0 4660 22136))"
 				 "  (file 4 (record 10 1 2 3)))",
 				 &config, err, sizeof(err)));
@@ -869,13 +887,13 @@ TEST(ConfigFileRecordsAreParsed)
 
 TEST(ConfigFileRecordErrors)
 {
-	EXPECT_ERROR("(device (file 1))", "at least one (record");
-	EXPECT_ERROR("(device (file 1 (record 0)))", "(record REC_NO VALUE");
-	EXPECT_ERROR("(device (file 1 (record 10000 1)))", "between 0 and 9999");
-	EXPECT_ERROR("(device (file 0 (record 0 1)))", "between 1 and 65535");
-	EXPECT_ERROR("(device (file 65536 (record 0 1)))", "between 1 and 65535");
-	EXPECT_ERROR("(device (file 1 (record 0 65536)))", "between 0 and 65535");
-	EXPECT_ERROR("(device (file 1 (record 0 1 2) (record 1 3)))", "overlaps another record");
+	EXPECT_ERROR("(device (unit-id 1) (file 1))", "at least one (record");
+	EXPECT_ERROR("(device (unit-id 1) (file 1 (record 0)))", "(record REC_NO VALUE");
+	EXPECT_ERROR("(device (unit-id 1) (file 1 (record 10000 1)))", "between 0 and 9999");
+	EXPECT_ERROR("(device (unit-id 1) (file 0 (record 0 1)))", "between 1 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (file 65536 (record 0 1)))", "between 1 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (file 1 (record 0 65536)))", "between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (file 1 (record 0 1 2) (record 1 3)))", "overlaps another record");
 }
 
 TEST(ConfigFifoQueuesAreParsed)
@@ -885,7 +903,7 @@ TEST(ConfigFifoQueuesAreParsed)
 	u16		out[3] = { 0, 0, 0 };
 	u16		count  = 0;
 
-	ASSERT_SUCCESS(load_text("(device"
+	ASSERT_SUCCESS(load_text("(device (unit-id 1)"
 				 "  (fifo 0 (values 4660 22136))"
 				 "  (fifo 1000 (values)))",
 				 &config, err, sizeof(err)));
@@ -898,13 +916,13 @@ TEST(ConfigFifoQueuesAreParsed)
 
 TEST(ConfigFifoQueueErrors)
 {
-	EXPECT_ERROR("(device (fifo))", "expected (fifo ADDRESS (values");
-	EXPECT_ERROR("(device (fifo 0 1))", "expected (values");
-	EXPECT_ERROR("(device (fifo 65536 (values)))", "between 0 and 65535");
-	EXPECT_ERROR("(device (fifo 0 (vals)))", "expected (values");
-	EXPECT_ERROR("(device (fifo 0 (values 65536)))", "between 0 and 65535");
-	EXPECT_ERROR("(device (fifo 0 (values \"x\")))", "whole numbers");
-	EXPECT_ERROR("(device (fifo 0 (values 1)) (fifo 0 (values 2)))", "already defined");
+	EXPECT_ERROR("(device (unit-id 1) (fifo))", "expected (fifo ADDRESS (values");
+	EXPECT_ERROR("(device (unit-id 1) (fifo 0 1))", "expected (values");
+	EXPECT_ERROR("(device (unit-id 1) (fifo 65536 (values)))", "between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (fifo 0 (vals)))", "expected (values");
+	EXPECT_ERROR("(device (unit-id 1) (fifo 0 (values 65536)))", "between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (fifo 0 (values \"x\")))", "whole numbers");
+	EXPECT_ERROR("(device (unit-id 1) (fifo 0 (values 1)) (fifo 0 (values 2)))", "already defined");
 }
 
 TEST(ConfigCanopenObjectsAreParsed)
@@ -914,7 +932,7 @@ TEST(ConfigCanopenObjectsAreParsed)
 	const device_canopen_object_t*	obj = NULL;
 	u8				out[4] = { 0, 0, 0, 0 };
 
-	ASSERT_SUCCESS(load_text("(device"
+	ASSERT_SUCCESS(load_text("(device (unit-id 1)"
 				 "  (canopen-object 5 #x6041 0 \"00fFa510\")"
 				 "  (canopen-object 127 0 255 \"aB\"))",
 				 &config, err, sizeof(err)));
@@ -944,7 +962,7 @@ TEST(ConfigCanopenObjectAcceptsMaxLength)
 	for (u32 i = 0; i < 2 * DEVICE_MAX_CANOPEN_OBJECT_BYTES; i++)
 		hex[i] = (i % 2 == 0) ? 'A' : (char)('0' + (i / 2) % 10);
 	hex[2 * DEVICE_MAX_CANOPEN_OBJECT_BYTES] = '\0';
-	snprintf(text, sizeof(text), "(device (canopen-object 1 0 0 \"%s\"))", hex);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (canopen-object 1 0 0 \"%s\"))", hex);
 
 	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 	obj = device_find_canopen_object(config.devices[0], 1, 0, 0);
@@ -956,19 +974,19 @@ TEST(ConfigCanopenObjectAcceptsMaxLength)
 
 TEST(ConfigCanopenObjectErrors)
 {
-	EXPECT_ERROR("(device (canopen-object 1 0 0))", "expected (canopen-object NODE INDEX");
-	EXPECT_ERROR("(device (canopen-object \"1\" 0 0 \"00\"))", "expected (canopen-object NODE INDEX");
-	EXPECT_ERROR("(device (canopen-object 0 0 0 \"00\"))", "node must be between 1 and 127");
-	EXPECT_ERROR("(device (canopen-object 128 0 0 \"00\"))", "node must be between 1 and 127");
-	EXPECT_ERROR("(device (canopen-object 1 -1 0 \"00\"))", "index must be between 0 and 65535");
-	EXPECT_ERROR("(device (canopen-object 1 65536 0 \"00\"))", "index must be between 0 and 65535");
-	EXPECT_ERROR("(device (canopen-object 1 0 -1 \"00\"))", "subindex must be between 0 and 255");
-	EXPECT_ERROR("(device (canopen-object 1 0 256 \"00\"))", "subindex must be between 0 and 255");
-	EXPECT_ERROR("(device (canopen-object 1 0 0 1234))", "HEXBYTES must be in double quotes");
-	EXPECT_ERROR("(device (canopen-object 1 0 0 \"\"))", "too few hex digits");
-	EXPECT_ERROR("(device (canopen-object 1 0 0 \"abc\"))", "even number of hex digits");
-	EXPECT_ERROR("(device (canopen-object 1 0 0 \"00gg\"))", "invalid hex digit");
-	EXPECT_ERROR("(device (canopen-object 1 0 0 \"00\") (canopen-object 1 0 0 \"11\"))",
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 0))", "expected (canopen-object NODE INDEX");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object \"1\" 0 0 \"00\"))", "expected (canopen-object NODE INDEX");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 0 0 0 \"00\"))", "node must be between 1 and 127");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 128 0 0 \"00\"))", "node must be between 1 and 127");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 -1 0 \"00\"))", "index must be between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 65536 0 \"00\"))", "index must be between 0 and 65535");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 -1 \"00\"))", "subindex must be between 0 and 255");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 256 \"00\"))", "subindex must be between 0 and 255");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 0 1234))", "HEXBYTES must be in double quotes");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 0 \"\"))", "too few hex digits");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 0 \"abc\"))", "even number of hex digits");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 0 \"00gg\"))", "invalid hex digit");
+	EXPECT_ERROR("(device (unit-id 1) (canopen-object 1 0 0 \"00\") (canopen-object 1 0 0 \"11\"))",
 		     "already configured");
 }
 
@@ -981,7 +999,7 @@ TEST(ConfigCanopenObjectRejectsOverLength)
 
 	memset(hex, '0', sizeof(hex) - 1);
 	hex[sizeof(hex) - 1] = '\0';
-	snprintf(text, sizeof(text), "(device (canopen-object 1 0 0 \"%s\"))", hex);
+	snprintf(text, sizeof(text), "(device (unit-id 1) (canopen-object 1 0 0 \"%s\"))", hex);
 
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too many hex digits") != NULL);
@@ -992,7 +1010,7 @@ TEST(ConfigCanopenObjectRejectsOverMaxCount)
 {
 	config_t	config = { 0 };
 	char		err[512] = "";
-	char		text[4096] = "(device";
+	char		text[4096] = "(device (unit-id 1)";
 	char		entry[80];
 
 	for (u32 i = 0; i < DEVICE_MAX_CANOPEN_OBJECTS; i++)
@@ -1012,7 +1030,7 @@ TEST(ConfigBindAcceptsValidIpv4)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"127.0.0.1\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"127.0.0.1\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
 }
@@ -1022,12 +1040,12 @@ TEST(ConfigTcpDefaultsToLoopbackAndAllowsExplicitWildcard)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
 	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
 
-	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"0.0.0.0\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"0.0.0.0\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
 	ASSERT_EQ(strcmp(config.bind_address, "0.0.0.0") == 0);
@@ -1038,7 +1056,7 @@ TEST(ConfigBindRejectsHostname)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_FAILURE(load_text("(server (mode tcp) (bind \"localhost\")) (device (holding 0))",
+	ASSERT_FAILURE(load_text("(server (mode tcp) (bind \"localhost\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "not a valid IPv4 or IPv6 address") != NULL);
 }
@@ -1048,11 +1066,11 @@ TEST(ConfigBindAcceptsIpv6)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"::1\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (bind \"::1\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (bind \"::\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (bind \"::\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(strcmp(config.bind_address, "::") == 0);
 }
@@ -1067,7 +1085,7 @@ TEST(ConfigBindRejectsOverlongString)
 	memset(bind, 'a', CONFIG_BIND_MAX);
 	bind[CONFIG_BIND_MAX] = '\0';
 	snprintf(text, sizeof(text),
-		 "(server (mode tcp) (bind \"%s\")) (device (holding 0))",
+		 "(server (mode tcp) (bind \"%s\")) (device (unit-id 1) (holding 0))",
 		 bind);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "too long") != NULL);
@@ -1078,20 +1096,20 @@ TEST(ConfigIdleTimeoutIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode tcp) (idle-timeout-ms 5000)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode tcp) (idle-timeout-ms 5000)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.idle_timeout_ms == 5000);
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (idle-timeout-ms 0)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (idle-timeout-ms 0)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.idle_timeout_ms == 0);
 }
 
 TEST(ConfigIdleTimeoutRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms -1)) (device (holding 0))", "between 0 and 86400000");
-	EXPECT_ERROR("(server (mode rtu-tcp) (idle-timeout-ms 86400001)) (device (holding 0))", "between 0 and 86400000");
-	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms -1)) (device (unit-id 1) (holding 0))", "between 0 and 86400000");
+	EXPECT_ERROR("(server (mode rtu-tcp) (idle-timeout-ms 86400001)) (device (unit-id 1) (holding 0))", "between 0 and 86400000");
+	EXPECT_ERROR("(server (mode tcp) (idle-timeout-ms nope)) (device (unit-id 1) (holding 0))", "whole number");
 }
 
 TEST(ConfigFrameGapIsParsed)
@@ -1099,16 +1117,16 @@ TEST(ConfigFrameGapIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (frame-gap-ms 5)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (frame-gap-ms 5)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.frame_gap_ms == 5);
 }
 
 TEST(ConfigFrameGapRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (mode rtu-pty) (frame-gap-ms 0)) (device (holding 0))", "between 1 and 60000");
-	EXPECT_ERROR("(server (mode rtu-tcp) (frame-gap-ms 60001)) (device (holding 0))", "between 1 and 60000");
-	EXPECT_ERROR("(server (mode rtu-pty) (frame-gap-ms nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-pty) (frame-gap-ms 0)) (device (unit-id 1) (holding 0))", "between 1 and 60000");
+	EXPECT_ERROR("(server (mode rtu-tcp) (frame-gap-ms 60001)) (device (unit-id 1) (holding 0))", "between 1 and 60000");
+	EXPECT_ERROR("(server (mode rtu-pty) (frame-gap-ms nope)) (device (unit-id 1) (holding 0))", "whole number");
 }
 
 TEST(ConfigBaudIsParsed)
@@ -1116,17 +1134,17 @@ TEST(ConfigBaudIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (baud 9600)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (baud 9600)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.baud == 9600);
 }
 
 TEST(ConfigBaudRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (mode rtu-pty) (baud 0)) (device (holding 0))", "between 1 and 4000000");
-	EXPECT_ERROR("(server (mode ascii-pty) (baud 4000001)) (device (holding 0))", "between 1 and 4000000");
-	EXPECT_ERROR("(server (mode rtu-pty) (baud nope)) (device (holding 0))", "whole number");
-	EXPECT_ERROR("(server (mode rtu-tcp) (baud 12345)) (device (holding 0))", "standard termios rate");
+	EXPECT_ERROR("(server (mode rtu-pty) (baud 0)) (device (unit-id 1) (holding 0))", "between 1 and 4000000");
+	EXPECT_ERROR("(server (mode ascii-pty) (baud 4000001)) (device (unit-id 1) (holding 0))", "between 1 and 4000000");
+	EXPECT_ERROR("(server (mode rtu-pty) (baud nope)) (device (unit-id 1) (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-tcp) (baud 12345)) (device (unit-id 1) (holding 0))", "standard termios rate");
 }
 
 TEST(ConfigBroadcastExecuteIsParsed)
@@ -1134,27 +1152,27 @@ TEST(ConfigBroadcastExecuteIsParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (broadcast-execute on)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (broadcast-execute on)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == true);
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (broadcast-execute off)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-tcp) (broadcast-execute off)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == false);
 
 	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyS0\") (broadcast-execute yes))"
-				 " (device (holding 0))", &config, err, sizeof(err)));
+				 " (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == true);
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (broadcast-execute #f)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (broadcast-execute #f)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.broadcast_execute == false);
 }
 
 TEST(ConfigBroadcastExecuteRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (mode rtu-pty) (broadcast-execute maybe)) (device (holding 0))", "expected on or off");
-	EXPECT_ERROR("(server (mode rtu-tcp) (broadcast-execute 2)) (device (holding 0))", "expected on or off");
+	EXPECT_ERROR("(server (mode rtu-pty) (broadcast-execute maybe)) (device (unit-id 1) (holding 0))", "expected on or off");
+	EXPECT_ERROR("(server (mode rtu-tcp) (broadcast-execute 2)) (device (unit-id 1) (holding 0))", "expected on or off");
 }
 
 TEST(ConfigDataBitsAreParsed)
@@ -1162,28 +1180,28 @@ TEST(ConfigDataBitsAreParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (data-bits 7)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (data-bits 7)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.data_bits == 7);
 
 	ASSERT_SUCCESS(load_text("(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits 8))"
-				 " (device (holding 0))", &config, err, sizeof(err)));
+				 " (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.data_bits == 8);
 }
 
 TEST(ConfigDataBitsRejectsInvalidValuesAndModes)
 {
-	EXPECT_ERROR("(server (mode ascii-pty) (data-bits 0)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-pty) (data-bits 0)) (device (unit-id 1) (holding 0))",
 		     "between 7 and 8");
-	EXPECT_ERROR("(server (mode ascii-pty) (data-bits 9)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-pty) (data-bits 9)) (device (unit-id 1) (holding 0))",
 		     "between 7 and 8");
 	EXPECT_ERROR("(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits nope))"
-		     " (device (holding 0))", "whole number");
-	EXPECT_ERROR("(server (mode rtu-pty) (data-bits 7)) (device (holding 0))",
+		     " (device (unit-id 1) (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-pty) (data-bits 7)) (device (unit-id 1) (holding 0))",
 		     "data-bits is not valid in rtu-pty mode");
-	EXPECT_ERROR("(server (mode tcp) (data-bits 8)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (data-bits 8)) (device (unit-id 1) (holding 0))",
 		     "data-bits is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode rtu-tcp) (data-bits 7)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (data-bits 7)) (device (unit-id 1) (holding 0))",
 		     "data-bits is not valid in rtu-tcp mode");
 }
 
@@ -1196,7 +1214,7 @@ TEST(ConfigParityIsParsed)
 
 	for (u32 i = 0; i < ARRAY_COUNT(names); i++)
 	{
-		snprintf(text, sizeof(text), "(server (mode rtu-pty) (parity %s)) (device (holding 0))", names[i]);
+		snprintf(text, sizeof(text), "(server (mode rtu-pty) (parity %s)) (device (unit-id 1) (holding 0))", names[i]);
 		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 		ASSERT_EQ(config.parity == (parity_t)i);
 	}
@@ -1204,8 +1222,8 @@ TEST(ConfigParityIsParsed)
 
 TEST(ConfigParityRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (mode rtu-pty) (parity nope)) (device (holding 0))", "expected one of: none, even, odd, mark, space");
-	EXPECT_ERROR("(server (mode rtu-device) (path \"/dev/ttyS0\") (parity 1)) (device (holding 0))", "expected one of: none, even, odd, mark, space");
+	EXPECT_ERROR("(server (mode rtu-pty) (parity nope)) (device (unit-id 1) (holding 0))", "expected one of: none, even, odd, mark, space");
+	EXPECT_ERROR("(server (mode rtu-device) (path \"/dev/ttyS0\") (parity 1)) (device (unit-id 1) (holding 0))", "expected one of: none, even, odd, mark, space");
 }
 
 TEST(ConfigStopBitsAreParsed)
@@ -1213,20 +1231,20 @@ TEST(ConfigStopBitsAreParsed)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (stop-bits 1)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (stop-bits 1)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.stop_bits == 1);
 
 	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyS0\") (stop-bits 2))"
-				 " (device (holding 0))", &config, err, sizeof(err)));
+				 " (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.stop_bits == 2);
 }
 
 TEST(ConfigStopBitsRejectsInvalidValues)
 {
-	EXPECT_ERROR("(server (mode rtu-pty) (stop-bits 0)) (device (holding 0))", "between 1 and 2");
-	EXPECT_ERROR("(server (mode rtu-device) (path \"/dev/ttyS0\") (stop-bits 3)) (device (holding 0))", "between 1 and 2");
-	EXPECT_ERROR("(server (mode rtu-pty) (stop-bits nope)) (device (holding 0))", "whole number");
+	EXPECT_ERROR("(server (mode rtu-pty) (stop-bits 0)) (device (unit-id 1) (holding 0))", "between 1 and 2");
+	EXPECT_ERROR("(server (mode rtu-device) (path \"/dev/ttyS0\") (stop-bits 3)) (device (unit-id 1) (holding 0))", "between 1 and 2");
+	EXPECT_ERROR("(server (mode rtu-pty) (stop-bits nope)) (device (unit-id 1) (holding 0))", "whole number");
 }
 
 TEST(ConfigServerModeNamesAreParsed)
@@ -1237,7 +1255,7 @@ TEST(ConfigServerModeNamesAreParsed)
 
 	for (u32 i = 0; i < ARRAY_COUNT(SERVER_MODES); i++)
 	{
-		snprintf(text, sizeof(text), "(server (mode %s)%s) (device (holding 0))",
+		snprintf(text, sizeof(text), "(server (mode %s)%s) (device (unit-id 1) (holding 0))",
 			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
 		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 		ASSERT_EQ(config.mode == SERVER_MODES[i].mode);
@@ -1253,15 +1271,15 @@ TEST(ConfigServerModeDefaultsToTcp)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
 	ASSERT_EQ(config.path[0] == '\0');
 }
 
 TEST(ConfigServerModeRejectsUnknownNames)
 {
-	EXPECT_ERROR("(server (mode rtu)) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
-	EXPECT_ERROR("(server (mode \"tcp\")) (device (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
+	EXPECT_ERROR("(server (mode rtu)) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
+	EXPECT_ERROR("(server (mode \"tcp\")) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
 }
 
 TEST(ConfigServerPathIsParsedForDeviceModes)
@@ -1269,12 +1287,12 @@ TEST(ConfigServerPathIsParsedForDeviceModes)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyUSB0\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode rtu-device) (path \"/dev/ttyUSB0\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_RTU_DEVICE);
 	ASSERT_EQ(strcmp(config.path, "/dev/ttyUSB0") == 0);
 
-	ASSERT_SUCCESS(load_text("(server (mode ascii-device) (path \"/dev/ttyUSB1\")) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode ascii-device) (path \"/dev/ttyUSB1\")) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_DEVICE);
 	ASSERT_EQ(strcmp(config.path, "/dev/ttyUSB1") == 0);
@@ -1282,18 +1300,18 @@ TEST(ConfigServerPathIsParsedForDeviceModes)
 
 TEST(ConfigServerPathIsRequiredForDeviceModes)
 {
-	EXPECT_ERROR("(server (mode rtu-device)) (device (holding 0))", "(path ...) is required");
-	EXPECT_ERROR("(server (mode ascii-device)) (device (holding 0))", "(path ...) is required");
+	EXPECT_ERROR("(server (mode rtu-device)) (device (unit-id 1) (holding 0))", "(path ...) is required");
+	EXPECT_ERROR("(server (mode ascii-device)) (device (unit-id 1) (holding 0))", "(path ...) is required");
 }
 
 TEST(ConfigServerPathIsForbiddenForOtherModes)
 {
-	EXPECT_ERROR("(server (mode tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
-	EXPECT_ERROR("(server (mode rtu-pty) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
-	EXPECT_ERROR("(server (mode rtu-tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
-	EXPECT_ERROR("(server (mode ascii-pty) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
-	EXPECT_ERROR("(server (mode ascii-tcp) (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
-	EXPECT_ERROR("(server (path \"/dev/ttyS0\")) (device (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode tcp) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode rtu-pty) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode rtu-tcp) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode ascii-pty) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode ascii-tcp) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))", "(path ...) is only valid");
+	EXPECT_ERROR("(server (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))", "(path ...) is only valid");
 }
 
 TEST(ConfigServerPathLengthIsValidated)
@@ -1305,13 +1323,13 @@ TEST(ConfigServerPathLengthIsValidated)
 
 	memset(path, 'x', CONFIG_PATH_MAX - 1);
 	path[CONFIG_PATH_MAX - 1] = '\0';
-	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (holding 0))", path);
+	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (unit-id 1) (holding 0))", path);
 	ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strlen(config.path) == CONFIG_PATH_MAX - 1);
 
 	memset(path, 'x', CONFIG_PATH_MAX);
 	path[CONFIG_PATH_MAX] = '\0';
-	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (holding 0))", path);
+	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\")) (device (unit-id 1) (holding 0))", path);
 	ASSERT_FAILURE(load_text(text, &config, err, sizeof(err)));
 	ASSERT_EQ(strstr(err, "path is too long") != NULL);
 	ASSERT_EQ(strstr(err, "255 characters") != NULL);
@@ -1333,7 +1351,7 @@ TEST(ConfigTlsFullFormIsParsed)
 		"       (min-version tls1.3)\n"
 		"       (tls1-2-ciphers \"ECDHE-RSA-AES128-GCM-SHA256\")\n"
 		"       (tls1-3-ciphersuites \"TLS_AES_128_GCM_SHA256\")))\n"
-		"(device (holding 0))", &config, err, sizeof(err)));
+		"(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_TLS_PORT);
 	ASSERT_EQ(config.tls_enabled);
@@ -1355,7 +1373,7 @@ TEST(ConfigTlsDefaultsAndExplicitPort)
 	ASSERT_SUCCESS(load_text(
 		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\")\n"
 		"             (ca-certificate \"ca.pem\")))\n"
-		"(device (holding 0))", &config, err, sizeof(err)));
+		"(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_TLS_PORT);
 	ASSERT_EQ(config.tls_enabled);
 	ASSERT_EQ(config.tls_require_client_certificate == true);
@@ -1368,7 +1386,7 @@ TEST(ConfigTlsDefaultsAndExplicitPort)
 		"(server (mode tcp) (port 1802)\n"
 		"        (tls (certificate \"cert.pem\") (private-key \"key.pem\")\n"
 		"             (require-client-certificate off)))\n"
-		"(device (holding 0))", &config, err, sizeof(err)));
+		"(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == 1802);
 	ASSERT_EQ(config.tls_ca_certificate[0] == '\0');
 	ASSERT_EQ(config.tls_require_client_certificate == false);
@@ -1382,21 +1400,21 @@ TEST(ConfigTlsHandshakeTimeoutIsParsed)
 	ASSERT_SUCCESS(load_text(
 		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		"             (ca-certificate \"ca.pem\") "
-		"             (handshake-timeout-ms 250))) (device (holding 0))",
+		"             (handshake-timeout-ms 250))) (device (unit-id 1) (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.tls_handshake_timeout_ms == 250);
 
 	ASSERT_SUCCESS(load_text(
 		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		"             (ca-certificate \"ca.pem\") "
-		"             (handshake-timeout-ms 1))) (device (holding 0))",
+		"             (handshake-timeout-ms 1))) (device (unit-id 1) (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.tls_handshake_timeout_ms == 1);
 
 	ASSERT_SUCCESS(load_text(
 		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		"             (ca-certificate \"ca.pem\") "
-		"             (handshake-timeout-ms 86400000))) (device (holding 0))",
+		"             (handshake-timeout-ms 86400000))) (device (unit-id 1) (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.tls_handshake_timeout_ms == 86400000);
 }
@@ -1405,20 +1423,20 @@ TEST(ConfigTlsHandshakeTimeoutRejectsInvalidValues)
 {
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		     "         (ca-certificate \"ca.pem\") "
-		     "         (handshake-timeout-ms 0))) (device (holding 0))",
+		     "         (handshake-timeout-ms 0))) (device (unit-id 1) (holding 0))",
 		     "between 1 and 86400000");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		     "         (ca-certificate \"ca.pem\") "
-		     "         (handshake-timeout-ms 86400001))) (device (holding 0))",
+		     "         (handshake-timeout-ms 86400001))) (device (unit-id 1) (holding 0))",
 		     "between 1 and 86400000");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		     "         (ca-certificate \"ca.pem\") "
-		     "         (handshake-timeout-ms nope))) (device (holding 0))",
+		     "         (handshake-timeout-ms nope))) (device (unit-id 1) (holding 0))",
 		     "whole number");
 	EXPECT_ERROR("(server (handshake-timeout-ms 250) "
 		     "        (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		     "        (ca-certificate \"ca.pem\"))) "
-		     "(device (holding 0))", "unknown option 'handshake-timeout-ms'");
+		     "(device (unit-id 1) (holding 0))", "unknown option 'handshake-timeout-ms'");
 }
 #endif
 
@@ -1427,7 +1445,7 @@ TEST(ConfigPlaintextTcpPortIsUnchanged)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (holding 0))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text("(server (mode tcp)) (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
 	ASSERT_EQ(config.tls_enabled == false);
 }
@@ -1436,19 +1454,19 @@ TEST(ConfigPlaintextTcpPortIsUnchanged)
 TEST(ConfigTlsRequiresCertificateAndPrivateKey)
 {
 	EXPECT_ERROR("(server (tls (private-key \"key.pem\") (ca-certificate \"ca.pem\"))) "
-		     "(device (holding 0))", "missing required option (certificate ...)");
+		     "(device (unit-id 1) (holding 0))", "missing required option (certificate ...)");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (ca-certificate \"ca.pem\"))) "
-		     "(device (holding 0))", "missing required option (private-key ...)");
+		     "(device (unit-id 1) (holding 0))", "missing required option (private-key ...)");
 	EXPECT_ERROR("(server (tls (certificate \"\") (private-key \"key.pem\"))) "
-		     "(device (holding 0))", "certificate path must not be empty");
+		     "(device (unit-id 1) (holding 0))", "certificate path must not be empty");
 }
 
 TEST(ConfigTlsRequiresCaForClientAuthentication)
 {
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\"))) "
-		     "(device (holding 0))", "ca-certificate is required");
+		     "(device (unit-id 1) (holding 0))", "ca-certificate is required");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(require-client-certificate on))) (device (holding 0))",
+		     "(require-client-certificate on))) (device (unit-id 1) (holding 0))",
 		     "ca-certificate is required");
 }
 
@@ -1460,31 +1478,31 @@ TEST(ConfigTlsValidatesMinVersionAndBooleans)
 	ASSERT_SUCCESS(load_text(
 		"(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		"(require-client-certificate off) (min-version tls1.2))) "
-		"(device (holding 0))", &config, err, sizeof(err)));
+		"(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
 
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(min-version tls1.1))) (device (holding 0))",
+		     "(min-version tls1.1))) (device (unit-id 1) (holding 0))",
 		     "expected one of: tls1.2, tls1.3");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(min-version \"tls1.3\"))) (device (holding 0))",
+		     "(min-version \"tls1.3\"))) (device (unit-id 1) (holding 0))",
 		     "expected one of: tls1.2, tls1.3");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(require-client-certificate maybe))) (device (holding 0))",
+		     "(require-client-certificate maybe))) (device (unit-id 1) (holding 0))",
 		     "expected on or off");
 }
 
 TEST(ConfigTlsValidatesCipherStrings)
 {
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(tls1-2-ciphers \"\"))) (device (holding 0))", "tls1-2-ciphers must not be empty");
+		     "(tls1-2-ciphers \"\"))) (device (unit-id 1) (holding 0))", "tls1-2-ciphers must not be empty");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(tls1-3-ciphersuites \"\"))) (device (holding 0))",
+		     "(tls1-3-ciphersuites \"\"))) (device (unit-id 1) (holding 0))",
 		     "tls1-3-ciphersuites must not be empty");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(tls1-2-ciphers 7))) (device (holding 0))", "expected text in double quotes");
+		     "(tls1-2-ciphers 7))) (device (unit-id 1) (holding 0))", "expected text in double quotes");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(tls1-3-ciphersuites 7))) (device (holding 0))", "expected text in double quotes");
+		     "(tls1-3-ciphersuites 7))) (device (unit-id 1) (holding 0))", "expected text in double quotes");
 }
 
 TEST(ConfigTlsValidatesNestedKeysDuplicatesAndPathLength)
@@ -1493,16 +1511,16 @@ TEST(ConfigTlsValidatesNestedKeysDuplicatesAndPathLength)
 	char	text[CONFIG_TLS_PATH_MAX + 160];
 
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
-		     "(unknown 1))) (device (holding 0))", "unknown option 'unknown'");
+		     "(unknown 1))) (device (unit-id 1) (holding 0))", "unknown option 'unknown'");
 	EXPECT_ERROR("(server (tls (certificate \"cert.pem\") (certificate \"other.pem\") "
-		     "(private-key \"key.pem\"))) (device (holding 0))",
+		     "(private-key \"key.pem\"))) (device (unit-id 1) (holding 0))",
 		     "option 'certificate' is given more than once");
 
 	memset(path, 'x', CONFIG_TLS_PATH_MAX);
 	path[CONFIG_TLS_PATH_MAX] = '\0';
 	snprintf(text, sizeof(text),
 		 "(server (tls (certificate \"%s\") (private-key \"key.pem\"))) "
-		 "(device (holding 0))", path);
+		 "(device (unit-id 1) (holding 0))", path);
 	EXPECT_ERROR(text, "certificate path is too long");
 }
 
@@ -1512,7 +1530,7 @@ TEST(ConfigTlsIsRejectedOutsideTcpMode)
 
 	for (u32 i = 1; i < ARRAY_COUNT(SERVER_MODES); i++)
 	{
-		snprintf(text, sizeof(text), "(server (mode %s)%s (tls)) (device (holding 0))",
+		snprintf(text, sizeof(text), "(server (mode %s)%s (tls)) (device (unit-id 1) (holding 0))",
 			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
 		EXPECT_ERROR(text, "not valid in");
 	}
@@ -1522,8 +1540,8 @@ TEST(ConfigTlsRejectedWithoutTlsSupport)
 {
 	EXPECT_ERROR("(server (mode tcp) (tls (certificate \"cert.pem\") "
 		     "(private-key \"key.pem\") (ca-certificate \"ca.pem\"))) "
-		     "(device (holding 0))", "built without TLS support");
-	EXPECT_ERROR("(server (mode rtu-pty) (tls)) (device (holding 0))",
+		     "(device (unit-id 1) (holding 0))", "built without TLS support");
+	EXPECT_ERROR("(server (mode rtu-pty) (tls)) (device (unit-id 1) (holding 0))",
 		     "built without TLS support");
 }
 #endif
@@ -1587,17 +1605,17 @@ TEST(ConfigTcpModeAcceptsFullUnitIdRange)
 TEST(ConfigRtuTcpRejectsSerialOptions)
 {
 	/* Presence alone is invalid here: even the default value is rejected. */
-	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 on)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 on)) (device (unit-id 1) (holding 0))",
 		     "strict-t15 is not valid in rtu-tcp mode");
-	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 off)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (strict-t15 off)) (device (unit-id 1) (holding 0))",
 		     "strict-t15 is not valid in rtu-tcp mode");
-	EXPECT_ERROR("(server (mode rtu-tcp) (parity none)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (parity none)) (device (unit-id 1) (holding 0))",
 		     "parity is not valid in rtu-tcp mode");
-	EXPECT_ERROR("(server (mode rtu-tcp) (parity even)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (parity even)) (device (unit-id 1) (holding 0))",
 		     "parity is not valid in rtu-tcp mode");
-	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 1)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 1)) (device (unit-id 1) (holding 0))",
 		     "stop-bits is not valid in rtu-tcp mode");
-	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 2)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode rtu-tcp) (stop-bits 2)) (device (unit-id 1) (holding 0))",
 		     "stop-bits is not valid in rtu-tcp mode");
 }
 
@@ -1621,21 +1639,21 @@ TEST(ConfigRtuTcpAcceptsListenAndTimingOptions)
 
 TEST(ConfigTcpModeRejectsSerialOptions)
 {
-	EXPECT_ERROR("(server (mode tcp) (broadcast-execute on)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (broadcast-execute on)) (device (unit-id 1) (holding 0))",
 		     "broadcast-execute is not valid in tcp mode");
-	EXPECT_ERROR("(server (broadcast-execute off)) (device (holding 0))",
+	EXPECT_ERROR("(server (broadcast-execute off)) (device (unit-id 1) (holding 0))",
 		     "broadcast-execute is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode tcp) (baud 9600)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (baud 9600)) (device (unit-id 1) (holding 0))",
 		     "baud is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode tcp) (frame-gap-ms 20)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (frame-gap-ms 20)) (device (unit-id 1) (holding 0))",
 		     "frame-gap-ms is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode tcp) (strict-t15 off)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (strict-t15 off)) (device (unit-id 1) (holding 0))",
 		     "strict-t15 is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode tcp) (parity none)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (parity none)) (device (unit-id 1) (holding 0))",
 		     "parity is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode tcp) (stop-bits 1)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (stop-bits 1)) (device (unit-id 1) (holding 0))",
 		     "stop-bits is not valid in tcp mode");
-	EXPECT_ERROR("(server (mode tcp) (data-bits 7)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode tcp) (data-bits 7)) (device (unit-id 1) (holding 0))",
 		     "data-bits is not valid in tcp mode");
 }
 
@@ -1654,7 +1672,7 @@ TEST(ConfigSerialModesRejectTcpListenOptions)
 			continue;
 		for (u32 j = 0; j < ARRAY_COUNT(options); j++)
 		{
-			snprintf(text, sizeof(text), "(server (mode %s)%s %s) (device (holding 0))",
+			snprintf(text, sizeof(text), "(server (mode %s)%s %s) (device (unit-id 1) (holding 0))",
 				 SERVER_MODES[i].name, SERVER_MODES[i].path_option, options[j]);
 			snprintf(fragment, sizeof(fragment), "is not valid in %s mode", SERVER_MODES[i].name);
 			EXPECT_ERROR(text, fragment);
@@ -1664,14 +1682,14 @@ TEST(ConfigSerialModesRejectTcpListenOptions)
 
 TEST(ConfigAsciiModeRejectsRtuOptionsAndBroadcast)
 {
-	EXPECT_ERROR("(server (mode ascii-pty) (broadcast-execute on)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-pty) (broadcast-execute on)) (device (unit-id 1) (holding 0))",
 		     "broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)");
 	EXPECT_ERROR("(server (mode ascii-device) (path \"/dev/ttyS0\") (broadcast-execute off))"
-		     " (device (holding 0))",
+		     " (device (unit-id 1) (holding 0))",
 		     "broadcast-execute is not valid in ascii-device mode (ASCII never executes unit-0 broadcasts)");
-	EXPECT_ERROR("(server (mode ascii-pty) (frame-gap-ms 20)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-pty) (frame-gap-ms 20)) (device (unit-id 1) (holding 0))",
 		     "frame-gap-ms is not valid in ascii-pty mode");
-	EXPECT_ERROR("(server (mode ascii-pty) (strict-t15 on)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-pty) (strict-t15 on)) (device (unit-id 1) (holding 0))",
 		     "strict-t15 is not valid in ascii-pty mode");
 }
 
@@ -1682,7 +1700,7 @@ TEST(ConfigAsciiModeAcceptsLineSettings)
 
 	ASSERT_SUCCESS(load_text(
 		"(server (mode ascii-pty) (seed 3) (baud 115200)"
-		" (data-bits 7) (parity even) (stop-bits 1)) (device (holding 0))",
+		" (data-bits 7) (parity even) (stop-bits 1)) (device (unit-id 1) (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.baud == 115200);
 	ASSERT_EQ(config.seed == 3);
@@ -1692,7 +1710,7 @@ TEST(ConfigAsciiModeAcceptsLineSettings)
 
 	ASSERT_SUCCESS(load_text(
 		"(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits 8)"
-		" (parity odd) (stop-bits 2)) (device (holding 0))",
+		" (parity odd) (stop-bits 2)) (device (unit-id 1) (holding 0))",
 		&config, err, sizeof(err)));
 	ASSERT_EQ(config.data_bits == 8);
 	ASSERT_EQ(config.parity == PARITY_ODD);
@@ -1704,7 +1722,7 @@ TEST(ConfigAsciiModeAcceptsBaudOnly)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (seed 3) (baud 115200)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode ascii-pty) (seed 3) (baud 115200)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.baud == 115200);
 	ASSERT_EQ(config.seed == 3);
@@ -1715,7 +1733,7 @@ TEST(ConfigAsciiTcpAcceptsListenOptions)
 	config_t	config = { 0 };
 	char		err[256] = "";
 
-	ASSERT_SUCCESS(load_text("(server (mode ascii-tcp)) (device (holding 0))",
+	ASSERT_SUCCESS(load_text("(server (mode ascii-tcp)) (device (unit-id 1) (holding 0))",
 				 &config, err, sizeof(err)));
 	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_TCP);
 	ASSERT_EQ(config.port == CONFIG_DEFAULT_PORT);
@@ -1732,23 +1750,23 @@ TEST(ConfigAsciiTcpAcceptsListenOptions)
 
 TEST(ConfigAsciiTcpRejectsSerialOptionsAndBroadcast)
 {
-	EXPECT_ERROR("(server (mode ascii-tcp) (path \"/dev/ttyS0\")) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))",
 		     "(path ...) is only valid");
-	EXPECT_ERROR("(server (mode ascii-tcp) (baud 9600)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (baud 9600)) (device (unit-id 1) (holding 0))",
 		     "baud is not valid in ascii-tcp mode");
-	EXPECT_ERROR("(server (mode ascii-tcp) (frame-gap-ms 20)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (frame-gap-ms 20)) (device (unit-id 1) (holding 0))",
 		     "frame-gap-ms is not valid in ascii-tcp mode");
-	EXPECT_ERROR("(server (mode ascii-tcp) (strict-t15 on)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (strict-t15 on)) (device (unit-id 1) (holding 0))",
 		     "strict-t15 is not valid in ascii-tcp mode");
-	EXPECT_ERROR("(server (mode ascii-tcp) (broadcast-execute on)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (broadcast-execute on)) (device (unit-id 1) (holding 0))",
 		     "broadcast-execute is not valid in ascii-tcp mode");
-	EXPECT_ERROR("(server (mode ascii-tcp) (broadcast-execute off)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (broadcast-execute off)) (device (unit-id 1) (holding 0))",
 		     "broadcast-execute is not valid in ascii-tcp mode (ASCII never executes unit-0 broadcasts)");
-	EXPECT_ERROR("(server (mode ascii-tcp) (data-bits 7)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (data-bits 7)) (device (unit-id 1) (holding 0))",
 		     "data-bits is not valid in ascii-tcp mode");
-	EXPECT_ERROR("(server (mode ascii-tcp) (parity even)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (parity even)) (device (unit-id 1) (holding 0))",
 		     "parity is not valid in ascii-tcp mode");
-	EXPECT_ERROR("(server (mode ascii-tcp) (stop-bits 1)) (device (holding 0))",
+	EXPECT_ERROR("(server (mode ascii-tcp) (stop-bits 1)) (device (unit-id 1) (holding 0))",
 		     "stop-bits is not valid in ascii-tcp mode");
 }
 
@@ -1759,7 +1777,7 @@ TEST(ConfigSerialModesAcceptSerialOptions)
 
 	ASSERT_SUCCESS(load_text(
 		"(server (mode rtu-pty) (strict-t15 on) (parity even) (stop-bits 2) (baud 9600))"
-		" (device (holding 0))", &config, err, sizeof(err)));
+		" (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
 	ASSERT_EQ(config.strict_t15 == true);
 	ASSERT_EQ(config.parity == PARITY_EVEN);
 	ASSERT_EQ(config.stop_bits == 2);
@@ -1774,7 +1792,7 @@ TEST(ConfigFloat32StaticAcceptsNonFinite)
 	u32		raw = 0;
 	f32		real = 0;
 
-	ASSERT_SUCCESS(load_text("(device (holding 0 (type float32) (static +nan.0))\n"
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0 (type float32) (static +nan.0))\n"
 				 "        (holding 2 (type float32) (static +inf.0))\n"
 				 "        (holding 4 (type float32) (static -inf.0)))",
 				 &config, err, sizeof(err)));
@@ -1790,9 +1808,9 @@ TEST(ConfigFloat32StaticAcceptsNonFinite)
 
 TEST(ConfigNonFloatStaticRejectsNonFinite)
 {
-	EXPECT_ERROR("(device (holding 0 (type u16) (static +nan.0)))", "only float32");
-	EXPECT_ERROR("(device (holding 0 (type u16) (static +inf.0)))", "only float32");
-	EXPECT_ERROR("(device (holding 0 (type s32) (static -inf.0)))", "only float32");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u16) (static +nan.0)))", "only float32");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u16) (static +inf.0)))", "only float32");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type s32) (static -inf.0)))", "only float32");
 }
 
 #define MACHINE_DEVICE(body) "(device (unit-id 1) (holding 0) (machine " body "))"
@@ -1936,7 +1954,7 @@ TEST(ConfigMachineRejectsUnknownAndDuplicateNames)
 	EXPECT_ERROR(MACHINE_DEVICE("m (initial idle) (bogus) (state idle)"),
 		     "unknown machine form");
 	EXPECT_ERROR(MACHINE_DEVICE("M (initial idle) (state idle)"), "bad machine name");
-	EXPECT_ERROR("(device (holding 0)"
+	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
 		     " (machine m (initial idle) (state idle))"
 		     " (machine m (initial idle) (state idle)))",
 		     "defined more than once");
