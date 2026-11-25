@@ -1174,10 +1174,8 @@ check_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* dev)
 }
 
 bool
-config_machine_finalize(form_ctx_t* ctx, device_t* dev)
+config_machine_check_points(form_ctx_t* ctx, device_t* dev)
 {
-	const char* error = NULL;
-
 	if (!dev || !dev->machines)
 		return true;
 	if (ctx->machine_state && !check_points(ctx, ctx->machine_state, dev))
@@ -1190,6 +1188,16 @@ config_machine_finalize(form_ctx_t* ctx, device_t* dev)
 		state->point_ref_count = 0;
 		memset(state->ref_by_stmt, 0, sizeof(state->ref_by_stmt));
 	}
+	return true;
+}
+
+bool
+config_machine_finalize(form_ctx_t* ctx, device_t* dev)
+{
+	const char* error = NULL;
+
+	if (!dev || !dev->machines)
+		return true;
 	error = device_finalize_machines(dev);
 	if (error)
 		return form_fail(ctx, "machine definitions: %s", error);

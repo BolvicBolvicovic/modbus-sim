@@ -1,5 +1,6 @@
 #include "config/config.h"
 #include "config/config_device.h"
+#include "config/config_machine.h"
 #include "util/baud.h"
 #include "util/clock.h"
 #include "util/ip.h"
@@ -414,7 +415,7 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 	if (config->device_count >= CONFIG_MAX_DEVICES)
 		return form_fail(ctx, "too many devices (max %d)", CONFIG_MAX_DEVICES);
 
-	return config_parse_device(ctx, form, arena, now_ms, config->seed,
+	return config_parse_device(ctx, form, arena, now_ms,
 				   &config->devices[config->device_count++]);
 }
 
@@ -427,6 +428,17 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 	for (s7_pointer p = forms; s7_is_pair(p); p = s7_cdr(p))
 	{
 		if (!parse_top_level_form(ctx, s7_car(p), arena, now_ms, config, &server_seen))
+			return false;
+	}
+
+	/* Machine point references were checked while each device was read; seeding and
+	 * finalization wait for (server (seed N)), which may appear after the devices. */
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		device_t* dev = config->devices[i];
+
+		device_seed_machines(dev, config->seed);
+		if (!config_machine_finalize(ctx, dev))
 			return false;
 	}
 

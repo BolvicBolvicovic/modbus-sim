@@ -777,7 +777,7 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 bool
 config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
-		    u64 start_ms, u64 seed, device_t** out)
+		    u64 start_ms, device_t** out)
 {
 	device_t*	dev = device_new(arena, start_ms);
 
@@ -791,8 +791,7 @@ config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
 			return false;
 	}
 
-	device_seed_machines(dev, seed);
-	if (!config_machine_finalize(ctx, dev))
+	if (!config_machine_check_points(ctx, dev))
 		return false;
 
 	*out = dev;

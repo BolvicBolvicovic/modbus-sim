@@ -8,8 +8,13 @@
  * deep copy on the device. Reports load errors through ctx->err. */
 bool	config_machine_add(form_ctx_t* ctx, s7_pointer form, device_t* dev);
 
-/* Validates deferred point references and finalizes every machine on dev.
- * Called once, after the last device item. */
+/* Validates deferred point references while their form text is still in the
+ * scratch state. Called once, after the last item of a device. */
+bool	config_machine_check_points(form_ctx_t* ctx, device_t* dev);
+
+/* Initializes every machine on dev at dev->start_ms using the seed already set
+ * by the caller via device_seed_machines(). Called after the whole config is
+ * read, so the server seed is known. */
 bool	config_machine_finalize(form_ctx_t* ctx, device_t* dev);
 
 #endif

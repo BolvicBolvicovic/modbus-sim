@@ -1615,6 +1615,35 @@ TEST(ConfigNonFloatStaticRejectsNonFinite)
 
 #define MACHINE_DEVICE(body) "(device (unit-id 1) (holding 0) (machine " body "))"
 
+#define RANDOM_MACHINE_DEVICE \
+	"(device (unit-id 1) (holding 0)" \
+	"  (machine m (initial idle)" \
+	"    (state idle) (state done)" \
+	"    (transition idle done (after-ms (random 1 86400000)))))"
+
+/* Returns the initial random after-ms deadline relative to device start time. */
+static u64
+load_random_deadline(u32 seed, bool server_first, config_t* config, char* err, u32 err_size)
+{
+	char	text[512];
+	char	server[64];
+	u64	offset = 0;
+
+	snprintf(server, sizeof(server), "(server (mode tcp) (seed %u))", seed);
+	if (server_first)
+		snprintf(text, sizeof(text), "%s %s", server, RANDOM_MACHINE_DEVICE);
+	else
+		snprintf(text, sizeof(text), "%s %s", RANDOM_MACHINE_DEVICE, server);
+	ASSERT_SUCCESS(load_text(text, config, err, err_size));
+	ASSERT_EQ(config->seed == seed);
+	ASSERT_SUCCESS(config->device_count == 1 &&
+		       config->devices[0]->machines != NULL &&
+		       config->devices[0]->machines->count == 1);
+	offset = config->devices[0]->machines->deadline[0][0] - config->devices[0]->start_ms;
+	ASSERT_EQ(offset >= 1 && offset <= 86400000);
+	return offset;
+}
+
 TEST(ConfigMachineLoadsCompiledDefinitionAndRuns)
 {
 	config_t	config = { 0 };
@@ -1648,6 +1677,34 @@ TEST(ConfigMachineLoadsCompiledDefinitionAndRuns)
 	device_tick(dev, dev->start_ms + 20);
 	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, out));
 	ASSERT_EQ(out[0] == 42);
+}
+
+TEST(ConfigMachineSeedIgnoresServerFormOrder)
+{
+	config_t first = { 0 };
+	config_t last  = { 0 };
+	config_t other = { 0 };
+	char	err[256] = "";
+	u64	first_offset = 0;
+	u64	last_offset  = 0;
+	u64	other_offset = 0;
+
+	first_offset = load_random_deadline(5, true, &first, err, sizeof(err));
+	last_offset  = load_random_deadline(5, false, &last, err, sizeof(err));
+	other_offset = load_random_deadline(6, false, &other, err, sizeof(err));
+
+	ASSERT_EQ(first_offset == last_offset);
+	ASSERT_EQ(first_offset != other_offset);
+}
+
+TEST(ConfigMachineDeferredErrorKeepsFormTextWithServerLast)
+{
+	EXPECT_ERROR(
+		"(device (unit-id 1) (holding 0)"
+		" (machine m (initial idle)"
+		"  (state idle (on-enter (when (< (holding 5) 1) (set! (holding 0) 2))))))"
+		" (server (seed 5))",
+		"(holding 5): machine 'm', state 'idle': point read must name the first address of a configured point");
 }
 
 TEST(ConfigMachineResolvesForwardPointsAndNestedGuards)
