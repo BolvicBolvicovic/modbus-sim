@@ -14,7 +14,10 @@ The file format comes from Scheme, but you only need these rules:
 - Scheme hex literals such as `#x1234` are also accepted where examples use them.
 - On/off can be written `on`, `off`, `yes`, `no`, `true`, `false`, `#t`, `#f`, `1` or `0`.
 - Spaces, tabs and new lines are all the same. Indent however you like.
-- Top-level forms and most entries can appear in any order. Exceptions: at most one `(server ...)` form; point address ranges cannot overlap; `(com-event ...)` entries are reported in the order written; and inside `(machine ...)`, `(var ...)`, `(state ...)`, and `(transition ...)` must be ordered as shown.
+- Top-level forms and most entries can appear in any order. Exceptions: at most one `(server ...)`
+  form; point address ranges cannot overlap; `(com-event ...)` entries are reported in the order
+  written; and inside `(machine ...)`, `(initial ...)`, optional `(state-register ...)`, `(var ...)`,
+  `(state ...)`, `(on-write ...)` and `(transition ...)` must be ordered as shown.
 
 The file is only *read as data*. Nothing in it is run, so a typo can never do anything but
 produce an error message.
@@ -340,7 +343,8 @@ Ramps are not available for coils and discrete inputs.
 
 Clients can write `coil` and `holding` points. The written value is stored and returned by
 later reads. If the point was a ramp, **it stops moving** and keeps the written value as a
-static value until the simulator is restarted.
+static value until the simulator is restarted. Machine-owned points, including state registers,
+reject client writes with exception 02 (see `(machine ...)` below).
 
 ### `(count N)`
 
@@ -362,20 +366,25 @@ compiled into flat expression/statement arrays and copied into the device arena.
 ```scheme
 (machine NAME
   (initial STATE)
-  (var NAME LITERAL) ...        ; zero or more, before any (state ...)
-  (state NAME                   ; one or more, before any (transition ...)
+  (state-register (holding ADDR))    ; optional, immediately after (initial STATE)
+  (var NAME LITERAL) ...             ; zero or more, before any (state ...)
+  (state NAME                        ; one or more, before any (transition ...)
     (on-enter STATEMENT ...)
     (on-tick STATEMENT ...)
-    (on-exit STATEMENT ...)) ...
+    (on-exit STATEMENT ...)
+    (fault (kind K) ...)) ...        ; per-state faults, one definition per kind
+  (on-write POINT STATEMENT ...) ... ; after states, before transitions
   (transition FROM TO TRIGGER ...) ...)
 ```
 
-Handlers are optional and may appear in any order within a state.
+Handlers are optional and may appear in any order within a state. Faults may also appear in a state,
+using the same options as the device-level `(fault ...)` described below.
 
 Names use lowercase letters, digits and `-`, start with a letter, and are at most 63 characters.
 Machine names are unique per device; state and variable names are unique per machine.
-`(initial STATE)` is required and must name a state. Entries must be ordered as shown: variables,
-then states, then transitions. Each handler can appear at most once per state.
+`(initial STATE)` is required and must name a state. Entries must be ordered as shown: optional
+state register, variables, states, on-write handlers, then transitions. Each handler can appear at
+most once per state.
 
 Statements (usable in handlers and nested in guards):
 
@@ -406,9 +415,33 @@ Point accessors are `(coil ADDR)`, `(discrete ADDR)`, `(input ADDR)` and `(holdi
 through the configured point, so bit tables yield booleans and registers yield numbers with the
 point's type and word order applied. Both reads and `set!` targets must name the **first address of
 a configured point**; an undefined address or a continuation address of a 32-bit point is a load
-error. A machine can `set!` a static point but not a ramp point, and a point may be driven by at
-most one machine. A machine-driven point stays machine-owned: a client write changes the table
-value but does not freeze it, so the machine keeps driving it.
+error. A machine can `set!` a static point but not a ramp point or a state-register point, and a
+point may be driven by at most one machine. A machine-driven point stays machine-owned: a client
+write to any address of it fails with exception 02 and leaves the value unchanged, so the machine
+keeps driving it. Machine/internal writes still update the point normally.
+
+`(state-register (holding ADDR))` or `(state-register (input ADDR))` is optional, at most once per
+machine, and must be the first item after `(initial STATE)`. It names the first address of a
+configured static register point (not a ramp and not driven by any machine). That point becomes
+machine-owned and read-only to clients; it holds the zero-based index of the current state as a
+number. It is written before the initial state's `on-enter` and after each state switch, before the
+new state's `on-enter`, and is readable from machine expressions and Modbus reads.
+
+`(on-write POINT STATEMENT ...)` is optional, repeatable (at most 16 per machine), and must follow
+all states and precede transitions. `POINT` names the first address of a configured point that is
+not machine-driven; at most one handler per point is allowed in one machine. The handler runs
+immediately after a successful client write that touches any register of that point, after the raw
+value is written and in the same request. It sees the just-written value and may read/set variables
+and points like other handlers, but it does not fire transitions or advance any machine. Failures
+in an on-write handler are logged with the machine's current state. Handlers in different machines
+run in declaration order. `(now-ms)` is the request's tick time and `(elapsed-ms)` is measured from
+the machine's last tick or state change.
+
+A `(fault ...)` inside `(state ...)` overlays the device faults while that state is active. It uses
+the same options and one-definition-per-kind rule as a device-level fault, and a `(kind disconnect)`
+overlay is rejected in serial modes for the same reason. An active overlay overrides or adds its
+kind; kinds not mentioned keep the device setting. If several machines are in states that define the
+same kind, the earliest declared machine wins for that kind.
 
 Machines on the same device share one point table: any machine can read any configured point,
 including a point driven by another machine, but a point has at most one machine writer, and
@@ -443,8 +476,9 @@ runs the initial state's `on-enter` at simulator start time. With no `(server ..
 seed and unit id therefore give the same random deadlines on every run.
 
 Limits are `MACHINE_MAX_MACHINES` 8 per device, `MACHINE_MAX_STATES` 16,
-`MACHINE_MAX_TRANSITIONS` 32, `MACHINE_MAX_VARS` 16, `MACHINE_MAX_STATEMENTS` 128 (including nested
-statements), `MACHINE_MAX_EXPR_NODES` 512 and `MACHINE_MAX_FIRINGS` 64 per tick.
+`MACHINE_MAX_TRANSITIONS` 32, `MACHINE_MAX_VARS` 16, `MACHINE_MAX_WRITE_HANDLERS` 16 per machine,
+`MACHINE_MAX_STATEMENTS` 128 (including nested statements), `MACHINE_MAX_EXPR_NODES` 512 and
+`MACHINE_MAX_FIRINGS` 64 per tick. A machine has at most one state register.
 
 ```scheme
 (device
@@ -502,6 +536,12 @@ Each kind rolls independently with the chance given by its `percent`.
 (fault (kind corrupt) (percent 50))                 ; half of the answers get a flipped PDU byte
 (fault (kind disconnect) (percent 10))              ; 1 in 10 answers closes the connection
 ```
+
+A state machine may repeat the same form inside `(state ...)`; see `(machine ...)` above. Such a
+fault is an overlay for that state: while the state is active it overrides or adds that kind, while
+unmentioned kinds keep the device setting. If several active states define the same kind, the
+earliest declared machine wins. Overlays are checked with the same rules, including the transport
+restriction below.
 
 `(kind disconnect)` is valid only for TCP-like transports (`tcp`, `rtu-tcp`, `ascii-tcp`).
 It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty` and `ascii-device`; serial
@@ -653,12 +693,17 @@ is wrong and show the entry. Common ones:
 | `server: broadcast-execute is not valid in ascii-pty mode (ASCII never executes unit-0 broadcasts)` | ASCII never executes broadcasts; remove the entry |
 | `server: (path ...) is required in rtu-device and ascii-device modes` | Add `(path "PATH")` |
 | `devices 'A' and 'B' both use unit-id N` | Give each device its own unit id |
-| `only one is allowed per kind` | A fault kind may be defined only once per device; combine different kinds instead |
+| `only one is allowed per kind` | A fault kind may be defined only once per device or per state; combine different kinds instead |
 | `missing required option (code ...)` | `(kind exception)` needs `(code N)` |
 | `code is only valid for kind exception` | Remove `(code ...)` from other fault kinds |
 | `delay-ms is only valid for kind delay` | Remove `(delay-ms ...)` from other fault kinds |
 | `code 9 is reserved` | Use one of 1-8, 10 or 11 |
-| `(fault (kind disconnect)) is not valid in ... mode` | Use `tcp`, `rtu-tcp` or `ascii-tcp`, or remove the fault |
+| `(fault (kind disconnect)) is not valid in ... mode` | Use `tcp`, `rtu-tcp` or `ascii-tcp`, or remove the fault; this also applies to state overlays |
+| `state-register must immediately follow` | Put the optional state register directly after `(initial STATE)` |
+| `state register cannot name a point driven by a machine` | Use an unused static holding or input point; state registers are machine-owned |
+| `on-write must follow states and precede transitions` | Keep on-write handlers after all states and before the first transition |
+| `on-write is given more than once for the same point` | Combine the statements into one on-write handler for that point |
+| `on-write cannot watch a machine-driven point` | Watch a client-writable point instead of a state register or machine-driven point |
 | `unknown top-level form` | Only `(server ...)` and `(device ...)` are allowed at the top |
 
 ## A complete example

@@ -282,7 +282,7 @@ Any other function code gets exception 01.
 | Code | Name | When |
 |---|---|---|
 | 01 | Illegal Function | the function code is not in the table above |
-| 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535) |
+| 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535), or a write targets a machine-owned point such as a state register |
 | 03 | Illegal Data Value | quantity is 0 or above the limit, the request has the wrong length or byte count, or a single-coil value is not `FF00` / `0000` |
 | 04 | Slave Device Failure | only via `(fault (kind exception) (code 4))` |
 | 05 | Acknowledge | only via `(fault (kind exception) (code 5))` |
@@ -298,6 +298,12 @@ Checks run in this order: function, request shape and quantity (03), then addres
 injection (see [config-reference.md](config-reference.md)). Fault injection is a simulator testing
 feature, not a Modbus protocol feature: a device may configure several kinds at once (at most one
 definition per kind), and each kind rolls independently for every response.
+
+A state machine may also configure faults inside its states. While a state is active, an overlay
+overrides or adds its kind; kinds not mentioned in the active state keep the device setting. If
+several machines are in states that define the same kind, the earliest declared machine wins for
+that kind. Overlays use the same options and transport restrictions as device faults, so serial
+modes reject `disconnect` overlays too.
 
 A fired exception fault replaces the response that normal processing produced, including an
 exception response, and does not undo the request's effects; a sent injected exception is counted
@@ -321,6 +327,10 @@ If any address of a write is undefined, nothing is written and the answer is exc
 Only coils (05, 15) and holding registers (06, 16, 22, 23) can be written: Modbus has no function code
 that writes input registers or discrete inputs. A write to an address that exists only as an
 input register or discrete input is exception 02, because the target table has no such point.
+A machine-owned point, including a machine state register, is read-only to Modbus clients: a write
+that touches any of its addresses fails all-or-nothing with exception 02 and leaves the value
+unchanged. Successful writes run any matching machine `on-write` handlers in the same request after
+the raw values are applied; those handlers do not fire transitions or advance the machine.
 Read/Write Multiple Registers (FC 23, 0x17) is also all-or-nothing: availability of both the read and
 write holding-register ranges is validated before applying the write, so an unavailable/malformed
 request modifies no holding registers.
