@@ -9,6 +9,13 @@ bool __attribute__((weak)) device_get_point(const device_t* dev, space_kind_t sp
 enum { EXPR_MAX_DEPTH = 512 };
 
 static bool
+fail(expr_ctx_t* ctx, expr_failure_t reason)
+{
+	ctx->failure = reason;
+	return false;
+}
+
+static bool
 eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 depth)
 {
 	const expr_node_t* node = &nodes[index];
@@ -19,32 +26,34 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 	u16 chosen;
 
 	if (depth >= EXPR_MAX_DEPTH)
-		return false;
+		return fail(ctx, EXPR_FAIL_BUDGET);
 	if (ctx->budget == 0)
-		return false;
+		return fail(ctx, EXPR_FAIL_BUDGET);
 	ctx->budget--;
 
 	switch (node->kind)
 	{
 	case EXPR_BOOL:
 		if (node->literal.type != VAL_BOOL)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		*out = node->literal;
 		return true;
 	case EXPR_NUM:
 		if (node->literal.type != VAL_NUM)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		*out = node->literal;
 		return true;
 	case EXPR_VAR:
 		if (node->a == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		*out = ctx->vars[node->a];
 		return true;
 	case EXPR_POINT:
 		if (!device_get_point)
-			return false;
-		return device_get_point(ctx->dev, (space_kind_t)node->space, node->address, out);
+			return fail(ctx, EXPR_FAIL_POINT);
+		if (!device_get_point(ctx->dev, (space_kind_t)node->space, node->address, out))
+			return fail(ctx, EXPR_FAIL_POINT);
+		return true;
 	case EXPR_NOW_MS:
 		*out = (val_t){ .type = VAL_NUM, .n = (f64)ctx->now_ms };
 		return true;
@@ -58,12 +67,12 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 	case EXPR_MIN:
 	case EXPR_MAX:
 		if (node->a == EXPR_NO_CHILD || node->b == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		if (!eval_node(nodes, node->a, ctx, &lhs, depth + 1) ||
 		    !eval_node(nodes, node->b, ctx, &rhs, depth + 1))
 			return false;
 		if (lhs.type != VAL_NUM || rhs.type != VAL_NUM)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		result = (val_t){ .type = VAL_NUM };
 		switch (node->kind)
@@ -73,12 +82,12 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 		case EXPR_MUL: result.n = lhs.n * rhs.n; break;
 		case EXPR_DIV:
 			if (rhs.n == 0.0)
-				return false;
+				return fail(ctx, EXPR_FAIL_DIV_ZERO);
 			result.n = lhs.n / rhs.n;
 			break;
 		case EXPR_MIN: result.n = fmin(lhs.n, rhs.n); break;
 		case EXPR_MAX: result.n = fmax(lhs.n, rhs.n); break;
-		default: return false;
+		default: return fail(ctx, EXPR_FAIL_TYPE);
 		}
 		*out = result;
 		return true;
@@ -87,12 +96,12 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 	case EXPR_GT:
 	case EXPR_GE:
 		if (node->a == EXPR_NO_CHILD || node->b == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		if (!eval_node(nodes, node->a, ctx, &lhs, depth + 1) ||
 		    !eval_node(nodes, node->b, ctx, &rhs, depth + 1))
 			return false;
 		if (lhs.type != VAL_NUM || rhs.type != VAL_NUM)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		result = (val_t){ .type = VAL_BOOL };
 		switch (node->kind)
@@ -101,18 +110,18 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 		case EXPR_LE: result.b = lhs.n <= rhs.n; break;
 		case EXPR_GT: result.b = lhs.n > rhs.n; break;
 		case EXPR_GE: result.b = lhs.n >= rhs.n; break;
-		default: return false;
+		default: return fail(ctx, EXPR_FAIL_TYPE);
 		}
 		*out = result;
 		return true;
 	case EXPR_EQ:
 		if (node->a == EXPR_NO_CHILD || node->b == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		if (!eval_node(nodes, node->a, ctx, &lhs, depth + 1) ||
 		    !eval_node(nodes, node->b, ctx, &rhs, depth + 1))
 			return false;
 		if (lhs.type != rhs.type)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		*out = (val_t){ .type = VAL_BOOL };
 		out->b = lhs.type == VAL_BOOL ? lhs.b == rhs.b : lhs.n == rhs.n;
@@ -120,11 +129,11 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 	case EXPR_AND:
 	case EXPR_OR:
 		if (node->a == EXPR_NO_CHILD || node->b == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		if (!eval_node(nodes, node->a, ctx, &lhs, depth + 1))
 			return false;
 		if (lhs.type != VAL_BOOL)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		if ((node->kind == EXPR_AND && !lhs.b) ||
 		    (node->kind == EXPR_OR && lhs.b))
 		{
@@ -134,17 +143,17 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 		if (!eval_node(nodes, node->b, ctx, &rhs, depth + 1))
 			return false;
 		if (rhs.type != VAL_BOOL)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		*out = (val_t){ .type = VAL_BOOL, .b = rhs.b };
 		return true;
 	case EXPR_NOT:
 		if (node->a == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 		if (!eval_node(nodes, node->a, ctx, &lhs, depth + 1))
 			return false;
 		if (lhs.type != VAL_BOOL)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		*out = (val_t){ .type = VAL_BOOL, .b = !lhs.b };
 		return true;
@@ -152,23 +161,24 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 		if (node->a == EXPR_NO_CHILD ||
 		    node->b == EXPR_NO_CHILD ||
 		    node->c == EXPR_NO_CHILD)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		/* Branch type equality is a load-time check; only one branch runs. */
 		if (!eval_node(nodes, node->a, ctx, &cond, depth + 1))
 			return false;
 		if (cond.type != VAL_BOOL)
-			return false;
+			return fail(ctx, EXPR_FAIL_TYPE);
 
 		chosen = cond.b ? node->b : node->c;
 		return eval_node(nodes, chosen, ctx, out, depth + 1);
 	default:
-		return false;
+		return fail(ctx, EXPR_FAIL_TYPE);
 	}
 }
 
 bool
 expr_eval(const expr_node_t* nodes, u16 root, expr_ctx_t* ctx, val_t* out)
 {
+	ctx->failure = EXPR_FAIL_NONE;
 	return eval_node(nodes, root, ctx, out, 0);
 }

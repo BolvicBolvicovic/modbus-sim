@@ -147,6 +147,8 @@ enum device_id_object
  * Description: one simulated Modbus device (one unit id).
  * */
 typedef struct device_t device_t;
+struct machine_system_t; /* defined in device/machine.h */
+
 struct device_t
 {
 	char		name[DEVICE_NAME_MAX];
@@ -188,6 +190,7 @@ struct device_t
 	}		extended_id[DEVICE_MAX_EXTENDED_IDS];
 	u32		extended_id_count;
 	space_t		spaces[SPACE_COUNT];
+	struct machine_system_t* machines; /* up to MACHINE_MAX_MACHINES, arena-backed */
 };
 
 /* Creates an empty device in the arena. Returns NULL if the arena is out of memory. */
