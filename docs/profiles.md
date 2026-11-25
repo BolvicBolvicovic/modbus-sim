@@ -22,6 +22,7 @@ instead of a manual.
 | `power-meter.scm` | 1 | 3 voltages, 3 currents, power, frequency, power factor, energy (float32 input registers); 2 settings; reset coil; alarm |
 | `temperature-controller.scm` | 1 | process value (s16, 0.1 C), output %, setpoint and mode (writable), run coil, 2 alarms |
 | `vfd-drive.scm` | 1 | status, frequency and current that climb and hold, DC voltage, temperature, 32-bit energy; control word, setpoint, run and reset coils |
+| `motor.scm` | 1 | scripted state machine: idle/starting/running/tripped, timed ramp and random trip |
 | `flow-meter.scm` | 1 | flow rate and temperature (float32), 32-bit totalizer, reset coil, empty-pipe alarm |
 | `io-module.scm` | 1 | 16 digital inputs, 16 digital outputs, 8 analog inputs (4-20 mA), 4 analog outputs |
 | `slow-sensor.scm` | 1 | temperature sensor; 30% of answers arrive 1.5 s late |

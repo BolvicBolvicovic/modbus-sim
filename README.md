@@ -88,7 +88,7 @@ when checking a no-TLS binary.
 |---|---|
 | Protocol | Modbus TCP (optionally TLS-wrapped), Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
-| Behaviours | **static** (fixed value) and **ramp** (moves over time: wrap, bounce or hold). |
+| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), and **machine** (bounded scripted state machine, see [config reference](docs/config-reference.md#machine-)). |
 | Fault | Repeatable per device: combine **delay**, **drop**, **exception**, **corrupt**, and TCP-only **disconnect** faults, each with its own chance in percent. |
 | Devices | Several devices on one port, told apart by unit id. |
 | Clients | Up to 32 at the same time. A delayed response never blocks other clients. |
@@ -102,6 +102,7 @@ when checking a no-TLS binary.
 | [`profiles/power-meter.scm`](profiles/power-meter.scm) | Three-phase power meter | float32 values, ramps, energy counter |
 | [`profiles/temperature-controller.scm`](profiles/temperature-controller.scm) | Temperature controller | signed values, setpoint, alarms |
 | [`profiles/vfd-drive.scm`](profiles/vfd-drive.scm) | Motor drive | start-up ramp that holds, 32-bit counter |
+| [`profiles/motor.scm`](profiles/motor.scm) | Motor with a scripted machine | start/stop states, timed ramp, random trip |
 | [`profiles/flow-meter.scm`](profiles/flow-meter.scm) | Flow meter | float32 and 32-bit totalizer |
 | [`profiles/io-module.scm`](profiles/io-module.scm) | Remote I/O block | `(count N)` for many points |
 | [`profiles/slow-sensor.scm`](profiles/slow-sensor.scm) | Sensor with late answers | delay fault |
