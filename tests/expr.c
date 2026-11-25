@@ -1,36 +1,6 @@
 #include "vtest.h"
 #include "device/expr.h"
-#include "vlib/macros.h"
 #include <math.h>
-
-/* T2 supplies the real device_get_point in device.c; this weak fake keeps the
- * expression suite self-contained until that object is linked in. */
-bool __attribute__((weak))
-device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out)
-{
-	static const struct
-	{
-		space_kind_t	space;
-		u32		address;
-		val_t		value;
-	} points[] = {
-		{ SPACE_HOLDING, 10, { .type = VAL_NUM, .n = 7 } },
-		{ SPACE_INPUT, 5, { .type = VAL_NUM, .n = -2.5 } },
-		{ SPACE_COIL, 3, { .type = VAL_BOOL, .b = true } },
-		{ SPACE_DISCRETE, 2, { .type = VAL_BOOL, .b = false } },
-	};
-
-	(void)dev;
-	for (u32 i = 0; i < ARRAY_COUNT(points); i++)
-	{
-		if (points[i].space == space && points[i].address == address)
-		{
-			*out = points[i].value;
-			return true;
-		}
-	}
-	return false;
-}
 
 static expr_node_t
 node(expr_kind_t kind)

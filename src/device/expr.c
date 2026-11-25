@@ -1,11 +1,6 @@
 #include "device/expr.h"
 #include <math.h>
 
-/* The point accessor arrives with the device-machine task. Keeping this
- * reference weak lets T1 build on its own; the tests provide a stub. */
-bool __attribute__((weak)) device_get_point(const device_t* dev, space_kind_t space,
-					    u32 address, val_t* out);
-
 enum { EXPR_MAX_DEPTH = 512 };
 
 static bool
@@ -49,8 +44,6 @@ eval_node(const expr_node_t* nodes, u16 index, expr_ctx_t* ctx, val_t* out, u16 
 		*out = ctx->vars[node->a];
 		return true;
 	case EXPR_POINT:
-		if (!device_get_point)
-			return fail(ctx, EXPR_FAIL_POINT);
 		if (!device_get_point(ctx->dev, (space_kind_t)node->space, node->address, out))
 			return fail(ctx, EXPR_FAIL_POINT);
 		return true;

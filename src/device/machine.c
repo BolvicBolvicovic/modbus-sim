@@ -47,22 +47,32 @@ name_ok(const char* name)
 	return name[0] != '\0' && memchr(name, '\0', MACHINE_NAME_MAX) != NULL;
 }
 
-/* Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
-static u32
-find_point_index(const device_t* dev, space_kind_t space, u32 address)
+machine_target_result_t
+machine_check_target_point(const device_t* dev, space_kind_t space, u32 address,
+			   u8* owners, u8 machine_id)
 {
-	u16 owner = 0;
+	machine_target_result_t result = {
+		.index = device_find_point(dev, space, address),
+		.status = MACHINE_TARGET_OK,
+	};
 
-	if (space >= SPACE_COUNT || address >= ADDRESS_SPACE_SIZE)
-		return DEVICE_MAX_POINTS;
-
-	owner = dev->spaces[space].owner[address];
-	if (owner == 0 || (u32)owner > dev->point_count)
-		return DEVICE_MAX_POINTS;
-
-	if (dev->points[owner - 1].space != space || dev->points[owner - 1].address != address)
-		return DEVICE_MAX_POINTS;
-	return owner - 1;
+	if (result.index == DEVICE_MAX_POINTS)
+	{
+		result.status = MACHINE_TARGET_NOT_FOUND;
+		return result;
+	}
+	if (dev->points[result.index].kind == POINT_RAMP)
+	{
+		result.status = MACHINE_TARGET_RAMP;
+		return result;
+	}
+	if (owners[result.index] != 0 && owners[result.index] != machine_id)
+	{
+		result.status = MACHINE_TARGET_CONFLICT;
+		return result;
+	}
+	owners[result.index] = machine_id;
+	return result;
 }
 
 typedef struct validation_t validation_t;
@@ -232,9 +242,9 @@ validate_statement(const machine_def_t* def, u16 index, const char* machine, con
 		   validation_t* v)
 {
 	const machine_stmt_t* stmt = NULL;
+	machine_target_result_t target = { 0 };
 	val_type_t value_type = VAL_NUM;
 	val_type_t target_type = VAL_NUM;
-	u32 point = 0;
 	const char* error = NULL;
 
 	if (index >= def->statement_count)
@@ -260,17 +270,17 @@ validate_statement(const machine_def_t* def, u16 index, const char* machine, con
 		}
 		else if (stmt->target_kind == TARGET_POINT)
 		{
-			point = find_point_index(v->dev, (space_kind_t)stmt->space, stmt->address);
-			if (point == DEVICE_MAX_POINTS)
+			target = machine_check_target_point(v->dev, (space_kind_t)stmt->space,
+							    stmt->address, v->point_owner,
+							    (u8)(v->machine_index + 1));
+			if (target.status == MACHINE_TARGET_NOT_FOUND)
 				return machine_error(machine, state,
 						     "assignment target must be the first address of a configured point");
-			if (v->dev->points[point].kind == POINT_RAMP)
+			if (target.status == MACHINE_TARGET_RAMP)
 				return machine_error(machine, state, "machine cannot drive a ramp point");
-			if (v->point_owner[point] != 0 &&
-			    v->point_owner[point] != (u8)(v->machine_index + 1))
+			if (target.status == MACHINE_TARGET_CONFLICT)
 				return machine_error(machine, state,
 						     "point is already driven by another machine");
-			v->point_owner[point] = (u8)(v->machine_index + 1);
 			target_type = space_is_bit((space_kind_t)stmt->space) ? VAL_BOOL : VAL_NUM;
 		}
 		else
@@ -465,7 +475,7 @@ mark_point_owner(device_t* dev, const machine_def_t* def, u16 index, u8* seen)
 	stmt = &def->statements[index];
 	if (stmt->kind == STMT_SET && stmt->target_kind == TARGET_POINT)
 	{
-		point = find_point_index(dev, (space_kind_t)stmt->space, stmt->address);
+		point = device_find_point(dev, (space_kind_t)stmt->space, stmt->address);
 		if (point != DEVICE_MAX_POINTS)
 			dev->points[point].kind = POINT_MACHINE;
 	}

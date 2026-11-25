@@ -1065,22 +1065,6 @@ config_machine_add(form_ctx_t* ctx, s7_pointer form, device_t* dev)
 	return parse_machine(&c, form, text, dev);
 }
 
-static u32
-find_point_index(const device_t* dev, space_kind_t space, u32 address)
-{
-	u16 owner = 0;
-
-	if (space >= SPACE_COUNT || address >= ADDRESS_SPACE_SIZE)
-		return DEVICE_MAX_POINTS;
-	owner = dev->spaces[space].owner[address];
-	if (owner == 0 || (u32)owner > dev->point_count)
-		return DEVICE_MAX_POINTS;
-	if (dev->points[owner - 1].space != space ||
-	    dev->points[owner - 1].address != address)
-		return DEVICE_MAX_POINTS;
-	return owner - 1;
-}
-
 static const point_ref_t*
 find_expr_ref(const machine_state_t* state, u16 machine_index, u16 expr_index)
 {
@@ -1107,7 +1091,7 @@ check_expr_points(form_ctx_t* ctx, const machine_state_t* state, const device_t*
 
 		if (node->kind != EXPR_POINT)
 			continue;
-		if (find_point_index(dev, (space_kind_t)node->space, node->address) != DEVICE_MAX_POINTS)
+		if (device_find_point(dev, (space_kind_t)node->space, node->address) != DEVICE_MAX_POINTS)
 			continue;
 		ref = find_expr_ref(state, machine_index, i);
 		text = ref ? ref->text : def->name;
@@ -1126,7 +1110,7 @@ check_set_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* 
 	for (u16 i = 0; i < def->statement_count; i++)
 	{
 		const machine_stmt_t* stmt = &def->statements[i];
-		u32 point = 0;
+		machine_target_result_t target = { 0 };
 		u16 ref_index = 0;
 		const point_ref_t* ref = NULL;
 		const char* text = NULL;
@@ -1134,25 +1118,26 @@ check_set_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* 
 
 		if (stmt->kind != STMT_SET || stmt->target_kind != TARGET_POINT)
 			continue;
-		point = find_point_index(dev, (space_kind_t)stmt->space, stmt->address);
+		target = machine_check_target_point(dev, (space_kind_t)stmt->space,
+						   stmt->address, owners,
+						   (u8)(machine_index + 1));
 		ref_index = state->ref_by_stmt[machine_index][i];
 		if (ref_index)
 			ref = &state->point_refs[ref_index - 1];
 		text = ref ? ref->text : def->name;
 		state_name = ref && ref->state_index < def->state_count ?
 			     def->states[ref->state_index].name : "(none)";
-		if (point == DEVICE_MAX_POINTS)
+		if (target.status == MACHINE_TARGET_NOT_FOUND)
 			return form_fail(ctx, "%s: machine '%s', state '%s': point %s %u is not the first address of a configured point",
 					 text, def->name, state_name,
 					 space_name((space_kind_t)stmt->space), stmt->address);
-		if (dev->points[point].kind == POINT_RAMP)
+		if (target.status == MACHINE_TARGET_RAMP)
 			return form_fail(ctx, "%s: machine '%s', state '%s': machine cannot drive a ramp point",
 					 text, def->name, state_name);
-		if (owners[point] && owners[point] != (u8)(machine_index + 1))
+		if (target.status == MACHINE_TARGET_CONFLICT)
 			return form_fail(ctx, "%s: machine '%s', state '%s': point %s %u is already driven by another machine",
 					 text, def->name, state_name,
 					 space_name((space_kind_t)stmt->space), stmt->address);
-		owners[point] = (u8)(machine_index + 1);
 	}
 	return true;
 }
