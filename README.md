@@ -113,7 +113,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
 | Writes | Clients can write coils and holding registers. Writing a ramp freezes it at the written value. |
 | Observability | `(server (http ...))` serves `/healthz`, `/readyz` and Prometheus `/metrics`; `--log-format json` writes one JSON object per log line, with structured request events under `-v`. `(http (control on))` adds an opt-in JSON API to read and write registers and set or clear faults while the server runs. |
-| Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`); the `mogbus` binary is itself a client of it. |
+| Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`), and a Python package on top of it (`python/`, for pytest and scripts); the `mogbus` binary is itself a client of the C API. |
 
 ## Ready-made profiles
 
@@ -295,7 +295,9 @@ rejected in `ascii-tcp`. `ascii-udp` carries one frame per datagram with no resy
 partial-frame timeout. FC 08 subfunction `0x0003` (Change ASCII Delimiter) is rejected with
 exception 03; `CR LF` framing is fixed.
 
-## Use as a library
+## Embedding: C and Python
+
+### C
 
 mogbus also builds as `libmogbus.a` / `libmogbus.so` (`make lib`) with a small C API in
 `include/mogbus.h`: create devices in code or from a config file, start any transport and step it
@@ -304,12 +306,25 @@ from your own loop. The `mogbus` binary is built the same way: `src/main.c` incl
 config file loader for hosts that build devices in code. See [docs/user/library.md](docs/user/library.md)
 and `examples/embed_tcp.c`.
 
-## Use from Python
+### Python
 
-The `python/` package wraps `libmogbus.so` with `ctypes` (standard library only) for tests that
-start simulated devices, change their values while a client talks to them and check the result:
-`make python && pip install ./python`, then `with mogbus.serve(config="profiles/minimal.scm", port=0) as srv:`.
-See [docs/user/python.md](docs/user/python.md).
+The `python/` package wraps `libmogbus.so` with `ctypes` (standard library only), so tests and
+scripts can start simulated devices, change their values while a client talks to them, and check
+the result:
+
+```bash
+make python && pip install ./python
+```
+
+```python
+import mogbus
+
+with mogbus.serve(config="profiles/minimal.scm", port=0) as srv:
+    print("Modbus TCP on port", srv.port)
+    srv.device(1).set_value("holding", 0, 1234)   # a client now reads 1234
+```
+
+See [docs/user/python.md](docs/user/python.md) for the API, the threading model and a pytest fixture.
 
 ## Documentation
 
