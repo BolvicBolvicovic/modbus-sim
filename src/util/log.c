@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Process-wide logging with a level and a pluggable sink.
+ */
 #include "util/log.h"
 #include <stdarg.h>
 #include <stdio.h>

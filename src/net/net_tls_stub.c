@@ -2,10 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Built when WITH_TLS=0: the API stays linkable for the shared net/tcp_server
- * code, but no TLS session can ever be created. Config loading rejects
- * (tls ...) before this is reached; the error text is kept here too so direct
- * callers get the same explanation. */
+/**
+ * @file
+ * @brief No-TLS implementation of net_tls.h, built when WITH_TLS=0.
+ *
+ * The API stays linkable for the shared net/tcp_server code, but no TLS session can ever be
+ * created. Config loading rejects (tls ...) before this is reached; the error text is kept here too so
+ * direct callers get the same explanation.
+ */
 
 static void
 tls_unavailable(char* err, u32 err_size)

@@ -3,7 +3,10 @@
 
 #include "vlib/c_types.h"
 
-/* Modbus is big-endian on the wire. */
+/**
+ * @file
+ * @brief Big-endian 16-bit helpers: Modbus is big-endian on the wire.
+ */
 
 static inline u16
 get_be16(const u8* p)

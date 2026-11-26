@@ -1,12 +1,17 @@
+/**
+ * @file
+ * @brief Transport selector shared by the config loader and the server facade.
+ */
 #ifndef SERVER_MODE_H
 #define SERVER_MODE_H
 
-/* Name: server_mode_t
- * Description: transport selected by (server (mode NAME)) or by a host program.
- * Lives in its own header so config/ can name modes without depending on net/.
- * The *_FD modes serve an already-open byte-stream fd (socketpair, PTY master,
- * ...) borrowed from the host; the config file cannot select them.
- * */
+/**
+ * @brief Transport selected by (server (mode NAME)) or by a host program.
+ *
+ * Lives in its own header so config/ can name modes without depending on net/. The *_FD modes
+ * serve an already-open byte-stream fd (socketpair, PTY master, ...) borrowed from the host;
+ * the config file cannot select them.
+ */
 typedef enum server_mode_t server_mode_t;
 enum server_mode_t
 {

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Simulated device: data tables, points, reads and writes, file records, FIFOs, identification.
+ */
 #include "device/device.h"
 #include "device/machine.h"
 #include <math.h>
@@ -72,7 +76,7 @@ device_new(arena_t* arena, u64 start_ms)
 	return dev;
 }
 
-/* Computes the point's current value and stores it in its address(es). */
+/** @brief Computes the point's current value and stores it in its address(es). */
 static void
 point_apply(device_t* dev, const point_t* point, u64 now_ms)
 {
@@ -217,7 +221,7 @@ device_find_point(const device_t* dev, space_kind_t space, u32 address)
 	return owner - 1;
 }
 
-/* True when [address, address+qty) is inside the table and fully defined. */
+/** @brief True when [address, address+qty) is inside the table and fully defined. */
 static bool
 range_is_defined(const space_t* space, u32 address, u32 qty)
 {

@@ -246,6 +246,12 @@ no per-peer state, no disconnect fault.
   usually inlined. The full style rules are in `AGENTS.md`.
 - No `malloc`/`free` in project code: vlib arenas only, and no allocation per request.
 - Compiled with `-Wall -Wextra -Werror`.
+- Doc comments use Doxygen: every source file starts with `/** @file @brief ... */`; a type,
+  function or macro gets `/** @brief One sentence. Details. */` above it; members get `/**< ... */`
+  after them (or `/** ... */` above); related declarations share a `@name ... @{ ... @}` group.
+  Public functions in `include/mogbus.h` document every `@param` and `@return`; internal ones add
+  them only when the brief does not already say it. Comments inside function bodies stay `/* */`.
+  `make api-docs` (CI job `api-docs`) builds the HTML reference with warnings as errors.
 
 ## Build and tests
 

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus RTU frames over TCP connections.
+ */
 #define _GNU_SOURCE
 #include "net/rtu_tcp_server.h"
 #include "modbus/pdu.h"

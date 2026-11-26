@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Loads a Scheme config file into devices and server settings.
+ */
 #include "config/config.h"
 #include "config/config_device.h"
 #include "config/config_machine.h"
@@ -9,8 +13,11 @@
 #include "vlib/readfile.h"
 #include <string.h>
 
-/* Scheme helper run once: reads every form in a text without evaluating any of them.
- * Returns (#t form ...) on success or (#f "message") on a syntax error. */
+/**
+ * @brief Scheme helper run once: reads every form in a text without evaluating any of them.
+ *
+ * Returns (#t form ...) on success or (#f "message") on a syntax error.
+ */
 static const char READ_ALL_FORMS[] =
 	"(lambda (text)"
 	"  (catch #t"
@@ -26,7 +33,7 @@ static const char READ_ALL_FORMS[] =
 	"                   (object->string info))))))";
 
 static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "space" };
-/* Indexed by every server_mode_t so messages never read past the table. */
+/** @brief Indexed by every server_mode_t so messages never read past the table. */
 static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_TCP]          = "tcp",
 	[SERVER_MODE_RTU_PTY]      = "rtu-pty",
@@ -41,7 +48,7 @@ static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_ASCII_UDP]    = "ascii-udp",
 	[SERVER_MODE_RTU_UDP]      = "rtu-udp",
 };
-/* What (mode ...) accepts, in selection order; the _FD modes are host-only. */
+/** @brief What (mode ...) accepts, in selection order; the _FD modes are host-only. */
 static const char* const CONFIG_MODE_NAMES[] = {
 	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp", "udp",
 	"ascii-udp", "rtu-udp",
@@ -508,7 +515,11 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 	       check_fault_modes(ctx, config);
 }
 
-/* Reads all forms of `text` with s7. Returns the list of forms, or false with ctx->err set. */
+/**
+ * @brief Reads all forms of `text` with s7.
+ *
+ * Returns the list of forms, or false with ctx->err set.
+ */
 static bool
 read_forms(form_ctx_t* ctx, const char* text, s7_pointer* forms)
 {

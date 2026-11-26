@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Readers for (key value) config forms with uniform error messages.
+ */
 #include "config/form.h"
 #include "vlib/macros.h"
 #include <stdarg.h>
@@ -126,7 +130,7 @@ form_need(form_ctx_t* ctx, s7_pointer options, const char* key, const char* wher
 	return true;
 }
 
-/* A value form must look like (key value). */
+/** @brief A value form must look like (key value). */
 static bool
 value_form_ok(form_ctx_t* ctx, s7_pointer form)
 {
@@ -191,7 +195,7 @@ form_get_string(form_ctx_t* ctx, s7_pointer form, const char** out)
 	return true;
 }
 
-/* Words people naturally write for on/off. */
+/** @brief Words people naturally write for on/off. */
 static bool
 symbol_to_bool(const char* name, bool* out)
 {

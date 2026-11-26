@@ -13,13 +13,16 @@
 #include <string.h>
 #include <unistd.h>
 
-/* PTY/pipe fds have no baud rate or UART character timing, so true Modbus
- * RTU t3.5/t1.5 cannot be observed from read() boundaries alone. When baud is
- * known (config or tty), derive t3.5 per Modbus spec. Optional strict_t15
- * enables a best-effort intra-frame t1.5 discard heuristic on read()
- * boundaries in baud-derived auto mode. Otherwise fall back to a fixed
- * conservative silence gap. frame_gap_ms remains an explicit inter-frame
- * override for compatibility and deterministic testing. */
+/**
+ * @file
+ * @brief Modbus RTU server on a serial-like byte stream.
+ *
+ * PTY/pipe fds have no baud rate or UART character timing, so true Modbus RTU t3.5/t1.5 cannot
+ * be observed from read() boundaries alone. When baud is known (config or tty), derive t3.5 per Modbus spec. Optional strict_t15 enables
+ * a best-effort intra-frame t1.5 discard heuristic on read() boundaries in baud-derived auto
+ * mode. Otherwise fall back to a fixed conservative silence gap. frame_gap_ms remains an
+ * explicit inter-frame override for compatibility and deterministic testing.
+ */
 
 static void
 rtu_server_init_ctx(rtu_server_t* server)

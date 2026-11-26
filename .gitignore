@@ -17,3 +17,4 @@ examples/embed_tcp_static
 mogbus*-tests.times
 dist/
 .revision
+build/

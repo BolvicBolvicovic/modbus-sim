@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Transport-independent server facade: opens PTYs and serial devices and drives the selected transport.
+ */
 #include "server/server.h"
 #include <stdio.h>
 #include <string.h>

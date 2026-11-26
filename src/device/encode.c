@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Encoding and decoding of point values to and from 16-bit registers.
+ */
 #include "device/encode.h"
 #include "vlib/macros.h"
 #include <float.h>

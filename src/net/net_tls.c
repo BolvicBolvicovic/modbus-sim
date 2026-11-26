@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief OpenSSL implementation of the TLS layer for Modbus TCP.
+ */
 #include "net/net_tls.h"
 #include <errno.h>
 #include <openssl/bio.h>

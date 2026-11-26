@@ -1,8 +1,12 @@
+/**
+ * @file
+ * @brief Modbus RTU framing: CRC-16, frame encoding, decoding and boundary search.
+ */
 #include "modbus/rtu.h"
 #include "modbus/pdu.h"
 #include "modbus/mei_canopen.h"
 
-/* Reflected CRC-16/Modbus table (polynomial 0xA001). */
+/** @brief Reflected CRC-16/Modbus table (polynomial 0xA001). */
 static const u16 crc16_table[256] = {
 	0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241,
 	0xC601, 0x06C0, 0x0780, 0xC741, 0x0500, 0xC5C1, 0xC481, 0x0440,

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Compiled machine expression nodes and their evaluator.
+ */
 #ifndef EXPR_H
 #define EXPR_H
 
@@ -20,10 +24,10 @@ typedef struct expr_node_t expr_node_t;
 struct expr_node_t
 {
 	expr_kind_t	kind;
-	u8		space;		/* EXPR_POINT: numeric space_kind_t value (0..3) */
-	u16		a, b, c;	/* child indices / var index; unused = EXPR_NO_CHILD */
-	u32		address;	/* EXPR_POINT */
-	val_t		literal;	/* EXPR_BOOL / EXPR_NUM */
+	u8		space;		/**< EXPR_POINT: numeric space_kind_t value (0..3) */
+	u16		a, b, c;	/**< child indices / var index; unused = EXPR_NO_CHILD */
+	u32		address;	/**< EXPR_POINT */
+	val_t		literal;	/**< EXPR_BOOL / EXPR_NUM */
 };
 
 typedef enum expr_failure_t expr_failure_t;
@@ -40,11 +44,11 @@ typedef struct expr_ctx_t expr_ctx_t;
 struct expr_ctx_t
 {
 	device_t*	dev;
-	val_t*		vars;		/* the machine's variables */
+	val_t*		vars;		/**< the machine's variables */
 	u64		now_ms;
 	u64		elapsed_ms;
-	u32		budget;		/* steps left; one per node evaluated */
-	expr_failure_t	failure;	/* reason of the last failed eval, for logging */
+	u32		budget;		/**< steps left; one per node evaluated */
+	expr_failure_t	failure;	/**< reason of the last failed eval, for logging */
 };
 
 bool expr_eval(const expr_node_t* nodes, u16 root, expr_ctx_t* ctx, val_t* out);

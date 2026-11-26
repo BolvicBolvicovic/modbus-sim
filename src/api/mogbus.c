@@ -1,6 +1,11 @@
-/* Public C API (include/mogbus.h): a thin top layer over config (optional), device, server
- * and util. Nothing else includes this module. Handles are structs pushed on the
- * context arena, so the API itself never calls malloc. */
+/**
+ * @file
+ * @brief Public C API (include/mogbus.h): a thin top layer over config (optional), device,
+ *        server and util.
+ *
+ * Nothing else includes this module. Handles are structs pushed on the context arena, so the
+ * API itself never calls malloc.
+ */
 #include "mogbus.h"
 #include "build_config.h"
 #include "device/device.h"
@@ -19,7 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* The public enums are mapped by value, so they must match the internal ones. */
+/** @brief The public enums are mapped by value, so they must match the internal ones. */
 _Static_assert((int)MOGBUS_COIL == (int)SPACE_COIL &&
 	       (int)MOGBUS_DISCRETE == (int)SPACE_DISCRETE &&
 	       (int)MOGBUS_INPUT == (int)SPACE_INPUT &&
@@ -75,11 +80,13 @@ _Static_assert(MOGBUS_MAX_DEVICES == SERVER_MAX_DEVICES, "device limit");
 #define VERSION_STRING_(a, b, c)	#a "." #b "." #c
 #define VERSION_STRING(a, b, c)		VERSION_STRING_(a, b, c)
 
-/* Name: mogbus_server_t
- * Description: a server slot. Slots are reused after close because arena memory
- * cannot be freed one by one. Strings of the options are copied into `strings`
- * (mogbus_server_check() validates into a stack copy of the same struct).
- * */
+/**
+ * @brief A server slot.
+ *
+ * Slots are reused after close because arena memory cannot be freed one by one. Strings of the
+ * options are copied into `strings` (mogbus_server_check() validates into a stack copy of the
+ * same struct).
+ */
 struct mogbus_server_t
 {
 	server_t	server;
@@ -101,7 +108,7 @@ struct mogbus_t
 {
 	arena_t*	arena;
 #if WITH_CONFIG
-	config_t	config;		/* last loaded file: server section only is used */
+	config_t	config;		/**< last loaded file: server section only is used */
 	bool		has_config;
 #endif
 	device_t*	devices[SERVER_MAX_DEVICES];
@@ -457,7 +464,7 @@ mogbus_server_options_defaults(void)
 	};
 }
 
-/* Copies src into dst; NULL stays NULL and a too-long string fails with *ok = false. */
+/** @brief Copies src into dst; NULL stays NULL and a too-long string fails with *ok = false. */
 static const char*
 copy_string(char* dst, size_t cap, const char* src, const char* what, bool* ok,
 	    char* err, size_t err_size)
@@ -474,10 +481,13 @@ copy_string(char* dst, size_t cap, const char* src, const char* what, bool* ok,
 	return dst;
 }
 
-/* The validation shared by create and mogbus_server_check(): fails for no devices,
- * a missing path or fd, a bad serial line, over-long strings and unusable TLS
- * files. `o` borrows its strings; they are copied into `st`, so the caller's
- * storage may go away, and `o` is repointed at the copies. Opens nothing. */
+/**
+ * @brief The validation shared by create and mogbus_server_check(): fails for no devices, a
+ *        missing path or fd, a bad serial line, over-long strings and unusable TLS files.
+ *
+ * `o` borrows its strings; they are copied into `st`, so the caller's storage may go away, and
+ * `o` is repointed at the copies. Opens nothing.
+ */
 static mogbus_error_t
 validate_options(const mogbus_t* ctx, server_options_t* o, struct strings_t* st,
 		 char* err, size_t err_size)
@@ -529,7 +539,7 @@ validate_options(const mogbus_t* ctx, server_options_t* o, struct strings_t* st,
 	return MOGBUS_OK;
 }
 
-/* Common tail of both create functions. */
+/** @brief Common tail of both create functions. */
 static mogbus_server_t*
 create_server(mogbus_t* ctx, server_options_t o, char* err, size_t err_size, mogbus_error_t* status)
 {
@@ -593,7 +603,7 @@ fail:
 	return NULL;
 }
 
-/* Public options to internal ones; false with a message for an enum out of range. */
+/** @brief Public options to internal ones; false with a message for an enum out of range. */
 static bool
 options_from_public(const mogbus_server_options_t* in, server_options_t* o, char* err, size_t err_size)
 {
@@ -768,7 +778,7 @@ mogbus_server_pty_name(const mogbus_server_t* server)
 	return server_pty_name(&server->server);
 }
 
-/* The log sink is process-wide, like util/log itself. */
+/** @brief The log sink is process-wide, like util/log itself. */
 static struct
 {
 	mogbus_log_fn	fn;

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus TCP (MBAP) server, optionally TLS-wrapped.
+ */
 #define _GNU_SOURCE
 #include "net/tcp_server.h"
 #include "modbus/mbap.h"
@@ -93,7 +97,7 @@ conn_skip_idle(void* ctx, const net_tcp_conn_t* base)
 	return conn->tx_len > 0;
 }
 
-/* Removes the first `size` bytes of the receive buffer. */
+/** @brief Removes the first `size` bytes of the receive buffer. */
 static void
 conn_consume(tcp_conn_t* conn, u32 size)
 {
@@ -101,7 +105,7 @@ conn_consume(tcp_conn_t* conn, u32 size)
 	conn->rx_len -= size;
 }
 
-/* Runs the request found at the start of conn->rx and queues the response (if any). */
+/** @brief Runs the request found at the start of conn->rx and queues the response (if any). */
 static void
 handle_frame(tcp_server_t* server, tcp_conn_t* conn, const mbap_header_t* header, u64 now_ms)
 {
@@ -125,7 +129,7 @@ handle_frame(tcp_server_t* server, tcp_conn_t* conn, const mbap_header_t* header
 	conn->tx_due_ms = now_ms + decision.delay_ms;
 }
 
-/* Handles every complete request waiting in the receive buffer, one at a time. */
+/** @brief Handles every complete request waiting in the receive buffer, one at a time. */
 static void
 conn_process(tcp_server_t* server, tcp_conn_t* conn)
 {
@@ -260,7 +264,7 @@ conn_write(tcp_server_t* server, tcp_conn_t* conn)
 
 /* --- main loop --- */
 
-/* A TLS handshake has its own deadline from accept(), even with idle timeout disabled. */
+/** @brief A TLS handshake has its own deadline from accept(), even with idle timeout disabled. */
 static void
 close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
 {
@@ -286,8 +290,11 @@ close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
 	}
 }
 
-/* OpenSSL may hold decrypted request bytes even when the socket has nothing to read.
- * Only synthesize a wakeup while no response is pending, so delayed faults are honored. */
+/**
+ * @brief OpenSSL may hold decrypted request bytes even when the socket has nothing to read.
+ *
+ * Only synthesize a wakeup while no response is pending, so delayed faults are honored.
+ */
 static bool
 conn_tls_has_buffered_input(const tcp_conn_t* conn)
 {
@@ -297,7 +304,11 @@ conn_tls_has_buffered_input(const tcp_conn_t* conn)
 	       net_tls_conn_pending(conn->tls) > 0;
 }
 
-/* Fills the poll table. Returns the number of entries; entry 0 is the listening socket. */
+/**
+ * @brief Fills the poll table.
+ *
+ * Returns the number of entries; entry 0 is the listening socket.
+ */
 static u32
 build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owners,
 		 u64 now_ms, int* timeout)
@@ -392,16 +403,19 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner
 
 	tls_events = conn->tls ? net_tls_conn_poll_events(conn->tls) : 0;
 
-	/* WANT_WRITE from SSL_read must be retried as a read, never as an empty write. */
+	/** WANT_WRITE from SSL_read must be retried as a read, never as an empty write. */
 	if (conn->tls && conn->tx_len == 0 && tls_events != 0)
 	{
 		conn_read(server, conn);
 		return;
 	}
 
-	/* A TLS write can need a read (renegotiation/post-handshake messages), but
-	 * a delayed response must never be sent early. Do not consume new request
-	 * bytes while a response is still pending. */
+	/**
+	 * @brief A TLS write can need a read (renegotiation/post-handshake messages), but a delayed
+	 *        response must never be sent early.
+	 *
+	 * Do not consume new request bytes while a response is still pending.
+	 */
 	if (conn->tls && conn->tx_len > 0)
 	{
 		/* poll reports POLLHUP even when events is 0: a disconnect must free

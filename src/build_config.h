@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Compile-time fallbacks for the WITH_TLS and WITH_CONFIG build options.
+ */
 #ifndef BUILD_CONFIG_H
 #define BUILD_CONFIG_H
 

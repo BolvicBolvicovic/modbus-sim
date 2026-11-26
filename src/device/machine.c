@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Machine runtime: states, transitions, timers and on-write handlers, evaluated at request time.
+ */
 #include "device/machine.h"
 #include "util/log.h"
 #include <math.h>
@@ -76,8 +80,8 @@ struct validation_t
 	u8		expr_marks[MACHINE_MAX_EXPR_NODES];
 	val_type_t	expr_types[MACHINE_MAX_EXPR_NODES];
 	u8		stmt_marks[MACHINE_MAX_STATEMENTS];
-	u8		point_owner[DEVICE_MAX_POINTS]; /* machine index + 1, from set! */
-	u8		reg_owner[DEVICE_MAX_POINTS];   /* machine index + 1, from state registers */
+	u8		point_owner[DEVICE_MAX_POINTS]; /**< machine index + 1, from set! */
+	u8		reg_owner[DEVICE_MAX_POINTS];   /**< machine index + 1, from state registers */
 };
 
 static const char*

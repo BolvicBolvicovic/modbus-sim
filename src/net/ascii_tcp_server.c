@@ -14,9 +14,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-/* Raw Modbus ASCII over TCP byte streams. Framing is CR LF, not silence timing,
- * so a partial frame is expired only after one second without a new byte. Each
- * connection owns its rx buffer and delayed response; devices are borrowed. */
+/**
+ * @file
+ * @brief Raw Modbus ASCII over TCP byte streams.
+ *
+ * Framing is CR LF, not silence timing, so a partial frame is expired only after one second
+ * without a new byte. Each connection owns its rx buffer and delayed response; devices are
+ * borrowed.
+ */
 
 static void
 conn_close(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)

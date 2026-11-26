@@ -1,6 +1,13 @@
-/* The project's only vlib arena implementation, so libmogbus is self-contained.
- * The test runner (vlib/vtest.c) defines its own, so the Makefile leaves this
- * file out of the test binary. */
+/**
+ * @file
+ * @brief The vlib arena implementation (ARENA_IMPL) for the library and the binary.
+ */
+/**
+ * @brief The project's only vlib arena implementation, so libmogbus is self-contained.
+ *
+ * The test runner (vlib/vtest.c) defines its own, so the Makefile leaves this file out of the
+ * test binary.
+ */
 #define ARENA_IMPL
 /* Vendored vlib/arena.h: arena_push() dereferences a freshly allocated block
  * without checking arena_alloc()'s NULL return. Callers check their own

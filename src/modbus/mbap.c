@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief MBAP header encoding and decoding for Modbus TCP and UDP.
+ */
 #include "modbus/mbap.h"
 #include "modbus/bytes.h"
 

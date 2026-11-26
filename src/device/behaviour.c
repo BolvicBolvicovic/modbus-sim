@@ -1,9 +1,15 @@
+/**
+ * @file
+ * @brief Ramp behaviour: the value of a ramp at a given time.
+ */
 #include "device/behaviour.h"
 #include "vlib/macros.h"
 #include <math.h>
 
-/* Index of the value to show after `ticks` steps, for a bouncing ramp
- * that has `last + 1` distinct values (indexes 0..last). */
+/**
+ * @brief Index of the value to show after `ticks` steps, for a bouncing ramp that has `last +
+ *        1` distinct values (indexes 0..last).
+ */
 static u64
 bounce_index(u64 ticks, u64 last)
 {

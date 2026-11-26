@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Adapter from a loaded config to server options.
+ */
 #include "server/server_config.h"
 
 server_options_t

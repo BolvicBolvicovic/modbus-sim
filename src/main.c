@@ -1,5 +1,9 @@
-/* mogbus: a Modbus device simulator configured with a Scheme file. A pure client
- * of the public library API (mogbus.h); nothing here touches an internal module. */
+/**
+ * @file
+ * @brief mogbus: a Modbus device simulator configured with a Scheme file.
+ *
+ * A pure client of the public library API (mogbus.h); nothing here touches an internal module.
+ */
 #include "mogbus.h"
 #include <signal.h>
 #include <stdio.h>
@@ -7,7 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* The binary owns signal handling; the handler stops the running server. */
+/** @brief The binary owns signal handling; the handler stops the running server. */
 static mogbus_server_t* volatile	g_server;
 
 static void
@@ -73,7 +77,7 @@ print_usage(void)
 	     "Docs: README.md and docs/user/");
 }
 
-/* Returns false and prints a message when the arguments make no sense. */
+/** @brief Returns false and prints a message when the arguments make no sense. */
 static bool
 parse_args(int argc, char** argv, cli_t* cli)
 {

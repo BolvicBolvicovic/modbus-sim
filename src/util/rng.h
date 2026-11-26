@@ -1,13 +1,18 @@
+/**
+ * @file
+ * @brief Seeded pseudo-random numbers for reproducible faults.
+ */
 #ifndef RNG_H
 #define RNG_H
 
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
-/* Name: rng_t
- * Description: deterministic xoshiro256** generator seeded via splitmix64.
+/**
+ * @brief Deterministic xoshiro256** generator seeded via splitmix64.
+ *
  * Same seed, same sequence: fault injection is reproducible.
- * */
+ */
 typedef struct rng_t rng_t;
 struct rng_t
 {
@@ -17,7 +22,7 @@ struct rng_t
 void	rng_seed(rng_t* rng, u64 seed);
 u64	rng_next(rng_t* rng);
 
-/* Returns true with a probability of `percent` (0..100). */
+/** @brief Returns true with a probability of `percent` (0..100). */
 bool	rng_percent(rng_t* rng, u32 percent);
 
 #endif

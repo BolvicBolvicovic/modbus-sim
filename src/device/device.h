@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Simulated Modbus device: four data tables and the points that own their addresses.
+ */
 #ifndef DEVICE_H
 #define DEVICE_H
 
@@ -11,38 +15,38 @@
 #include <stddef.h>
 
 #define DEVICE_NAME_MAX		64
-#define DEVICE_ID_OBJECT_MAX	244	/* 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
-/* 253-byte Modbus PDU minus FC, byte count, server ID and run indicator. */
+#define DEVICE_ID_OBJECT_MAX	244	/**< 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
+/** @brief 253-byte Modbus PDU minus FC, byte count, server ID and run indicator. */
 #define DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX	249
 #define DEVICE_MAX_EXTENDED_IDS	32
 #define DEVICE_MAX_POINTS	8192
 #define ADDRESS_SPACE_SIZE	65536
 
-/* Name: space_kind_t
- * Description: the four Modbus data tables.
- * */
+/** @brief The four Modbus data tables. */
 typedef enum space_kind_t space_kind_t;
 enum space_kind_t
 {
-	SPACE_COIL,	/* read/write bit    (FC 01, 05, 15) */
-	SPACE_DISCRETE,	/* read-only bit     (FC 02)         */
-	SPACE_INPUT,	/* read-only 16 bits (FC 04)         */
-	SPACE_HOLDING,	/* read/write 16 bits(FC 03, 06, 16) */
+	SPACE_COIL,	/**< read/write bit    (FC 01, 05, 15) */
+	SPACE_DISCRETE,	/**< read-only bit     (FC 02)         */
+	SPACE_INPUT,	/**< read-only 16 bits (FC 04)         */
+	SPACE_HOLDING,	/**< read/write 16 bits(FC 03, 06, 16) */
 	SPACE_COUNT,
 };
 
 typedef enum point_kind_t point_kind_t;
 enum point_kind_t
 {
-	POINT_STATIC,	/* value never changes by itself */
-	POINT_RAMP,	/* value follows a ramp over time */
-	POINT_MACHINE,	/* value is driven by a scripted device machine */
+	POINT_STATIC,	/**< value never changes by itself */
+	POINT_RAMP,	/**< value follows a ramp over time */
+	POINT_MACHINE,	/**< value is driven by a scripted device machine */
 };
 
-/* Name: point_t
- * Description: one configured data point: where it lives, how it is encoded,
- * and how its value behaves. A point occupies value_width(type) addresses.
- * */
+/**
+ * @brief One configured data point: where it lives, how it is encoded, and how its value
+ *        behaves.
+ *
+ * A point occupies value_width(type) addresses.
+ */
 typedef struct point_t point_t;
 struct point_t
 {
@@ -51,15 +55,17 @@ struct point_t
 	value_type_t	type;
 	word_order_t	order;
 	point_kind_t	kind;
-	point_kind_t	configured_kind;	/* kind as configured, before client writes */
+	point_kind_t	configured_kind;	/**< kind as configured, before client writes */
 	f64		static_value;
 	ramp_params_t	ramp;
 };
 
-/* Name: space_t
- * Description: one data table. `owner` is the 1-based index of the point that
- * defines each address (0 = address not defined). Bit spaces store 0 or 1.
- * */
+/**
+ * @brief One data table.
+ *
+ * `owner` is the 1-based index of the point that defines each address (0 = address not
+ * defined). Bit spaces store 0 or 1.
+ */
 typedef struct space_t space_t;
 struct space_t
 {
@@ -76,21 +82,19 @@ struct space_t
 #define DEVICE_MAX_CANOPEN_OBJECTS	64
 #define DEVICE_MAX_CANOPEN_OBJECT_BYTES	238
 
-/* Name: file_segment_t
- * Description: one contiguous block of 16-bit register values in a file,
- * starting at Modbus record number `record`.
- * */
+/**
+ * @brief One contiguous block of 16-bit register values in a file, starting at Modbus record
+ *        number `record`.
+ */
 typedef struct file_segment_t file_segment_t;
 struct file_segment_t
 {
 	u16	record;
 	u16	length;
-	u16*	values;	/* length entries, arena-backed */
+	u16*	values;	/**< length entries, arena-backed */
 };
 
-/* Name: device_file_t
- * Description: configured FC 20 (Read File Record) storage for one file number.
- * */
+/** @brief Configured FC 20 (Read File Record) storage for one file number. */
 typedef struct device_file_t device_file_t;
 struct device_file_t
 {
@@ -99,21 +103,20 @@ struct device_file_t
 	file_segment_t	segments[DEVICE_MAX_FILE_SEGMENTS];
 };
 
-/* Name: device_fifo_t
- * Description: configured FC 24 (Read FIFO Queue) storage for one FIFO pointer.
+/**
+ * @brief Configured FC 24 (Read FIFO Queue) storage for one FIFO pointer.
+ *
  * Values are returned in configured order, non-destructively.
- * */
+ */
 typedef struct device_fifo_t device_fifo_t;
 struct device_fifo_t
 {
-	u16	address;	/* FIFO pointer address */
-	u16	count;		/* 0..DEVICE_MAX_FIFO_VALUES */
-	u16*	values;		/* count entries, arena-backed */
+	u16	address;	/**< FIFO pointer address */
+	u16	count;		/**< 0..DEVICE_MAX_FIFO_VALUES */
+	u16*	values;		/**< count entries, arena-backed */
 };
 
-/* Name: device_canopen_object_t
- * Description: one CANopen object served by FC 43 MEI 0x0D SDO transfers.
- * */
+/** @brief One CANopen object served by FC 43 MEI 0x0D SDO transfers. */
 typedef struct device_canopen_object_t device_canopen_object_t;
 struct device_canopen_object_t
 {
@@ -124,14 +127,18 @@ struct device_canopen_object_t
 	u8	data[DEVICE_MAX_CANOPEN_OBJECT_BYTES];
 };
 
-/* FC 08 diagnostic register bits. The simulator has no UART character stream,
- * so the character-overrun flag/count are always clear; 0x0014 still resets them. */
+/**
+ * @brief FC 08 diagnostic register bits.
+ *
+ * The simulator has no UART character stream, so the character-overrun flag/count are always
+ * clear; 0x0014 still resets them.
+ */
 enum diagnostic_register_bit
 {
 	DIAG_REG_CHARACTER_OVERRUN       = 1u << 0,
 };
 
-/* MEI 14 (Read Device Identification) object ids. */
+/** @brief MEI 14 (Read Device Identification) object ids. */
 enum device_id_object
 {
 	DEVICE_ID_VENDOR_NAME          = 0x00,
@@ -144,9 +151,7 @@ enum device_id_object
 	DEVICE_ID_STANDARD_COUNT       = 0x07,
 };
 
-/* Name: device_t
- * Description: one simulated Modbus device (one unit id).
- * */
+/** @brief One simulated Modbus device (one unit id). */
 typedef struct device_t device_t;
 struct machine_system_t; /* defined in device/machine.h */
 
@@ -154,37 +159,37 @@ struct device_t
 {
 	char		name[DEVICE_NAME_MAX];
 	u8		unit_id;
-	u8		exception_status;	/* FC 07 (Read Exception Status) response byte */
-	u8		server_id;		/* FC 17 (Report Server ID) server ID byte */
-	u8		run_indicator;		/* FC 17 Run Indicator Status (0xFF run, 0x00 off) */
+	u8		exception_status;	/**< FC 07 (Read Exception Status) response byte */
+	u8		server_id;		/**< FC 17 (Report Server ID) server ID byte */
+	u8		run_indicator;		/**< FC 17 Run Indicator Status (0xFF run, 0x00 off) */
 	u8		server_id_additional_data[DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX];
 	u8		server_id_additional_data_len;
-	u16		com_status;		/* FC 11/12 status: 0 ready, 0xFFFF busy */
-	u16		com_event_count;	/* FC 11/12 event counter, wraps modulo 65536 */
-	u16		message_count;		/* FC 12 + FC 08 bus/slave message count */
-	u16		com_event_log_count;	/* number of configured FC 12 event bytes */
-	u8		com_events[DEVICE_MAX_COM_EVENTS]; /* FC 12 event bytes, in order */
-	u16		diagnostic_register;	/* FC 08 subfunction 0x0002 bitmask */
-	u16		diag_comm_error_count;	/* FC 08 subfunction 0x000C */
-	u16		diag_exception_count;	/* FC 08 subfunction 0x000D */
-	u16		diag_no_response_count;	/* FC 08 subfunction 0x000F */
-	u16		diag_nak_count;		/* FC 08 subfunction 0x0010 */
-	u16		diag_busy_count;	/* FC 08 subfunction 0x0011 */
-	u16		diag_overrun_count;	/* FC 08 subfunction 0x0012 */
-	bool		listen_only;		/* FC 08 subfunction 0x0004 */
-	u64		start_ms;		/* ramps count their time from here */
-	u64		now_ms;			/* last device_tick, or start_ms before the first tick */
+	u16		com_status;		/**< FC 11/12 status: 0 ready, 0xFFFF busy */
+	u16		com_event_count;	/**< FC 11/12 event counter, wraps modulo 65536 */
+	u16		message_count;		/**< FC 12 + FC 08 bus/slave message count */
+	u16		com_event_log_count;	/**< number of configured FC 12 event bytes */
+	u8		com_events[DEVICE_MAX_COM_EVENTS]; /**< FC 12 event bytes, in order */
+	u16		diagnostic_register;	/**< FC 08 subfunction 0x0002 bitmask */
+	u16		diag_comm_error_count;	/**< FC 08 subfunction 0x000C */
+	u16		diag_exception_count;	/**< FC 08 subfunction 0x000D */
+	u16		diag_no_response_count;	/**< FC 08 subfunction 0x000F */
+	u16		diag_nak_count;		/**< FC 08 subfunction 0x0010 */
+	u16		diag_busy_count;	/**< FC 08 subfunction 0x0011 */
+	u16		diag_overrun_count;	/**< FC 08 subfunction 0x0012 */
+	bool		listen_only;		/**< FC 08 subfunction 0x0004 */
+	u64		start_ms;		/**< ramps count their time from here */
+	u64		now_ms;			/**< last device_tick, or start_ms before the first tick */
 	fault_set_t	faults;
 	fault_runtime_t	fault_runtime;
-	arena_t*	arena;			/* backing arena for dynamic config storage */
+	arena_t*	arena;			/**< backing arena for dynamic config storage */
 	u32		point_count;
-	point_t*	points;			/* DEVICE_MAX_POINTS entries */
+	point_t*	points;			/**< DEVICE_MAX_POINTS entries */
 	u32		file_count;
-	device_file_t*	files;			/* DEVICE_MAX_FILES entries */
+	device_file_t*	files;			/**< DEVICE_MAX_FILES entries */
 	u32		fifo_count;
-	device_fifo_t*	fifos;			/* DEVICE_MAX_FIFOS entries */
+	device_fifo_t*	fifos;			/**< DEVICE_MAX_FIFOS entries */
 	u32		canopen_object_count;
-	device_canopen_object_t* canopen_objects; /* DEVICE_MAX_CANOPEN_OBJECTS entries */
+	device_canopen_object_t* canopen_objects; /**< DEVICE_MAX_CANOPEN_OBJECTS entries */
 	char		device_id[DEVICE_ID_STANDARD_COUNT][DEVICE_ID_OBJECT_MAX + 1];
 	struct
 	{
@@ -193,94 +198,144 @@ struct device_t
 	}		extended_id[DEVICE_MAX_EXTENDED_IDS];
 	u32		extended_id_count;
 	space_t		spaces[SPACE_COUNT];
-	struct machine_system_t* machines; /* up to MACHINE_MAX_MACHINES, arena-backed */
+	struct machine_system_t* machines; /**< up to MACHINE_MAX_MACHINES, arena-backed */
 };
 
-/* Creates an empty device in the arena. Returns NULL if the arena is out of memory. */
+/**
+ * @brief Creates an empty device in the arena.
+ *
+ * Returns NULL if the arena is out of memory.
+ */
 device_t*	device_new(arena_t* arena, u64 start_ms);
 
-/* Adds a point. Returns NULL on success, or a static error message. */
+/**
+ * @brief Adds a point.
+ *
+ * Returns NULL on success, or a static error message.
+ */
 const char*	device_add_point(device_t* dev, const point_t* point);
 
-/* Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
+/** @brief Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
 u32		device_find_point(const device_t* dev, space_kind_t space, u32 address);
 
-/* Moves every ramp to its value at `now_ms`. Call before serving a read. */
+/**
+ * @brief Moves every ramp to its value at `now_ms`.
+ *
+ * Call before serving a read.
+ */
 void		device_tick(device_t* dev, u64 now_ms);
 
-/* Restarts the device at `now_ms`: restores every point to its configured kind
- * and initial value, restarts ramp timelines, resets machine runtimes (initial
- * state, vars, timers and on-enter), and re-arms fault schedules from `now_ms`
- * except for the restart kind, which keeps its progress. Protocol counters,
- * files, FIFOs, the RNG seed and configured data stay unchanged. */
+/**
+ * @brief Restarts the device at `now_ms`: restores every point to its configured kind and
+ *        initial value, restarts ramp timelines, resets machine runtimes (initial state, vars, timers
+ *        and on-enter), and re-arms fault schedules from `now_ms` except for the restart kind, which
+ *        keeps its progress.
+ *
+ * Protocol counters, files, FIFOs, the RNG seed and configured data stay unchanged.
+ */
 void		device_restart(device_t* dev, u64 now_ms);
 
-/* Reads `qty` consecutive addresses. Fails if any address is out of range or undefined. */
+/**
+ * @brief Reads `qty` consecutive addresses.
+ *
+ * Fails if any address is out of range or undefined.
+ */
 bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty, u16* out);
 
-/* Writes `qty` consecutive addresses. Fails (and writes nothing) if any address is
- * out of range, undefined or machine-owned. A written ramp point becomes static.
- * On success, runs any matching machine on-write handlers in the same request. */
+/**
+ * @brief Writes `qty` consecutive addresses.
+ *
+ * Fails (and writes nothing) if any address is out of range, undefined or machine-owned. A
+ * written ramp point becomes static. On success, runs any matching machine on-write handlers
+ * in the same request.
+ */
 bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
 
-/* Reads/writes one decoded point value. Machine-driven points use these instead of
- * raw register access. */
+/**
+ * @brief Reads/writes one decoded point value.
+ *
+ * Machine-driven points use these instead of raw register access.
+ */
 bool		device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out);
 bool		device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in);
 
-/* Inverse of encode_value(): decodes the first value of a point from raw words. */
+/** @brief Inverse of encode_value(): decodes the first value of a point from raw words. */
 f64		decode_value(value_type_t type, word_order_t order, const u16* words);
 
-/* Adds `length` consecutive file-record register values starting at `record`
- * in file `file_no`. Values are copied into the device arena. Returns NULL on
- * success, or a static error message. */
+/**
+ * @brief Adds `length` consecutive file-record register values starting at `record` in file
+ *        `file_no`.
+ *
+ * Values are copied into the device arena. Returns NULL on success, or a static error message.
+ */
 const char*	device_add_file_record(device_t* dev, u16 file_no, u16 record, u16 length,
 				       const u16* values);
 
-/* Reads `length` consecutive file-record registers starting at `record` in
- * `file_no`. Fails if the file or any requested record is not defined. */
+/**
+ * @brief Reads `length` consecutive file-record registers starting at `record` in `file_no`.
+ *
+ * Fails if the file or any requested record is not defined.
+ */
 bool		device_read_file_records(const device_t* dev, u16 file_no, u16 record, u16 length,
 					 u16* out);
 
-/* True if `length` consecutive file-record registers starting at `record` in
- * `file_no` are defined and writable. */
+/**
+ * @brief True if `length` consecutive file-record registers starting at `record` in `file_no`
+ *        are defined and writable.
+ */
 bool		device_can_write_file_records(const device_t* dev, u16 file_no, u16 record,
 					      u16 length);
 
-/* Writes `length` consecutive file-record registers starting at `record` in
- * `file_no`. Fails if the file or any requested record is not defined. */
+/**
+ * @brief Writes `length` consecutive file-record registers starting at `record` in `file_no`.
+ *
+ * Fails if the file or any requested record is not defined.
+ */
 bool		device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 length,
 					  const u16* in);
 
-/* Adds a FIFO queue identified by `address` with `count` register values.
- * Values are copied into the device arena and returned in order by FC 24.
- * Returns NULL on success, or a static error message. */
+/**
+ * @brief Adds a FIFO queue identified by `address` with `count` register values.
+ *
+ * Values are copied into the device arena and returned in order by FC 24. Returns NULL on
+ * success, or a static error message.
+ */
 const char*	device_add_fifo(device_t* dev, u16 address, u16 count, const u16* values);
 
-/* Reads a configured FIFO queue identified by `address`. On success sets
- * `*count` (0..DEVICE_MAX_FIFO_VALUES) and copies values into `out`.
- * Fails if the FIFO is not defined. */
+/**
+ * @brief Reads a configured FIFO queue identified by `address`.
+ *
+ * On success sets `*count` (0..DEVICE_MAX_FIFO_VALUES) and copies values into `out`. Fails if
+ * the FIFO is not defined.
+ */
 bool		device_read_fifo(const device_t* dev, u16 address, u16* count, u16* out);
 
-/* Adds a CANopen object. Returns NULL on success, or a static error message.
- * Node ids are 1..127, length is 1..DEVICE_MAX_CANOPEN_OBJECT_BYTES, and each
- * (node, index, subindex) triple may be configured only once per device. */
+/**
+ * @brief Adds a CANopen object.
+ *
+ * Returns NULL on success, or a static error message. Node ids are 1..127, length is
+ * 1..DEVICE_MAX_CANOPEN_OBJECT_BYTES, and each (node, index, subindex) triple may be
+ * configured only once per device.
+ */
 const char*	device_add_canopen_object(device_t* dev, u8 node_id, u16 index, u8 subindex,
 					  u16 length, const u8* data);
 
-/* Finds a configured CANopen object, or NULL if there is none. */
+/** @brief Finds a configured CANopen object, or NULL if there is none. */
 const device_canopen_object_t* device_find_canopen_object(const device_t* dev, u8 node_id,
 							   u16 index, u8 subindex);
 
-/* Reads/writes `count` bytes at `offset` in a configured object. Fails if the
- * object is absent or the range is outside its stored data. All configured
- * objects are writable. */
+/**
+ * @brief Reads/writes `count` bytes at `offset` in a configured object.
+ *
+ * Fails if the object is absent or the range is outside its stored data. All configured
+ * objects are writable.
+ */
 bool		device_canopen_read(const device_t* dev, u8 node_id, u16 index, u8 subindex,
 				    u16 offset, u16 count, u8* out);
 bool		device_canopen_write(device_t* dev, u8 node_id, u16 index, u8 subindex,
 				     u16 offset, u16 count, const u8* in);
 
-/* True for SPACE_COIL and SPACE_DISCRETE. */
+/** @brief True for SPACE_COIL and SPACE_DISCRETE. */
 bool		space_is_bit(space_kind_t space);
 
 const char*	space_name(space_kind_t space);

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief PDU dispatch: every supported function code against a device.
+ */
 #include "modbus/pdu.h"
 #include "device/machine.h"
 #include "modbus/bytes.h"
@@ -531,8 +535,7 @@ diagnostic_counter_response(u8* resp, u16 subfunction, u16 value)
 	return 5;
 }
 
-/* Shared reset for 0x0001 and 0x000A; listen-only state is deliberately not
- * part of it. */
+/** @brief Shared reset for 0x0001 and 0x000A; listen-only state is deliberately not part of it. */
 static void
 clear_diagnostic_counters(device_t* dev)
 {
@@ -956,7 +959,7 @@ encapsulated_interface_transport(device_t* dev, const u8* req, u32 req_len, u8* 
 	return modbus_exception(resp, req[0], EXC_ILLEGAL_FUNCTION);
 }
 
-/* Applies or withdraws the counters for one exception response. */
+/** @brief Applies or withdraws the counters for one exception response. */
 static void
 account_exception(device_t* dev, u8 code, int delta)
 {

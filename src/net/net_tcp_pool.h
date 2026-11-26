@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Shared TCP listener, accept backoff, idle sweep and poll table.
+ */
 #ifndef NET_TCP_POOL_H
 #define NET_TCP_POOL_H
 
@@ -11,19 +15,25 @@ enum
 	NET_TCP_PEER_SIZE = 64,
 };
 
-/* First member of every server's connection struct. The pool owns only the
- * socket, activity stamp, peer string and accept bookkeeping. */
+/**
+ * @brief First member of every server's connection struct.
+ *
+ * The pool owns only the socket, activity stamp, peer string and accept bookkeeping.
+ */
 typedef struct net_tcp_conn_t net_tcp_conn_t;
 struct net_tcp_conn_t
 {
-	int		fd;		/* -1 when the slot is free */
+	int		fd;		/**< -1 when the slot is free */
 	u64		last_activity_ms;
 	char		peer[NET_TCP_PEER_SIZE];
 };
 
-/* Caller-owned connection array: `conns` points at the first base member,
- * `conn_size` is sizeof(the caller's connection struct). Callbacks keep
- * framing/TLS concerns in the servers. */
+/**
+ * @brief Caller-owned connection array: `conns` points at the first base member, `conn_size`
+ *        is sizeof(the caller's connection struct).
+ *
+ * Callbacks keep framing/TLS concerns in the servers.
+ */
 typedef struct net_tcp_pool_t net_tcp_pool_t;
 struct net_tcp_pool_t
 {
@@ -40,21 +50,27 @@ struct net_tcp_pool_t
 	bool		(*skip_idle)(void* ctx, const net_tcp_conn_t* conn);
 };
 
-/* Opens the shared nonblocking listener (backlog 64) and stores its fd. */
+/** @brief Opens the shared nonblocking listener (backlog 64) and stores its fd. */
 int	net_tcp_pool_listen(net_tcp_pool_t* pool, const char* bind_address, u16 port);
 
-/* Accepts until EAGAIN, applying the shared backoff and connection setup. */
+/** @brief Accepts until EAGAIN, applying the shared backoff and connection setup. */
 void	net_tcp_pool_accept(net_tcp_pool_t* pool);
 
 void	net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn);
 void	net_tcp_pool_close_idle(net_tcp_pool_t* pool, u64 now_ms);
 
-/* Closes every active connection (through on_close) and the listener. Safe to
- * call repeatedly: closed slots and listeners are left at -1. */
+/**
+ * @brief Closes every active connection (through on_close) and the listener.
+ *
+ * Safe to call repeatedly: closed slots and listeners are left at -1.
+ */
 void	net_tcp_pool_close_all(net_tcp_pool_t* pool);
 
-/* Fills entry 0 with the listener and one entry per active connection.
- * Callers refine events and add their own deadlines afterwards. */
+/**
+ * @brief Fills entry 0 with the listener and one entry per active connection.
+ *
+ * Callers refine events and add their own deadlines afterwards.
+ */
 u32	net_tcp_pool_build_poll(net_tcp_pool_t* pool, struct pollfd* fds,
 				net_tcp_conn_t** owners, u64 now_ms, int* timeout);
 

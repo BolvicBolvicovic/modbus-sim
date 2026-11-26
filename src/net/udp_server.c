@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus UDP server: one MBAP ADU per datagram.
+ */
 #define _GNU_SOURCE
 #include "net/udp_server.h"
 #include "modbus/pdu.h"
@@ -10,7 +14,7 @@
 #include <poll.h>
 #include <string.h>
 
-/* One datagram is one complete ADU: the MBAP length must account for every byte. */
+/** @brief One datagram is one complete ADU: the MBAP length must account for every byte. */
 static void
 handle_datagram(udp_server_t* server, const net_udp_peer_t* peer, const u8* buf, u32 len)
 {

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Machine runtime definitions filled by the config compiler.
+ */
 #ifndef MACHINE_H
 #define MACHINE_H
 
@@ -24,8 +28,12 @@ enum machine_role_t
 	MACHINE_ROLE_WHEN, MACHINE_ROLE_WRITE, MACHINE_ROLE_COUNT,
 };
 
-/* Machine runtime descriptions. T4 fills these while reading the config; the
- * runtime deep-copies them into the device arena and never touches s7. */
+/**
+ * @brief Machine runtime descriptions.
+ *
+ * T4 fills these while reading the config; the runtime deep-copies them into the device arena
+ * and never touches s7.
+ */
 typedef enum machine_stmt_kind_t machine_stmt_kind_t;
 enum machine_stmt_kind_t
 {
@@ -71,20 +79,20 @@ typedef struct machine_stmt_t machine_stmt_t;
 struct machine_stmt_t
 {
 	machine_stmt_kind_t kind;
-	u16	expr_root;		/* STMT_SET: value expr; STMT_WHEN/UNLESS: condition */
-	machine_target_kind_t target_kind; /* STMT_SET only */
-	u16	var_index;		/* TARGET_VAR */
-	u8	space;			/* TARGET_POINT: numeric space_kind_t value */
-	u32	address;		/* TARGET_POINT */
-	u16	first_child;		/* STMT_WHEN/UNLESS: first child statement */
-	u16	child_count;		/* number of child statements */
+	u16	expr_root;		/**< STMT_SET: value expr; STMT_WHEN/UNLESS: condition */
+	machine_target_kind_t target_kind; /**< STMT_SET only */
+	u16	var_index;		/**< TARGET_VAR */
+	u8	space;			/**< TARGET_POINT: numeric space_kind_t value */
+	u32	address;		/**< TARGET_POINT */
+	u16	first_child;		/**< STMT_WHEN/UNLESS: first child statement */
+	u16	child_count;		/**< number of child statements */
 };
 
 typedef struct machine_write_handler_t machine_write_handler_t;
 struct machine_write_handler_t
 {
-	u16	first, count;	/* statements run on a successful client write */
-	u8	space;		/* configured point to watch */
+	u16	first, count;	/**< statements run on a successful client write */
+	u8	space;		/**< configured point to watch */
 	u32	address;
 };
 
@@ -95,7 +103,7 @@ struct machine_state_def_t
 	u16	on_enter_first, on_enter_count;
 	u16	on_tick_first,  on_tick_count;
 	u16	on_exit_first,  on_exit_count;
-	fault_set_t faults;	/* active-state overlay on the device faults */
+	fault_set_t faults;	/**< active-state overlay on the device faults */
 };
 
 typedef struct machine_transition_def_t machine_transition_def_t;
@@ -131,14 +139,14 @@ struct machine_def_t
 	expr_node_t nodes[MACHINE_MAX_EXPR_NODES];
 };
 
-/* Declared in device.h; the fields stay private to the runtime. */
+/** @brief Machine runtime of one device (declared in device.h; fields private to the runtime). */
 typedef struct machine_system_t machine_system_t;
 struct machine_system_t
 {
 	machine_def_t	defs[MACHINE_MAX_MACHINES];
 	u16		count;
 	bool		finalized;
-	u64		seed;			/* raw server seed, mixed with unit id on finalize */
+	u64		seed;			/**< raw server seed, mixed with unit id on finalize */
 	rng_t		rng;
 
 	u16		current[MACHINE_MAX_MACHINES];
@@ -146,51 +154,83 @@ struct machine_system_t
 	u64		advanced_to[MACHINE_MAX_MACHINES];
 	val_t		vars[MACHINE_MAX_MACHINES][MACHINE_MAX_VARS];
 	u64		deadline[MACHINE_MAX_MACHINES][MACHINE_MAX_TRANSITIONS];
-	/* [machine][state][role] bitmask of failure kinds already warned about. */
+	/** [machine][state][role] bitmask of failure kinds already warned about. */
 	u8		warned[MACHINE_MAX_MACHINES][MACHINE_MAX_STATES][MACHINE_ROLE_COUNT];
 	bool		cap_warned[MACHINE_MAX_MACHINES];
 };
 
-/* Checks one set! point target, rejecting ramps and points already claimed by
- * another machine. On success, records `machine_id` as the point's owner. */
+/**
+ * @brief Checks one set! point target, rejecting ramps and points already claimed by another
+ *        machine.
+ *
+ * On success, records `machine_id` as the point's owner.
+ */
 machine_target_result_t machine_check_target_point(const device_t* dev, space_kind_t space,
 						   u32 address, u8* owners, u8 machine_id);
 
-/* Ensures `dev` has machine storage, allocating it on first use. Returns NULL on
- * success or a static error text. */
+/**
+ * @brief Ensures `dev` has machine storage, allocating it on first use.
+ *
+ * Returns NULL on success or a static error text.
+ */
 const char*	device_machines_prepare(device_t* dev);
 
-/* Adds a machine copy to `dev`. Returns NULL on success or a static error text. */
+/**
+ * @brief Adds a machine copy to `dev`.
+ *
+ * Returns NULL on success or a static error text.
+ */
 const char*	device_add_machine(device_t* dev, const machine_def_t* def);
 
-/* Validates and initializes all added machines at dev->start_ms. */
+/** @brief Validates and initializes all added machines at dev->start_ms. */
 const char*	device_finalize_machines(device_t* dev);
 
-/* Call before finalize. Mixes `server_seed` with the device unit id. */
+/**
+ * @brief Call before finalize.
+ *
+ * Mixes `server_seed` with the device unit id.
+ */
 void		device_seed_machines(device_t* dev, u64 server_seed);
 
-/* Advances every machine in declaration order. Called by device_tick. */
+/**
+ * @brief Advances every machine in declaration order.
+ *
+ * Called by device_tick.
+ */
 void		device_machines_advance(device_t* dev, u64 now_ms);
 
-/* Resets every machine to its initial state, vars and timers at `now_ms` and
- * runs the initial on-enter handler. Does nothing before finalization. */
+/**
+ * @brief Resets every machine to its initial state, vars and timers at `now_ms` and runs the
+ *        initial on-enter handler.
+ *
+ * Does nothing before finalization.
+ */
 void		device_machines_restart(device_t* dev, u64 now_ms);
 
-/* Runs on-write handlers whose point overlaps [address, address + qty) after a
- * successful client write. Does not fire transitions. */
+/**
+ * @brief Runs on-write handlers whose point overlaps [address, address + qty) after a
+ *        successful client write.
+ *
+ * Does not fire transitions.
+ */
 void		device_machines_on_write(device_t* dev, space_kind_t space, u32 address,
 					 u32 qty, u64 now_ms);
 
-/* Device faults overridden by the active state of each machine, in declaration
- * order (the earliest machine wins for each kind). */
+/**
+ * @brief Device faults overridden by the active state of each machine, in declaration order
+ *        (the earliest machine wins for each kind).
+ */
 fault_set_t	device_effective_faults(const device_t* dev);
 
-/* True if any machine state configures `kind`, even if that state is inactive. */
+/** @brief True if any machine state configures `kind`, even if that state is inactive. */
 bool		device_machine_fault_present(const device_t* dev, fault_kind_t kind);
 
-/* True if any machine state overlay configures FAULT_CORRUPT with `mode`, even
- * if that state is inactive. A corrupt overlay with FAULT_CORRUPT_NONE counts
- * as FAULT_CORRUPT_PDU. */
+/**
+ * @brief True if any machine state overlay configures FAULT_CORRUPT with `mode`, even if that
+ *        state is inactive.
+ *
+ * A corrupt overlay with FAULT_CORRUPT_NONE counts as FAULT_CORRUPT_PDU.
+ */
 bool		device_machine_corrupt_mode_present(const device_t* dev,
 						    fault_corrupt_mode_t mode);
 

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Parses one (device ...) form: points, identification, files, FIFOs, faults, machines.
+ */
 #include "config/config_device.h"
 #include "config/config_fault.h"
 #include "config/config_machine.h"
@@ -5,7 +9,7 @@
 #include <math.h>
 #include <string.h>
 
-/* Names the user writes, in the same order as the matching enums. */
+/** @brief Names the user writes, in the same order as the matching enums. */
 static const char* const TYPE_NAMES[]  = { "u16", "s16", "u32", "s32", "float32" };
 static const char* const ORDER_NAMES[] = { "high-first", "low-first" };
 static const char* const MODE_NAMES[]  = { "wrap", "bounce", "hold" };
@@ -57,7 +61,7 @@ static bool parse_product_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) 
 static bool parse_model_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_MODEL_NAME); }
 static bool parse_user_application_name(form_ctx_t* ctx, s7_pointer item, device_t* dev) { return parse_device_id_string(ctx, item, dev, DEVICE_ID_USER_APPLICATION_NAME); }
 
-/* Repeatable (device-id-object ID "Text"), stored in ascending ID order. */
+/** @brief Repeatable (device-id-object ID "Text"), stored in ascending ID order. */
 static bool
 parse_device_id_object(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
@@ -204,7 +208,7 @@ parse_server_id_additional_data(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
-/* Repeatable (canopen-object NODE INDEX SUBINDEX "HEXBYTES"). */
+/** @brief Repeatable (canopen-object NODE INDEX SUBINDEX "HEXBYTES"). */
 static bool
 parse_canopen_object(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
@@ -295,7 +299,11 @@ parse_com_event(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
-/* (note "text") is documentation for humans. It is checked and ignored. */
+/**
+ * @brief (note "text") is documentation for humans.
+ *
+ * It is checked and ignored.
+ */
 static bool
 parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
@@ -373,7 +381,11 @@ parse_static(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
 	return true;
 }
 
-/* Reads (static ...) or (ramp ...). With neither, the point is a static 0. */
+/**
+ * @brief Reads (static ...) or (ramp ...).
+ *
+ * With neither, the point is a static 0.
+ */
 static bool
 parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 {
@@ -397,7 +409,7 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	return true;
 }
 
-/* Reads (type ...) and (word-order ...) for register points. */
+/** @brief Reads (type ...) and (word-order ...) for register points. */
 static bool
 parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 {

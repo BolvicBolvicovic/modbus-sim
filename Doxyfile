@@ -1,0 +1,35 @@
+# Doxygen configuration for the mogbus sources. `make api-docs` writes HTML to
+# build/api/html; warnings are errors so the comment style stays valid.
+PROJECT_NAME           = mogbus
+OUTPUT_DIRECTORY       = build/api
+INPUT                  = include src examples
+FILE_PATTERNS          = *.c *.h
+RECURSIVE              = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+TYPEDEF_HIDES_STRUCT   = NO
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = NO
+JAVADOC_AUTOBRIEF      = NO
+GENERATE_LATEX         = NO
+GENERATE_HTML          = YES
+SOURCE_BROWSER         = NO
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = MOGBUS_API= WITH_TLS=1 WITH_CONFIG=1 "__attribute__(x)="
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+WARN_FORMAT            = "$file:$line: $text"
+HAVE_DOT               = NO
+CLASS_GRAPH            = NO
+COLLABORATION_GRAPH    = NO
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO

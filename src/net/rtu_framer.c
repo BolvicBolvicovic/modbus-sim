@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief RTU receive buffer, frame boundaries (t3.5, t1.5) and frame dispatch.
+ */
 #include "net/rtu_framer.h"
 #include "modbus/pdu.h" // IWYU pragma: keep
 #include "net/net_common.h"
@@ -27,8 +31,10 @@ clear_deferral(rtu_framer_t* framer)
 	framer->gap_deferred_len = 0;
 }
 
-/* A buffer rejected at a frame boundary counts as one bus communication error
- * for every device: either the CRC is wrong or the declared length never arrived. */
+/**
+ * @brief A buffer rejected at a frame boundary counts as one bus communication error for every
+ *        device: either the CRC is wrong or the declared length never arrived.
+ */
 static bool
 rx_is_bad_frame(const u8* rx, u32 rx_len)
 {

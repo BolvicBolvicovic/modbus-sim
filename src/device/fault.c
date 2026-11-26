@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Fault decisions: percent dice, schedules and the combined per-request decision.
+ */
 #include "device/fault.h"
 
 enum { FAULT_MAX_DELAY_MS = 60000 };

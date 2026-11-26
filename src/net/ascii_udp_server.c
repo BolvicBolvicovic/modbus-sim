@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus ASCII over UDP: one frame per datagram.
+ */
 #define _GNU_SOURCE
 #include "net/ascii_udp_server.h"
 #include "modbus/pdu.h"
@@ -10,8 +14,10 @@
 #include <poll.h>
 #include <string.h>
 
-/* One datagram is exactly one complete frame ':'...CR LF: no reassembly, so a
- * missing terminator, trailing bytes or a second frame make it malformed. */
+/**
+ * @brief One datagram is exactly one complete frame ':'...CR LF: no reassembly, so a missing
+ *        terminator, trailing bytes or a second frame make it malformed.
+ */
 static void
 handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8* buf, u32 len)
 {

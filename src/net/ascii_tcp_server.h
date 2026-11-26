@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus ASCII server over TCP connections.
+ */
 #ifndef ASCII_TCP_SERVER_H
 #define ASCII_TCP_SERVER_H
 
@@ -17,10 +21,12 @@ enum
 
 typedef struct device_t device_t;
 
-/* Name: ascii_tcp_server_options_t
- * Description: Modbus ASCII-over-TCP server options. Devices are borrowed, not copied.
- * Raw ASCII frames (':' + hex [addr][PDU][LRC] + CR LF) are carried over TCP
- * byte streams; this is not MBAP framing. No serial line options apply. */
+/**
+ * @brief Modbus ASCII-over-TCP server options.
+ *
+ * Devices are borrowed, not copied. Raw ASCII frames (':' + hex [addr][PDU][LRC] + CR LF) are
+ * carried over TCP byte streams; this is not MBAP framing. No serial line options apply.
+ */
 typedef struct ascii_tcp_server_options_t ascii_tcp_server_options_t;
 struct ascii_tcp_server_options_t
 {
@@ -43,10 +49,10 @@ struct ascii_tcp_conn_t
 	bool		read_closed;
 };
 
-/* Name: ascii_tcp_server_t
- * Description: all state of one ASCII-over-TCP server; the caller owns the
- * storage and keeps it at a stable address between init and close.
- * */
+/**
+ * @brief All state of one ASCII-over-TCP server; the caller owns the storage and keeps it at a
+ *        stable address between init and close.
+ */
 typedef struct ascii_tcp_server_t ascii_tcp_server_t;
 struct ascii_tcp_server_t
 {
@@ -57,33 +63,42 @@ struct ascii_tcp_server_t
 	volatile sig_atomic_t		stop;
 };
 
-/* Name: ascii_tcp_server_init
- * Description: resets *server and opens the listener. Returns 0, or 2 if it
- * could not start.
- * */
+/**
+ * @brief Resets *server and opens the listener.
+ *
+ * Returns 0, or 2 if it could not start.
+ */
 s32	ascii_tcp_server_init(ascii_tcp_server_t* server, const ascii_tcp_server_options_t* options);
 
-/* Name: ascii_tcp_server_step
- * Description: one poll iteration, waiting at most max_wait_ms (-1 = until the
- * next deadline, at most 1 s; 0 = nonblocking). Returns NET_STEP_CONTINUE,
- * NET_STEP_DONE after ascii_tcp_server_stop, or NET_STEP_ERROR if poll failed.
- * */
+/**
+ * @brief One poll iteration, waiting at most max_wait_ms (-1 = until the next deadline, at
+ *        most 1 s; 0 = nonblocking).
+ *
+ * Returns NET_STEP_CONTINUE, NET_STEP_DONE after ascii_tcp_server_stop, or NET_STEP_ERROR if
+ * poll failed.
+ */
 s32	ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms);
 
-/* Name: ascii_tcp_server_stop
- * Description: async-signal-safe; only sets a flag. The next step returns NET_STEP_DONE.
- * */
+/**
+ * @brief async-signal-safe; only sets a flag.
+ *
+ * The next step returns NET_STEP_DONE.
+ */
 void	ascii_tcp_server_stop(ascii_tcp_server_t* server);
 
-/* Name: ascii_tcp_server_close
- * Description: closes clients and the listener. Idempotent after init.
- * */
+/**
+ * @brief Closes clients and the listener.
+ *
+ * Idempotent after init.
+ */
 void	ascii_tcp_server_close(ascii_tcp_server_t* server);
 
-/* Name: ascii_tcp_server_run
- * Description: init, step until stopped, close. No signal handlers are installed.
- * Returns 0 after a clean stop, non-zero on startup/runtime error.
- * */
+/**
+ * @brief Init, step until stopped, close.
+ *
+ * No signal handlers are installed. Returns 0 after a clean stop, non-zero on startup/runtime
+ * error.
+ */
 s32	ascii_tcp_server_run(ascii_tcp_server_t* server, const ascii_tcp_server_options_t* options);
 
 #endif

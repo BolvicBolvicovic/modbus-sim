@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Shared UDP socket layer: datagram receive, send and delayed replies.
+ */
 #define _GNU_SOURCE
 #include "net/net_udp.h"
 #include "net/net_common.h"

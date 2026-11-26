@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus RTU over UDP: one frame per datagram.
+ */
 #define _GNU_SOURCE
 #include "net/rtu_udp_server.h"
 #include "modbus/rtu.h"
@@ -10,8 +14,10 @@
 #include <poll.h>
 #include <string.h>
 
-/* One datagram is one complete RTU frame: anything else (bad CRC, extra bytes,
- * several frames) is rejected whole and counted like a bad frame on rtu-tcp. */
+/**
+ * @brief One datagram is one complete RTU frame: anything else (bad CRC, extra bytes, several
+ *        frames) is rejected whole and counted like a bad frame on rtu-tcp.
+ */
 static void
 handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, const u8* buf, u32 len)
 {

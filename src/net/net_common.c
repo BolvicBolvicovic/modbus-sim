@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Helpers shared by the transports: device lookup, PDU and fault handling, MBAP replies, listeners.
+ */
 #define _GNU_SOURCE
 #include "net/net_common.h"
 #include "modbus/mbap.h"

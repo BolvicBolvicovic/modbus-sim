@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief IPv4 and IPv6 literal address validation.
+ */
 #include "util/ip.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>

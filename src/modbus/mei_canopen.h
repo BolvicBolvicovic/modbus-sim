@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief CANopen General Reference (FC 43 MEI 0x0D) request parsing and responses.
+ */
 #ifndef MODBUS_MEI_CANOPEN_H
 #define MODBUS_MEI_CANOPEN_H
 
@@ -6,10 +10,10 @@
 
 #define MEI_TYPE_CANOPEN	0x0D
 
-/* CiA 309-2 numbers protocol control bits MSB-first; these are the byte masks. */
+/** @brief CiA 309-2 numbers protocol control bits MSB-first; these are the byte masks. */
 enum canopen_protocol_control
 {
-	CANOPEN_CTRL_ACCESS        = 0x01, /* 0 = upload (read), 1 = download (write) */
+	CANOPEN_CTRL_ACCESS        = 0x01, /**< 0 = upload (read), 1 = download (write) */
 	CANOPEN_CTRL_ENCODED_DATA  = 0x02,
 	CANOPEN_CTRL_NETWORK_ID    = 0x04,
 	CANOPEN_CTRL_COUNTER       = 0x20,
@@ -20,7 +24,7 @@ enum canopen_protocol_control
 #define CANOPEN_CTRL_UNSUPPORTED \
 	(CANOPEN_CTRL_ENCODED_DATA | CANOPEN_CTRL_COUNTER | CANOPEN_CTRL_EXTENDED_CTRL | CANOPEN_CTRL_EXTEND)
 
-/* CANopen service error codes carried in the 4-byte extended exception field. */
+/** @brief CANopen service error codes carried in the 4-byte extended exception field. */
 enum canopen_error_code
 {
 	CANOPEN_ERR_OBJECT_NOT_FOUND     = 0xFFFF000Bu,
@@ -49,18 +53,26 @@ struct canopen_request_t
 	bool	has_data_type;
 };
 
-/* Computes the full PDU length from a (possibly partial) request buffer. Only
- * the header bytes are read, so RTU framing can split variable-length frames. */
+/**
+ * @brief Computes the full PDU length from a (possibly partial) request buffer.
+ *
+ * Only the header bytes are read, so RTU framing can split variable-length frames.
+ */
 bool	canopen_expected_pdu_len(const u8* pdu, u32 pdu_len, u32* expected);
 
-/* Parses the header without checking the trailing data length. */
+/** @brief Parses the header without checking the trailing data length. */
 bool	canopen_parse_header(const u8* pdu, u32 pdu_len, canopen_request_t* out);
 
-/* Parses a complete request, rejecting any mismatch between count and data. */
+/** @brief Parses a complete request, rejecting any mismatch between count and data. */
 bool	canopen_parse_request(const u8* pdu, u32 pdu_len, canopen_request_t* out);
 
-/* Extended exceptions: AB FF <len-hi> <len-lo> 0D <AE|CE> <payload>. */
+/**
+ * @name Extended exception responses
+ * Both write `AB FF <len-hi> <len-lo> 0D <AE|CE> <payload>` into `resp` and return its length.
+ * @{
+ */
 u32	canopen_unsupported_option_exception(u8* resp, u8 supported_control);
 u32	canopen_service_exception(u8* resp, u32 error_code);
+/** @} */
 
 #endif

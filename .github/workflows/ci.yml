@@ -17,6 +17,7 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'Makefile'
+      - 'Doxyfile'
       - '.github/workflows/**'
   pull_request:
     paths:
@@ -32,6 +33,7 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'Makefile'
+      - 'Doxyfile'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -169,6 +171,18 @@ jobs:
 
       - name: Sanitizers (dev)
         run: make -j$(nproc) asan
+
+  api-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+
+      - name: Doxygen comments are valid (warnings are errors)
+        run: make api-docs
 
   analyzer:
     runs-on: ubuntu-latest

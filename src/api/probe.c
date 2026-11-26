@@ -1,5 +1,10 @@
-/* mogbus_probe(): one FC 08 Return Query Data round trip against a network server, used by
- * `mogbus --health`. Nonblocking sockets with poll() deadlines; no allocation. */
+/**
+ * @file
+ * @brief mogbus_probe(): one FC 08 Return Query Data round trip against a network server, used
+ *        by `mogbus --health`.
+ *
+ * Nonblocking sockets with poll() deadlines; no allocation.
+ */
 #include "mogbus.h"
 #include "modbus/ascii.h"
 #include "modbus/mbap.h"
@@ -40,8 +45,10 @@ remaining_ms(u64 deadline)
 	return deadline > now ? (int)(deadline - now) : 0;
 }
 
-/* 1 = a complete reply from `unit` (*pdu points into buf or out), 0 = need more bytes,
- * -1 = malformed or from somebody else. */
+/**
+ * @brief 1 = a complete reply from `unit` (*pdu points into buf or out), 0 = need more bytes,
+ *        -1 = malformed or from somebody else.
+ */
 static int
 parse_reply(mogbus_mode_t mode, const u8* buf, u32 len, u8 unit, u8* out, const u8** pdu, u32* pdu_len)
 {

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Standard termios baud rates and their speed_t values.
+ */
 #include "util/baud.h"
 
 typedef struct baud_entry_t baud_entry_t;

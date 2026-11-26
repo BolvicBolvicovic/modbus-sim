@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Modbus ASCII framing: hex encoding, LRC and delimiter scanning.
+ */
 #include "modbus/ascii.h"
 
 static const char hex_digits[] = "0123456789ABCDEF";

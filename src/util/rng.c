@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Seeded pseudo-random numbers for reproducible faults.
+ */
 #include "util/rng.h"
 
 #define RNG_FALLBACK_SEED	0x9E3779B97F4A7C15ULL

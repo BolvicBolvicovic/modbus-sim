@@ -324,8 +324,12 @@ endif
 	(cd $(DIST_DIR) && sha256sum $(DIST_NAME).tar.gz $(DIST_NAME).spdx.json > SHA256SUMS) && \
 	cat $(DIST_DIR)/SHA256SUMS
 
+# HTML reference of the sources in build/api/html (needs doxygen; warnings are errors).
+api-docs:
+	mkdir -p build/api && doxygen Doxyfile
+
 clean:
-	$(RM) -r $(DIST_DIR)
+	$(RM) -r $(DIST_DIR) build/api
 	rm -f $(REV_STAMP)
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times
@@ -339,4 +343,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib lib-check tests asan dist clean distclean re commands FORCE
+.PHONY: all dev lib lib-check tests asan dist api-docs clean distclean re commands FORCE

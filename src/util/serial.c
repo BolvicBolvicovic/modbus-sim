@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief tty setup: raw mode, baud, data bits, parity and stop bits.
+ */
 #include "util/serial.h"
 #include "util/baud.h"
 #include <errno.h>
@@ -75,9 +79,12 @@ serial_tty_baud(int fd)
 	return baud_from_speed(cfgetospeed(&tio));
 }
 
-/* Applies raw mode with the selected line format. When baud is 0, preserves
- * the existing baud rate so a configured serial line keeps its speed.
- * Non-tty fds are skipped. */
+/**
+ * @brief Applies raw mode with the selected line format.
+ *
+ * When baud is 0, preserves the existing baud rate so a configured serial line keeps its
+ * speed. Non-tty fds are skipped.
+ */
 static bool
 set_tty_raw(int fd, u32 baud, u32 data_bits, parity_t parity, u32 stop_bits)
 {

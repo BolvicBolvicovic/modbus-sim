@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief FC 43 MEI 0x0D (CANopen General Reference) SDO upload and download.
+ */
 #include "modbus/mei_canopen.h"
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"

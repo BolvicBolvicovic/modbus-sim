@@ -12,11 +12,15 @@
 #include <string.h>
 #include <unistd.h>
 
-/* ASCII frames are delimited by CRLF, so unlike RTU there is no inter-frame
- * silence timing. Complete frames are dispatched as soon as the terminator
- * arrives, including several frames delivered in one read(). A partial frame
- * with no further bytes for one second is dropped so it cannot corrupt a later
- * request. */
+/**
+ * @file
+ * @brief Modbus ASCII server on a serial-like byte stream.
+ *
+ * ASCII frames are delimited by CR LF, so unlike RTU there is no inter-frame silence timing.
+ * Complete frames are dispatched as soon as the terminator arrives, including several frames
+ * delivered in one read(). A partial frame with no further bytes for one second is dropped so
+ * it cannot corrupt a later request.
+ */
 
 enum
 {

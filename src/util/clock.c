@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Monotonic millisecond clock.
+ */
 #include "util/clock.h"
 #include <time.h>
 

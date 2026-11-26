@@ -1,7 +1,11 @@
-/* Embeds mogbus in a host program: one device built in code, a Modbus TCP
- * server on a free loopback port, and a raw MBAP client in the same process.
- * Only "mogbus.h" is included from the library. Exit status 0 means the
- * register read back the expected value. */
+/**
+ * @file
+ * @brief Embeds mogbus in a host program: one device built in code, a Modbus TCP server on a
+ *        free loopback port, and a raw MBAP client in the same process.
+ *
+ * Only "mogbus.h" is included from the library. Exit status 0 means the register read back the
+ * expected value.
+ */
 #include "mogbus.h"
 #include <arpa/inet.h>
 #include <poll.h>
@@ -10,7 +14,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-/* Asks the kernel for a free loopback port (the port is reused right away). */
+/** @brief Asks the kernel for a free loopback port (the port is reused right away). */
 static uint16_t
 free_port(void)
 {

@@ -1,9 +1,13 @@
+/**
+ * @file
+ * @brief Parses (fault ...) forms and their schedules.
+ */
 #include "config/config_fault.h"
 #include "vlib/macros.h"
 #include <stddef.h>
 #include <string.h>
 
-/* Names the user writes, in the same order as the matching fault kinds. */
+/** @brief Names the user writes, in the same order as the matching fault kinds. */
 static const char* const KIND_NAMES[] = {
 	"delay", "drop", "exception", "corrupt", "disconnect", "restart", "sensor-disconnect",
 };
@@ -12,7 +16,7 @@ static const fault_kind_t KIND_VALUES[] = {
 	FAULT_RESTART, FAULT_SENSOR_DISCONNECT,
 };
 
-/* Names the user writes, in the same order as the matching corrupt modes. */
+/** @brief Names the user writes, in the same order as the matching corrupt modes. */
 static const char* const CORRUPT_MODE_NAMES[] = { "pdu", "register", "checksum" };
 static const fault_corrupt_mode_t CORRUPT_MODE_VALUES[] = {
 	FAULT_CORRUPT_PDU, FAULT_CORRUPT_REGISTER, FAULT_CORRUPT_CHECKSUM,
@@ -29,8 +33,11 @@ schedule_hash_u32(u64 hash, u32 value)
 	return hash;
 }
 
-/* Parses (schedule (step (after-ms N) (count N)) ...) into `fault`. The stable
- * schedule_id lets the runtime notice when the active definition changed. */
+/**
+ * @brief Parses (schedule (step (after-ms N) (count N)) ...) into `fault`.
+ *
+ * The stable schedule_id lets the runtime notice when the active definition changed.
+ */
 static bool
 parse_fault_schedule(form_ctx_t* ctx, s7_pointer form, fault_t* fault)
 {

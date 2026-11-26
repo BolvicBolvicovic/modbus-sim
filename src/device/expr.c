@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Evaluator for compiled machine expressions.
+ */
 #include "device/expr.h"
 #include <math.h>
 

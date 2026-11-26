@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Shared TCP listener and connection-pool logic of the three TCP transports.
+ */
 #define _GNU_SOURCE
 #include "net/net_tcp_pool.h"
 #include "net/net_common.h"

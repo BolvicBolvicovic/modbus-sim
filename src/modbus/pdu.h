@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Function codes, exception codes, protocol limits and the PDU handler.
+ */
 #ifndef PDU_H
 #define PDU_H
 
@@ -6,7 +10,7 @@
 #include "device/fault.h"
 #include "util/rng.h"
 
-/* Supported function codes. */
+/** @brief Supported function codes. */
 enum modbus_function_code
 {
 	FC_READ_COILS                     = 0x01,
@@ -30,14 +34,17 @@ enum modbus_function_code
 	FC_ENCAPSULATED_INTERFACE_TRANSPORT = 0x2B,
 };
 
-/* Encapsulated Interface Transport MEI types. MEI 0x0D is declared in
- * modbus/mei_canopen.h alongside its request helpers. */
+/**
+ * @brief Encapsulated Interface Transport MEI types.
+ *
+ * MEI 0x0D is declared in modbus/mei_canopen.h alongside its request helpers.
+ */
 enum modbus_mei_type
 {
 	MEI_TYPE_READ_DEVICE_ID = 0x0E,
 };
 
-/* Public FC 08 diagnostics subfunctions. */
+/** @brief Public FC 08 diagnostics subfunctions. */
 enum modbus_diagnostics_subfunction
 {
 	DIAG_SUB_RETURN_QUERY_DATA       = 0x0000,
@@ -57,7 +64,7 @@ enum modbus_diagnostics_subfunction
 	DIAG_SUB_CLEAR_OVERRUN_COUNTER_AND_FLAG = 0x0014,
 };
 
-/* Exception codes. 0x09 is reserved by the Modbus specification. */
+/** @brief Exception codes. 0x09 is reserved by the Modbus specification. */
 enum modbus_exception_code
 {
 	EXC_ILLEGAL_FUNCTION           = 0x01,
@@ -74,26 +81,31 @@ enum modbus_exception_code
 	EXC_GATEWAY_TARGET_FAILED      = 0x0B,
 };
 
-/* Protocol limits from the Modbus specification. */
+/** @brief Protocol limits from the Modbus specification. */
 #define MB_MAX_READ_BITS		2000
 #define MB_MAX_READ_REGISTERS		125
 #define MB_MAX_WRITE_BITS		1968
 #define MB_MAX_WRITE_REGISTERS		123
 
-/* Name: modbus_handle_pdu
- * Description: runs one request PDU against a device and writes the response PDU.
- * `resp` must hold MODBUS_MAX_PDU bytes. Returns the response length: >= 2 for a
- * normal or exception response, or 0 when the response must be suppressed.
- * Protocol problems become Modbus exception responses; this never fails.
- * */
+/**
+ * @brief Runs one request PDU against a device and writes the response PDU.
+ *
+ * `resp` must hold MODBUS_MAX_PDU bytes. Returns the response length: >= 2 for a normal or
+ * exception response, or 0 when the response must be suppressed. Protocol problems become
+ * Modbus exception responses; this never fails.
+ */
 u32	modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp);
 
-/* Handles a PDU and applies device fault decision. */
+/** @brief Handles a PDU and applies device fault decision. */
 u32	modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
 			      const u8* req, u32 req_len, u8* resp,
 			      fault_decision_t* decision);
 
-/* Builds an exception response PDU. Returns its length (2). */
+/**
+ * @brief Builds an exception response PDU.
+ *
+ * Returns its length (2).
+ */
 u32	modbus_exception(u8* resp, u8 function, u8 code);
 
 #endif

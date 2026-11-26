@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief Compiles (machine ...) forms into the machine runtime tables.
+ */
 #include "config/config_machine.h"
 #include "config/config_fault.h"
 #include "vlib/macros.h"
@@ -30,13 +34,13 @@ struct point_ref_t
 {
 	u16		machine_index;
 	u16		state_index;
-	u16		expr_index;	/* EMITTED_NONE for set! targets */
+	u16		expr_index;	/**< EMITTED_NONE for set! targets */
 	space_kind_t	space;
 	u32		address;
-	const char*	text;		/* copy of the s7 form in the scratch arena */
+	const char*	text;		/**< copy of the s7 form in the scratch arena */
 };
 
-/* Parser state lives in the scratch arena, never in a device or machine_def_t. */
+/** @brief Parser state lives in the scratch arena, never in a device or machine_def_t. */
 typedef struct machine_state_t machine_state_t;
 struct machine_state_t
 {
@@ -57,7 +61,7 @@ struct staged_stmt_t
 	u16		state_index;
 	u8		handler;
 	bool		top;
-	u16		ref_index;	/* point_refs index + 1, for set! on a point */
+	u16		ref_index;	/**< point_refs index + 1, for set! on a point */
 };
 
 typedef struct top_list_t top_list_t;
@@ -101,7 +105,7 @@ enum result_rule_t
 {
 	RESULT_NUM,
 	RESULT_BOOL,
-	RESULT_BRANCHES,	/* IF: type of the compiled branches */
+	RESULT_BRANCHES,	/**< IF: type of the compiled branches */
 };
 
 typedef struct expr_form_t expr_form_t;
@@ -114,9 +118,9 @@ struct expr_form_t
 	expr_compile_fn	compile;
 	operand_rule_t	operands;
 	result_rule_t	result;
-	space_kind_t	space;		/* SPACE_COUNT for non-point forms */
+	space_kind_t	space;		/**< SPACE_COUNT for non-point forms */
 	u8		min_len;
-	u8		max_len;	/* EXPR_ARITY_ANY for variadic forms */
+	u8		max_len;	/**< EXPR_ARITY_ANY for variadic forms */
 };
 
 static bool compile_point(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
@@ -126,7 +130,10 @@ static bool compile_logical(compile_t*, s7_pointer, const expr_form_t*, val_type
 static bool compile_not(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_if(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 
-/* Lengths are s7 list lengths including the head; point forms validate their own address form. */
+/**
+ * @brief Lengths are s7 list lengths including the head; point forms validate their own
+ *        address form.
+ */
 static const expr_form_t EXPR_FORMS[] = {
 	{ "coil",      EXPR_POINT,      compile_point,   OPERAND_NONE, RESULT_BOOL, SPACE_COIL,     2, 2 },
 	{ "discrete",  EXPR_POINT,      compile_point,   OPERAND_NONE, RESULT_BOOL, SPACE_DISCRETE, 2, 2 },
