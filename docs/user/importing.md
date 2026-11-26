@@ -141,9 +141,9 @@ take the byte order only.
 
 - The `default` cell becomes `(static ...)`: numbers as numbers, `on/off/true/false/1/0` for bits,
   text for strings. Out-of-range values are clamped with a warning. Without a default the point is 0.
-- `access` (R, RO, read only, W, RW, R/W, ...) is only checked. A read-only entry in a writable
-  table (`holding`, `coil`) or a writable one in `input`/`discrete` gives a warning; the table is
-  never changed, because the table is what the map says.
+- `access` (R, RO, read only, W, RW, R/W, ...): a read-only entry in `holding` or `coil` becomes
+  `(access read-only)`, so clients cannot write it. A writable entry in `input`/`discrete` gives a
+  warning; the table is never changed, because the table is what the map says.
 - A `scale` other than 1 gives a warning and is added to the note (`raw x 0.1`). mogbus stores raw
   register values and does not scale, so put the raw value in the default: for 230.4 V with scale
   0.1, the default is `2304`.
@@ -224,11 +224,10 @@ output say. With `"shared blocks": false` the blocks are laid out one after the 
 inputs, input registers, holding registers, sizes from the `... size` entries) and every cell goes to
 the table of its block; cells that no function code can reach are skipped with a warning.
 
-**Write access.** pymodbus makes everything read-only except the cells in `write`. mogbus holding
-registers and coils are always writable, input registers and discrete inputs never. So `write` cannot
-be reproduced exactly. The importer keeps all registers in `holding` (so reads with function code
-03 work) and `input`, and warns once how many registers or bits were not in `write`. If a point must
-not be writable, delete its `holding` line by hand; the `input` copy stays.
+**Write access.** pymodbus makes everything read-only except the cells in `write`. The importer keeps
+every cell in `holding` (so reads with function code 03 work) and `input`, and marks the `holding`
+and `coil` copies of cells that are not in `write` as `(access read-only)`; the `input` and
+`discrete` copies are read-only anyway.
 
 **Servers.**
 

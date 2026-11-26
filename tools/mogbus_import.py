@@ -108,6 +108,7 @@ class Point:
     byte_order: str = "big"
     length: int = 0             # strings: registers
     padding: str = "nul"
+    read_only: bool = False
     value: object = None
     extra: list = field(default_factory=list)   # behaviour forms that replace (static ...)
     count: int = 1
@@ -196,6 +197,8 @@ def render_point(p):
         parts.append("(length %d)" % p.length)
         if p.padding != "nul":
             parts.append("(padding %s)" % p.padding)
+    if p.read_only:
+        parts.append("(access read-only)")
     if p.extra:
         parts.extend(p.extra)
     elif p.value is not None:
@@ -717,8 +720,7 @@ def convert_csv(args, rep):
         p.note = note
 
         if access == "ro" and table in ("coil", "holding"):
-            rep.warn("%s: read-only, but the %s table is writable in mogbus (table kept)" %
-                     (where, table))
+            p.read_only = True
         elif access == "rw" and table in ("input", "discrete"):
             rep.warn("%s: writable, but the %s table is read-only in mogbus (table kept)" %
                      (where, table))
@@ -1065,7 +1067,6 @@ def pm_points(cells, shared, sizes, args, rep):
             items.append(("string", i, j - i, c, [cells[k].value for k in range(i, j)]))
 
     pts = []
-    readonly_regs = readonly_bits = 0
     for kind, idx, width, c, words in items:
         where = "pymodbus %s at cell %d" % ({"bits": "bits", "u16": "uint16", "u32": "uint32",
                                               "float32": "float32", "string": "string"}[kind], idx)
@@ -1080,23 +1081,20 @@ def pm_points(cells, shared, sizes, args, rep):
             if idx * 16 + 15 > 65535:
                 rep.warn("%s: coil addresses beyond 65535; skipped" % where)
                 continue
-            if not c.access:
-                readonly_bits += 1
             for table, base in targets:
                 for k in range(16):
                     pts.append(Point(table=table, addr=base + k, value=bool(c.value >> k & 1),
                                      src="pymodbus bits", noun="bit", first=base + k,
-                                     last=base + k, label=where))
+                                     last=base + k, label=where,
+                                     read_only=table == "coil" and not c.access))
             continue
         targets = reg_target(idx)
         if not targets:
             rep.warn("%s: not reachable by any function code in this layout; skipped" % where)
             continue
-        if not c.access:
-            readonly_regs += 1
         for table, addr in targets:
             p = Point(table=table, addr=addr, label=where, src="pymodbus " + where.split()[1],
-                      first=idx, last=idx)
+                      first=idx, last=idx, read_only=table == "holding" and not c.access)
             if kind == "string":
                 raw = b"".join(w.to_bytes(2, "big") for w in words)
                 p.type, p.length, p.padding = "string", width, "space"
@@ -1117,14 +1115,6 @@ def pm_points(cells, shared, sizes, args, rep):
                     p.src += ", action %s%s" % (c.action, " (%s)" % ", ".join("%s %s" % kv for kv in sorted(c.params.items()))
                                                 if c.params else "")
             pts.append(p)
-    if readonly_regs:
-        rep.warn("%d register(s) are not in the pymodbus 'write' list (read-only there), but mogbus "
-                 "holding registers are always writable; they stay in the holding table so function "
-                 "code 03 works, the input table copy is read-only. Delete the holding line by hand "
-                 "to make one strictly read-only." % readonly_regs)
-    if readonly_bits:
-        rep.warn("%d bit cell(s) are not in the pymodbus 'write' list, but mogbus coils are always "
-                 "writable; the discrete input copy is read-only." % readonly_bits)
     return group_points(pts)
 
 
@@ -1136,7 +1126,7 @@ def group_points(pts):
         if (prev is not None and prev.table == p.table and prev.type == p.type and
                 prev.addr + prev.width * prev.count == p.addr and prev.value == p.value and
                 prev.extra == p.extra and prev.length == p.length and
-                prev.padding == p.padding and prev.src == p.src and p.type != "string"):
+                prev.padding == p.padding and prev.read_only == p.read_only and prev.src == p.src and p.type != "string"):
             prev.count += 1
             prev.last = p.first
         else:

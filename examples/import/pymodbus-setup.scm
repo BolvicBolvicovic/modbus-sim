@@ -9,8 +9,6 @@
 ;
 ; Warnings:
 ;   pymodbus uint16 at cell 11: increment starts at 50 but minval is 0; the ramp starts at minval
-;   8 register(s) are not in the pymodbus 'write' list (read-only there), but mogbus holding registers are always writable; they stay in the holding table so function code 03 works, the input table copy is read-only. Delete the holding line by hand to make one strictly read-only.
-;   3 bit cell(s) are not in the pymodbus 'write' list, but mogbus coils are always writable; the discrete input copy is read-only.
 
 (server (mode tcp) (port 5020) (bind "127.0.0.1"))
 
@@ -23,11 +21,11 @@
   (major-minor-revision "1.0")
 
   ; Coils (FC 01/05/15)
-  (coil 0 (static on) (note "pymodbus bits, bit 0"))
-  (coil 1 (static off) (note "pymodbus bits, bit 1"))
-  (coil 2 (static on) (note "pymodbus bits, bit 2"))
-  (coil 3 (static off) (count 13) (note "pymodbus bits, bits 3-15"))
-  (coil 16 (static on) (count 32) (note "pymodbus bits, bits 16-47"))
+  (coil 0 (access read-only) (static on) (note "pymodbus bits, bit 0"))
+  (coil 1 (access read-only) (static off) (note "pymodbus bits, bit 1"))
+  (coil 2 (access read-only) (static on) (note "pymodbus bits, bit 2"))
+  (coil 3 (access read-only) (static off) (count 13) (note "pymodbus bits, bits 3-15"))
+  (coil 16 (access read-only) (static on) (count 32) (note "pymodbus bits, bits 16-47"))
 
   ; Discrete inputs (FC 02)
   (discrete 0 (static on) (note "pymodbus bits, bit 0"))
@@ -56,18 +54,19 @@
 
   ; Holding registers (FC 03/06/16)
   (holding 10 (static 1500) (note "pymodbus uint16, cell 10"))
-  (holding 11 (ramp (from 0) (to 100) (step 1) (every-ms 1000) (mode wrap))
+  (holding 11 (access read-only) (ramp (from 0) (to 100) (step 1) (every-ms 1000) (mode wrap))
       (note "pymodbus uint16, cell 11, action increment (maxval 100, minval 0)"))
-  (holding 12 (static 50) (noise (amplitude 5) (every-ms 1000))
+  (holding 12 (access read-only) (static 50) (noise (amplitude 5) (every-ms 1000))
       (note "pymodbus uint16, cell 12, action random (maxval 55, minval 45)"))
   (holding 20 (static 7) (count 2) (note "pymodbus uint16, cells 20-21"))
-  (holding 22 (ramp (from 1) (to 65535) (step 1) (every-ms 1000) (mode hold))
+  (holding 22 (access read-only) (ramp (from 1) (to 65535) (step 1) (every-ms 1000) (mode hold))
       (note "pymodbus uint16, cell 22, action uptime"))
-  (holding 30 (type u32) (static 617001) (note "pymodbus uint32, cell 30"))
-  (holding 32 (type u32) (ramp (from 5) (to 4294967295) (step 1) (every-ms 1000) (mode wrap))
+  (holding 30 (type u32) (access read-only) (static 617001) (note "pymodbus uint32, cell 30"))
+  (holding 32 (type u32) (access read-only)
+      (ramp (from 5) (to 4294967295) (step 1) (every-ms 1000) (mode wrap))
       (note "pymodbus uint32, cell 32, action increment"))
-  (holding 40 (type float32) (static 404.17) (note "pymodbus float32, cell 40"))
-  (holding 42 (type float32) (static 20.5) (noise (amplitude 1.5) (every-ms 1000))
+  (holding 40 (type float32) (access read-only) (static 404.17) (note "pymodbus float32, cell 40"))
+  (holding 42 (type float32) (access read-only) (static 20.5) (noise (amplitude 1.5) (every-ms 1000))
       (note "pymodbus float32, cell 42, action random (maxval 22.0, minval 19.0)"))
-  (holding 50 (type string) (length 6) (padding space) (static "Pump station")
+  (holding 50 (type string) (length 6) (padding space) (access read-only) (static "Pump station")
       (note "pymodbus string, cell 50")))

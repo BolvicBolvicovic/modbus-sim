@@ -13,6 +13,7 @@ Address,Register Type,Name,Description,Data Type,Byte Order,Unit,Scale,Default,A
 40001,Holding Register,CT ratio,Current transformer ratio,u16,,,,100,RW
 40002,Holding Register,Demand period,Demand integration period,u16,,min,,15,RW
 40003,Holding Register,Device label,User label,STRING[8],,,,Plant 1,RW
+40007,Holding Register,Status word,Device status bits (read only),u16,,,,1,R
 00001,Coil,Reset energy,Write 1 to reset the energy counter,bool,,,,off,RW
 00002,Coil,Alarm ack,Acknowledge the alarm,bool,,,,off,RW
 10001,Discrete Input,Alarm,Over-voltage alarm,bool,,,,off,R

@@ -360,11 +360,16 @@ class CsvAddressing(ImportCase):
 
 class CsvWarningsAndOptions(ImportCase):
     def test_access_mismatches(self):
-        _, _, err = self.csv("Address,Table,Access\n0,holding,R\n0,input,RW\n1,coil,RO\n1,discrete,W\n")
-        self.assertIn("read-only, but the holding table is writable", err)
+        _, _, err = self.csv("Address,Table,Access\n0,input,RW\n1,discrete,W\n")
         self.assertIn("writable, but the input table is read-only", err)
-        self.assertIn("read-only, but the coil table is writable", err)
         self.assertIn("writable, but the discrete table is read-only", err)
+
+    def test_read_only_holding_and_coil_rows(self):
+        code, out, err = self.csv("Address,Table,Access\n0,holding,R\n1,holding,RW\n2,coil,RO\n3,coil,\n")
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        pts = self.points(out)
+        self.assertEqual([("access read-only" in p) for p in pts], [True, False, True, False])
 
     def test_access_matching_is_silent(self):
         for text in ("R", "RO", "Read only", "RW", "R/W", "read/write"):
@@ -470,25 +475,25 @@ class Pymodbus(ImportCase):
             "float32": [{"addr": [20, 21], "value": 404.17}],
             "string": [{"addr": [30, 34], "value": "A_B_C_D_E_"}]}))
         joined = "\n".join(pts)
-        self.assertIn("(holding 3 (static 17001)", joined)
-        self.assertIn("(holding 4 (static 0)", joined)
-        self.assertIn("(holding 10 (type u32) (static 617001)", joined)
-        self.assertIn("(holding 20 (type float32) (static 404.17)", joined)
-        self.assertIn('(holding 30 (type string) (length 5) (padding space) (static "A_B_C_D_E_")', joined)
+        self.assertIn("(holding 3 (access read-only) (static 17001)", joined)
+        self.assertIn("(holding 4 (access read-only) (static 0)", joined)
+        self.assertIn("(holding 10 (type u32) (access read-only) (static 617001)", joined)
+        self.assertIn("(holding 20 (type float32) (access read-only) (static 404.17)", joined)
+        self.assertIn('(holding 30 (type string) (length 5) (padding space) (access read-only) (static "A_B_C_D_E_")', joined)
 
     def test_defaults_apply(self):
         pts, _, _ = self.body(pm_doc({"uint16": [7, [9, 10]], "float32": [[20, 21]]},
                                       defaults={"value": {"uint16": 5, "float32": 1.5}, "action": {}}))
         joined = "\n".join(pts)
-        self.assertIn("(holding 7 (static 5)", joined)
-        self.assertIn("(holding 9 (static 5) (count 2)", joined)
-        self.assertIn("(holding 20 (type float32) (static 1.5)", joined)
+        self.assertIn("(holding 7 (access read-only) (static 5)", joined)
+        self.assertIn("(holding 9 (access read-only) (static 5) (count 2)", joined)
+        self.assertIn("(holding 20 (type float32) (access read-only) (static 1.5)", joined)
 
     def test_shared_blocks_emit_both_tables(self):
         pts, out, _ = self.body(pm_doc({"uint16": [{"addr": 3, "value": 9}], "bits": [{"addr": 0, "value": 1}]}))
         self.assertTrue(any(p.startswith("(holding 3 ") for p in pts))
         self.assertTrue(any(p.startswith("(input 3 ") for p in pts))
-        self.assertTrue(any(p.startswith("(coil 0 (static on)") for p in pts))
+        self.assertTrue(any(p.startswith("(coil 0 (access read-only) (static on)") for p in pts))
         self.assertTrue(any(p.startswith("(discrete 0 (static on)") for p in pts))
         self.assertIn("one register array for all tables", out)
 
@@ -498,24 +503,34 @@ class Pymodbus(ImportCase):
                      **{"shared blocks": False, "co size": 4, "di size": 4, "ir size": 8, "hr size": 8})
         pts, _, _ = self.body(doc)
         joined = "\n".join(pts)
-        self.assertIn("(coil 0 (static off) (count 16)", joined)
+        self.assertIn("(coil 0 (access read-only) (static off) (count 16)", joined)
         self.assertIn("(discrete 0 (static off) (count 16)", joined)
         self.assertIn("(input 2 (static 11)", joined)
-        self.assertIn("(holding 3 (static 22)", joined)
+        self.assertIn("(holding 3 (access read-only) (static 22)", joined)
         self.assertNotIn("(holding 2 ", joined)
 
     def test_bits_cell_expands_to_sixteen_coils(self):
         pts, _, _ = self.body(pm_doc({"bits": [{"addr": 1, "value": 0b101}]}))
-        self.assertIn("(coil 16 (static on) (note \"pymodbus bits, bit 16\"))", pts)
-        self.assertIn("(coil 17 (static off) (note \"pymodbus bits, bit 17\"))", pts)
-        self.assertTrue(any(p.startswith("(coil 19 (static off) (count 13)") for p in pts))
+        self.assertIn("(coil 16 (access read-only) (static on) (note \"pymodbus bits, bit 16\"))", pts)
+        self.assertIn("(coil 17 (access read-only) (static off) (note \"pymodbus bits, bit 17\"))", pts)
+        self.assertTrue(any(p.startswith("(coil 19 (access read-only) (static off) (count 13)") for p in pts))
 
-    def test_write_list_warns_about_writable_holding(self):
-        _, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 1}, {"addr": 2, "value": 2}],
-                                      "write": [1]}))
-        self.assertIn("1 register(s) are not in the pymodbus 'write' list", err)
-        _, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 1}], "write": [1]}))
-        self.assertNotIn("write' list", err)
+    def test_write_list_makes_the_rest_read_only(self):
+        pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 1}, {"addr": 2, "value": 2}],
+                                        "bits": [{"addr": 0, "value": 1}],
+                                        "write": [1, 2]}))
+        self.assertEqual(err, "")
+        joined = "\n".join(pts)
+        self.assertIn("(holding 1 (static 1)", joined)
+        self.assertIn("(holding 2 (static 2)", joined)
+        self.assertIn("(input 1 (static 1)", joined)
+        self.assertIn("(coil 0 (access read-only)", joined)
+        self.assertNotIn("(discrete 0 (access", joined)
+        pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 1}, {"addr": 2, "value": 2}],
+                                        "write": [1]}))
+        self.assertIn("(holding 1 (static 1)", "\n".join(pts))
+        self.assertIn("(holding 2 (access read-only) (static 2)", "\n".join(pts))
+        self.assertNotIn("(input 2 (access", "\n".join(pts))
 
     def test_write_of_undefined_cell_is_an_error(self):
         code, _, err = self.pm(pm_doc({"write": [5]}))
@@ -532,8 +547,8 @@ class Pymodbus(ImportCase):
             {"addr": 5, "value": 50, "action": "increment", "parameters": {"minval": 45, "maxval": 155}},
             {"addr": 6, "value": 3, "action": "increment"}]}))
         joined = "\n".join(pts)
-        self.assertIn("(holding 5 (ramp (from 45) (to 155) (step 1) (every-ms 1000) (mode wrap))", joined)
-        self.assertIn("(holding 6 (ramp (from 3) (to 65535) (step 1) (every-ms 1000) (mode wrap))", joined)
+        self.assertIn("(holding 5 (access read-only) (ramp (from 45) (to 155) (step 1) (every-ms 1000) (mode wrap))", joined)
+        self.assertIn("(holding 6 (access read-only) (ramp (from 3) (to 65535) (step 1) (every-ms 1000) (mode wrap))", joined)
 
     def test_increment_float_and_action_ms(self):
         pts, _, _ = self.body(pm_doc({"float32": [{"addr": [4, 5], "value": 1.5, "action": "increment"}]}),
@@ -545,8 +560,8 @@ class Pymodbus(ImportCase):
             {"addr": 5, "action": "random", "parameters": {"minval": 45, "maxval": 55}}],
             "float32": [{"addr": [10, 11], "action": "random", "parameters": {"minval": 19.0, "maxval": 22.0}}]}))
         joined = "\n".join(pts)
-        self.assertIn("(holding 5 (static 50) (noise (amplitude 5) (every-ms 1000))", joined)
-        self.assertIn("(holding 10 (type float32) (static 20.5) (noise (amplitude 1.5) (every-ms 1000))", joined)
+        self.assertIn("(holding 5 (access read-only) (static 50) (noise (amplitude 5) (every-ms 1000))", joined)
+        self.assertIn("(holding 10 (type float32) (access read-only) (static 20.5) (noise (amplitude 1.5) (every-ms 1000))", joined)
 
     def test_uptime_becomes_holding_ramp(self):
         pts, _, _ = self.body(pm_doc({"uint32": [{"addr": [0, 1], "action": "uptime"}]}))
@@ -556,7 +571,7 @@ class Pymodbus(ImportCase):
         for action in ("timestamp", "reset", "my_custom"):
             with self.subTest(action=action):
                 pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 9, "action": action}]}))
-                self.assertIn("(holding 1 (static 9)", "\n".join(pts))
+                self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
                 self.assertIn("action '%s' has no mogbus equivalent" % action, err)
 
     def test_bits_action_warns(self):
@@ -568,17 +583,17 @@ class Pymodbus(ImportCase):
                                       "repeat": [{"addr": [0, 1], "to": [10, 13]}]}))
         joined = "\n".join(pts)
         for addr, val in ((10, 4), (11, 5), (12, 4), (13, 5)):
-            self.assertIn("(holding %d (static %d)" % (addr, val), joined)
+            self.assertIn("(holding %d (access read-only) (static %d)" % (addr, val), joined)
 
     def test_devices(self):
         doc = pm_doc({"uint16": [{"addr": 1, "value": 11}]})
         doc["device_list"]["second"] = pm_doc({"uint16": [{"addr": 2, "value": 22}]})["device_list"]["dev"]
         code, out, err = self.pm(doc)
         self.assertEqual(code, 0)
-        self.assertIn("(holding 1 (static 11)", out)
+        self.assertIn("(holding 1 (access read-only) (static 11)", out)
         self.assertIn("2 devices; using 'dev'", err)
         code, out, err = self.pm(doc, "--device", "second")
-        self.assertIn("(holding 2 (static 22)", out)
+        self.assertIn("(holding 2 (access read-only) (static 22)", out)
         self.assertNotIn("2 devices", err)
         self.assertIn('(name "second")', out)
         code, _, err = self.pm(doc, "--device", "nope")
