@@ -2646,3 +2646,33 @@ TEST(ConfigRtuUdpModeUnitAndFaultRules)
 		" (fault (kind corrupt) (mode register)))",
 		&config, err, sizeof(err)));
 }
+
+TEST(ConfigHttpEndpointDefaultsAndAllModes)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(!config.http_enabled);
+	ASSERT_SUCCESS(load_text("(server (http)) (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.http_enabled && config.http_port == 9102);
+	ASSERT_EQ(strcmp(config.http_bind_address, "127.0.0.1") == 0);
+	ASSERT_SUCCESS(load_text("(server (mode rtu-pty) (http (port 9200) (bind \"::\")))"
+				 " (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.http_enabled && config.http_port == 9200 && strcmp(config.http_bind_address, "::") == 0);
+	/* Different protocols may share a number. */
+	ASSERT_SUCCESS(load_text("(server (mode udp) (port 9102) (http)) (device (unit-id 1) (holding 0))",
+				 &config, err, sizeof(err)));
+}
+
+TEST(ConfigHttpEndpointRejectsBadValues)
+{
+	EXPECT_ERROR("(server (http (port 0))) (device (unit-id 1) (holding 0))", "port");
+	EXPECT_ERROR("(server (http (bind \"localhost\"))) (device (unit-id 1) (holding 0))",
+		     "http: bind address 'localhost' is not a valid IPv4 or IPv6 address");
+	EXPECT_ERROR("(server (http (path \"/x\"))) (device (unit-id 1) (holding 0))", "path");
+	EXPECT_ERROR("(server (port 1502) (http (port 1502))) (device (unit-id 1) (holding 0))",
+		     "http: port 1502 is already the Modbus server port");
+	EXPECT_ERROR("(server (mode rtu-tcp) (port 9102) (http)) (device (unit-id 1) (holding 0))",
+		     "http: port 9102 is already the Modbus server port");
+}

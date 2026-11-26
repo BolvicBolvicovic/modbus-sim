@@ -29,6 +29,7 @@ typedef struct device_t device_t;
  * not reflect UART character timing. broadcast_execute runs unit-0 requests on every device
  * without a response.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct rtu_tcp_server_options_t rtu_tcp_server_options_t;
 struct rtu_tcp_server_options_t
 {
@@ -41,6 +42,7 @@ struct rtu_tcp_server_options_t
 	bool		broadcast_execute; /**< opt-in: execute unit-0 requests on all devices */
 	device_t**	devices;
 	u32		device_count;
+	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
 typedef struct rtu_tcp_conn_t rtu_tcp_conn_t;

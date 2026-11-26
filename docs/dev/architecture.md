@@ -235,6 +235,13 @@ using one scratch `rtu_framer_t` in the server struct; the queued reply is moved
 `net_udp` pending table (so `delay` never blocks) and sent to the source address. No timing state,
 no per-peer state, no disconnect fault.
 
+### Observability (`net/net_obs.c`)
+
+Each server owns a `net_obs_t` (in `server_t`): counters updated by `net_handle_pdu()` and the
+transports, the DEBUG request log line (text, or JSON fields via `log_write_fields`), and the optional
+HTTP endpoint. Transports call `net_poll()` instead of `poll()`, which adds the endpoint's sockets to the
+same poll set, so the endpoint runs on the server thread with no locking and no allocation.
+
 ## Coding rules used here
 
 - Plain C (gnu11), vlib types (`u8`, `u16`, `f64` ...), vlib macros (`ARRAY_COUNT`, `MIN`, `MAX`,
@@ -315,13 +322,6 @@ only outstanding work is listed here.
 - Model true UART character-level timing. Why: t3.5/t1.5 are derived from baud and read
   boundaries, which cannot reproduce byte-time-sensitive serial framing. RTU-over-TCP and
   RTU-over-UDP need no change because they are explicit separate transports.
-
-### Operational observability
-
-- Structured JSON logs and metrics for requests, errors, latency, active clients, device health
-  and fault statistics. Why: automated test platforms need machine-readable status.
-- Health/readiness and Prometheus endpoints. Why: container orchestration and monitoring need
-  standard probes and scrape targets.
 
 ### Protocol validation and compatibility
 

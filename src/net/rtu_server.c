@@ -3,6 +3,7 @@
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/rtu_framer.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -36,6 +37,7 @@ rtu_server_init_ctx(rtu_server_t* server)
 		.strict_t15 = server->options.strict_t15,
 		.broadcast_execute = server->options.broadcast_execute,
 		.peer = NULL,
+		.obs = server->options.obs,
 	};
 }
 
@@ -234,7 +236,7 @@ rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 	rtu_build_poll(server, &pfd, &timeout, now_ms, gap_ms);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(&pfd, 1, timeout) < 0)
+	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 	{
 		if (errno == EINTR)
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */

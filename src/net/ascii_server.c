@@ -3,6 +3,7 @@
 #include "modbus/ascii.h"
 #include "modbus/pdu.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
@@ -54,19 +55,19 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 
 	if (!modbus_ascii_decode(frame, len, decoded, &addr, &pdu, &pdu_len))
 	{
-		net_record_comm_error(server->options.devices, server->options.device_count);
+		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		return;
 	}
-	if (addr == 0)
-		return; /* broadcast: no response */
-	dev = net_find_device(server->options.devices, server->options.device_count, addr);
+	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr) : NULL;
 	if (!dev)
-		return; /* unknown unit: no response */
+	{
+		/* broadcast or unknown unit: no response; never reaches a device */
+		net_obs_request(server->options.obs, NULL, NULL, addr, pdu[0], NULL, 0, NULL);
+		return;
+	}
 
-	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
-	LOG_DEBUG("ascii unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
-		  resp_len == 0 ? "silent" : (resp[0] & 0x80) ? "exception" : "ok",
-		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
+	resp_len = net_handle_pdu(server->options.obs, NULL, dev, &server->rng, now_ms, pdu, pdu_len,
+				  resp, &decision);
 	if (decision.drop)
 		return;
 
@@ -136,7 +137,7 @@ ascii_process(ascii_server_t* server, u64 now_ms)
 			 * request; count it like any other discarded frame. */
 			server->rx_len = 0;
 			server->last_rx_ms = 0;
-			net_record_comm_error(server->options.devices, server->options.device_count);
+			net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		}
 	}
 
@@ -155,7 +156,7 @@ ascii_process(ascii_server_t* server, u64 now_ms)
 		if (scan == MODBUS_ASCII_SCAN_FRAME)
 			ascii_handle_frame(server, now_ms, server->rx, len);
 		else
-			net_record_comm_error(server->options.devices, server->options.device_count);
+			net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		ascii_consume(server, len);
 	}
 }
@@ -280,7 +281,7 @@ ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 	ascii_build_poll(server, &pfd, &timeout, now_ms);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(&pfd, 1, timeout) < 0)
+	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 	{
 		if (errno == EINTR)
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */

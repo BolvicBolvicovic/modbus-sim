@@ -24,6 +24,8 @@ server_options_from_config(config_t* config)
 		.stop_bits                = config->stop_bits,
 		.tls_enabled              = config->tls_enabled,
 		.tls_handshake_timeout_ms = config->tls_handshake_timeout_ms,
+		.http_bind_address = config->http_enabled ? config->http_bind_address : NULL,
+		.http_port         = config->http_port,
 		.tls = {
 			.certificate                = config->tls_certificate,
 			.private_key                = config->tls_private_key,

@@ -187,10 +187,32 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 }
 #endif
 
+/* (http (port N) (bind "ADDR")): the health, readiness and Prometheus endpoint, any mode. */
+static bool
+parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
+{
+	static const char* const keys[] = { "port", "bind" };
+	s64		port = SERVER_DEFAULT_HTTP_PORT;
+	const char*	bind = NULL;
+
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "http") ||
+	    !form_opt_int(ctx, options, "port", 1, 65535, &port) ||
+	    !form_opt_string(ctx, options, "bind", &bind))
+		return false;
+	if (bind && strlen(bind) >= SERVER_BIND_MAX)
+		return form_fail(ctx, "http: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
+	if (bind && !ip_is_literal(bind))
+		return form_fail(ctx, "http: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
+	strcpy(config->http_bind_address, bind ? bind : "127.0.0.1");
+	config->http_port    = (u16)port;
+	config->http_enabled = true;
+	return true;
+}
+
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
-	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls" };
+	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls", "http" };
 	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls" };
 	static const char* const udp_keys[] = { "mode", "port", "bind", "seed" };
 	static const char* const ascii_udp_keys[] = { "mode", "port", "bind", "seed" };
@@ -295,6 +317,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		bool supported = false;
 
 		if (strcmp(keys[i], "path") == 0 ||
+		    strcmp(keys[i], "http") == 0 ||
 		    form_is_absent(ctx, form_find(ctx, options, keys[i])))
 			continue;
 		for (u32 j = 0; j < allowed_count; j++)
@@ -318,6 +341,10 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 #endif
 
 	if (!form_opt_int(ctx, options, "port", 1, 65535, &port))
+		return false;
+
+	if (!form_is_absent(ctx, form_find(ctx, options, "http")) &&
+	    !parse_http(ctx, s7_cdr(form_find(ctx, options, "http")), config))
 		return false;
 
 	if (!form_opt_int(ctx, options, "seed", 0, 4294967295LL, &seed))
@@ -377,6 +404,10 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 
 	config->mode              = (server_mode_t)mode;
 	config->port              = (u16)(config->tls_enabled && !port_given ? CONFIG_DEFAULT_TLS_PORT : port);
+	if (config->http_enabled &&
+	    config->http_port == config->port &&
+	    (mode == SERVER_MODE_TCP || mode == SERVER_MODE_RTU_TCP || mode == SERVER_MODE_ASCII_TCP))
+		return form_fail(ctx, "http: port %u is already the Modbus server port", config->port);
 	config->seed              = (u32)seed;
 	config->idle_timeout_ms   = (u32)idle;
 	config->frame_gap_ms      = (u32)frame;

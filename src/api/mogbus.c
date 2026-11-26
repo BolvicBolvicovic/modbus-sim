@@ -13,6 +13,7 @@
 #include "server/server.h"
 #include "server/server_limits.h"
 #include "util/clock.h"
+#include "util/ip.h"
 #include "util/log.h"
 #include "vlib/arena.h"
 #if WITH_CONFIG
@@ -76,6 +77,8 @@ _Static_assert(MOGBUS_STEP_CONTINUE == NET_STEP_CONTINUE &&
 	       MOGBUS_STEP_DONE == NET_STEP_DONE &&
 	       MOGBUS_STEP_ERROR == NET_STEP_ERROR, "step results");
 _Static_assert(MOGBUS_MAX_DEVICES == SERVER_MAX_DEVICES, "device limit");
+_Static_assert((int)MOGBUS_LOG_TEXT == (int)LOG_FORMAT_TEXT &&
+	       (int)MOGBUS_LOG_JSON == (int)LOG_FORMAT_JSON, "log format enum");
 
 #define VERSION_STRING_(a, b, c)	#a "." #b "." #c
 #define VERSION_STRING(a, b, c)		VERSION_STRING_(a, b, c)
@@ -95,6 +98,7 @@ struct mogbus_server_t
 	struct strings_t
 	{
 		char	bind[SERVER_BIND_MAX];
+		char	http_bind[SERVER_BIND_MAX];
 		char	path[SERVER_PATH_MAX];
 		char	certificate[SERVER_TLS_PATH_MAX];
 		char	private_key[SERVER_TLS_PATH_MAX];
@@ -450,6 +454,7 @@ mogbus_server_options_defaults(void)
 {
 	return (mogbus_server_options_t){
 		.mode                           = MOGBUS_MODE_TCP,
+		.http_port                      = SERVER_DEFAULT_HTTP_PORT,
 		.bind_address                   = "127.0.0.1",
 		.port                           = SERVER_DEFAULT_PORT,
 		.fd                             = -1,
@@ -520,6 +525,14 @@ validate_options(const mogbus_t* ctx, server_options_t* o, struct strings_t* st,
 
 	o->bind_address = copy_string(st->bind, sizeof(st->bind), o->bind_address, "bind address",
 				      &ok, err, err_size);
+	o->http_bind_address = copy_string(st->http_bind, sizeof(st->http_bind), o->http_bind_address,
+					   "HTTP bind address", &ok, err, err_size);
+	if (ok && o->http_bind_address && !ip_is_literal(o->http_bind_address))
+	{
+		set_err(err, err_size, "HTTP bind address '%s' is not a valid IPv4 or IPv6 address",
+			o->http_bind_address);
+		return MOGBUS_ERR_INVALID;
+	}
 	o->path         = copy_string(st->path, sizeof(st->path), o->path, "device path", &ok, err, err_size);
 	o->tls.certificate = copy_string(st->certificate, sizeof(st->certificate), o->tls.certificate,
 					 "TLS certificate path", &ok, err, err_size);
@@ -617,6 +630,8 @@ options_from_public(const mogbus_server_options_t* in, server_options_t* o, char
 	*o = (server_options_t){
 		.mode                     = (server_mode_t)in->mode,
 		.bind_address             = in->bind_address ? in->bind_address : "127.0.0.1",
+		.http_bind_address        = in->http_bind_address,
+		.http_port                = in->http_port,
 		.port                     = in->port,
 		.path                     = in->path,
 		.fd                       = in->fd,
@@ -702,6 +717,8 @@ mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
 		.mode                           = (mogbus_mode_t)o.mode,
 		.bind_address                   = o.bind_address,
 		.port                           = o.port,
+		.http_bind_address              = o.http_bind_address,
+		.http_port                      = o.http_port,
 		.path                           = o.path[0] ? o.path : NULL,
 		.fd                             = -1,
 		.seed                           = o.seed,
@@ -804,4 +821,18 @@ void
 mogbus_set_log_level(mogbus_log_level_t level)
 {
 	log_set_level((log_level_t)level);
+}
+
+void
+mogbus_set_log_format(mogbus_log_format_t format)
+{
+	log_set_format((log_format_t)format);
+}
+
+size_t
+mogbus_server_metrics(const mogbus_server_t* server, char* out, size_t size)
+{
+	if (!server || !server->in_use || !out || size == 0)
+		return 0;
+	return net_obs_render_metrics(&server->server.obs, out, size > UINT32_MAX ? UINT32_MAX : (u32)size);
 }

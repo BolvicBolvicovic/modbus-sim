@@ -34,6 +34,7 @@ struct cli_t
 	bool		verbose;
 	bool		show_help;
 	bool		show_version;
+	bool		log_json;
 };
 
 static inline void
@@ -49,6 +50,7 @@ print_usage(void)
 	     "                       device) and exit 0 if it answers, 1 if not\n"
 	     "      --timeout-ms N   --health reply timeout (default 2000)\n"
 	     "  -v, --verbose        log every request\n"
+	     "      --log-format F   log lines as text (default) or json\n"
 	     "  -V, --version        print the version and exit\n"
 	     "  -h, --help           show this help\n"
 	     "\n"
@@ -108,6 +110,18 @@ parse_args(int argc, char** argv, cli_t* cli)
 		}
 		else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0)
 			cli->verbose = true;
+		else if (strcmp(arg, "--log-format") == 0)
+		{
+			const char* value = i + 1 < argc ? argv[++i] : "";
+
+			if (strcmp(value, "json") == 0)
+				cli->log_json = true;
+			else if (strcmp(value, "text") != 0)
+			{
+				fprintf(stderr, "--log-format needs text or json\n");
+				return false;
+			}
+		}
 		else if (arg[0] == '-')
 		{
 			fprintf(stderr, "unknown option '%s' (try --help)\n", arg);
@@ -245,6 +259,9 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 			break;	/* host-only, never loaded from config */
 	}
 
+	if (options->http_bind_address)
+		printf("  HTTP /healthz, /readyz and /metrics on %s:%u\n", options->http_bind_address,
+		       options->http_port);
 	for (size_t i = 0; i < count; i++)
 	{
 		mogbus_device_info_t info;
@@ -289,6 +306,7 @@ main(int argc, char** argv)
 	}
 
 	mogbus_set_log_level(cli.verbose ? MOGBUS_LOG_DEBUG : MOGBUS_LOG_INFO);
+	mogbus_set_log_format(cli.log_json ? MOGBUS_LOG_JSON : MOGBUS_LOG_TEXT);
 	ctx = mogbus_create();
 	if (!ctx)
 	{

@@ -27,6 +27,7 @@ typedef struct device_t device_t;
  * Devices are borrowed, not copied. Raw ASCII frames (':' + hex [addr][PDU][LRC] + CR LF) are
  * carried over TCP byte streams; this is not MBAP framing. No serial line options apply.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct ascii_tcp_server_options_t ascii_tcp_server_options_t;
 struct ascii_tcp_server_options_t
 {
@@ -36,6 +37,7 @@ struct ascii_tcp_server_options_t
 	u32		idle_timeout_ms;
 	device_t**	devices;
 	u32		device_count;
+	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
 typedef struct ascii_tcp_conn_t ascii_tcp_conn_t;

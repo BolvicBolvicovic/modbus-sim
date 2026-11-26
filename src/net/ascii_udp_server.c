@@ -7,6 +7,7 @@
 #include "modbus/pdu.h"
 #include "modbus/ascii.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/net_udp.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -39,19 +40,19 @@ handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8
 	    !modbus_ascii_decode(buf, len, decoded, &addr, &pdu, &pdu_len))
 	{
 		LOG_DEBUG("ascii-udp %s sent a malformed datagram (%u bytes), ignored", peer->text, len);
-		net_record_comm_error(server->options.devices, server->options.device_count);
+		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		return;
 	}
-	if (addr == 0)
-		return; /* broadcast: no response, no request processing */
-	dev = net_find_device(server->options.devices, server->options.device_count, addr);
+	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr) : NULL;
 	if (!dev)
-		return; /* unknown unit: no response */
+	{
+		/* broadcast or unknown unit: no response, no request processing; never reaches a device */
+		net_obs_request(server->options.obs, peer->text, NULL, addr, pdu[0], NULL, 0, NULL);
+		return;
+	}
 
-	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
-	LOG_DEBUG("ascii-udp peer=%s unit=%u fc=0x%02X -> %s%s", peer->text, addr, pdu[0],
-		  resp_len == 0 ? "silent" : (resp[0] & 0x80) ? "exception" : "ok",
-		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
+	resp_len = net_handle_pdu(server->options.obs, peer->text, dev, &server->rng, now_ms, pdu, pdu_len,
+				  resp, &decision);
 	if (decision.drop)
 		return;
 
@@ -78,7 +79,7 @@ ascii_udp_server_step(ascii_udp_server_t* server, s32 max_wait_ms)
 	net_udp_poll_timeout(&server->udp, now_ms, &timeout);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(&pfd, 1, timeout) < 0)
+	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
 	net_udp_flush_due(&server->udp, clock_now_ms());
@@ -94,6 +95,8 @@ ascii_udp_server_step(ascii_udp_server_t* server, s32 max_wait_ms)
 			break;
 		if (len > 0)
 			handle_datagram(server, &peer, buf, (u32)len);
+		else
+			net_obs_rejected(server->options.obs);
 	}
 	return NET_STEP_CONTINUE;
 }

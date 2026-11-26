@@ -7,6 +7,7 @@
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/net_tcp_pool.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -110,7 +111,7 @@ static void
 handle_frame(tcp_server_t* server, tcp_conn_t* conn, const mbap_header_t* header, u64 now_ms)
 {
 	fault_decision_t	decision = { 0 };
-	u32			len = net_mbap_respond(server->options.devices,
+	u32			len = net_mbap_respond(server->options.obs, server->options.devices,
 						       server->options.device_count, &server->rng,
 						       now_ms, conn->base.peer, header,
 						       conn->rx + MBAP_HEADER_SIZE, conn->tx, &decision);
@@ -142,6 +143,7 @@ conn_process(tcp_server_t* server, tcp_conn_t* conn)
 		if (!mbap_is_valid(&header))
 		{
 			LOG_WARN("client %s sent a bad MBAP header, closing", conn->base.peer);
+			net_obs_rejected(server->options.obs);
 			conn_close(server, conn);
 			return;
 		}
@@ -456,7 +458,7 @@ tcp_server_step(tcp_server_t* server, s32 max_wait_ms)
 	count = build_poll_table(server, fds, owners, now_ms, &timeout);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(fds, count, timeout) < 0)
+	if (net_poll(server->options.obs, fds, count, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
 	now_ms = clock_now_ms();
@@ -486,6 +488,7 @@ tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 	server->pool.idle_timeout_ms = options->idle_timeout_ms;
 	server->pool.listen_fd = -1;
 	server->pool.ctx = server;
+	server->pool.obs = options->obs;
 	server->pool.on_accept = conn_on_accept;
 	server->pool.on_close = conn_on_close;
 	server->pool.skip_idle = conn_skip_idle;

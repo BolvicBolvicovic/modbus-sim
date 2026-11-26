@@ -15,6 +15,7 @@
 typedef struct device_t device_t;
 typedef struct rng_t rng_t;
 typedef struct fault_decision_t fault_decision_t;
+typedef struct net_obs_t net_obs_t;
 
 /**
  * @brief Shared delayed-response slot for byte-stream servers.
@@ -48,10 +49,14 @@ enum
 /** @brief Returns the device with the given unit id, or NULL. */
 device_t*	net_find_device(device_t** devices, u32 count, u8 unit);
 
-/** @brief Runs the PDU against the device and decides the response fault. */
-u32		net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms,
-			       const u8* req, u32 req_len, u8* resp,
-			       fault_decision_t* decision);
+/**
+ * @brief Runs the PDU against the device, decides the response fault, and records and logs the
+ *        request in `obs` (NULL records nothing).
+ *
+ * `peer` describes the client in logs (NULL for a byte stream).
+ */
+u32		net_handle_pdu(net_obs_t* obs, const char* peer, device_t* dev, rng_t* rng, u64 now_ms,
+			       const u8* req, u32 req_len, u8* resp, fault_decision_t* decision);
 
 /**
  * @brief Counts one bus communication error (FC 08 subfunction 0x000C) for every device on the
@@ -59,7 +64,7 @@ u32		net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms,
  *
  * Used for bad frames on both RTU and ASCII byte streams.
  */
-void		net_record_comm_error(device_t** devices, u32 count);
+void		net_record_comm_error(net_obs_t* obs, device_t** devices, u32 count);
 
 /** @brief Clears a queued response slot. */
 void		pending_response_clear(pending_response_t* pending);
@@ -86,7 +91,7 @@ int		net_bind_addr(const char* bind_address, u16 port,
  * Returns the frame length, or 0 when nothing is to be sent (no response or drop fault).
  * `peer` is for logs.
  */
-u32		net_mbap_respond(device_t** devices, u32 count, rng_t* rng, u64 now_ms,
+u32		net_mbap_respond(net_obs_t* obs, device_t** devices, u32 count, rng_t* rng, u64 now_ms,
 				 const char* peer, const mbap_header_t* header,
 				 const u8* request, u8* out, fault_decision_t* decision);
 

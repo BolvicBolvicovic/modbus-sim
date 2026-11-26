@@ -19,6 +19,7 @@ typedef struct device_t device_t;
  *
  * Devices are borrowed, not copied.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct udp_server_options_t udp_server_options_t;
 struct udp_server_options_t
 {
@@ -27,6 +28,7 @@ struct udp_server_options_t
 	u32		seed;
 	device_t**	devices;
 	u32		device_count;
+	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
 /**

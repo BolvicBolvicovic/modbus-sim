@@ -6,6 +6,7 @@
 #include "net/rtu_udp_server.h"
 #include "modbus/rtu.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/net_udp.h"
 #include "net/rtu_framer.h"
 #include "util/clock.h"
@@ -28,6 +29,7 @@ handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, const u8* 
 		.rng               = &server->rng,
 		.broadcast_execute = server->options.broadcast_execute,
 		.peer              = peer->text,
+		.obs               = server->options.obs,
 	};
 	u32			frame_len = 0;
 	u64			now_ms    = clock_now_ms();
@@ -37,7 +39,9 @@ handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, const u8* 
 	{
 		LOG_DEBUG("UDP %s sent a malformed RTU datagram (%u bytes), ignored", peer->text, len);
 		if (len >= 4)
-			net_record_comm_error(ctx.devices, ctx.device_count);
+			net_record_comm_error(ctx.obs, ctx.devices, ctx.device_count);
+		else
+			net_obs_rejected(ctx.obs);
 		return;
 	}
 
@@ -64,7 +68,7 @@ rtu_udp_server_step(rtu_udp_server_t* server, s32 max_wait_ms)
 	net_udp_poll_timeout(&server->udp, now_ms, &timeout);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(&pfd, 1, timeout) < 0)
+	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
 	net_udp_flush_due(&server->udp, clock_now_ms());
@@ -80,6 +84,8 @@ rtu_udp_server_step(rtu_udp_server_t* server, s32 max_wait_ms)
 			break;
 		if (len > 0)
 			handle_datagram(server, &peer, buf, (u32)len);
+		else
+			net_obs_rejected(server->options.obs);
 	}
 	return NET_STEP_CONTINUE;
 }

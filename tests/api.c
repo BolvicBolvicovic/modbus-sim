@@ -307,6 +307,99 @@ TEST(ApiProbeFailsWhenTheUnitIsUnknownOrSilent)
 	mogbus_destroy(ctx);
 }
 
+/* Steps the server until `fd` has a full HTTP response (the endpoint closes after it). */
+static bool
+http_get(mogbus_server_t* server, u16 port, const char* path, char* out, u32 cap)
+{
+	char	req[128];
+	int	fd = ts_connect_loopback(port, AF_INET, 1000);
+	u32	len = 0;
+	u64	deadline = clock_now_ms() + 2000;
+
+	if (fd < 0)
+		return false;
+	snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: test\r\n\r\n", path);
+	if (send(fd, req, strlen(req), MSG_NOSIGNAL) != (ssize_t)strlen(req))
+	{
+		close(fd);
+		return false;
+	}
+	while (clock_now_ms() < deadline && len + 1 < cap)
+	{
+		struct pollfd	pfd = { .fd = fd, .events = POLLIN };
+		ssize_t		got;
+
+		(void)mogbus_server_step(server, 5);
+		if (poll(&pfd, 1, 0) <= 0)
+			continue;
+		got = recv(fd, out + len, cap - 1 - len, 0);
+		if (got <= 0)
+			break;
+		len += (u32)got;
+	}
+	out[len] = '\0';
+	close(fd);
+	return len > 0;
+}
+
+TEST(ApiServesHealthAndMetricsOverHttp)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev;
+	mogbus_point_t	p = holding(0, 0x1234);
+	mogbus_server_options_t o = mogbus_server_options_defaults();
+	mogbus_server_options_t clash;
+	mogbus_server_t* server;
+	mogbus_error_t	status = MOGBUS_OK;
+	char		err[256];
+	static char	text[40000];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	int		fd;
+
+	ASSERT_EQ(ctx != NULL);
+	dev = mogbus_add_device(ctx, 1, "http", err, sizeof(err));
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(o.http_bind_address == NULL && o.http_port == 9102);
+	o.port              = ts_free_port();
+	o.http_bind_address = "127.0.0.1";
+	o.http_port         = ts_free_port();
+	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	ASSERT_EQ(server != NULL);
+
+	fd = ts_connect_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0 && ts_mbap_send(fd, 1, 9, READ_HOLDING, sizeof(READ_HOLDING)));
+	ASSERT_EQ(pump(server, fd) && ts_mbap_recv(fd, 1, 9, resp, &len, 1000));
+	close(fd);
+
+	ASSERT_EQ(http_get(server, o.http_port, "/healthz", text, sizeof(text)));
+	ASSERT_EQ(strncmp(text, "HTTP/1.1 200 OK", 15) == 0);
+	ASSERT_EQ(http_get(server, o.http_port, "/readyz", text, sizeof(text)));
+	ASSERT_EQ(strncmp(text, "HTTP/1.1 200 OK", 15) == 0);
+	ASSERT_EQ(http_get(server, o.http_port, "/metrics", text, sizeof(text)));
+	ASSERT_EQ(strstr(text, "\nmogbus_requests_total{fc=\"3\"} 1\n") != NULL);
+	ASSERT_EQ(strstr(text, "\nmogbus_device_responses_total{unit=\"1\",result=\"ok\"} 1\n") != NULL);
+	ASSERT_EQ(strstr(text, "\nmogbus_connections_total 1\n") != NULL);
+
+	ASSERT_EQ(mogbus_server_metrics(server, text, sizeof(text)) == strlen(text));
+	ASSERT_EQ(strstr(text, "\nmogbus_ready 1\n") != NULL);
+	ASSERT_EQ(mogbus_server_metrics(server, text, 16) == 0);
+
+	/* The endpoint port is taken now: a second server fails like a busy listener. */
+	clash                   = o;
+	clash.port              = ts_free_port();
+	ASSERT_EQ(mogbus_server_create(ctx, &clash, err, sizeof(err), &status) == NULL);
+	ASSERT_EQ(status == MOGBUS_ERR_LISTEN);
+	clash.http_bind_address = "localhost";
+	ASSERT_EQ(mogbus_server_create(ctx, &clash, err, sizeof(err), &status) == NULL);
+	ASSERT_EQ(status == MOGBUS_ERR_INVALID && strstr(err, "HTTP bind address") != NULL);
+
+	mogbus_server_stop(server);
+	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
+	mogbus_server_close(server);
+	mogbus_destroy(ctx);
+}
+
 TEST(ApiServesDevicesOverUdp)
 {
 	mogbus_t*	ctx = mogbus_create();

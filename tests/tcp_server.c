@@ -43,6 +43,8 @@ static ts_server_t g_server = {
 	.ready_needle	= "listening on"
 };
 static u32 g_server_nofile = 0;
+/* Extra CLI flags for the next server_start (cleared by server_stop). */
+static bool g_server_json_logs = false;
 
 /* Separate fixture for --check runs, which exit instead of listening. */
 #if WITH_TLS
@@ -307,8 +309,10 @@ server_start_with_bind(const char* bind, const char* server_options, const char*
 	{
 		const char* bin = getenv("MOGBUS_BIN");
 		char*       argv[] = { (char*)(bin ? bin : "./mogbus"), g_server.config, NULL };
+		char*       json[] = { (char*)(bin ? bin : "./mogbus"), "-v", "--log-format", "json",
+				       g_server.config, NULL };
 
-		return ts_server_start(&g_server, argv);
+		return ts_server_start(&g_server, g_server_json_logs ? json : argv);
 	}
 }
 
@@ -324,6 +328,7 @@ server_stop(void)
 	ASSERT_EQ(ts_server_stop(&g_server));
 	g_server.probe_port = 0;
 	g_server_nofile = 0;
+	g_server_json_logs = false;
 }
 
 static void
@@ -3152,3 +3157,106 @@ TEST(NetTlsCheckAcceptsValidTlsConfig)
 	ASSERT_EQ(tls_check_run(TLS_SERVER_OPTIONS, 0, NULL));
 }
 #endif
+
+/* One raw HTTP/1.1 GET against the running binary's endpoint; the server closes after it. */
+static bool
+http_get_binary(u16 port, const char* path, char* out, u32 cap)
+{
+	char	req[128];
+	int	fd = ts_connect_loopback(port, AF_INET, 1000);
+	u32	len = 0;
+
+	if (fd < 0)
+		return false;
+	snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: test\r\n\r\n", path);
+	ts_set_recv_timeout(fd, 2000);
+	if (!ts_send_socket(fd, (const u8*)req, (u32)strlen(req)))
+	{
+		close(fd);
+		return false;
+	}
+	while (len + 1 < cap)
+	{
+		ssize_t got = recv(fd, out + len, cap - 1 - len, 0);
+
+		if (got <= 0)
+			break;
+		len += (u32)got;
+	}
+	out[len] = '\0';
+	close(fd);
+	return len > 0;
+}
+
+TEST(NetHttpEndpointServesMetricsAndJsonLogs)
+{
+	client_t	client = { .fd = -1 };
+	u16		http_port = ts_free_port();
+	char		options[64];
+	static char	text[40000];
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	bool		ok;
+
+	snprintf(options, sizeof(options), "(http (port %u))", http_port);
+	g_server_json_logs = true;
+	ok = server_start(options, "(device (unit-id 1) (holding 0 (static 5))"
+				   " (fault (kind delay) (delay-ms 20) (percent 100)))");
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
+	read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) && len == 4;
+	read_pdu(req, FC_READ_HOLDING_REGISTERS, 9, 1);
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) && resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80);
+	client_close(&client);
+	ok = ok && http_get_binary(http_port, "/readyz", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	ok = ok && http_get_binary(http_port, "/metrics", text, sizeof(text));
+	ok = ok && strstr(text, "\nmogbus_requests_total{fc=\"3\"} 2\n") != NULL;
+	ok = ok && strstr(text, "\nmogbus_device_exceptions_total{unit=\"1\",code=\"2\"} 1\n") != NULL;
+	ok = ok && strstr(text, "\nmogbus_device_faults_total{unit=\"1\",kind=\"delay\"} 2\n") != NULL;
+	ok = ok && strstr(text, "\nmogbus_response_latency_seconds_bucket{le=\"0.01\"} 0\n") != NULL;
+	ok = ok && strstr(text, "\nmogbus_response_latency_seconds_bucket{le=\"0.025\"} 2\n") != NULL;
+	ok = ok && ts_file_contains(g_server.stderr_path, "\"event\":\"request\",\"transport\":\"tcp\"");
+	ok = ok && ts_file_contains(g_server.stderr_path,
+				    "\"result\":\"exception\",\"exception\":2,\"latency_ms\":20,\"faults\":[\"delay\"]");
+	ok = ok && ts_file_contains(g_server.stderr_path, "{\"ts\":\"");
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+/* The HTTP endpoint opens before the transport: a taken port fails start-up with status 2. */
+TEST(NetHttpPortInUseFailsToStart)
+{
+	int	busy = -1;
+	u16	http_port = 0;
+	char	options[64];
+	ts_server_t second = { .pid = -1, .master_fd = -1, .label = "http clash",
+			       .flags = TS_CAPTURE_STDERR | TS_NULL_STDIN | TS_EXIT_IS_READY };
+	char	config[256];
+	const char* bin = getenv("MOGBUS_BIN");
+	char*	argv[3];
+	int	status = 0;
+	bool	ok;
+
+	ASSERT_EQ(server_start("", "(device (unit-id 1) (holding 0 (static 5)))"));
+	busy = ts_connect_loopback(g_server.probe_port, AF_INET, 1000);
+	ASSERT_EQ(busy >= 0);
+	close(busy);
+	http_port = g_server.probe_port;	/* the running Modbus listener holds this TCP port */
+	snprintf(options, sizeof(options), "(http (port %u))", http_port);
+	snprintf(config, sizeof(config), "(server (mode tcp) (port %u) %s)\n(device (unit-id 1) (holding 0))\n",
+		 ts_free_port(), options);
+	ASSERT_EQ(ts_write_config(&second, "/tmp/mogbus-http-XXXXXX", config));
+	argv[0] = (char*)(bin ? bin : "./mogbus");
+	argv[1] = second.config;
+	argv[2] = NULL;
+	ASSERT_EQ(ts_server_start(&second, argv));
+	ok = ts_wait_pid(second.pid, &status, 5000);
+	second.pid = -1;
+	ok = ok && WIFEXITED(status) && WEXITSTATUS(status) == 2;
+	ok = ok && ts_file_contains(second.stderr_path, "cannot listen for HTTP");
+	ts_server_cleanup(&second);
+	ASSERT_EQ(ok);
+	server_stop();
+}

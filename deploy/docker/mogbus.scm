@@ -3,6 +3,7 @@
 ; The built-in default binds 127.0.0.1, which a published container port cannot reach, so the
 ; container binds 0.0.0.0. Publish the port to loopback (-p 127.0.0.1:1502:1502) unless remote
 ; clients are meant to connect. The first device's unit id is what `mogbus --health` probes.
+; The HTTP endpoint on 9102 serves /healthz, /readyz and /metrics (Prometheus).
 ;
 ; Mount your own file over /etc/mogbus/mogbus.scm, or pass another path as the container command.
 
@@ -10,7 +11,8 @@
   (mode tcp)
   (port 1502)
   (bind "0.0.0.0")
-  (idle-timeout-ms 60000))
+  (idle-timeout-ms 60000)
+  (http (port 9102) (bind "0.0.0.0")))
 
 (device
   (name "Container example")

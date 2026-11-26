@@ -70,3 +70,31 @@ TEST(LogTruncatesLongMessages)
 	ASSERT_EQ(c.count == 1 && strlen(c.last) == 1023);
 	log_set_sink(NULL, NULL);
 }
+
+TEST(LogJsonFormatEscapesAndAddsFields)
+{
+	capture_t c = { 0 };
+
+	log_set_sink(capture, &c);
+	log_set_format(LOG_FORMAT_JSON);
+	LOG_INFO("name \"%s\"\tback\\slash", "x");
+	ASSERT_EQ(c.count == 1);
+	ASSERT_EQ(strncmp(c.last, "{\"ts\":\"", 7) == 0);
+	ASSERT_EQ(strstr(c.last, "\"level\":\"info\",\"msg\":\"name \\\"x\\\"\\u0009back\\\\slash\"}") != NULL);
+	log_set_level(LOG_LEVEL_DEBUG);
+	log_write_fields(LOG_LEVEL_DEBUG, "\"event\":\"request\",\"unit\":1", "req");
+	ASSERT_EQ(strstr(c.last, "\"msg\":\"req\",\"event\":\"request\",\"unit\":1}") != NULL);
+	log_set_format(LOG_FORMAT_TEXT);
+	log_write_fields(LOG_LEVEL_DEBUG, "\"event\":\"request\"", "plain %d", 5);
+	ASSERT_EQ(strcmp(c.last, "plain 5") == 0);
+	log_set_sink(NULL, NULL);
+}
+
+TEST(LogJsonEscapeTruncatesSafely)
+{
+	char out[8];
+
+	ASSERT_EQ(log_json_escape(out, sizeof(out), "a\"b") == 4 && strcmp(out, "a\\\"b") == 0);
+	ASSERT_EQ(log_json_escape(out, sizeof(out), "abcdefghij") == 7 && strcmp(out, "abcdefg") == 0);
+	ASSERT_EQ(log_json_escape(out, 4, "\n") == 0 && out[0] == '\0');	/* \u000a does not fit */
+}

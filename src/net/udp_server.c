@@ -7,6 +7,7 @@
 #include "modbus/pdu.h"
 #include "modbus/mbap.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/net_udp.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -31,10 +32,11 @@ handle_datagram(udp_server_t* server, const net_udp_peer_t* peer, const u8* buf,
 	    mbap_frame_size(&header) != len)
 	{
 		LOG_DEBUG("UDP %s sent a malformed MBAP datagram (%u bytes), ignored", peer->text, len);
+		net_obs_rejected(server->options.obs);
 		return;
 	}
 
-	out_len = net_mbap_respond(server->options.devices, server->options.device_count,
+	out_len = net_mbap_respond(server->options.obs, server->options.devices, server->options.device_count,
 				   &server->rng, now_ms, peer->text, &header,
 				   buf + MBAP_HEADER_SIZE, out, &decision);
 	if (out_len == 0)
@@ -56,7 +58,7 @@ udp_server_step(udp_server_t* server, s32 max_wait_ms)
 	net_udp_poll_timeout(&server->udp, now_ms, &timeout);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(&pfd, 1, timeout) < 0)
+	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
 	net_udp_flush_due(&server->udp, clock_now_ms());
@@ -72,6 +74,8 @@ udp_server_step(udp_server_t* server, s32 max_wait_ms)
 			break;
 		if (len > 0)
 			handle_datagram(server, &peer, buf, (u32)len);
+		else
+			net_obs_rejected(server->options.obs);
 	}
 	return NET_STEP_CONTINUE;
 }

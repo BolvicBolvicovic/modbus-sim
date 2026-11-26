@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 struct pollfd;
+typedef struct net_obs_t net_obs_t;
 
 enum
 {
@@ -44,6 +45,7 @@ struct net_tcp_pool_t
 	int		listen_fd;
 	u64		accept_backoff_until_ms;
 	bool		accept_backoff_logged;
+	net_obs_t*	obs;	/**< connection metrics; NULL records nothing */
 	void*		ctx;
 	void		(*on_accept)(void* ctx, net_tcp_conn_t* conn, u64 now_ms);
 	void		(*on_close)(void* ctx, net_tcp_conn_t* conn);

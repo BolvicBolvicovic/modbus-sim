@@ -7,6 +7,7 @@
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/net_tcp_pool.h"
 #include "net/rtu_framer.h"
 #include "util/clock.h"
@@ -31,6 +32,7 @@ rtu_tcp_init_ctx(rtu_tcp_server_t* server)
 		.strict_t15 = false,
 		.broadcast_execute = server->options.broadcast_execute,
 		.peer = NULL,
+		.obs = server->options.obs,
 	};
 }
 
@@ -320,7 +322,7 @@ rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 	count = build_poll_table(server, fds, owners, now_ms, &timeout);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(fds, count, timeout) < 0)
+	if (net_poll(server->options.obs, fds, count, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 	now_ms = clock_now_ms();
 	net_tcp_pool_close_idle(&server->pool, now_ms);
@@ -359,6 +361,7 @@ rtu_tcp_server_init(rtu_tcp_server_t* server, const rtu_tcp_server_options_t* op
 	server->pool.idle_timeout_ms = options->idle_timeout_ms;
 	server->pool.listen_fd = -1;
 	server->pool.ctx = server;
+	server->pool.obs = options->obs;
 	server->pool.on_accept = conn_on_accept;
 	server->pool.on_close = conn_on_close;
 	server->pool.skip_idle = conn_skip_idle;

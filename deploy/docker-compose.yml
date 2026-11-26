@@ -10,6 +10,8 @@ services:
     # Loopback only; drop "127.0.0.1:" to accept remote Modbus clients.
     ports:
       - "127.0.0.1:1502:1502/tcp"
+      # /healthz, /readyz and /metrics (Prometheus) from the container config's (http ...).
+      - "127.0.0.1:9102:9102/tcp"
     volumes:
       # Replace the built-in config with your own (the file must be readable by UID 10001).
       - ./docker/mogbus.scm:/etc/mogbus/mogbus.scm:ro

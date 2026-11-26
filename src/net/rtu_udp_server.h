@@ -22,6 +22,7 @@ typedef struct device_t device_t;
  * no t3.5/t1.5 timing. broadcast_execute runs unit-0 requests on every device without a
  * response.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct rtu_udp_server_options_t rtu_udp_server_options_t;
 struct rtu_udp_server_options_t
 {
@@ -31,6 +32,7 @@ struct rtu_udp_server_options_t
 	bool		broadcast_execute;
 	device_t**	devices;
 	u32		device_count;
+	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
 /**

@@ -5,6 +5,7 @@
 #include "net/rtu_framer.h"
 #include "modbus/pdu.h" // IWYU pragma: keep
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "util/log.h"
 #include <string.h>
 
@@ -54,7 +55,7 @@ static void
 discard_rx(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx)
 {
 	if (rx_is_bad_frame(framer->rx, framer->rx_len))
-		net_record_comm_error(ctx->devices, ctx->device_count);
+		net_record_comm_error(ctx->obs, ctx->devices, ctx->device_count);
 	framer->rx_len = 0;
 	clear_deferral(framer);
 }
@@ -107,7 +108,10 @@ rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
 	if (addr == 0)
 	{
 		if (!ctx->broadcast_execute)
+		{
+			net_obs_request(ctx->obs, ctx->peer, NULL, 0, pdu[0], NULL, 0, NULL);
 			return; /* broadcast: no response */
+		}
 		/* Deliberately queue nothing: broadcasts execute on all devices but
 		 * never produce a response; a NULL rng keeps them from consuming fault
 		 * schedule steps. */
@@ -115,37 +119,23 @@ rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
 		{
 			fault_decision_t ignored = { 0 };
 
-			(void)net_handle_pdu(ctx->devices[i], NULL, now_ms, pdu, pdu_len,
+			(void)net_handle_pdu(NULL, NULL, ctx->devices[i], NULL, now_ms, pdu, pdu_len,
 					     resp, &ignored);
 		}
-		if (ctx->peer)
-			LOG_DEBUG("%s rtu broadcast fc=0x%02X -> executed on %u device%s (no response)",
-				  ctx->peer, pdu[0], ctx->device_count,
-				  ctx->device_count == 1 ? "" : "s");
-		else
-			LOG_DEBUG("rtu broadcast fc=0x%02X -> executed on %u device%s (no response)",
-				  pdu[0], ctx->device_count, ctx->device_count == 1 ? "" : "s");
+		/* Recorded once as a request without a response, not once per device. */
+		net_obs_request(ctx->obs, ctx->peer, NULL, 0, pdu[0], NULL, 0, NULL);
 		return;
 	}
 	dev = net_find_device(ctx->devices, ctx->device_count, addr);
 	if (!dev)
-		return; /* unknown unit: no response */
-
-	resp_len = net_handle_pdu(dev, ctx->rng, now_ms, pdu, pdu_len, resp, &decision);
-	framer->fault_disconnect |= decision.disconnect;
 	{
-		const char* result = resp_len == 0 ? "no response" :
-				     (resp[0] & 0x80) ? "exception" : "ok";
-
-		if (ctx->peer)
-			LOG_DEBUG("%s rtu unit=%u fc=0x%02X -> %s%s", ctx->peer, addr, pdu[0],
-				  result, decision.drop ? " (dropped by fault)" :
-				  decision.delay_ms ? " (delayed by fault)" : "");
-		else
-			LOG_DEBUG("rtu unit=%u fc=0x%02X -> %s%s", addr, pdu[0],
-				  result, decision.drop ? " (dropped by fault)" :
-				  decision.delay_ms ? " (delayed by fault)" : "");
+		net_obs_request(ctx->obs, ctx->peer, NULL, addr, pdu[0], NULL, 0, NULL);
+		return; /* unknown unit: no response */
 	}
+
+	resp_len = net_handle_pdu(ctx->obs, ctx->peer, dev, ctx->rng, now_ms, pdu, pdu_len, resp,
+				  &decision);
+	framer->fault_disconnect |= decision.disconnect;
 	if (decision.drop || resp_len == 0)
 		return;
 	(void)rtu_framer_queue(framer, addr, resp, resp_len, now_ms + decision.delay_ms,

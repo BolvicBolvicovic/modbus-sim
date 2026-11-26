@@ -25,6 +25,7 @@ typedef struct device_t device_t;
  *
  * Devices are borrowed, not copied.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct tcp_server_options_t tcp_server_options_t;
 struct tcp_server_options_t
 {
@@ -37,6 +38,7 @@ struct tcp_server_options_t
 	net_tls_config_t tls;		/**< borrowed TLS settings, used when tls_enabled */
 	device_t**	devices;
 	u32		device_count;
+	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
 /**

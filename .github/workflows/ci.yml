@@ -262,7 +262,7 @@ jobs:
         run: |
           docker run -d --name mogbus --read-only --cap-drop ALL \
             --security-opt no-new-privileges --memory 64m --pids-limit 64 \
-            -p 127.0.0.1:1502:1502 mogbus:ci
+            -p 127.0.0.1:1502:1502 -p 127.0.0.1:9102:9102 mogbus:ci
 
       - name: Wait for the Docker health check
         run: |
@@ -282,6 +282,15 @@ jobs:
           out=$(./tools/modbus_probe.py holding 0 1)
           echo "$out"
           echo "$out" | grep -q 42
+
+      - name: HTTP readiness and Prometheus metrics from the host
+        run: |
+          curl -fsS http://127.0.0.1:9102/readyz
+          curl -fsS http://127.0.0.1:9102/healthz
+          metrics=$(curl -fsS http://127.0.0.1:9102/metrics)
+          echo "$metrics" | grep -E '^mogbus_(ready|requests_total|responses_total)'
+          echo "$metrics" | grep -q '^mogbus_ready 1$'
+          echo "$metrics" | grep -q '^mogbus_requests_total{fc="3"} 1$'
 
       - name: Process is PID 1, unprivileged and without capabilities
         run: |

@@ -398,6 +398,8 @@ typedef struct mogbus_server_options_t
 	mogbus_tls_version_t tls_min_version;	/**< minimum TLS version */
 	const char*	tls_ciphers_1_2;	/**< NULL = OpenSSL default */
 	const char*	tls_ciphersuites_1_3;	/**< NULL = OpenSSL default */
+	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint; NULL = off */
+	uint16_t	http_port;		/**< endpoint port, used when http_bind_address is set */
 } mogbus_server_options_t;
 
 /**
@@ -545,6 +547,19 @@ MOGBUS_API int		mogbus_server_run(mogbus_server_t* server);
 MOGBUS_API void		mogbus_server_close(mogbus_server_t* server);
 
 /**
+ * @brief Renders the server's metrics in the Prometheus text format.
+ *
+ * The same text the HTTP endpoint serves on /metrics, for a host that exports metrics itself.
+ * Counters start at zero when the server is created.
+ *
+ * @param server Server.
+ * @param out Buffer for the text.
+ * @param size Size of @p out; 32 KiB is enough for 16 devices.
+ * @return Length of the NUL-terminated text, or 0 if @p size is too small or @p server is NULL.
+ */
+MOGBUS_API size_t	mogbus_server_metrics(const mogbus_server_t* server, char* out, size_t size);
+
+/**
  * @brief Returns the PTY slave path of a *_PTY mode server.
  * @param server Server.
  * @return The path, borrowed from the server, or NULL in other modes.
@@ -568,6 +583,13 @@ typedef enum mogbus_log_level_t
  * @param level Level of the line.
  * @param message The line, without a trailing newline; valid only during the call.
  */
+/** @brief Log line format. */
+typedef enum mogbus_log_format_t
+{
+	MOGBUS_LOG_TEXT,	/**< timestamp, level and message (default) */
+	MOGBUS_LOG_JSON,	/**< one JSON object per line, with event fields for requests */
+} mogbus_log_format_t;
+
 typedef void (*mogbus_log_fn)(void* user, mogbus_log_level_t level, const char* message);
 
 /**
@@ -586,6 +608,16 @@ MOGBUS_API void		mogbus_set_log_sink(mogbus_log_fn fn, void* user);
  * @param level New level; the default is MOGBUS_LOG_INFO.
  */
 MOGBUS_API void		mogbus_set_log_level(mogbus_log_level_t level);
+
+/**
+ * @brief Sets the process-wide log line format.
+ *
+ * In MOGBUS_LOG_JSON each line is an object with `ts`, `level` and `msg`; request lines (DEBUG)
+ * add `event`, `transport`, `peer`, `unit`, `fc`, `result`, `exception`, `latency_ms` and
+ * `faults`. A log sink receives the whole JSON object as its message.
+ * @param format New format; the default is MOGBUS_LOG_TEXT.
+ */
+MOGBUS_API void		mogbus_set_log_format(mogbus_log_format_t format);
 
 #ifdef __cplusplus
 }

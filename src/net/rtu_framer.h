@@ -39,6 +39,7 @@ struct rtu_framer_t
  * baud-derived/auto timing. strict_t15 is best-effort and only meaningful for RTU byte
  * streams. broadcast_execute runs unit-0 requests on all devices without a response.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct rtu_framer_ctx_t rtu_framer_ctx_t;
 struct rtu_framer_ctx_t
 {
@@ -49,7 +50,8 @@ struct rtu_framer_ctx_t
 	u32		baud;
 	bool		strict_t15;
 	bool		broadcast_execute;
-	const char*	peer;
+	const char*	peer;		/**< client for logs, NULL on a byte stream */
+	net_obs_t*	obs;		/**< metrics and request logs; NULL records nothing */
 };
 
 void	rtu_framer_init(rtu_framer_t* framer);

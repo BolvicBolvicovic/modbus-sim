@@ -8,6 +8,7 @@
 #include "net/ascii_server.h"
 #include "net/ascii_tcp_server.h"
 #include "net/ascii_udp_server.h"
+#include "net/net_obs.h"
 #include "net/net_tls.h"
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
@@ -47,6 +48,8 @@ struct server_options_t
 	bool		tls_enabled;		/**< SERVER_MODE_TCP only */
 	u32		tls_handshake_timeout_ms;
 	net_tls_config_t tls;
+	const char*	http_bind_address;	/**< HTTP health/metrics endpoint; NULL = off */
+	u16		http_port;
 	device_t**	devices;
 	u32		device_count;
 };
@@ -71,6 +74,7 @@ struct server_t
 		ascii_udp_server_t	ascii_udp;
 		rtu_udp_server_t	rtu_udp;
 	};
+	net_obs_t	obs;		/**< metrics, request logs and the HTTP endpoint */
 	int		fd;		/**< opened by init in PTY/device modes, else -1 */
 	int		slave_fd;	/**< PTY slave kept open, else -1 */
 	char		pty_name[128];

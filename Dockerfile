@@ -40,7 +40,7 @@ COPY deploy/docker/mogbus.scm /etc/mogbus/mogbus.scm
 # runAsUser can match it. mogbus writes no files, so a read-only root filesystem works.
 USER 10001:10001
 WORKDIR /
-EXPOSE 1502/tcp 1502/udp
+EXPOSE 1502/tcp 1502/udp 9102/tcp
 
 # Sends one Modbus request to the first device of the config; see docs/deployment.md.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \

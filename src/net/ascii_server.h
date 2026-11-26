@@ -21,6 +21,7 @@ typedef struct device_t device_t;
  * socketpair, or similar bidirectional byte stream. ASCII framing is delimiter-based (CRLF),
  * so there is no baud, frame-gap, or t1.5 setting here.
  */
+typedef struct net_obs_t net_obs_t;
 typedef struct ascii_server_options_t ascii_server_options_t;
 struct ascii_server_options_t
 {
@@ -28,6 +29,7 @@ struct ascii_server_options_t
 	u32		seed;
 	device_t**	devices;
 	u32		device_count;
+	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
 /**

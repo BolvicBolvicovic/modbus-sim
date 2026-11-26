@@ -11,7 +11,8 @@ data:
       (mode tcp)
       (port 1502)
       (bind "0.0.0.0")
-      (idle-timeout-ms 60000))
+      (idle-timeout-ms 60000)
+      (http (port 9102) (bind "0.0.0.0")))
 
     (device
       (name "Kubernetes example")
@@ -33,6 +34,12 @@ spec:
     metadata:
       labels:
         app: mogbus
+      # For a Prometheus that discovers pods by these common annotations; with the Prometheus
+      # Operator, use a PodMonitor on the `http` port instead.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
+        prometheus.io/path: /metrics
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -48,6 +55,9 @@ spec:
           ports:
             - name: modbus
               containerPort: 1502
+              protocol: TCP
+            - name: http
+              containerPort: 9102
               protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
@@ -65,18 +75,23 @@ spec:
             - name: config
               mountPath: /etc/mogbus
               readOnly: true
+          # /readyz is 200 while the transport is serving; /healthz answers from the server's
+          # own poll loop, so it fails if the loop stalls. Without (http ...), use an exec
+          # probe instead: ["/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"].
           readinessProbe:
-            exec:
-              command: ["/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"]
+            httpGet:
+              path: /readyz
+              port: http
             initialDelaySeconds: 2
             periodSeconds: 5
-            timeoutSeconds: 5
+            timeoutSeconds: 2
           livenessProbe:
-            exec:
-              command: ["/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"]
+            httpGet:
+              path: /healthz
+              port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 2
             failureThreshold: 3
       volumes:
         - name: config
@@ -94,4 +109,8 @@ spec:
     - name: modbus
       port: 1502
       targetPort: modbus
+      protocol: TCP
+    - name: http
+      port: 9102
+      targetPort: http
       protocol: TCP

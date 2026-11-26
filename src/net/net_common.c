@@ -6,6 +6,7 @@
 #include "net/net_common.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
+#include "net/net_obs.h"
 #include "util/log.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -27,15 +28,19 @@ net_find_device(device_t** devices, u32 count, u8 unit)
 }
 
 u32
-net_handle_pdu(device_t* dev, rng_t* rng, u64 now_ms, const u8* req, u32 req_len,
-	       u8* resp, fault_decision_t* decision)
+net_handle_pdu(net_obs_t* obs, const char* peer, device_t* dev, rng_t* rng, u64 now_ms,
+	       const u8* req, u32 req_len, u8* resp, fault_decision_t* decision)
 {
-	return modbus_handle_request(dev, rng, now_ms, req, req_len, resp, decision);
+	u32 len = modbus_handle_request(dev, rng, now_ms, req, req_len, resp, decision);
+
+	net_obs_request(obs, peer, dev, dev->unit_id, req[0], resp, len, decision);
+	return len;
 }
 
 void
-net_record_comm_error(device_t** devices, u32 count)
+net_record_comm_error(net_obs_t* obs, device_t** devices, u32 count)
 {
+	net_obs_rejected(obs);
 	for (u32 i = 0; i < count; i++)
 	{
 		device_t* dev = devices[i];
@@ -123,7 +128,7 @@ net_tcp_listen(const char* bind_address, u16 port, int backlog)
 }
 
 u32
-net_mbap_respond(device_t** devices, u32 count, rng_t* rng, u64 now_ms, const char* peer,
+net_mbap_respond(net_obs_t* obs, device_t** devices, u32 count, rng_t* rng, u64 now_ms, const char* peer,
 		 const mbap_header_t* header, const u8* request, u8* out,
 		 fault_decision_t* decision)
 {
@@ -134,14 +139,12 @@ net_mbap_respond(device_t** devices, u32 count, rng_t* rng, u64 now_ms, const ch
 	mbap_header_t	reply   = *header;
 
 	if (!dev)
+	{
 		pdu_len = modbus_exception(pdu, request[0], EXC_GATEWAY_TARGET_FAILED);
+		net_obs_request(obs, peer, NULL, header->unit, request[0], pdu, pdu_len, NULL);
+	}
 	else
-		pdu_len = net_handle_pdu(dev, rng, now_ms, request, req_len, pdu, decision);
-
-	LOG_DEBUG("%s tid=%u unit=%u fc=0x%02X -> %s%s", peer, header->transaction,
-		  header->unit, request[0], pdu_len == 0 ? "no response" :
-		  (pdu[0] & 0x80) ? "exception" : "ok",
-		  decision->drop ? " (dropped by fault)" : decision->delay_ms ? " (delayed by fault)" : "");
+		pdu_len = net_handle_pdu(obs, peer, dev, rng, now_ms, request, req_len, pdu, decision);
 
 	if (decision->drop || pdu_len == 0)
 		return 0;

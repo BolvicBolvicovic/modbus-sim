@@ -3,6 +3,7 @@
 #include "modbus/ascii.h"
 #include "modbus/pdu.h"
 #include "net/net_common.h"
+#include "net/net_obs.h"
 #include "net/net_tcp_pool.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -75,19 +76,19 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 
 	if (!modbus_ascii_decode(frame, len, decoded, &addr, &pdu, &pdu_len))
 	{
-		net_record_comm_error(server->options.devices, server->options.device_count);
+		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		return;
 	}
-	if (addr == 0)
-		return; /* broadcast: no response, no request processing */
-	dev = net_find_device(server->options.devices, server->options.device_count, addr);
+	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr) : NULL;
 	if (!dev)
-		return; /* unknown unit: no response */
+	{
+		/* broadcast or unknown unit: no response, no request processing; never reaches a device */
+		net_obs_request(server->options.obs, conn->base.peer, NULL, addr, pdu[0], NULL, 0, NULL);
+		return;
+	}
 
-	resp_len = net_handle_pdu(dev, &server->rng, now_ms, pdu, pdu_len, resp, &decision);
-	LOG_DEBUG("ascii-tcp client=%s unit=%u fc=0x%02X -> %s%s", conn->base.peer, addr, pdu[0],
-		  resp_len == 0 ? "silent" : (resp[0] & 0x80) ? "exception" : "ok",
-		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
+	resp_len = net_handle_pdu(server->options.obs, conn->base.peer, dev, &server->rng, now_ms, pdu, pdu_len,
+				  resp, &decision);
 	if (decision.disconnect)
 	{
 		conn_close(server, conn);
@@ -160,7 +161,7 @@ conn_process(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms)
 		{
 			conn->rx_len = 0;
 			conn->last_rx_ms = 0;
-			net_record_comm_error(server->options.devices, server->options.device_count);
+			net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		}
 	}
 
@@ -179,7 +180,7 @@ conn_process(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms)
 		if (scan == MODBUS_ASCII_SCAN_FRAME)
 			conn_handle_frame(server, conn, now_ms, conn->rx, len);
 		else
-			net_record_comm_error(server->options.devices, server->options.device_count);
+			net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		conn_consume(conn, len);
 	}
 }
@@ -365,7 +366,7 @@ ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 	count = build_poll_table(server, fds, owners, now_ms, &timeout);
 	if (max_wait_ms >= 0)
 		timeout = MIN(timeout, max_wait_ms);
-	if (poll(fds, count, timeout) < 0)
+	if (net_poll(server->options.obs, fds, count, timeout) < 0)
 	{
 		if (errno == EINTR)
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
@@ -408,6 +409,7 @@ ascii_tcp_server_init(ascii_tcp_server_t* server, const ascii_tcp_server_options
 	server->pool.idle_timeout_ms = options->idle_timeout_ms;
 	server->pool.listen_fd = -1;
 	server->pool.ctx = server;
+	server->pool.obs = options->obs;
 	server->pool.on_close = conn_on_close;
 	server->pool.skip_idle = conn_skip_idle;
 	rng_seed(&server->rng, options->seed);

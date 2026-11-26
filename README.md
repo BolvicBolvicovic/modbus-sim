@@ -110,6 +110,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
 | Writes | Clients can write coils and holding registers. Writing a ramp freezes it at the written value. |
+| Observability | `(server (http ...))` serves `/healthz`, `/readyz` and Prometheus `/metrics`; `--log-format json` writes one JSON object per log line, with structured request events under `-v`. |
 | Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`); the `mogbus` binary is itself a client of it. |
 
 ## Ready-made profiles
@@ -142,6 +143,7 @@ mogbus [options] CONFIG.scm
       --health         probe the running server described by the config; exit 0 if healthy, 1 if not
       --timeout-ms N   reply timeout of --health in milliseconds (default 2000)
   -v, --verbose        log every request
+      --log-format F   log lines as text (default) or json
   -V, --version        print the version (and git revision, when built from a checkout) and exit
   -h, --help           show this help
 ```

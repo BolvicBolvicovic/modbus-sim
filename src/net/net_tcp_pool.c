@@ -4,6 +4,7 @@
  */
 #define _GNU_SOURCE
 #include "net/net_tcp_pool.h"
+#include "net/net_obs.h"
 #include "net/net_common.h"
 #include "util/clock.h"
 #include "util/log.h"
@@ -126,6 +127,7 @@ net_tcp_pool_accept(net_tcp_pool_t* pool)
 		conn->last_activity_ms = now_ms;
 		format_peer(conn, &addr);
 		LOG_DEBUG("client %s connected", conn->peer);
+		net_obs_connection(pool->obs, true);
 		if (pool->on_accept)
 			pool->on_accept(pool->ctx, conn, now_ms);
 	}
@@ -139,6 +141,7 @@ net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn)
 	if (!conn || conn->fd < 0)
 		return;
 	LOG_DEBUG("client %s disconnected", conn->peer);
+	net_obs_connection(pool->obs, false);
 	fd = conn->fd;
 	if (pool->on_close)
 		pool->on_close(pool->ctx, conn);

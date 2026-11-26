@@ -275,6 +275,20 @@ TEST(CliVersionPrintsLibraryVersion)
 	ASSERT_EQ(strncmp(line, want, strlen(want)) == 0);
 }
 
+TEST(CliLogFormatRejectsUnknownValues)
+{
+	const char* bin = getenv("MOGBUS_BIN");
+	char cmd[256];
+	int status;
+
+	snprintf(cmd, sizeof(cmd), "%s --log-format yaml profiles/minimal.scm 2>/dev/null", bin ? bin : "./mogbus");
+	status = system(cmd);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+	snprintf(cmd, sizeof(cmd), "%s --log-format json --check profiles/minimal.scm >/dev/null", bin ? bin : "./mogbus");
+	status = system(cmd);
+	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
 {
 	const char* bin = getenv("MOGBUS_BIN");

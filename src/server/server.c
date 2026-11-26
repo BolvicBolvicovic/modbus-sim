@@ -3,9 +3,27 @@
  * @brief Transport-independent server facade: opens PTYs and serial devices and drives the selected transport.
  */
 #include "server/server.h"
+#include "server/server_limits.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+_Static_assert(NET_OBS_MAX_DEVICES == SERVER_MAX_DEVICES, "metrics keep one slot per device");
+
+static const char* const MODE_NAMES[] = {
+	[SERVER_MODE_TCP]          = "tcp",
+	[SERVER_MODE_RTU_PTY]      = "rtu-pty",
+	[SERVER_MODE_RTU_DEVICE]   = "rtu-device",
+	[SERVER_MODE_RTU_TCP]      = "rtu-tcp",
+	[SERVER_MODE_ASCII_PTY]    = "ascii-pty",
+	[SERVER_MODE_ASCII_DEVICE] = "ascii-device",
+	[SERVER_MODE_ASCII_TCP]    = "ascii-tcp",
+	[SERVER_MODE_RTU_FD]       = "rtu-fd",
+	[SERVER_MODE_ASCII_FD]     = "ascii-fd",
+	[SERVER_MODE_UDP]          = "udp",
+	[SERVER_MODE_ASCII_UDP]    = "ascii-udp",
+	[SERVER_MODE_RTU_UDP]      = "rtu-udp",
+};
 
 s32
 server_init(server_t* server, const server_options_t* options)
@@ -17,6 +35,13 @@ server_init(server_t* server, const server_options_t* options)
 	server->mode     = options->mode;
 	server->fd       = -1;
 	server->slave_fd = -1;
+	/* The endpoint opens first so a port clash fails start-up like a transport listener. */
+	if (net_obs_init(&server->obs, MODE_NAMES[options->mode], options->devices,
+			 options->device_count, options->http_bind_address, options->http_port) != 0)
+	{
+		net_obs_close(&server->obs);
+		return 2;
+	}
 
 	switch (options->mode)
 	{
@@ -32,9 +57,11 @@ server_init(server_t* server, const server_options_t* options)
 				.tls                      = options->tls,
 				.devices                  = options->devices,
 				.device_count             = options->device_count,
+				.obs                      = &server->obs,
 			};
 
-			return tcp_server_init(&server->tcp, &o);
+			rc = tcp_server_init(&server->tcp, &o);
+			break;
 		}
 		case SERVER_MODE_UDP:
 		{
@@ -44,9 +71,11 @@ server_init(server_t* server, const server_options_t* options)
 				.seed         = options->seed,
 				.devices      = options->devices,
 				.device_count = options->device_count,
+				.obs          = &server->obs,
 			};
 
-			return udp_server_init(&server->udp, &o);
+			rc = udp_server_init(&server->udp, &o);
+			break;
 		}
 		case SERVER_MODE_ASCII_UDP:
 		{
@@ -56,9 +85,11 @@ server_init(server_t* server, const server_options_t* options)
 				.seed         = options->seed,
 				.devices      = options->devices,
 				.device_count = options->device_count,
+				.obs          = &server->obs,
 			};
 
-			return ascii_udp_server_init(&server->ascii_udp, &o);
+			rc = ascii_udp_server_init(&server->ascii_udp, &o);
+			break;
 		}
 		case SERVER_MODE_RTU_UDP:
 		{
@@ -69,9 +100,11 @@ server_init(server_t* server, const server_options_t* options)
 				.broadcast_execute = options->broadcast_execute,
 				.devices           = options->devices,
 				.device_count      = options->device_count,
+				.obs               = &server->obs,
 			};
 
-			return rtu_udp_server_init(&server->rtu_udp, &o);
+			rc = rtu_udp_server_init(&server->rtu_udp, &o);
+			break;
 		}
 		case SERVER_MODE_RTU_TCP:
 		{
@@ -85,9 +118,11 @@ server_init(server_t* server, const server_options_t* options)
 				.broadcast_execute = options->broadcast_execute,
 				.devices           = options->devices,
 				.device_count      = options->device_count,
+				.obs               = &server->obs,
 			};
 
-			return rtu_tcp_server_init(&server->rtu_tcp, &o);
+			rc = rtu_tcp_server_init(&server->rtu_tcp, &o);
+			break;
 		}
 		case SERVER_MODE_ASCII_TCP:
 		{
@@ -98,9 +133,11 @@ server_init(server_t* server, const server_options_t* options)
 				.idle_timeout_ms = options->idle_timeout_ms,
 				.devices         = options->devices,
 				.device_count    = options->device_count,
+				.obs             = &server->obs,
 			};
 
-			return ascii_tcp_server_init(&server->ascii_tcp, &o);
+			rc = ascii_tcp_server_init(&server->ascii_tcp, &o);
+			break;
 		}
 		case SERVER_MODE_RTU_PTY:
 		case SERVER_MODE_RTU_DEVICE:
@@ -114,6 +151,7 @@ server_init(server_t* server, const server_options_t* options)
 				.broadcast_execute = options->broadcast_execute,
 				.devices           = options->devices,
 				.device_count      = options->device_count,
+				.obs               = &server->obs,
 			};
 
 			if (options->mode != SERVER_MODE_RTU_FD)
@@ -141,6 +179,7 @@ server_init(server_t* server, const server_options_t* options)
 				.seed         = options->seed,
 				.devices      = options->devices,
 				.device_count = options->device_count,
+				.obs          = &server->obs,
 			};
 
 			if (options->mode != SERVER_MODE_ASCII_FD)
@@ -161,6 +200,8 @@ server_init(server_t* server, const server_options_t* options)
 	}
 	if (rc != 0)
 		server_close(server);
+	else
+		server->obs.ready = true;
 	return rc;
 }
 
@@ -188,6 +229,7 @@ server_step(server_t* server, s32 max_wait_ms)
 void
 server_stop(server_t* server)
 {
+	server->obs.ready = false;
 	switch (server->mode)
 	{
 		case SERVER_MODE_TCP:		tcp_server_stop(&server->tcp); break;
@@ -223,6 +265,7 @@ server_close(server_t* server)
 		case SERVER_MODE_ASCII_DEVICE:
 		case SERVER_MODE_ASCII_FD:	ascii_server_close(&server->ascii); break;
 	}
+	net_obs_close(&server->obs);
 	if (server->slave_fd >= 0)
 		close(server->slave_fd);
 	if (server->fd >= 0)
