@@ -324,12 +324,33 @@ endif
 	(cd $(DIST_DIR) && sha256sum $(DIST_NAME).tar.gz $(DIST_NAME).spdx.json > SHA256SUMS) && \
 	cat $(DIST_DIR)/SHA256SUMS
 
+# libFuzzer harnesses (fuzz/*.c) with ASan + UBSan, built straight from the parser and device
+# sources (no TLS, no config loader, no s7). `make fuzz-run FUZZ_SECONDS=N` runs each for N s.
+FUZZ_CC      ?= clang
+FUZZ_DIR      = build/fuzz
+FUZZ_NAMES    = $(patsubst fuzz/fuzz_%.c,%,$(sort $(wildcard fuzz/fuzz_*.c)))
+FUZZ_BINS     = $(addprefix $(FUZZ_DIR)/fuzz_,$(FUZZ_NAMES))
+FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/device/*.c src/util/*.c)) \
+		src/net/net_common.c src/net/net_obs.c src/net/rtu_framer.c
+FUZZ_FLAGS    = -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
+		-DWITH_TLS=0 -DWITH_CONFIG=0 $(INC) -Ifuzz
+FUZZ_SECONDS ?= 60
+
+$(FUZZ_DIR)/fuzz_%: fuzz/fuzz_%.c fuzz/fuzz_common.h $(FUZZ_SRCS)
+	@mkdir -p $(FUZZ_DIR)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $< $(FUZZ_SRCS) -o $@ -lm
+
+fuzz: $(FUZZ_BINS)
+
+fuzz-run: fuzz
+	./tools/run_fuzz.sh $(FUZZ_SECONDS) $(FUZZ_NAMES)
+
 # HTML reference of the sources in build/api/html (needs doxygen; warnings are errors).
 api-docs:
 	mkdir -p build/api && doxygen Doxyfile
 
 clean:
-	$(RM) -r $(DIST_DIR) build/api
+	$(RM) -r $(DIST_DIR) build/api $(FUZZ_DIR)
 	rm -f $(REV_STAMP)
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times
@@ -343,4 +364,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib lib-check tests asan dist api-docs clean distclean re commands FORCE
+.PHONY: all dev lib lib-check tests asan dist api-docs fuzz fuzz-run clean distclean re commands FORCE

@@ -9,6 +9,7 @@ on:
       - 'src/**'
       - 'include/**'
       - 'examples/**'
+      - 'fuzz/**'
       - 'tests/**'
       - 'tools/**'
       - 'vlib/**'
@@ -25,6 +26,7 @@ on:
       - 'src/**'
       - 'include/**'
       - 'examples/**'
+      - 'fuzz/**'
       - 'tests/**'
       - 'tools/**'
       - 'vlib/**'
@@ -98,6 +100,9 @@ jobs:
 
       - name: Unit tests
         run: make -j$(nproc) tests
+
+      - name: Load smoke test (32 clients, 5 s, no errors, no memory growth)
+        run: ./tools/loadtest.py --spawn profiles/two-devices.scm --units 1,2 --clients 32 --duration 5
 
       - name: Check all profiles
         run: |
@@ -201,6 +206,47 @@ jobs:
 
       - name: Sanitizers (dev)
         run: make -j$(nproc) asan
+
+  fuzz:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install clang and libFuzzer
+        run: sudo apt-get update && sudo apt-get install -y clang "libclang-rt-$(clang -dumpversion | cut -d. -f1)-dev"
+
+      - name: Fuzz every parser for 60 s (ASan + UBSan)
+        run: make fuzz-run FUZZ_SECONDS=60
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: |
+            build/fuzz/artifacts
+            build/fuzz/*.log
+
+  interop:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install OpenSSL development files and pymodbus
+        run: |
+          sudo apt-get update && sudo apt-get install -y libssl-dev
+          python3 -m venv .venv && .venv/bin/pip install 'pymodbus==3.8.6'
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: pymodbus against every network transport
+        run: .venv/bin/python examples/interop/pymodbus_interop.py
 
   api-docs:
     needs: changes

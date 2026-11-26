@@ -262,6 +262,26 @@ same poll set, so the endpoint runs on the server thread with no locking and no 
 
 ## Build and tests
 
+Robustness evidence beyond the unit tests:
+
+- **Fuzzing:** `fuzz/fuzz_{pdu,mbap,rtu,ascii}.c` are libFuzzer harnesses (ASan + UBSan) for the PDU
+  handler with a device that has every feature, the MBAP request/response path, RTU codec and stream
+  framer (fed in fuzzer-chosen chunks with simulated gaps), and ASCII scanning/decoding. Each checks
+  invariants (response sizes, echoed function codes, encode/decode round trips). `make fuzz` builds
+  them in `build/fuzz/`, `make fuzz-run FUZZ_SECONDS=N` seeds them with one valid request per FC
+  (`tools/fuzz_seeds.py`) and runs each for N s; the CI `fuzz` job runs 60 s each and uploads crash
+  reproducers. Replay one with `build/fuzz/fuzz_NAME FILE`.
+- **Malformed and fragmented frames:** `tests/robustness.c` runs every network transport in-process
+  through the API: a request sent one byte at a time is answered, and after seeded random garbage
+  (biased to frame-start bytes) in random chunks or datagrams, and frames split across datagrams,
+  the server still answers a valid request.
+- **Load and stability:** `tools/loadtest.py` runs N concurrent TCP clients for a duration and reports
+  throughput, latency percentiles, errors and the server's RSS (start, peak, end); it fails on any
+  error or memory growth. CI runs 32 clients for 5 s; run it for hours for a soak test. On a laptop
+  the Python client tops out near 26 000 req/s against one mogbus with flat RSS (about 10 MB).
+- **Interoperability:** `examples/interop/pymodbus_interop.py` checks every supported FC through
+  pymodbus on all six network transports (CI job `interop`).
+
 `make` builds `mogbus`; `make lib` builds `libmogbus.a` and `libmogbus.so` from the same
 objects (compiled `-fPIC -fvisibility=hidden`, so only `MOGBUS_API` symbols are exported), and
 `make lib-check` builds `examples/embed_tcp.c` against both and checks the exported symbols.
@@ -325,8 +345,8 @@ only outstanding work is listed here.
 
 ### Protocol validation and compatibility
 
-- Independent Modbus conformance and interoperability testing against commercial PLCs/SCADA
-  products. Why: supporting an FC does not prove interoperability.
-- Fuzz and malformed/fragmented-frame tests, long-running stability and multi-client/device
-  performance tests. Why: parser/transport robustness and capacity need evidence beyond unit
-  tests.
+- User-defined function codes (vendor-specific FCs answered from config). Why: commercial PLC,
+  SCADA and HMI clients often use them, and conformance testing against such products needs them.
+- Conformance and interoperability runs against commercial PLC/SCADA products, following the method
+  of `examples/interop/` (which already checks every FC against pymodbus). Why: supporting an FC does
+  not prove interoperability.

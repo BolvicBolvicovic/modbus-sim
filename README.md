@@ -47,7 +47,9 @@ Run the tests: `make tests`. Every test runs in its own process, one per CPU in 
 `mogbus-tests.times` / `mogbus-asan-tests.times` (ignored by git, removed by `make clean`).
 Run them under AddressSanitizer and UBSan: `make asan` (the vendored s7 interpreter is excluded
 from instrumentation). The suite includes network integration tests that start the real server on
-loopback; set `MOGBUS_BIN` to test a different binary.
+loopback; set `MOGBUS_BIN` to test a different binary. `make fuzz-run` fuzzes the frame parsers,
+`tools/loadtest.py` load-tests a running server, and `examples/interop/` checks mogbus against the
+independent pymodbus client stack (see [docs/dev/architecture.md](docs/dev/architecture.md)).
 
 ### Build options
 
@@ -317,7 +319,7 @@ For contributors and maintainers, in [docs/dev/](docs/dev):
 
 ```
 include/        mogbus.h, the public C API of the library
-examples/       embed_tcp.c, a host program using only mogbus.h
+examples/       embed_tcp.c (a host program using only mogbus.h), interop/ (pymodbus interoperability check)
 src/            the program, one folder per module (headers next to their .c files)
   build_config.h  WITH_TLS and WITH_CONFIG compile-time fallbacks shared by sources and tests
   config/       reads the config file, checks it, builds devices
@@ -329,7 +331,8 @@ src/            the program, one folder per module (headers next to their .c fil
   util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
-tools/          modbus_probe.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
+fuzz/           libFuzzer harnesses for the frame parsers (make fuzz-run)
+tools/          modbus_probe.py, loadtest.py, run_fuzz.sh, fuzz_seeds.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 ```
