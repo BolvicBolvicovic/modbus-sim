@@ -2,7 +2,7 @@
 
 The `mogbus` binary is one front end; the same code builds as `libmogbus.a` and `libmogbus.so`
 with a small C API, so a test harness or application can embed simulated Modbus devices and drive
-them from its own loop. The only header is [`include/mogbus.h`](../../include/mogbus.h) (it needs just
+them from its own loop. The only header is [`include/mogbus.h`](https://github.com/BolvicBolvicovic/mogbus/blob/main/include/mogbus.h) (it needs just
 `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`; every symbol is `mogbus_*` / `MOGBUS_*`). The current
 version is 0.0.1 (`MOGBUS_VERSION_*`, `mogbus_version()`).
 
@@ -138,7 +138,7 @@ host-owned: clients can still write the registers. `mogbus_device_get_value()` a
 return false on a string point. `byte_order`, `length` and `text` were appended to the struct, so
 code built against the older header keeps working if it zero-initialises the struct.
 
-[`examples/embed_tcp.c`](../../examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
+[`examples/embed_tcp.c`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
 adds a device with one holding register, starts a TCP server on a free loopback port, connects as a
 raw MBAP client in the same process, calls `mogbus_server_step()` between client I/O, and checks the
 value it reads back. `make lib-check` builds it against `libmogbus.so` (rpath `$ORIGIN/..`) and

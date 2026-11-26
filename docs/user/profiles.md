@@ -1,6 +1,6 @@
 # Device profiles
 
-A profile is just a config file for one kind of device. The ones in [`profiles/`](../../profiles)
+A profile is just a config file for one kind of device. The ones in [`profiles/`](https://github.com/BolvicBolvicovic/mogbus/tree/main/profiles)
 are generic examples of common device types. They are **not** copies of any one manufacturer's
 register map; adapt the addresses and units to the device you want to imitate.
 

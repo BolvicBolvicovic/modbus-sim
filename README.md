@@ -1,3 +1,9 @@
+<p align="center">
+
+![](docs/assets/mogbus-logo.svg)
+
+</p>
+
 # mogbus
 
 A Modbus TCP/UDP/RTU/ASCII device simulator. You describe a device in a small text file; `mogbus`
@@ -119,23 +125,23 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 
 | File | Device | Shows |
 |---|---|---|
-| [`profiles/minimal.scm`](profiles/minimal.scm) | Two registers | The smallest config |
-| [`profiles/modbus-udp.scm`](profiles/modbus-udp.scm) | Two registers over UDP | `(mode udp)` transport |
-| [`profiles/ascii-udp.scm`](profiles/ascii-udp.scm) | Two registers, ASCII over UDP | `(mode ascii-udp)` transport |
-| [`profiles/rtu-udp.scm`](profiles/rtu-udp.scm) | Two registers over RTU-over-UDP | `(mode rtu-udp)` transport |
-| [`profiles/power-meter.scm`](profiles/power-meter.scm) | Three-phase power meter | float32 values, ramps, energy counter |
-| [`profiles/energy-meter.scm`](profiles/energy-meter.scm) | Energy meter | u64 energy counter, float64, byte-swapped float32, string registers |
-| [`profiles/temperature-controller.scm`](profiles/temperature-controller.scm) | Temperature controller | signed values, setpoint, alarms |
-| [`profiles/heater.scm`](profiles/heater.scm) | Heater with a thermostat | setpoint-following lag, gaussian noise, sine ambient |
-| [`profiles/aging-sensor.scm`](profiles/aging-sensor.scm) | Pressure transmitter that wears out | drift, growing noise, stuck value, then exception 04 |
-| [`profiles/vfd-drive.scm`](profiles/vfd-drive.scm) | Motor drive | start-up ramp that holds, 32-bit counter |
-| [`profiles/motor.scm`](profiles/motor.scm) | Motor with a scripted machine | start/stop states, timed ramp, random trip |
-| [`profiles/flow-meter.scm`](profiles/flow-meter.scm) | Flow meter | float32 and 32-bit totalizer |
-| [`profiles/io-module.scm`](profiles/io-module.scm) | Remote I/O block | `(count N)` for many points |
-| [`profiles/slow-sensor.scm`](profiles/slow-sensor.scm) | Sensor with late answers | delay fault |
-| [`profiles/unreliable-meter.scm`](profiles/unreliable-meter.scm) | Meter that goes silent | drop fault |
-| [`profiles/two-devices.scm`](profiles/two-devices.scm) | Two devices, one port | unit ids |
-| [`profiles/vendor-function-codes.scm`](profiles/vendor-function-codes.scm) | Vendor-style device | user-defined function codes 0x41 and 0x64 |
+| [`profiles/minimal.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/minimal.scm) | Two registers | The smallest config |
+| [`profiles/modbus-udp.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/modbus-udp.scm) | Two registers over UDP | `(mode udp)` transport |
+| [`profiles/ascii-udp.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/ascii-udp.scm) | Two registers, ASCII over UDP | `(mode ascii-udp)` transport |
+| [`profiles/rtu-udp.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/rtu-udp.scm) | Two registers over RTU-over-UDP | `(mode rtu-udp)` transport |
+| [`profiles/power-meter.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/power-meter.scm) | Three-phase power meter | float32 values, ramps, energy counter |
+| [`profiles/energy-meter.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/energy-meter.scm) | Energy meter | u64 energy counter, float64, byte-swapped float32, string registers |
+| [`profiles/temperature-controller.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/temperature-controller.scm) | Temperature controller | signed values, setpoint, alarms |
+| [`profiles/heater.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/heater.scm) | Heater with a thermostat | setpoint-following lag, gaussian noise, sine ambient |
+| [`profiles/aging-sensor.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/aging-sensor.scm) | Pressure transmitter that wears out | drift, growing noise, stuck value, then exception 04 |
+| [`profiles/vfd-drive.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/vfd-drive.scm) | Motor drive | start-up ramp that holds, 32-bit counter |
+| [`profiles/motor.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/motor.scm) | Motor with a scripted machine | start/stop states, timed ramp, random trip |
+| [`profiles/flow-meter.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/flow-meter.scm) | Flow meter | float32 and 32-bit totalizer |
+| [`profiles/io-module.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/io-module.scm) | Remote I/O block | `(count N)` for many points |
+| [`profiles/slow-sensor.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/slow-sensor.scm) | Sensor with late answers | delay fault |
+| [`profiles/unreliable-meter.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/unreliable-meter.scm) | Meter that goes silent | drop fault |
+| [`profiles/two-devices.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/two-devices.scm) | Two devices, one port | unit ids |
+| [`profiles/vendor-function-codes.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/vendor-function-codes.scm) | Vendor-style device | user-defined function codes 0x41 and 0x64 |
 
 Each profile starts with a comment listing its register map. Copy one, change what you need.
 See [docs/user/profiles.md](docs/user/profiles.md).
@@ -329,7 +335,7 @@ See [docs/user/python.md](docs/user/python.md) for the API, the threading model 
 
 ## Documentation
 
-For users, in [docs/user/](docs/user):
+For users, in [docs/user/](https://github.com/BolvicBolvicovic/mogbus/tree/main/docs/user):
 
 - [docs/user/config-reference.md](docs/user/config-reference.md) - every config entry, with examples and error help
 - [docs/user/profiles.md](docs/user/profiles.md) - the profiles, and how to write your own
@@ -338,7 +344,7 @@ For users, in [docs/user/](docs/user):
 - [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness, Prometheus metrics, runtime control API, JSON logs
 - [docs/user/library.md](docs/user/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
 - [docs/user/python.md](docs/user/python.md) - the Python package: install, API, threading, pytest fixture
-For contributors and maintainers, in [docs/dev/](docs/dev):
+For contributors and maintainers, in [docs/dev/](https://github.com/BolvicBolvicovic/mogbus/tree/main/docs/dev):
 
 - [docs/dev/architecture.md](docs/dev/architecture.md) - code layout, coding rules, roadmap
 - [docs/dev/release.md](docs/dev/release.md) - cutting a release, reproducible builds, SBOM
@@ -378,5 +384,5 @@ vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). Third-party components are documented in
+This project is licensed under the [MIT License](https://github.com/BolvicBolvicovic/mogbus/blob/main/LICENSE). Third-party components are documented in
 [NOTICE.md](NOTICE.md).

@@ -6,9 +6,10 @@ set -eu
 # $GITHUB_OUTPUT. Usage: tools/ci_changes.sh BASE HEAD (an empty or all-zero BASE, e.g.
 # a new branch or workflow_dispatch, means "everything changed").
 #   code   - a C file changed outside comments, or any other build/test input changed
-#   docs   - a C file or Doxyfile changed (Doxygen comments may need checking)
+#   docs   - a C file, Doxyfile, Markdown page, docs/ file, the Doxygen theme or the brief check
+#            changed (the api-docs job builds all of them)
 #   docker - code changed, or the Dockerfile, .dockerignore or deploy/ changed
-# Files that CI does not watch (docs, README, LICENSE, ...) never set anything.
+# Files that CI does not watch (LICENSE, ...) never set anything.
 
 base=${1:-}
 head=${2:-HEAD}
@@ -44,7 +45,8 @@ for f in $(git diff --name-only "$base" "$head"); do
 		new=$(git show "$head:$f" 2>/dev/null | strip_c || true)
 		[ "$old" = "$new" ] || code=true
 		;;
-	Doxyfile)
+	Doxyfile|README.md|CONTRIBUTING.md|SECURITY.md|NOTICE.md|AGENTS.md|docs/*|\
+	third_party/doxygen-awesome-css/*|tools/check_doc_briefs.sh)
 		docs=true ;;
 	Dockerfile|.dockerignore|deploy/*)
 		docker=true ;;

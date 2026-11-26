@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="mogbus">
+  <title>mogbus</title>
+  <rect width="64" height="64" rx="14" fill="#1f5fa8"/>
+  <rect x="7" y="14" width="50" height="6" rx="3" fill="#ffffff"/>
+  <path d="M16 20v12M32 20v12M48 20v12" stroke="#ffffff" stroke-width="3"/>
+  <g fill="#ffb703">
+    <rect x="9" y="32" width="14" height="18" rx="3"/>
+    <rect x="25" y="32" width="14" height="18" rx="3"/>
+    <rect x="41" y="32" width="14" height="18" rx="3"/>
+  </g>
+  <path d="M12.500 38h7M28.500 38h7M44.500 38h7M12.500 44h7M28.500 44h7M44.500 44h7" stroke="#1f5fa8" stroke-width="2" stroke-linecap="round"/>
+</svg>

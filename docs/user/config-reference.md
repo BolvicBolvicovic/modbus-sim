@@ -549,7 +549,7 @@ point that has failed keeps answering exception 04. Machines cannot drive a poin
 (coil 0 (static on) (degradation (fail-after-ms 60000)))
 ```
 
-See [`profiles/aging-sensor.scm`](../../profiles/aging-sensor.scm).
+See [`profiles/aging-sensor.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/aging-sensor.scm).
 
 ### What happens when a client writes
 
@@ -727,7 +727,7 @@ Limits are `MACHINE_MAX_MACHINES` 8 per device, `MACHINE_MAX_STATES` 16,
     (transition tripped  idle     (when (coil 1)))))
 ```
 
-See also [`profiles/motor.scm`](../../profiles/motor.scm).
+See also [`profiles/motor.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/motor.scm).
 
 ## `(fault ...)`
 

@@ -1,8 +1,9 @@
 name: CI
 
 on:
-  # Docs-only changes do not start CI. Profiles and tools stay in scope because CI
-  # validates their contents. Within a run, the changes job skips the build and test jobs
+  # Changes outside the lists below do not start CI. Profiles and tools stay in scope because
+  # CI validates their contents; the Markdown pages are in scope because the api-docs job
+  # builds them into the site (broken links fail it). Within a run, the changes job skips the build and test jobs
   # when C files changed only in comments, or only packaging files changed.
   push:
     paths:
@@ -20,6 +21,12 @@ on:
       - '.dockerignore'
       - 'Makefile'
       - 'Doxyfile'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+      - 'NOTICE.md'
+      - 'AGENTS.md'
+      - 'docs/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
@@ -37,6 +44,12 @@ on:
       - '.dockerignore'
       - 'Makefile'
       - 'Doxyfile'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+      - 'NOTICE.md'
+      - 'AGENTS.md'
+      - 'docs/**'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
 

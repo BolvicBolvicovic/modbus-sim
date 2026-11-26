@@ -1,9 +1,15 @@
 # Doxygen configuration for the mogbus sources. `make api-docs` writes HTML to
 # build/api/html; warnings are errors so the comment style stays valid.
 PROJECT_NAME           = mogbus
+PROJECT_BRIEF          = Modbus device simulator
+PROJECT_LOGO           = docs/assets/mogbus-logo.svg
+PROJECT_ICON           = docs/assets/mogbus-logo.svg
 OUTPUT_DIRECTORY       = build/api
-INPUT                  = include src examples tests/fuzz
-FILE_PATTERNS          = *.c *.h
+INPUT                  = README.md CONTRIBUTING.md SECURITY.md NOTICE.md AGENTS.md docs/user docs/dev include src examples tests/fuzz
+FILE_PATTERNS          = *.c *.h *.md
+EXCLUDE                = examples/interop/README.md
+IMAGE_PATH             = docs/assets
+USE_MDFILE_AS_MAINPAGE = README.md
 RECURSIVE              = YES
 OPTIMIZE_OUTPUT_FOR_C  = YES
 EXTRACT_ALL            = NO
@@ -11,6 +17,7 @@ EXTRACT_STATIC         = YES
 EXTRACT_LOCAL_CLASSES  = YES
 TYPEDEF_HIDES_STRUCT   = NO
 MARKDOWN_SUPPORT       = YES
+MARKDOWN_ID_STYLE      = GITHUB
 AUTOLINK_SUPPORT       = NO
 JAVADOC_AUTOBRIEF      = NO
 GENERATE_LATEX         = NO
@@ -33,3 +40,19 @@ CLASS_GRAPH            = NO
 COLLABORATION_GRAPH    = NO
 INCLUDE_GRAPH          = NO
 INCLUDED_BY_GRAPH      = NO
+
+# Theme: doxygen-awesome-css (vendored in third_party/doxygen-awesome-css), sidebar-only variant
+# with the dark-mode toggle, copy buttons on code and links on paragraphs. The header is the
+# stock one of `doxygen -w html` plus the script includes at the end of <head>.
+HTML_HEADER            = docs/doxygen/header.html
+HTML_EXTRA_STYLESHEET  = third_party/doxygen-awesome-css/doxygen-awesome.css \
+                         third_party/doxygen-awesome-css/doxygen-awesome-sidebar-only.css \
+                         third_party/doxygen-awesome-css/doxygen-awesome-sidebar-only-darkmode-toggle.css
+HTML_EXTRA_FILES       = third_party/doxygen-awesome-css/doxygen-awesome-darkmode-toggle.js \
+                         third_party/doxygen-awesome-css/doxygen-awesome-fragment-copy-button.js \
+                         third_party/doxygen-awesome-css/doxygen-awesome-paragraph-link.js
+HTML_COLORSTYLE        = LIGHT
+HTML_COPY_CLIPBOARD    = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
