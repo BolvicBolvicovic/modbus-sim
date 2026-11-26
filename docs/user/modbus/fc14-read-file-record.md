@@ -58,8 +58,9 @@ response:  14 06 05 06 1234 5678
 ```python
 from pymodbus.pdu.file_message import FileRecord
 
-record = FileRecord(file_number=1, record_number=0, record_length=2)
-print(client.read_file_record([record]))
+# pymodbus takes record_length in bytes: 4 bytes are 2 registers
+record = FileRecord(file_number=1, record_number=0, record_length=4)
+print(client.read_file_record([record]).records[0].record_data.hex())   # 12345678
 ```
 
 ## See also

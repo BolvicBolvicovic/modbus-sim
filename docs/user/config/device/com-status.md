@@ -1,6 +1,6 @@
 # `(device (com-status ...))`
 
-Sets the status field returned by Get Com Event Counter (FC 11) and Get Com Event Log (FC 12).
+Sets the status field returned by Get Com Event Counter (0x0B) and Get Com Event Log (0x0C).
 
 ## Syntax
 

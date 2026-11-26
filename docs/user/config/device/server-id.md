@@ -1,6 +1,6 @@
 # `(device (server-id ...))`
 
-Sets the Server ID byte returned by Report Server ID (FC 17).
+Sets the Server ID byte returned by Report Server ID (0x11).
 
 ## Syntax
 

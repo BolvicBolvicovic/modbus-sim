@@ -52,8 +52,8 @@ other kinds produced. A `sensor-disconnect` read also yields to a fired generic 
 and counters and ramp timing update before the response is built. `delay`, `drop`, `exception`,
 `corrupt` and `disconnect` then alter only that response. `restart` additionally resets device state,
 and `sensor-disconnect` changes successful sensor reads by design. An exception replaces the response
-with `[FC|0x80][code]`. A sent injected exception is counted like a real exception and not as an FC11
-successful completion; a suppressed injected exception counts only as no response. Real exceptions
+with `[FC|0x80][code]`. A sent injected exception is counted like a real exception and not as a
+successful completion for the 0x0B event counter; a suppressed injected exception counts only as no response. Real exceptions
 keep their accounting even when dropped, and busy/NAK counts use the injected code before any corrupt
 flip.
 

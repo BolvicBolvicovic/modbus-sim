@@ -1,6 +1,6 @@
 # `(device (run-indicator ...))`
 
-Sets the Run Indicator Status byte returned by Report Server ID (FC 17).
+Sets the Run Indicator Status byte returned by Report Server ID (0x11).
 
 ## Syntax
 

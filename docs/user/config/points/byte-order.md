@@ -38,7 +38,7 @@ swapped) and `low-first`/`little` is HGFEDCBA (the whole byte string reversed). 
 
 ## Errors
 
-- `(byte-order ...)`: `expected one of: big, little`: the only byte orders are `big` and `little`.
+- `(byte-order ...): expected one of: big, little`: the only byte orders are `big` and `little`.
 - `coils and discrete inputs are single bits: remove (byte-order ...)`: byte order is for register points.
 
 ## Examples
@@ -49,11 +49,11 @@ swapped) and `low-first`/`little` is HGFEDCBA (the whole byte string reversed). 
   (input 2 (type float32) (word-order low-first) (byte-order little) (static 1.5))) ; 0000 C03F
 ```
 
-Read both back as float32, the second with the byte swap undone:
+Read both back as float32. The second point needs both options undone, `--low-first` for the word order and `--byte-order little` for the bytes:
 
 ```bash
 ./tools/modbus_probe.py input 0 2 --as float32
-./tools/modbus_probe.py input 2 2 --as float32 --byte-order little
+./tools/modbus_probe.py input 2 2 --as float32 --low-first --byte-order little
 ```
 
 ## See also

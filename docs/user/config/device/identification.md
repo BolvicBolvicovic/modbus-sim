@@ -1,6 +1,6 @@
 # `(device (vendor-name ...))` and the other identification objects
 
-Set the objects answered by Read Device Identification (FC 43, MEI 14).
+Set the objects answered by Read Device Identification (0x2B, MEI 0x0E).
 
 ## Syntax
 

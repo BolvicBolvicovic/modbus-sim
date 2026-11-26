@@ -1,6 +1,6 @@
 # `(device (server-id-additional-data ...))`
 
-Sets the Additional Data returned by Report Server ID (FC 17).
+Sets the Additional Data returned by Report Server ID (0x11).
 
 ## Syntax
 

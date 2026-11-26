@@ -30,7 +30,7 @@ response; it still happens when that response is dropped or delayed. It:
 - re-arms fault schedules from the restart time. The restart kind keeps its own schedule progress, so
   a scheduled restart advances through its steps and stops instead of re-arming itself forever.
 
-It does not clear FC 08/FC 11 diagnostic counters, the FC 12 event log, file records, FIFO contents,
+It does not clear FC 08 diagnostic counters, the 0x0B event counter, the 0x0C event log, file records, FIFO contents,
 listen-only mode, or the RNG seed.
 
 ## Examples

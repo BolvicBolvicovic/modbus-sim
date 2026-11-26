@@ -1,6 +1,6 @@
 # `(device (com-event ...))`
 
-Adds one event byte to the log returned by Get Com Event Log (FC 12).
+Adds one event byte to the log returned by Get Com Event Log (0x0C).
 
 ## Syntax
 
@@ -18,8 +18,8 @@ none (empty log)
 
 ## Behaviour
 
-Each `com-event` supplies one byte of the FC 12 Events field, in the order written. Values must be
-0-255 and at most 64 entries are allowed; a 65th entry is rejected. FC 12 Byte Count is
+Each `com-event` supplies one byte of the 0x0C Events field, in the order written. Values must be
+0-255 and at most 64 entries are allowed; a 65th entry is rejected. 0x0C Byte Count is
 `6 + number of event bytes`, so an empty log gives Byte Count `6` and an 8-byte PDU, and 64 events
 give Byte Count `70`. The simulator reports the configured bytes verbatim and does not interpret
 serial-line event nibbles (it does not split an event byte into transmitter/receiver status or decode

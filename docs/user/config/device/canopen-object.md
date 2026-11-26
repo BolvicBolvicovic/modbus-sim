@@ -1,6 +1,6 @@
 # `(device (canopen-object ...))`
 
-Defines a CANopen object that FC 43 MEI `0x0D` SDO uploads and downloads read and write.
+Defines a CANopen object that `0x2B` MEI `0x0D` SDO uploads and downloads read and write.
 
 ## Syntax
 

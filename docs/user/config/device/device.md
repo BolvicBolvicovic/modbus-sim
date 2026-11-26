@@ -31,13 +31,13 @@ and the data answered by the less common function codes.
 | [`(name "Text")`](name.md) | Name shown in logs and `--check` |
 | [`(note "Text")`](note.md) | A comment kept for humans |
 | [`(exception-status N)`](exception-status.md) | Byte returned by FC 07 |
-| [`(server-id N)`](server-id.md), [`(run-indicator N)`](run-indicator.md), [`(server-id-additional-data "HEX")`](server-id-additional-data.md) | FC 17 Report Server ID |
-| [`(com-status N)`](com-status.md), [`(com-event N)`](com-event.md) | FC 11 and FC 12 |
-| [`(vendor-name ...)` and the other identification objects](identification.md) | FC 43 / MEI 14 |
+| [`(server-id N)`](server-id.md), [`(run-indicator N)`](run-indicator.md), [`(server-id-additional-data "HEX")`](server-id-additional-data.md) | 0x11 Report Server ID |
+| [`(com-status N)`](com-status.md), [`(com-event N)`](com-event.md) | 0x0B and 0x0C |
+| [`(vendor-name ...)` and the other identification objects](identification.md) | 0x2B / MEI 0x0E |
 | [`(device-id-object ID "Text")`](device-id-object.md) | Extended identification objects |
-| [`(canopen-object ...)`](canopen-object.md) | FC 43 / MEI 13 SDO data |
-| [`(file ...)`](file.md) | FC 20/21 file records |
-| [`(fifo ...)`](fifo.md) | FC 24 FIFO queues |
+| [`(canopen-object ...)`](canopen-object.md) | 0x2B / MEI 0x0D SDO data |
+| [`(file ...)`](file.md) | 0x14/0x15 file records |
+| [`(fifo ...)`](fifo.md) | 0x18 FIFO queues |
 | [`(function-code ...)`](function-code.md) | User-defined function codes |
 
 ## Examples

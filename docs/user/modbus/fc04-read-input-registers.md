@@ -39,7 +39,7 @@ response:  04 04 00E6 00E7
 ```
 
 ```bash
-./tools/modbus_probe.py input 0 2 --as float32
+./tools/modbus_probe.py input 0 2
 ```
 
 ```python

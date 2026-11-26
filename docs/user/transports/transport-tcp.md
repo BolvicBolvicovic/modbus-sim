@@ -51,8 +51,8 @@ Modbus TCP: MBAP-framed requests over a TCP listen socket, optionally wrapped in
 ```
 
 ```bash
-./mogbus profiles/minimal.scm
-./tools/modbus_probe.py holding 0 2
+./mogbus meter.scm                     # the config above saved as meter.scm
+./tools/modbus_probe.py holding 0 1    # -> [42]
 ```
 
 ## See also
