@@ -25,6 +25,8 @@ struct cli_t
 {
 	const char*	config_path;
 	bool		check_only;
+	bool		health;
+	uint32_t	timeout_ms;
 	bool		verbose;
 	bool		show_help;
 	bool		show_version;
@@ -39,6 +41,9 @@ print_usage(void)
 	     "\n"
 	     "Options:\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
+	     "      --health         probe the server the config describes (FC 08 echo to its first\n"
+	     "                       device) and exit 0 if it answers, 1 if not\n"
+	     "      --timeout-ms N   --health reply timeout (default 2000)\n"
 	     "  -v, --verbose        log every request\n"
 	     "  -V, --version        print the version and exit\n"
 	     "  -h, --help           show this help\n"
@@ -82,6 +87,21 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->show_version = true;
 		else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--check") == 0)
 			cli->check_only = true;
+		else if (strcmp(arg, "--health") == 0)
+			cli->health = true;
+		else if (strcmp(arg, "--timeout-ms") == 0)
+		{
+			char* end = NULL;
+			long  value = i + 1 < argc ? strtol(argv[i + 1], &end, 10) : 0;
+
+			if (i + 1 >= argc || end == argv[i + 1] || *end != '\0' || value < 1 || value > 600000)
+			{
+				fprintf(stderr, "--timeout-ms needs a number of milliseconds (1-600000)\n");
+				return false;
+			}
+			cli->timeout_ms = (uint32_t)value;
+			i++;
+		}
 		else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0)
 			cli->verbose = true;
 		else if (arg[0] == '-')
@@ -279,6 +299,25 @@ main(int argc, char** argv)
 	}
 
 	mogbus_config_server_options(ctx, &options);
+	if (cli.health)
+	{
+		mogbus_device_info_t first;
+
+		if (mogbus_device_count(ctx) == 0 ||
+		    !mogbus_device_info(mogbus_device_at(ctx, 0), &first))
+		{
+			fprintf(stderr, "%s: no device to probe\n", cli.config_path);
+			goto cleanup;
+		}
+		if (!mogbus_probe(&options, first.unit_id, cli.timeout_ms ? cli.timeout_ms : 2000,
+				  error, sizeof(error)))
+		{
+			fprintf(stderr, "unhealthy: %s\n", error);
+			goto cleanup;
+		}
+		status = 0;
+		goto cleanup;
+	}
 	print_summary(ctx, &options);
 	if (cli.check_only)
 	{

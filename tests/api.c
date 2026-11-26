@@ -9,9 +9,11 @@
 #include "tests/tests_utils/test_support.h"
 #include "util/clock.h"
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static const u8 READ_HOLDING[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
@@ -215,6 +217,94 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 			 "01234567890123456789012345678901234567890123456789";
 	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "too long"));
 	mogbus_destroy(ctx);	/* closes `other` */
+}
+
+/* Runs mogbus_probe() in a child (it blocks) while this process steps the server. */
+static bool
+probe_child(mogbus_server_t* server, const mogbus_server_options_t* o, uint8_t unit)
+{
+	char	err[128];
+	u64	deadline = clock_now_ms() + 5000;
+	int	status   = 0;
+	pid_t	pid      = fork();
+
+	if (pid == 0)
+		_exit(mogbus_probe(o, unit, 2000, err, sizeof(err)) ? 0 : 1);
+	if (pid < 0)
+		return false;
+	while (waitpid(pid, &status, WNOHANG) == 0)
+	{
+		if (clock_now_ms() > deadline)
+		{
+			kill(pid, SIGKILL);
+			waitpid(pid, &status, 0);
+			return false;
+		}
+		if (server)
+			(void)mogbus_server_step(server, 1);
+		else
+			usleep(1000);
+	}
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+TEST(ApiProbeAnswersOnEveryNetworkMode)
+{
+	static const mogbus_mode_t modes[] = {
+		MOGBUS_MODE_TCP, MOGBUS_MODE_UDP, MOGBUS_MODE_RTU_TCP, MOGBUS_MODE_RTU_UDP,
+		MOGBUS_MODE_ASCII_TCP, MOGBUS_MODE_ASCII_UDP,
+	};
+
+	for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++)
+	{
+		mogbus_t*	ctx = mogbus_create();
+		mogbus_server_options_t o = mogbus_server_options_defaults();
+		mogbus_server_t* server;
+		char		err[128];
+
+		ASSERT_EQ(ctx != NULL && mogbus_add_device(ctx, 9, "probe", err, sizeof(err)) != NULL);
+		o.mode = modes[i];
+		o.port = ts_free_port();
+		server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+		ASSERT_EQ(server != NULL);
+		ASSERT_EQ(probe_child(server, &o, 9));
+		o.bind_address = "0.0.0.0";	/* a wildcard bind is probed through loopback */
+		ASSERT_EQ(probe_child(server, &o, 9));
+		mogbus_destroy(ctx);
+	}
+}
+
+TEST(ApiProbeFailsWithoutAServer)
+{
+	mogbus_server_options_t o = mogbus_server_options_defaults();
+	char err[128];
+
+	o.port = ts_free_port();
+	ASSERT_EQ(!mogbus_probe(&o, 1, 500, err, sizeof(err)) && strstr(err, "connect") != NULL);
+	o.mode = MOGBUS_MODE_UDP;
+	ASSERT_EQ(!mogbus_probe(&o, 1, 500, err, sizeof(err)) && err[0]);
+	o.mode = MOGBUS_MODE_RTU_PTY;
+	ASSERT_EQ(!mogbus_probe(&o, 1, 500, err, sizeof(err)) && strstr(err, "network mode") != NULL);
+	o.mode = MOGBUS_MODE_TCP;
+	ASSERT_EQ(!mogbus_probe(&o, 0, 500, err, sizeof(err)) && strstr(err, "broadcast") != NULL);
+	ASSERT_EQ(!mogbus_probe(NULL, 1, 500, err, sizeof(err)));
+}
+
+TEST(ApiProbeFailsWhenTheUnitIsUnknownOrSilent)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_server_options_t o = mogbus_server_options_defaults();
+	mogbus_server_t* server;
+	char		err[128];
+
+	ASSERT_EQ(ctx != NULL && mogbus_add_device(ctx, 9, "probe", err, sizeof(err)) != NULL);
+	o.mode = MOGBUS_MODE_RTU_TCP;	/* an unknown RTU unit gets no reply */
+	o.port = ts_free_port();
+	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	ASSERT_EQ(server != NULL);
+	ASSERT_EQ(!probe_child(server, &o, 10));
+	ASSERT_EQ(probe_child(server, &o, 9));
+	mogbus_destroy(ctx);
 }
 
 TEST(ApiServesDevicesOverUdp)

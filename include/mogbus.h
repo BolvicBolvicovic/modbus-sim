@@ -325,6 +325,22 @@ MOGBUS_API bool		mogbus_config_server_options(const mogbus_t* ctx, mogbus_server
 MOGBUS_API bool		mogbus_server_check(const mogbus_t* ctx, const mogbus_server_options_t* options,
 					    char* err, size_t err_size);
 
+/* Liveness probe: sends one FC 08 Return Query Data request to `unit_id` of the
+ * server described by `options` (the same options you would pass to
+ * mogbus_server_create(), e.g. from mogbus_config_server_options()) and waits up
+ * to timeout_ms for the reply. Works for the TCP, UDP, RTU-over-TCP/UDP and
+ * ASCII-over-TCP/UDP modes, framing the request like the mode does; a bind of
+ * 0.0.0.0 or :: is reached through loopback. A TLS server (MOGBUS_MODE_TCP with
+ * tls_enabled) is only connected to, since the probe has no client certificate.
+ * Returns true for the echo or for a Modbus exception reply (the server and the
+ * unit answered); false with a message in err on a timeout, a refused
+ * connection or a malformed reply, for serial and fd modes ("health check needs
+ * a network mode") and for unit 0 (broadcast, never answered). A fault that
+ * drops or delays replies on that unit makes the probe fail. It blocks the
+ * calling thread, so it cannot probe a server stepped by the same thread. */
+MOGBUS_API bool		mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id,
+				     uint32_t timeout_ms, char* err, size_t err_size);
+
 /* RTU timing for a baud rate and optional explicit frame gap: the Modbus t3.5
  * in microseconds (0 when baud is 0 = unknown) and the inter-frame gap in
  * milliseconds a server would use (frame_gap_ms if nonzero, else derived from

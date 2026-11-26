@@ -5,7 +5,7 @@ set -eu
 #   net -> modbus -> device -> util
 #   config -> device -> util
 #   server -> net, config -> server (server_mode.h, server_limits.h only)
-#   api -> config, device, net, server, util
+#   api -> config, device, modbus, net, server, util
 #   main.c -> mogbus.h only (the binary is a pure client of the public API)
 # Only src/server/server_config.{c,h} may use config/, and config/ may use only
 # server_mode.h and server_limits.h from server/, so WITH_CONFIG=0 leaves out
@@ -108,7 +108,7 @@ check_tree() {
 	check_layer "$root" device "device util"
 	check_layer "$root" config "config device server util"
 	check_layer "$root" server "server net modbus device util config"
-	check_layer "$root" api    "api config device net server util"
+	check_layer "$root" api    "api config device modbus net server util"
 	check_layer "$root" util   "util"
 	check_extra_rules "$root"
 	check_main "$root"

@@ -22,6 +22,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #define NET_RECV_TIMEOUT_MS	1000
 #define NET_SHORT_TIMEOUT_MS	100
@@ -343,6 +344,58 @@ PRE_TEST()
 }
 
 /* --- tests --- */
+
+/* Runs `mogbus --health CONFIG` and returns its exit status, or -1 if it did not run. */
+static int
+health_status(const char* config)
+{
+	const char* bin    = getenv("MOGBUS_BIN");
+	char*	    argv[] = { (char*)(bin ? bin : "./mogbus"), "--health", (char*)config,
+			       "--timeout-ms", "1000", NULL };
+	int	    status = 0;
+	pid_t	    pid    = fork();
+
+	if (pid == 0)
+	{
+		int null_fd = open("/dev/null", O_WRONLY);
+
+		if (null_fd >= 0)
+			dup2(null_fd, STDERR_FILENO);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	if (pid < 0 || !ts_wait_pid(pid, &status, 5000) || !WIFEXITED(status))
+		return -1;
+	return WEXITSTATUS(status);
+}
+
+TEST(NetHealthFlagProbesTheRunningServer)
+{
+	char	missing[80] = "/tmp/mogbus-health-XXXXXX";
+	char	text[160];
+	int	fd;
+	int	up   = -2;
+	int	down = -2;
+	bool	ok   = server_start("", "(device (unit-id 7) (holding 0 (static 1)))");
+
+	if (ok)
+		up = health_status(g_server.config);
+	server_stop();
+
+	fd = mkstemp(missing);
+	ok = ok && fd >= 0;
+	if (fd >= 0)
+	{
+		snprintf(text, sizeof(text),
+			 "(server (mode tcp) (port %u))\n(device (unit-id 7) (holding 0 (static 1)))\n",
+			 ts_free_port());
+		ok = ok && write(fd, text, strlen(text)) == (ssize_t)strlen(text);
+		close(fd);
+		down = health_status(missing);
+		unlink(missing);
+	}
+	ASSERT_EQ(ok && up == 0 && down == 1);
+}
 
 TEST(NetPersistentConnectionServesRequestsInOrder)
 {
