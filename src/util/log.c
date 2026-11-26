@@ -82,7 +82,7 @@ log_json_escape(char* out, u32 size, const char* text)
 	return used;
 }
 
-static void
+static void __attribute__((format(printf, 3, 0)))
 log_vwrite(log_level_t level, const char* fields, const char* fmt, va_list ap)
 {
 	char		message[1024];

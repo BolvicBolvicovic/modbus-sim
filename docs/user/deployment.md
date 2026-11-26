@@ -84,6 +84,10 @@ config path to the container, override the health check to use the same path
 (`--health-cmd`, or `healthcheck:` in Compose). `docker ps` shows `healthy`; Docker itself does not restart an
 unhealthy container, so use an orchestrator or `restart:` plus an autoheal tool if you want that.
 
+The container's default config also enables the HTTP endpoint on port 9102 (`/healthz`, `/readyz`,
+Prometheus `/metrics`); publish it with `-p 127.0.0.1:9102:9102`. The image keeps `--health` as its
+`HEALTHCHECK` because it has no HTTP client. See [observability.md](observability.md).
+
 ## Non-root, read-only, no capabilities
 
 The image sets `USER 10001:10001` and needs nothing else:
@@ -130,8 +134,11 @@ docker compose -f deploy/docker-compose.yml up --build
 Service. Build the image and push it to a registry the cluster can pull from, change `image:` to match, then
 `kubectl apply -f deploy/kubernetes/mogbus.yaml`. The pod runs as UID 10001 with `runAsNonRoot`, a read-only
 root filesystem, `allowPrivilegeEscalation: false`, all capabilities dropped and the `RuntimeDefault` seccomp
-profile, with CPU/memory requests and limits. Liveness and readiness are exec probes running
-`mogbus --health` on the mounted config, so they follow the transport and unit id of the config. The config is
+profile, with CPU/memory requests and limits. The config enables the HTTP endpoint on port 9102, so the
+readiness probe is `httpGet /readyz` and the liveness probe `httpGet /healthz` (see
+[observability.md](observability.md)), and the pod carries the common `prometheus.io/scrape`, `port` and
+`path` annotations for Prometheus. Without `(http ...)`, use exec probes running `mogbus --health` on the
+mounted config instead. The config is
 mounted read-only at `/etc/mogbus`; change the ConfigMap and restart the pod (mogbus does not reload its
 config).
 

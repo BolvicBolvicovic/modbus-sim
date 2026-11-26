@@ -76,6 +76,22 @@ net_tcp_pool_listen(net_tcp_pool_t* pool, const char* bind_address, u16 port)
 	return 0;
 }
 
+/* DEBUG line for a client connection; JSON logs get event, transport and peer fields. */
+static void
+log_connection(const net_tcp_pool_t* pool, const net_tcp_conn_t* conn, const char* event,
+	       const char* verb)
+{
+	char	peer[2 * NET_TCP_PEER_SIZE];
+	char	fields[256];
+
+	if (!log_enabled(LOG_LEVEL_DEBUG))
+		return;
+	log_json_escape(peer, sizeof(peer), conn->peer);
+	snprintf(fields, sizeof(fields), "\"event\":\"%s\",\"transport\":\"%s\",\"peer\":\"%s\"", event,
+		 pool->obs && pool->obs->transport ? pool->obs->transport : "tcp", peer);
+	log_write_fields(LOG_LEVEL_DEBUG, fields, "client %s %s", conn->peer, verb);
+}
+
 void
 net_tcp_pool_accept(net_tcp_pool_t* pool)
 {
@@ -126,7 +142,7 @@ net_tcp_pool_accept(net_tcp_pool_t* pool)
 		conn->fd               = fd;
 		conn->last_activity_ms = now_ms;
 		format_peer(conn, &addr);
-		LOG_DEBUG("client %s connected", conn->peer);
+		log_connection(pool, conn, "connect", "connected");
 		net_obs_connection(pool->obs, true);
 		if (pool->on_accept)
 			pool->on_accept(pool->ctx, conn, now_ms);
@@ -140,7 +156,7 @@ net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn)
 
 	if (!conn || conn->fd < 0)
 		return;
-	LOG_DEBUG("client %s disconnected", conn->peer);
+	log_connection(pool, conn, "disconnect", "disconnected");
 	net_obs_connection(pool->obs, false);
 	fd = conn->fd;
 	if (pool->on_close)

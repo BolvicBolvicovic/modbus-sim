@@ -306,6 +306,7 @@ For users, in [docs/user/](docs/user):
 - [docs/user/profiles.md](docs/user/profiles.md) - the profiles, and how to write your own
 - [docs/user/modbus-support.md](docs/user/modbus-support.md) - what the server answers, exceptions, limits
 - [docs/user/deployment.md](docs/user/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
+- [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness and Prometheus metrics, JSON logs
 - [docs/user/library.md](docs/user/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
 For contributors and maintainers, in [docs/dev/](docs/dev):
 
