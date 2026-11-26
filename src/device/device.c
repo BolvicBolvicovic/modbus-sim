@@ -448,7 +448,8 @@ device_range_writable(const device_t* dev, space_kind_t space, u32 address, u32 
 		u16 owner = table->owner[address + i];
 
 		if (owner != 0 &&
-		    dev->points[owner - 1].read_only)
+		    (dev->points[owner - 1].read_only ||
+		     dev->points[owner - 1].kind == POINT_MACHINE))
 			return false;
 	}
 	return true;

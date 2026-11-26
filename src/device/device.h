@@ -354,7 +354,7 @@ bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty,
  */
 bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
 
-/** @brief True when no address in the range belongs to a read-only point (client writes). */
+/** @brief True when no address in the range belongs to a read-only or machine-driven point (client writes). */
 bool		device_range_writable(const device_t* dev, space_kind_t space, u32 address, u32 qty);
 
 /**

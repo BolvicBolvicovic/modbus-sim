@@ -439,7 +439,7 @@ struct mogbus_access_t
 	uint32_t	address;	/**< first address */
 	uint32_t	count;		/**< number of registers or bits */
 	const uint16_t*	values;		/**< writes: the raw registers (bits as 0/1) about to be stored; reads: NULL */
-	uint8_t		function_code;	/**< function code of the request (3, 16, 23, ...) */
+	uint8_t		function_code;	/**< function code of the request (0x03, 0x10, 0x17, ...) */
 };
 
 /**
@@ -461,10 +461,10 @@ typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogb
  *
  * Only Modbus client requests call it, after the range is known to be defined (reads) or
  * defined and writable (writes), never host calls (mogbus_device_write(), mogbus_device_set_value(),
- * the HTTP control API or machines). Covered: FC 01-04 (before the table is read), 05, 06, 15, 16, 22
- * (the masked result) and 23 (write hook first, then the read hook once the write is applied), and
- * the `registers` action of user-defined function codes. Not covered: file records (FC 20, 21),
- * FIFO (FC 24), CANopen, diagnostics and identification. A device has one hook; a new one replaces it.
+ * the HTTP control API or machines). Covered (hex codes): FC 01-04 (before the table is read), 05, 06, 0F, 10,
+ * 16 (the masked result) and 17 (write hook first, then the read hook once the write is applied),
+ * and the `registers` action of user-defined function codes. Not covered: file records (FC 14, 15),
+ * FIFO (FC 18), CANopen, diagnostics and identification. A device has one hook; a new one replaces it.
  *
  * @param dev Device.
  * @param fn Hook, or NULL to remove it.

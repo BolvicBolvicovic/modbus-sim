@@ -1136,6 +1136,7 @@ TEST(MasterWriteRejectsMachinePoint)
 	ASSERT_EQ(out.type == VAL_NUM && out.n == 100);
 
 	ASSERT_FAILURE(device_write(dev, SPACE_HOLDING, 0, 2, words));
+	ASSERT_FAILURE(device_range_writable(dev, SPACE_HOLDING, 0, 2));
 	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
 	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
 	ASSERT_EQ(out.type == VAL_NUM && out.n == 100);

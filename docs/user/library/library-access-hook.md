@@ -24,17 +24,19 @@ instead.
 
 ## When it runs
 
-- Reads (FC 01, 02, 03, 04, the read half of FC 23 and the `registers` action of
+- Reads (FC 01, 02, 03, 04, the read half of FC 17 and the `registers` action of
   [user-defined function codes](../config/device/function-code.md)): after the range is known to be
   defined and before the table is read, so the client receives what the hook stored.
-- Writes (FC 05, 06, 15, 16, 22 and the write half of FC 23): after the range is known to be defined
+- Writes (FC 05, 06, 0F, 10, 16 and the write half of FC 17): after the range is known to be defined
   and writable, before anything is stored. A nonzero return answers that exception and writes
-  nothing, so [writes stay all-or-nothing](../modbus/writes.md). FC 22 reports the masked result
+  nothing, so [writes stay all-or-nothing](../modbus/writes.md). FC 16 reports the masked result
   that would be stored.
-- FC 23 runs the write hook first, then (once the write is applied) the read hook.
-- An undefined address or a read-only point answers exception 02 without calling the hook.
+- FC 17 runs the write hook first, then (once the write is applied) the read hook; an exception
+  from the read hook leaves the write applied.
+- An undefined address, a read-only point or a machine-driven point answers exception 02 without
+  calling the hook.
 - The exception counts like any other the simulator answers (diagnostic counter, metrics).
-- Not covered: file records (FC 20, 21), FIFO (FC 24), CANopen (FC 43/13), diagnostics and device
+- Not covered: file records (FC 14, 15), FIFO (FC 18), CANopen (FC 2B/0D), diagnostics and device
   identification.
 - Host calls (`mogbus_device_write()`, `mogbus_device_set_value()`, the HTTP control API, machines)
   never call the hook.
