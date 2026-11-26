@@ -2868,3 +2868,147 @@ TEST(ConfigDegradationErrorsAreReadable)
 		     " (machine m (initial idle) (state idle (on-enter (set! (holding 0) 3)))))",
 		     "machine cannot drive a ramp or modeled point");
 }
+
+TEST(ConfigParsesSixtyFourBitTypesWordOrderAndByteOrder)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		w[4] = { 0 };
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)\n"
+		"  (holding 0 (type u64) (static #x0102030405060708))\n"
+		"  (holding 4 (type u64) (word-order low-first) (static #x0102030405060708))\n"
+		"  (holding 8 (type s64) (byte-order little) (static -2))\n"
+		"  (holding 12 (type float64) (static 1.0))\n"
+		"  (holding 16 (type float32) (byte-order little) (static 1.5))\n"
+		"  (holding 18 (type u16) (byte-order little) (static #x1234))\n"
+		"  (holding 20 (type float64) (static +nan.0)))",
+		&config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 4, w));
+	ASSERT_EQ(w[0] == 0x0102 && w[1] == 0x0304 && w[2] == 0x0506 && w[3] == 0x0708);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 4, 4, w));
+	ASSERT_EQ(w[0] == 0x0708 && w[1] == 0x0506 && w[2] == 0x0304 && w[3] == 0x0102);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 8, 4, w));
+	ASSERT_EQ(w[0] == 0xFFFF && w[1] == 0xFFFF && w[2] == 0xFFFF && w[3] == 0xFEFF);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 12, 4, w));
+	ASSERT_EQ(w[0] == 0x3FF0 && w[1] == 0 && w[2] == 0 && w[3] == 0);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 16, 2, w));
+	ASSERT_EQ(w[0] == 0xC03F && w[1] == 0);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 18, 1, w));
+	ASSERT_EQ(w[0] == 0x3412);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 20, 1, w));
+	ASSERT_EQ(w[0] == 0x7FF8);
+}
+
+TEST(ConfigStaticSixtyFourBitIntegersAreExact)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		w[4] = { 0 };
+
+	/* s7 reads integers as 64-bit: 2^63-1 and (as hex) 2^64-1 do not go through a double. */
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)\n"
+		"  (holding 0 (type s64) (static 9223372036854775807))\n"
+		"  (holding 4 (type u64) (static #xFFFFFFFFFFFFFFFF))\n"
+		"  (holding 8 (type s64) (static -9223372036854775808))\n"
+		"  (holding 12 (type u64) (static 9007199254740993)))",
+		&config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 4, w));
+	ASSERT_EQ(w[0] == 0x7FFF && w[1] == 0xFFFF && w[2] == 0xFFFF && w[3] == 0xFFFF);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 4, 4, w));
+	ASSERT_EQ(w[0] == 0xFFFF && w[1] == 0xFFFF && w[2] == 0xFFFF && w[3] == 0xFFFF);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 8, 4, w));
+	ASSERT_EQ(w[0] == 0x8000 && w[1] == 0 && w[2] == 0 && w[3] == 0);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 12, 4, w));
+	ASSERT_EQ(w[0] == 0x0020 && w[1] == 0 && w[2] == 0 && w[3] == 0x0001);	/* 2^53 + 1 */
+}
+
+TEST(ConfigParsesStringPoints)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		w[4] = { 0 };
+	char		text[16];
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)\n"
+		"  (holding 0 (type string) (length 3) (static \"ABCDE\"))\n"
+		"  (holding 10 (type string) (length 2) (padding space) (static \"HI\"))\n"
+		"  (input 20 (type string) (length 2) (byte-order little) (static \"ABCD\"))\n"
+		"  (holding 30 (type string) (length 1) (count 3) (static \"X\"))\n"
+		"  (holding 40 (type string) (length 2)))",
+		&config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 3, w));
+	ASSERT_EQ(w[0] == 0x4142 && w[1] == 0x4344 && w[2] == 0x4500);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 10, 2, w));
+	ASSERT_EQ(w[0] == 0x4849 && w[1] == 0x2020);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_INPUT, 20, 2, w));
+	ASSERT_EQ(w[0] == 0x4241 && w[1] == 0x4443);
+	ASSERT_SUCCESS(device_get_string(config.devices[0], SPACE_HOLDING, 32, text, sizeof(text)));
+	ASSERT_EQ(strcmp(text, "X") == 0);
+	ASSERT_SUCCESS(device_get_string(config.devices[0], SPACE_HOLDING, 40, text, sizeof(text)));
+	ASSERT_EQ(text[0] == '\0');
+}
+
+TEST(ConfigRejectsBadStringAndByteOrderOptions)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (static \"AB\")))", "(length");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 0)))", "between 1 and 123");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 124)))", "between 1 and 123");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 1) (static \"ABC\")))", "longer than 2 bytes");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (static \"caf\xc3\xa9\")))", "printable ASCII");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (static \"a\\tb\")))", "printable ASCII");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (static 5)))", "text in double quotes");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (ramp (from 0) (to 1))))", "can only be (static");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (sine (offset 0) (amplitude 1) (period-ms 100))))", "can only be (static");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (static \"A\") (noise (amplitude 1))))", "cannot have (noise");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (word-order low-first)))", "no word order");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2) (padding tab)))", "padding");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u16) (padding space)))", "only apply to (type string)");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u16) (length 2)))", "only apply to (type string)");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (type string) (length 2)))", "remove (type");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2)) (holding 1 (static 1)))",
+		     "already used");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (byte-order middle)))", "byte-order");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (byte-order little)))", "remove (byte-order");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u64) (static 1.5) (static 2)))", "static");
+	EXPECT_ERROR("(device (unit-id 1) (holding 65533 (type u64)))", "does not fit");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u16) (static +nan.0)))", "only float32 and float64");
+}
+
+TEST(ConfigRejectsStringPointsInMachines)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2)) (holding 5)"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (set! (holding 0) 1)))))",
+		     "machine cannot drive a string point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2)) (holding 5)"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (when (< (holding 0) 1) (set! (holding 5) 2))))))",
+		     "a string point has no number to read");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2))"
+		     " (machine m (initial idle) (state-register (holding 0)) (state idle)))",
+		     "state register cannot name a string point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type string) (length 2)) (holding 5)"
+		     " (machine m (initial idle) (state idle)"
+		     "  (on-write (holding 0) (set! (holding 5) 1))))",
+		     "on-write cannot watch a string point");
+}
+
+TEST(ConfigSixtyFourBitPointsWorkInMachines)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	u16		w[4] = { 0 };
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1) (holding 0 (type u64) (static 5)) (holding 4 (type float64))\n"
+		" (machine m (initial idle)\n"
+		"  (state idle (on-enter (set! (holding 4) (+ (holding 0) 0.5))))))",
+		&config, err, sizeof(err)));
+	device_tick(config.devices[0], 1);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 4, 4, w));
+	ASSERT_EQ(w[0] == 0x4016 && w[1] == 0 && w[2] == 0 && w[3] == 0);	/* 5.5 */
+}

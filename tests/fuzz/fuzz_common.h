@@ -86,8 +86,35 @@ fuzz_device(void)
 	p.model        = (model_t){ .degradation = { .has_fail = true, .fail_after_ms = 100 } };
 	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
 	device_reset_models(dev, 0);
+	p = (point_t){ .space = SPACE_HOLDING, .kind = POINT_STATIC, .type = VT_U64, .address = 300,
+		       .static_value = 1e15 };
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.type         = VT_F64;
+	p.address      = 304;
+	p.order        = WORDS_LOW_FIRST;
+	p.byte_order   = BYTES_LITTLE;
+	p.static_value = -2.5;
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.type         = VT_S64;
+	p.address      = 308;
+	p.static_exact = true;
+	p.static_raw   = (u64)INT64_MIN;
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p = (point_t){ .space = SPACE_HOLDING, .kind = POINT_STATIC, .type = VT_STRING, .address = 320,
+		       .length = 5, .text = "mogbus" };
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.space      = SPACE_INPUT;
+	p.byte_order = BYTES_LITTLE;
+	p.padding    = ' ';
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
 	p.kind  = POINT_STATIC;
 	p.type  = VT_BOOL;
+	p.order = WORDS_HIGH_FIRST;
+	p.byte_order = BYTES_BIG;
+	p.static_exact = false;
+	p.length = 0;
+	p.text = NULL;
+	p.padding = 0;
 	p.model = (model_t){ 0 };
 	for (u32 a = 0; a < 24; a++)
 	{

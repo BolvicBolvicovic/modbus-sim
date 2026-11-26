@@ -53,6 +53,7 @@ enum machine_target_status_t
 	MACHINE_TARGET_NOT_FOUND,
 	MACHINE_TARGET_RAMP,
 	MACHINE_TARGET_CONFLICT,
+	MACHINE_TARGET_STRING,
 };
 
 typedef struct machine_target_result_t machine_target_result_t;

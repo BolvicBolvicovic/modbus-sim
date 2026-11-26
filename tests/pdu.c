@@ -3216,3 +3216,50 @@ TEST(UserDefinedFunctionCodesGoThroughFaultsAndCounters)
 	ASSERT_EQ(len == 2 && resp[0] == 0xC1 && resp[1] == EXC_DEVICE_BUSY);
 	arena_release(arena);
 }
+
+TEST(ReadHoldingRegistersReturnsSixtyFourBitAndStringBytes)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena);
+	point_t		p     = { .space = SPACE_HOLDING, .kind = POINT_STATIC, .type = VT_U64,
+				  .address = 100, .static_exact = true,
+				  .static_raw = 0x0102030405060708ull };
+	u8		req[] = { 0x03, 0x00, 100, 0x00, 0x04 };
+	u8		resp[MODBUS_MAX_PDU];
+	u8		want64[] = { 0x03, 0x08, 1, 2, 3, 4, 5, 6, 7, 8 };
+	u8		want_le[] = { 0x03, 0x08, 2, 1, 4, 3, 6, 5, 8, 7 };
+	u8		want_str[] = { 0x03, 0x06, 'A', 'B', 'C', 'D', 'E', 0 };
+
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want64));
+	ASSERT_EQ(memcmp(resp, want64, sizeof(want64)) == 0);
+
+	p.address    = 110;
+	p.byte_order = BYTES_LITTLE;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	req[2] = 110;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want_le));
+	ASSERT_EQ(memcmp(resp, want_le, sizeof(want_le)) == 0);
+
+	p = (point_t){ .space = SPACE_HOLDING, .kind = POINT_STATIC, .type = VT_STRING,
+		       .address = 120, .length = 3, .text = "ABCDE" };
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	req[2] = 120;
+	req[4] = 3;
+	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want_str));
+	ASSERT_EQ(memcmp(resp, want_str, sizeof(want_str)) == 0);
+
+	/* A client writes the text with FC 16, then reads it back. */
+	{
+		u8	write[] = { 0x10, 0x00, 120, 0x00, 0x03, 0x06, 'H', 'i', 0, 0, 0, 0 };
+		u8	want_hi[] = { 0x03, 0x06, 'H', 'i', 0, 0, 0, 0 };
+		char	text[8];
+
+		ASSERT_EQ(run(dev, write, sizeof(write), resp) == 5);
+		ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want_hi));
+		ASSERT_EQ(memcmp(resp, want_hi, sizeof(want_hi)) == 0);
+		ASSERT_SUCCESS(device_get_string(dev, SPACE_HOLDING, 120, text, sizeof(text)));
+		ASSERT_EQ(strcmp(text, "Hi") == 0);
+	}
+	arena_release(arena);
+}

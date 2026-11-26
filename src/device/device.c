@@ -82,6 +82,12 @@ point_is_timed(const point_t* point)
 	return point->kind == POINT_RAMP || point->kind == POINT_MODEL;
 }
 
+u32
+point_width(const point_t* point)
+{
+	return point->type == VT_STRING ? point->length : value_width(point->type);
+}
+
 /** @brief Computes the point's current value and stores it in its address(es). */
 static void
 point_apply(device_t* dev, u32 index, u64 now_ms)
@@ -89,8 +95,16 @@ point_apply(device_t* dev, u32 index, u64 now_ms)
 	point_t*	point = &dev->points[index];
 	f64		value = point->static_value;
 	f64		target = 0;
-	u16		words[2] = { 0, 0 };
+	u16		words[DEVICE_MAX_STRING_REGISTERS] = { 0 };
 	u32		width = 0;
+
+	if (point->type == VT_STRING)
+	{
+		encode_string(point->byte_order, (const u8*)point->text, point->length, words);
+		memcpy(&dev->spaces[point->space].value[point->address], words,
+		       point->length * sizeof(u16));
+		return;
+	}
 
 	if (point->kind == POINT_RAMP)
 		value = ramp_value(&point->ramp, dev->start_ms, now_ms);
@@ -110,7 +124,14 @@ point_apply(device_t* dev, u32 index, u64 now_ms)
 				    ((u64)dev->unit_id << 32) | index);
 	}
 
-	width = encode_value(point->type, point->order, value, words);
+	if (point->static_exact &&
+	    point->kind == POINT_STATIC)
+	{
+		width = value_width(point->type);
+		encode_bits(width, point->order, point->byte_order, point->static_raw, words);
+	}
+	else
+		width = encode_value(point->type, point->order, point->byte_order, value, words);
 	for (u32 i = 0; i < width; i++)
 		dev->spaces[point->space].value[point->address + i] = words[i];
 }
@@ -118,12 +139,32 @@ point_apply(device_t* dev, u32 index, u64 now_ms)
 static const char*
 validate_point(const device_t* dev, const point_t* point)
 {
-	u32		width = value_width(point->type);
+	u32		width = point_width(point);
 	const space_t*	space = &dev->spaces[point->space];
 	f64		steps = 0;
 
 	if (space_is_bit(point->space) != (point->type == VT_BOOL))
 		return "bit tables hold on/off values, register tables hold numbers";
+
+	if (point->byte_order != BYTES_BIG &&
+	    point->byte_order != BYTES_LITTLE)
+		return "invalid byte order";
+
+	if (point->type == VT_STRING)
+	{
+		if (point->length < 1 ||
+		    point->length > DEVICE_MAX_STRING_REGISTERS)
+			return "string length must be between 1 and 123 registers";
+
+		if (point->kind != POINT_STATIC ||
+		    point->model.noise.amplitude != 0 ||
+		    model_has_degradation(&point->model))
+			return "strings are static: no ramp, model, noise or degradation";
+
+		if (point->text &&
+		    strlen(point->text) > 2u * point->length)
+			return "string text is longer than its registers";
+	}
 
 	if (point->address + width > ADDRESS_SPACE_SIZE)
 		return "point does not fit before address 65535";
@@ -202,13 +243,27 @@ const char*
 device_add_point(device_t* dev, const point_t* point)
 {
 	const char*	error = validate_point(dev, point);
-	u32		width = value_width(point->type);
+	u32		width = point_width(point);
 	u32		index = dev->point_count;
+	char*		text = NULL;
 
 	if (error)
 		return error;
 
+	if (point->type == VT_STRING)
+	{
+		size_t	len = point->text ? strlen(point->text) : 0;
+
+		text = ARENA_PUSH_ARRAY(dev->arena, char, 2u * point->length);
+		if (!text)
+			return "out of memory while storing a string";
+		memset(text, point->padding, 2u * point->length);
+		if (len)
+			memcpy(text, point->text, len);
+	}
+
 	dev->points[index] = *point;
+	dev->points[index].text = text;
 	dev->points[index].configured_kind = point->kind;
 	dev->point_count++;
 
@@ -381,13 +436,15 @@ bool
 device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out)
 {
 	const point_t*	point = NULL;
-	u16		words[2] = { 0, 0 };
+	u16		words[4] = { 0 };
 	u32		index = device_find_point(dev, space, address);
 
 	if (index == DEVICE_MAX_POINTS || !out)
 		return false;
 
 	point = &dev->points[index];
+	if (point->type == VT_STRING)
+		return false;
 	for (u32 i = 0; i < value_width(point->type); i++)
 		words[i] = dev->spaces[space].value[address + i];
 
@@ -400,7 +457,7 @@ device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* ou
 	else
 	{
 		out->type = VAL_NUM;
-		out->n    = decode_value(point->type, point->order, words);
+		out->n    = decode_value(point->type, point->order, point->byte_order, words);
 		out->b    = false;
 	}
 	return true;
@@ -410,23 +467,71 @@ bool
 device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in)
 {
 	const point_t*	point = NULL;
-	u16		words[2] = { 0, 0 };
+	u16		words[4] = { 0 };
 	u32		index = device_find_point(dev, space, address);
 	f64		value = 0;
 
-	if (index == DEVICE_MAX_POINTS || !in)
+	if (index == DEVICE_MAX_POINTS || !in ||
+	    dev->points[index].type == VT_STRING)
 		return false;
 	if (in->type != (space_is_bit(space) ? VAL_BOOL : VAL_NUM))
 		return false;
 
 	point = &dev->points[index];
 	value = in->type == VAL_BOOL ? (in->b ? 1.0 : 0.0) : in->n;
-	encode_value(point->type, point->order, value, words);
+	encode_value(point->type, point->order, point->byte_order, value, words);
 
 	for (u32 i = 0; i < value_width(point->type); i++)
 		dev->spaces[space].value[address + i] = words[i];
 
 	dev->points[index].kind = POINT_MACHINE;
+	return true;
+}
+
+bool
+device_get_string(const device_t* dev, space_kind_t space, u32 address, char* out, size_t size)
+{
+	const point_t*	point = NULL;
+	u8		bytes[2 * DEVICE_MAX_STRING_REGISTERS];
+	u32		index = device_find_point(dev, space, address);
+	size_t		len = 0;
+
+	if (index == DEVICE_MAX_POINTS ||
+	    dev->points[index].type != VT_STRING ||
+	    !out || size == 0)
+		return false;
+
+	point = &dev->points[index];
+	decode_string(point->byte_order, &dev->spaces[space].value[address], point->length, bytes);
+	while (len < 2u * point->length &&
+	       bytes[len] != 0)
+		len++;
+	if (len >= size)
+		return false;
+	memcpy(out, bytes, len);
+	out[len] = '\0';
+	return true;
+}
+
+bool
+device_set_string(device_t* dev, space_kind_t space, u32 address, const char* text)
+{
+	const point_t*	point = NULL;
+	u8		bytes[2 * DEVICE_MAX_STRING_REGISTERS] = { 0 };
+	u16		words[DEVICE_MAX_STRING_REGISTERS];
+	u32		index = device_find_point(dev, space, address);
+	size_t		len = text ? strlen(text) : 0;
+
+	if (index == DEVICE_MAX_POINTS ||
+	    dev->points[index].type != VT_STRING ||
+	    !text ||
+	    len > 2u * dev->points[index].length)
+		return false;
+
+	point = &dev->points[index];
+	memcpy(bytes, text, len);
+	encode_string(point->byte_order, bytes, point->length, words);
+	memcpy(&dev->spaces[space].value[address], words, point->length * sizeof(u16));
 	return true;
 }
 

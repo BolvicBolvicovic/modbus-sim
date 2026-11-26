@@ -929,3 +929,69 @@ TEST(ApiConfigOptionsAreUnavailableWithoutConfigSupport)
 	mogbus_destroy(ctx);
 }
 #endif
+
+TEST(ApiSixtyFourBitByteOrderAndStringPoints)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev;
+	mogbus_point_t	p;
+	uint16_t	w[4] = { 0 };
+	double		v = 0;
+	char		err[128];
+	char		text[16];
+
+	ASSERT_EQ(ctx != NULL);
+	dev = mogbus_add_device(ctx, 1, NULL, err, sizeof(err));
+	ASSERT_EQ(dev != NULL);
+
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U64,
+			      .value = 4294967296.0, .byte_order = MOGBUS_BYTES_LITTLE };
+	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 0, 4, w));
+	ASSERT_EQ(w[0] == 0 && w[1] == 0x0100 && w[2] == 0 && w[3] == 0);
+	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v == 4294967296.0);
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 4, .type = MOGBUS_TYPE_F64,
+			      .value = -2.5, .word_order = MOGBUS_WORDS_LOW_FIRST };
+	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 4, 4, w));
+	ASSERT_EQ(w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 0xC004);
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 8, .type = MOGBUS_TYPE_S64, .value = -1 };
+	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 8, &v) && v == -1);
+
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 20, .type = MOGBUS_TYPE_STRING,
+			      .length = 4, .text = "SN-1234" };
+	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_get_string(dev, MOGBUS_HOLDING, 20, text, sizeof(text)));
+	ASSERT_EQ(strcmp(text, "SN-1234") == 0);
+	ASSERT_EQ(!mogbus_device_get_value(dev, MOGBUS_HOLDING, 20, &v));	/* a string has no number */
+	ASSERT_EQ(!mogbus_device_set_value(dev, MOGBUS_HOLDING, 20, 1));
+	ASSERT_EQ(!mogbus_device_get_string(dev, MOGBUS_HOLDING, 20, text, 4));	/* too small */
+	ASSERT_EQ(!mogbus_device_get_string(dev, MOGBUS_HOLDING, 0, text, sizeof(text)));	/* not a string */
+	ASSERT_EQ(mogbus_device_set_string(dev, MOGBUS_HOLDING, 20, "NEW"));
+	ASSERT_EQ(mogbus_device_get_string(dev, MOGBUS_HOLDING, 20, text, sizeof(text)));
+	ASSERT_EQ(strcmp(text, "NEW") == 0);
+	ASSERT_EQ(!mogbus_device_set_string(dev, MOGBUS_HOLDING, 20, "123456789"));	/* > 2*length */
+	ASSERT_EQ(!mogbus_device_set_string(dev, MOGBUS_HOLDING, 21, "A"));
+	/* A client write still works and shows up in get_string. */
+	w[0] = 0x4F4B;
+	w[1] = w[2] = w[3] = 0;
+	ASSERT_EQ(mogbus_device_write(dev, MOGBUS_HOLDING, 20, 4, w));
+	ASSERT_EQ(mogbus_device_get_string(dev, MOGBUS_HOLDING, 20, text, sizeof(text)));
+	ASSERT_EQ(strcmp(text, "OK") == 0);
+
+	/* strings are limited to 1..123 registers and need a register table */
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 100, .type = MOGBUS_TYPE_STRING };
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)) && strstr(err, "between 1 and 123"));
+	p.length = 124;
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 100, .type = MOGBUS_TYPE_STRING,
+			      .length = 1, .text = "TOO LONG" };
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	p = (mogbus_point_t){ .space = MOGBUS_COIL, .address = 0, .type = MOGBUS_TYPE_STRING, .length = 1 };
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 100, .type = MOGBUS_TYPE_U16,
+			      .byte_order = (mogbus_byte_order_t)7 };
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	mogbus_destroy(ctx);
+}

@@ -1319,14 +1319,20 @@ check_expr_points(form_ctx_t* ctx, const machine_state_t* state, const device_t*
 		const point_ref_t* ref = NULL;
 		const char* text = NULL;
 		const char* state_name = NULL;
+		u32 index = 0;
 
 		if (node->kind != EXPR_POINT)
 			continue;
-		if (device_find_point(dev, (space_kind_t)node->space, node->address) != DEVICE_MAX_POINTS)
+		index = device_find_point(dev, (space_kind_t)node->space, node->address);
+		if (index != DEVICE_MAX_POINTS &&
+		    dev->points[index].type != VT_STRING)
 			continue;
 		ref = find_expr_ref(state, machine_index, i);
 		text = ref ? ref->text : def->name;
 		state_name = ref_state_name(def, ref);
+		if (index != DEVICE_MAX_POINTS)
+			return form_fail(ctx, "%s: machine '%s', state '%s': a string point has no number to read",
+					 text, def->name, state_name);
 		return form_fail(ctx, "%s: machine '%s', state '%s': point read must name the first address of a configured point",
 				 text, def->name, state_name);
 	}
@@ -1360,6 +1366,9 @@ check_set_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* 
 			return form_fail(ctx, "%s: machine '%s', state '%s': point %s %u is not the first address of a configured point",
 					 text, def->name, state_name,
 					 space_name((space_kind_t)stmt->space), stmt->address);
+		if (target.status == MACHINE_TARGET_STRING)
+			return form_fail(ctx, "%s: machine '%s', state '%s': machine cannot drive a string point",
+					 text, def->name, state_name);
 		if (target.status == MACHINE_TARGET_RAMP)
 			return form_fail(ctx, "%s: machine '%s', state '%s': machine cannot drive a ramp or modeled point",
 					 text, def->name, state_name);
@@ -1398,6 +1407,9 @@ check_state_registers(form_ctx_t* ctx, const machine_state_t* state, const devic
 		if (index == DEVICE_MAX_POINTS)
 			return form_fail(ctx, "machine '%s': %s: state register must name the first address "
 					      "of a configured point", def->name, text);
+		if (dev->points[index].type == VT_STRING)
+			return form_fail(ctx, "machine '%s': %s: state register cannot name a string point",
+					 def->name, text);
 		if (point_is_timed(&dev->points[index]))
 			return form_fail(ctx, "machine '%s': %s: state register cannot name a ramp or modeled point",
 					 def->name, text);
@@ -1431,6 +1443,9 @@ check_write_targets(form_ctx_t* ctx, const machine_state_t* state, const device_
 			if (index == DEVICE_MAX_POINTS)
 				return form_fail(ctx, "machine '%s': %s: on-write target must name the first "
 						      "address of a configured point", def->name, text);
+			if (dev->points[index].type == VT_STRING)
+				return form_fail(ctx, "machine '%s': %s: on-write cannot watch a string point",
+						 def->name, text);
 			if (set_owners[index] != 0 ||
 			    reg_owners[index] != 0 ||
 			    dev->points[index].kind == POINT_MACHINE)

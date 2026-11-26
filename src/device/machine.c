@@ -57,6 +57,11 @@ machine_check_target_point(const device_t* dev, space_kind_t space, u32 address,
 		result.status = MACHINE_TARGET_NOT_FOUND;
 		return result;
 	}
+	if (dev->points[result.index].type == VT_STRING)
+	{
+		result.status = MACHINE_TARGET_STRING;
+		return result;
+	}
 	if (point_is_timed(&dev->points[result.index]))
 	{
 		result.status = MACHINE_TARGET_RAMP;
@@ -278,6 +283,8 @@ validate_statement(const machine_def_t* def, u16 index, const char* machine, con
 			if (target.status == MACHINE_TARGET_NOT_FOUND)
 				return machine_error(machine, state,
 						     "assignment target must be the first address of a configured point");
+			if (target.status == MACHINE_TARGET_STRING)
+				return machine_error(machine, state, "machine cannot drive a string point");
 			if (target.status == MACHINE_TARGET_RAMP)
 				return machine_error(machine, state, "machine cannot drive a ramp or modeled point");
 			if (target.status == MACHINE_TARGET_CONFLICT)
@@ -506,6 +513,8 @@ collect_state_registers(validation_t* v)
 		if (index == DEVICE_MAX_POINTS)
 			return machine_error(def->name, NULL,
 					     "state register must name the first address of a configured point");
+		if (v->dev->points[index].type == VT_STRING)
+			return machine_error(def->name, NULL, "state register cannot name a string point");
 		if (point_is_timed(&v->dev->points[index]))
 			return machine_error(def->name, NULL, "state register cannot name a ramp or modeled point");
 		if (v->reg_owner[index] != 0)
@@ -951,7 +960,7 @@ device_machines_on_write(device_t* dev, space_kind_t space, u32 address,
 			index = device_find_point(dev, space, h->address);
 			if (index == DEVICE_MAX_POINTS)
 				continue;
-			width = value_width(dev->points[index].type);
+			width = point_width(&dev->points[index]);
 			watched_end = (u64)h->address + width;
 			if ((u64)h->address >= (u64)address + qty ||
 			    (u64)address >= watched_end)

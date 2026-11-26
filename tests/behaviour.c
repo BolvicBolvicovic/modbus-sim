@@ -102,17 +102,17 @@ TEST(EncodeIntegers)
 {
 	u16	w[2] = { 0, 0 };
 
-	ASSERT_EQ(encode_value(VT_U16, WORDS_HIGH_FIRST, 70000, w) == 1);
+	ASSERT_EQ(encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, 70000, w) == 1);
 	ASSERT_EQ(w[0] == 65535);
-	encode_value(VT_S16, WORDS_HIGH_FIRST, -2, w);
+	encode_value(VT_S16, WORDS_HIGH_FIRST, BYTES_BIG, -2, w);
 	ASSERT_EQ(w[0] == 0xFFFE);
-	encode_value(VT_U16, WORDS_HIGH_FIRST, 12.6, w);
+	encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, 12.6, w);
 	ASSERT_EQ(w[0] == 13);
-	encode_value(VT_U16, WORDS_HIGH_FIRST, NAN, w);
+	encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, NAN, w);
 	ASSERT_EQ(w[0] == 0);
-	encode_value(VT_S32, WORDS_HIGH_FIRST, INFINITY, w);
+	encode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, INFINITY, w);
 	ASSERT_EQ(w[0] == 0x7FFF && w[1] == 0xFFFF);
-	encode_value(VT_U32, WORDS_HIGH_FIRST, -INFINITY, w);
+	encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w);
 	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x0000);
 }
 
@@ -120,11 +120,11 @@ TEST(EncodeThirtyTwoBitWordOrder)
 {
 	u16	w[2] = { 0, 0 };
 
-	ASSERT_EQ(encode_value(VT_U32, WORDS_HIGH_FIRST, 0x12345678, w) == 2);
+	ASSERT_EQ(encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, 0x12345678, w) == 2);
 	ASSERT_EQ(w[0] == 0x1234 && w[1] == 0x5678);
-	encode_value(VT_U32, WORDS_LOW_FIRST, 0x12345678, w);
+	encode_value(VT_U32, WORDS_LOW_FIRST, BYTES_BIG, 0x12345678, w);
 	ASSERT_EQ(w[0] == 0x5678 && w[1] == 0x1234);
-	encode_value(VT_S32, WORDS_HIGH_FIRST, -1, w);
+	encode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, -1, w);
 	ASSERT_EQ(w[0] == 0xFFFF && w[1] == 0xFFFF);
 }
 
@@ -134,24 +134,24 @@ TEST(EncodeFloat32)
 	u32	raw  = 0;
 	f32	real = 0;
 
-	encode_value(VT_F32, WORDS_HIGH_FIRST, 1.0, w);	/* 0x3F800000 */
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, 1.0, w);	/* 0x3F800000 */
 	ASSERT_EQ(w[0] == 0x3F80 && w[1] == 0x0000);
-	encode_value(VT_F32, WORDS_LOW_FIRST, 1.0, w);
+	encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, 1.0, w);
 	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x3F80);
 
-	encode_value(VT_F32, WORDS_HIGH_FIRST, NAN, w);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, NAN, w);
 	raw = ((u32)w[0] << 16) | w[1];
 	memcpy(&real, &raw, sizeof(real));
 	ASSERT_EQ(isnan(real));
 
-	encode_value(VT_F32, WORDS_HIGH_FIRST, INFINITY, w);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, INFINITY, w);
 	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	encode_value(VT_F32, WORDS_HIGH_FIRST, -INFINITY, w);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w);
 	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 
-	encode_value(VT_F32, WORDS_HIGH_FIRST, (f64)FLT_MAX * 2.0, w);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, (f64)FLT_MAX * 2.0, w);
 	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	encode_value(VT_F32, WORDS_HIGH_FIRST, -((f64)FLT_MAX * 2.0), w);
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -((f64)FLT_MAX * 2.0), w);
 	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 }
 
@@ -159,9 +159,9 @@ TEST(EncodeBool)
 {
 	u16	w[2] = { 0, 0 };
 
-	encode_value(VT_BOOL, WORDS_HIGH_FIRST, 5, w);
+	encode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, 5, w);
 	ASSERT_EQ(w[0] == 1);
-	encode_value(VT_BOOL, WORDS_HIGH_FIRST, 0, w);
+	encode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, 0, w);
 	ASSERT_EQ(w[0] == 0);
 }
 

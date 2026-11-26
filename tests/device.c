@@ -880,87 +880,162 @@ TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
 	u32	raw  = 0;
 	f32	real = 0;
 
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, NAN, w) == 2);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, NAN, w) == 2);
 	raw = ((u32)w[0] << 16) | w[1];
 	memcpy(&real, &raw, sizeof(real));
 	ASSERT_EQ(isnan(real));
 
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, INFINITY, w) == 2);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, INFINITY, w) == 2);
 	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, -INFINITY, w) == 2);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w) == 2);
 	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, 1e39, w) == 2);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, 1e39, w) == 2);
 	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, -1e39, w) == 2);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -1e39, w) == 2);
 	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
 }
 
 static void
-check_value_round_trip(value_type_t type, word_order_t order, f64 value)
+check_value_round_trip(value_type_t type, word_order_t order, byte_order_t bytes, f64 value)
 {
-	u16	words[2] = { 0, 0 };
+	u16	words[4] = { 0 };
 	f64	decoded = 0;
 
-	ASSERT_EQ(encode_value(type, order, value, words) == value_width(type));
-	decoded = decode_value(type, order, words);
+	ASSERT_EQ(encode_value(type, order, bytes, value, words) == value_width(type));
+	decoded = decode_value(type, order, bytes, words);
 	if (isnan(value))
 		ASSERT_EQ(isnan(decoded));
 	else
 		ASSERT_EQ(decoded == value);
 }
 
-TEST(DecodeValueRoundTripsEveryTypeAndWordOrder)
+TEST(DecodeValueRoundTripsEveryTypeWordOrderAndByteOrder)
 {
-	static const f64 values[VT_BOOL + 1][4] = {
+	static const f64 values[VT_F64 + 1][4] = {
 		{ 0, 1, 12345, 65535 },					/* VT_U16 */
 		{ -32768, -1, 0, 32767 },					/* VT_S16 */
 		{ 0, 123456789, 3735928559.0, 4294967295.0 },		/* VT_U32 */
 		{ -2147483648.0, -123456789, 0, 2147483647.0 },		/* VT_S32 */
 		{ -3.5, 0, 1.25, 12345.5 },					/* VT_F32 */
 		{ 0, 1, 0, 1 },						/* VT_BOOL */
+		{ 0, 4294967296.0, 9007199254740992.0, 1.5e19 },	/* VT_U64 */
+		{ -9007199254740992.0, -1, 0, 4611686018427387904.0 },	/* VT_S64 */
+		{ -3.5, 0, 1.0e300, NAN },					/* VT_F64 */
 	};
 
-	for (u32 type = 0; type <= VT_BOOL; type++)
+	for (u32 type = 0; type <= VT_F64; type++)
 	{
 		for (u32 order = 0; order <= WORDS_LOW_FIRST; order++)
 		{
-			for (u32 i = 0; i < ARRAY_COUNT(values[0]); i++)
-				check_value_round_trip((value_type_t)type, (word_order_t)order,
-						       values[type][i]);
+			for (u32 bytes = 0; bytes <= BYTES_LITTLE; bytes++)
+			{
+				for (u32 i = 0; i < ARRAY_COUNT(values[0]); i++)
+					check_value_round_trip((value_type_t)type, (word_order_t)order,
+							       (byte_order_t)bytes, values[type][i]);
+			}
 		}
 	}
+}
+
+TEST(EncodeValueMatchesTheFourCommonThirtyTwoBitLayouts)
+{
+	u16	w[4] = { 0 };
+
+	/* 1.5f = 0x3FC00000: ABCD = 3F C0 00 00 */
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, 1.5, w) == 2);
+	ASSERT_EQ(w[0] == 0x3FC0 && w[1] == 0x0000);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, 1.5, w) == 2);
+	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x3FC0);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_LITTLE, 1.5, w) == 2);
+	ASSERT_EQ(w[0] == 0xC03F && w[1] == 0x0000);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_LITTLE, 1.5, w) == 2);
+	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0xC03F);
+
+	/* 0x12345678: ABCD, CDAB, BADC, DCBA */
+	ASSERT_EQ(encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, 0x12345678, w) == 2);
+	ASSERT_EQ(w[0] == 0x1234 && w[1] == 0x5678);
+	ASSERT_EQ(encode_value(VT_U32, WORDS_LOW_FIRST, BYTES_BIG, 0x12345678, w) == 2);
+	ASSERT_EQ(w[0] == 0x5678 && w[1] == 0x1234);
+	ASSERT_EQ(encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_LITTLE, 0x12345678, w) == 2);
+	ASSERT_EQ(w[0] == 0x3412 && w[1] == 0x7856);
+	ASSERT_EQ(encode_value(VT_U32, WORDS_LOW_FIRST, BYTES_LITTLE, 0x12345678, w) == 2);
+	ASSERT_EQ(w[0] == 0x7856 && w[1] == 0x3412);
+
+	/* 16-bit: only the byte order matters */
+	ASSERT_EQ(encode_value(VT_U16, WORDS_LOW_FIRST, BYTES_LITTLE, 0x1234, w) == 1);
+	ASSERT_EQ(w[0] == 0x3412);
+}
+
+TEST(EncodeBitsLaysOutSixtyFourBitValuesInEveryOrder)
+{
+	const u64	raw = 0x0102030405060708ull;
+	u16		w[4] = { 0 };
+
+	encode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, raw, w);
+	ASSERT_EQ(w[0] == 0x0102 && w[1] == 0x0304 && w[2] == 0x0506 && w[3] == 0x0708);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, w) == raw);
+	encode_bits(4, WORDS_LOW_FIRST, BYTES_BIG, raw, w);
+	ASSERT_EQ(w[0] == 0x0708 && w[1] == 0x0506 && w[2] == 0x0304 && w[3] == 0x0102);
+	ASSERT_EQ(decode_bits(4, WORDS_LOW_FIRST, BYTES_BIG, w) == raw);
+	encode_bits(4, WORDS_HIGH_FIRST, BYTES_LITTLE, raw, w);
+	ASSERT_EQ(w[0] == 0x0201 && w[1] == 0x0403 && w[2] == 0x0605 && w[3] == 0x0807);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_LITTLE, w) == raw);
+	encode_bits(4, WORDS_LOW_FIRST, BYTES_LITTLE, raw, w);
+	ASSERT_EQ(w[0] == 0x0807 && w[1] == 0x0605 && w[2] == 0x0403 && w[3] == 0x0201);
+	ASSERT_EQ(decode_bits(4, WORDS_LOW_FIRST, BYTES_LITTLE, w) == raw);
+}
+
+TEST(Encode64BitIntegersClampAndFloat64KeepsNonFinite)
+{
+	u16	w[4] = { 0 };
+
+	encode_value(VT_U64, WORDS_HIGH_FIRST, BYTES_BIG, -5, w);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, w) == 0);
+	encode_value(VT_U64, WORDS_HIGH_FIRST, BYTES_BIG, 1e30, w);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, w) == UINT64_MAX);
+	encode_value(VT_U64, WORDS_HIGH_FIRST, BYTES_BIG, NAN, w);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, w) == 0);
+	encode_value(VT_S64, WORDS_HIGH_FIRST, BYTES_BIG, 1e30, w);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, w) == (u64)INT64_MAX);
+	encode_value(VT_S64, WORDS_HIGH_FIRST, BYTES_BIG, -1e30, w);
+	ASSERT_EQ(decode_bits(4, WORDS_HIGH_FIRST, BYTES_BIG, w) == (u64)INT64_MIN);
+	encode_value(VT_F64, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w);
+	ASSERT_EQ(isinf(decode_value(VT_F64, WORDS_HIGH_FIRST, BYTES_BIG, w)));
+	/* 1.0 = 0x3FF0000000000000 */
+	encode_value(VT_F64, WORDS_HIGH_FIRST, BYTES_BIG, 1.0, w);
+	ASSERT_EQ(w[0] == 0x3FF0 && w[1] == 0 && w[2] == 0 && w[3] == 0);
 }
 
 TEST(DecodeValueHandlesNonFiniteAndWordOrder)
 {
 	u16	words[2] = { 0x1234, 0x5678 };
 
-	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, words) == 0x12345678u);
-	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, words) == 0x12345678);
+	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, words) == 0x12345678u);
+	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, words) == 0x12345678);
 	words[0] = 0x5678;
 	words[1] = 0x1234;
-	ASSERT_EQ(decode_value(VT_U32, WORDS_LOW_FIRST, words) == 0x12345678u);
-	ASSERT_EQ(decode_value(VT_S32, WORDS_LOW_FIRST, words) == 0x12345678);
+	ASSERT_EQ(decode_value(VT_U32, WORDS_LOW_FIRST, BYTES_BIG, words) == 0x12345678u);
+	ASSERT_EQ(decode_value(VT_S32, WORDS_LOW_FIRST, BYTES_BIG, words) == 0x12345678);
 
 	words[0] = 0xFFFF;
 	words[1] = 0xFFFF;
-	ASSERT_EQ(decode_value(VT_U16, WORDS_HIGH_FIRST, words) == 65535);
-	ASSERT_EQ(decode_value(VT_S16, WORDS_HIGH_FIRST, words) == -1);
-	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, words) == 4294967295u);
-	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, words) == -1);
-	ASSERT_EQ(decode_value(VT_BOOL, WORDS_HIGH_FIRST, words) == 1);
+	ASSERT_EQ(decode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, words) == 65535);
+	ASSERT_EQ(decode_value(VT_S16, WORDS_HIGH_FIRST, BYTES_BIG, words) == -1);
+	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, words) == 4294967295u);
+	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, words) == -1);
+	ASSERT_EQ(decode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, words) == 1);
 	words[0] = 0;
-	ASSERT_EQ(decode_value(VT_BOOL, WORDS_HIGH_FIRST, words) == 0);
+	ASSERT_EQ(decode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, words) == 0);
 
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, NAN, words) == 2);
-	ASSERT_EQ(isnan(decode_value(VT_F32, WORDS_HIGH_FIRST, words)));
-	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, INFINITY, words) == 2);
-	ASSERT_EQ(isinf(decode_value(VT_F32, WORDS_LOW_FIRST, words)));
-	ASSERT_EQ(decode_value(VT_F32, WORDS_LOW_FIRST, words) > 0);
-	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, -INFINITY, words) == 2);
-	ASSERT_EQ(isinf(decode_value(VT_F32, WORDS_LOW_FIRST, words)));
-	ASSERT_EQ(decode_value(VT_F32, WORDS_LOW_FIRST, words) < 0);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, NAN, words) == 2);
+	ASSERT_EQ(isnan(decode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, words)));
+	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, INFINITY, words) == 2);
+	ASSERT_EQ(isinf(decode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, words)));
+	ASSERT_EQ(decode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, words) > 0);
+	ASSERT_EQ(encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, -INFINITY, words) == 2);
+	ASSERT_EQ(isinf(decode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, words)));
+	ASSERT_EQ(decode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, words) < 0);
 }
 
 TEST(DevicePointAccessOnlyAtFirstAddress)
@@ -1392,5 +1467,135 @@ TEST(DegradationIsRejectedForDriftOnBitsAndBadNumbers)
 	m.degradation = (struct model_degradation_t){ .has_stuck = true, .stuck_after_ms = 10 };
 	p = model_point(SPACE_COIL, 0, VT_BOOL, &m);
 	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	arena_release(arena);
+}
+
+TEST(ExactStaticSixtyFourBitIntegersSurviveRestartAndClientReads)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		p     = static_point(SPACE_HOLDING, 0, VT_U64, 0);
+	u16		w[4]  = { 0 };
+
+	p.static_raw   = UINT64_MAX - 1;
+	p.static_exact = true;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = static_point(SPACE_HOLDING, 4, VT_S64, 0);
+	p.order        = WORDS_LOW_FIRST;
+	p.static_raw   = (u64)INT64_MAX;
+	p.static_exact = true;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, w));
+	ASSERT_EQ(w[0] == 0xFFFF && w[1] == 0xFFFF && w[2] == 0xFFFF && w[3] == 0xFFFE);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 4, 4, w));
+	ASSERT_EQ(w[0] == 0xFFFF && w[1] == 0xFFFF && w[2] == 0xFFFF && w[3] == 0x7FFF);
+	w[0] = w[1] = w[2] = 0;
+	w[3] = 7;
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 4, w));
+	device_restart(dev, 10);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, w));
+	ASSERT_EQ(w[3] == 0xFFFE);
+	arena_release(arena);
+}
+
+TEST(StringPointStoresTextPadsAndRestartsToConfiguredText)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		p     = static_point(SPACE_HOLDING, 10, VT_STRING, 0);
+	u16		w[3]  = { 0 };
+	char		out[8];
+
+	p.length = 3;
+	p.text   = "ABCDE";
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 10, 3, w));
+	ASSERT_EQ(w[0] == 0x4142 && w[1] == 0x4344 && w[2] == 0x4500);
+	ASSERT_SUCCESS(device_get_string(dev, SPACE_HOLDING, 10, out, sizeof(out)));
+	ASSERT_EQ(strcmp(out, "ABCDE") == 0);
+	ASSERT_FAILURE(device_get_string(dev, SPACE_HOLDING, 10, out, 5));
+	ASSERT_FAILURE(device_get_string(dev, SPACE_HOLDING, 11, out, sizeof(out)));
+
+	/* a client writes raw registers: "HI" then NULs */
+	w[0] = 0x4849;
+	w[1] = 0;
+	w[2] = 0;
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 10, 3, w));
+	ASSERT_SUCCESS(device_get_string(dev, SPACE_HOLDING, 10, out, sizeof(out)));
+	ASSERT_EQ(strcmp(out, "HI") == 0);
+
+	ASSERT_SUCCESS(device_set_string(dev, SPACE_HOLDING, 10, "XYZ"));
+	ASSERT_FAILURE(device_set_string(dev, SPACE_HOLDING, 10, "TOO LONG!"));
+	ASSERT_SUCCESS(device_get_string(dev, SPACE_HOLDING, 10, out, sizeof(out)));
+	ASSERT_EQ(strcmp(out, "XYZ") == 0);
+
+	device_restart(dev, 10);
+	ASSERT_SUCCESS(device_get_string(dev, SPACE_HOLDING, 10, out, sizeof(out)));
+	ASSERT_EQ(strcmp(out, "ABCDE") == 0);
+	arena_release(arena);
+}
+
+TEST(StringPointByteOrderPaddingAndRejections)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		p     = static_point(SPACE_INPUT, 0, VT_STRING, 0);
+	u16		w[2]  = { 0 };
+	char		out[8];
+	val_t		val   = { .type = VAL_NUM, .n = 1 };
+
+	p.length     = 2;
+	p.text       = "AB";
+	p.padding    = ' ';
+	p.byte_order = BYTES_LITTLE;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 0, 2, w));
+	ASSERT_EQ(w[0] == 0x4241 && w[1] == 0x2020);
+	ASSERT_SUCCESS(device_get_string(dev, SPACE_INPUT, 0, out, sizeof(out)));
+	ASSERT_EQ(strcmp(out, "AB  ") == 0);
+	ASSERT_FAILURE(device_get_point(dev, SPACE_INPUT, 0, &val));
+	ASSERT_FAILURE(device_set_point(dev, SPACE_INPUT, 0, &val));
+
+	/* length bounds, text too long, models and coils */
+	p = static_point(SPACE_HOLDING, 100, VT_STRING, 0);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	p.length = 124;
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	p.length = 123;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = static_point(SPACE_HOLDING, 300, VT_STRING, 0);
+	p.length = 1;
+	p.text   = "ABC";
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	p.text = "AB";
+	p.kind = POINT_MODEL;
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	p.kind = POINT_STATIC;
+	p.space = SPACE_COIL;
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	arena_release(arena);
+}
+
+TEST(SixtyFourBitPointsReadAndWriteAsDecodedValues)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		p     = static_point(SPACE_HOLDING, 0, VT_F64, 2.5);
+	val_t		in    = { .type = VAL_NUM, .n = -7.25 };
+	val_t		out   = { 0 };
+	u16		w[4]  = { 0 };
+
+	p.byte_order = BYTES_LITTLE;
+	p.order      = WORDS_LOW_FIRST;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
+	ASSERT_EQ(out.n == 2.5);
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_HOLDING, 0, &in));
+	ASSERT_SUCCESS(device_get_point(dev, SPACE_HOLDING, 0, &out));
+	ASSERT_EQ(out.n == -7.25);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, w));
+	/* -7.25 = 0xC01D000000000000; low word first, bytes swapped in each register */
+	ASSERT_EQ(w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 0x1DC0);
 	arena_release(arena);
 }

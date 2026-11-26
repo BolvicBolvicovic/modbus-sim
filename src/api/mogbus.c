@@ -33,8 +33,12 @@ _Static_assert((int)MOGBUS_COIL == (int)SPACE_COIL &&
 	       (int)MOGBUS_SPACE_COUNT == (int)SPACE_COUNT, "space enum");
 _Static_assert((int)MOGBUS_TYPE_U16 == (int)VT_U16 && (int)MOGBUS_TYPE_S16 == (int)VT_S16 &&
 	       (int)MOGBUS_TYPE_U32 == (int)VT_U32 && (int)MOGBUS_TYPE_S32 == (int)VT_S32 &&
-	       (int)MOGBUS_TYPE_F32 == (int)VT_F32 && (int)MOGBUS_TYPE_BOOL == (int)VT_BOOL,
+	       (int)MOGBUS_TYPE_F32 == (int)VT_F32 && (int)MOGBUS_TYPE_BOOL == (int)VT_BOOL &&
+	       (int)MOGBUS_TYPE_U64 == (int)VT_U64 && (int)MOGBUS_TYPE_S64 == (int)VT_S64 &&
+	       (int)MOGBUS_TYPE_F64 == (int)VT_F64 && (int)MOGBUS_TYPE_STRING == (int)VT_STRING,
 	       "value type enum");
+_Static_assert((int)MOGBUS_BYTES_BIG == (int)BYTES_BIG &&
+	       (int)MOGBUS_BYTES_LITTLE == (int)BYTES_LITTLE, "byte order enum");
 _Static_assert((int)MOGBUS_WORDS_HIGH_FIRST == (int)WORDS_HIGH_FIRST &&
 	       (int)MOGBUS_WORDS_LOW_FIRST == (int)WORDS_LOW_FIRST, "word order enum");
 _Static_assert((int)MOGBUS_POINT_STATIC == (int)POINT_STATIC &&
@@ -343,18 +347,30 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in, char*
 	const char*	error = NULL;
 
 	if ((unsigned)in->space >= SPACE_COUNT ||
-	    (unsigned)in->type > MOGBUS_TYPE_BOOL ||
+	    (unsigned)in->type > MOGBUS_TYPE_STRING ||
 	    (unsigned)in->word_order > MOGBUS_WORDS_LOW_FIRST ||
+	    (unsigned)in->byte_order > MOGBUS_BYTES_LITTLE ||
 	    (unsigned)in->kind > MOGBUS_POINT_RAMP ||
 	    (unsigned)in->ramp.mode > MOGBUS_RAMP_HOLD)
 	{
-		set_err(err, err_size, "point has an invalid space, type, word order, kind or ramp mode");
+		set_err(err, err_size, "point has an invalid space, type, word order, byte order, kind or ramp mode");
 		return false;
 	}
 	point.space   = (space_kind_t)in->space;
 	point.address = in->address;
 	point.type    = (value_type_t)in->type;
 	point.order   = (word_order_t)in->word_order;
+	point.byte_order = (byte_order_t)in->byte_order;
+	if (point.type == VT_STRING)
+	{
+		if (in->length > DEVICE_MAX_STRING_REGISTERS)
+		{
+			set_err(err, err_size, "string length must be between 1 and 123 registers");
+			return false;
+		}
+		point.length = (u16)in->length;
+		point.text   = in->text;
+	}
 	point.kind    = (point_kind_t)in->kind;
 	if (in->kind == MOGBUS_POINT_RAMP)
 	{
@@ -375,9 +391,11 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in, char*
 		point.static_value = in->value != 0 ? 1.0 : 0.0;
 	else
 	{
-		if (!isfinite(in->value) && point.type != VT_F32)
+		if (!isfinite(in->value) &&
+		    point.type != VT_F32 &&
+		    point.type != VT_F64)
 		{
-			set_err(err, err_size, "only float32 static values can be NaN or infinity");
+			set_err(err, err_size, "only float32 and float64 static values can be NaN or infinity");
 			return false;
 		}
 		point.static_value = in->value;
@@ -456,6 +474,24 @@ mogbus_device_set_value(mogbus_device_t* handle, mogbus_space_t space, uint32_t 
 		val.n    = value;
 	}
 	return device_set_point(dev, (space_kind_t)space, address, &val);
+}
+
+bool
+mogbus_device_get_string(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
+			 char* out, size_t size)
+{
+	if ((unsigned)space >= SPACE_COUNT)
+		return false;
+	return device_get_string((device_t*)handle, (space_kind_t)space, address, out, size);
+}
+
+bool
+mogbus_device_set_string(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
+			 const char* text)
+{
+	if ((unsigned)space >= SPACE_COUNT)
+		return false;
+	return device_set_string((device_t*)handle, (space_kind_t)space, address, text);
 }
 
 mogbus_server_options_t

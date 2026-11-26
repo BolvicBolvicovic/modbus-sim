@@ -10,8 +10,13 @@
 #include <string.h>
 
 /** @brief Names the user writes, in the same order as the matching enums. */
-static const char* const TYPE_NAMES[]  = { "u16", "s16", "u32", "s32", "float32" };
+static const char* const TYPE_NAMES[]  = { "u16", "s16", "u32", "s32", "float32", "u64", "s64", "float64",
+	"string" };
+static const value_type_t TYPE_VALUES[ARRAY_COUNT(TYPE_NAMES)] = { VT_U16, VT_S16, VT_U32, VT_S32, VT_F32,
+	VT_U64, VT_S64, VT_F64, VT_STRING };
 static const char* const ORDER_NAMES[] = { "high-first", "low-first" };
+static const char* const BYTE_NAMES[]  = { "big", "little" };
+static const char* const PADDING_NAMES[] = { "nul", "space" };
 static const char* const MODE_NAMES[]  = { "wrap", "bounce", "hold" };
 static const char* const DIST_NAMES[]  = { "uniform", "gaussian" };
 static const char* const SPACE_NAMES[] = { "coil", "discrete", "input", "holding" };
@@ -366,13 +371,45 @@ parse_static(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
 	bool	on = false;
 
 	point->kind = POINT_STATIC;
+	if (point->type == VT_STRING)
+	{
+		const char*	text = NULL;
+
+		if (!form_get_string(ctx, item, &text))
+			return false;
+		for (const char* c = text; *c; c++)
+		{
+			if (*c < 0x20 ||
+			    *c > 0x7E)
+				return form_fail(ctx, "%s: string text can only use printable ASCII (0x20-0x7E)",
+						 form_text(ctx, item));
+		}
+		if (strlen(text) > 2u * point->length)
+			return form_fail(ctx, "%s: text is longer than %u bytes (2 per register, length %u)",
+					 form_text(ctx, item), 2u * point->length, (u32)point->length);
+		point->text = text;
+		return true;
+	}
+
 	if (!is_bit)
 	{
 		if (!form_get_number(ctx, item, &point->static_value))
 			return false;
-		if (!isfinite(point->static_value) && point->type != VT_F32)
-			return form_fail(ctx, "%s: only float32 static values can be NaN or infinity",
+		if (!isfinite(point->static_value) &&
+		    point->type != VT_F32 &&
+		    point->type != VT_F64)
+			return form_fail(ctx, "%s: only float32 and float64 static values can be NaN or infinity",
 					 form_text(ctx, item));
+
+		/* s7 integers are 64-bit: keep a 64-bit integer exactly instead of through f64. */
+		if ((point->type == VT_U64 || point->type == VT_S64) &&
+		    s7_is_integer(s7_cadr(item)))
+		{
+			point->static_raw   = (u64)s7_integer(s7_cadr(item));
+			point->static_exact = true;
+			point->static_value = point->type == VT_U64 ? (f64)point->static_raw :
+					      (f64)(s64)point->static_raw;
+		}
 		return true;
 	}
 
@@ -593,6 +630,20 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	if (present > 1)
 		return form_fail(ctx, "a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)");
 
+	if (point->type == VT_STRING)
+	{
+		for (u32 i = 1; i < ARRAY_COUNT(names); i++)
+		{
+			if (!form_is_absent(ctx, found[i]))
+				return form_fail(ctx, "%s: string points can only be (static \"TEXT\")",
+						 form_text(ctx, found[i]));
+		}
+		if (!form_is_absent(ctx, noise) ||
+		    !form_is_absent(ctx, degradation))
+			return form_fail(ctx, "%s: string points cannot have (noise ...) or (degradation ...)",
+					 form_text(ctx, form_is_absent(ctx, noise) ? degradation : noise));
+	}
+
 	if (is_bit)
 	{
 		for (u32 i = 1; i < ARRAY_COUNT(names); i++)
@@ -638,12 +689,15 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	return true;
 }
 
-/** @brief Reads (type ...) and (word-order ...) for register points. */
+/** @brief Reads (type ...), (word-order ...), (byte-order ...), (length ...) and (padding ...). */
 static bool
 parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 {
-	u32	type  = VT_U16;
+	u32	type  = 0;
 	u32	order = WORDS_HIGH_FIRST;
+	u32	bytes = BYTES_BIG;
+	u32	padding = 0;
+	s64	length  = 0;
 
 	point->type = is_bit ? VT_BOOL : VT_U16;
 	if (is_bit && !form_is_absent(ctx, form_find(ctx, options, "type")))
@@ -655,16 +709,41 @@ parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 	if (!form_opt_choice(ctx, options, "word-order", ORDER_NAMES, ARRAY_COUNT(ORDER_NAMES), &order))
 		return false;
 
-	point->type  = is_bit ? VT_BOOL : (value_type_t)type;
-	point->order = (word_order_t)order;
+	if (!form_opt_choice(ctx, options, "byte-order", BYTE_NAMES, ARRAY_COUNT(BYTE_NAMES), &bytes))
+		return false;
+
+	if (is_bit &&
+	    !form_is_absent(ctx, form_find(ctx, options, "byte-order")))
+		return form_fail(ctx, "coils and discrete inputs are single bits: remove (byte-order ...)");
+
+	point->type       = is_bit ? VT_BOOL : TYPE_VALUES[type];
+	point->order      = (word_order_t)order;
+	point->byte_order = (byte_order_t)bytes;
+
+	if (point->type != VT_STRING)
+	{
+		if (!form_is_absent(ctx, form_find(ctx, options, "length")) ||
+		    !form_is_absent(ctx, form_find(ctx, options, "padding")))
+			return form_fail(ctx, "(length ...) and (padding ...) only apply to (type string)");
+		return true;
+	}
+
+	if (!form_is_absent(ctx, form_find(ctx, options, "word-order")))
+		return form_fail(ctx, "strings have no word order: remove (word-order ...)");
+	if (!form_need(ctx, options, "length", "a string point") ||
+	    !form_opt_int(ctx, options, "length", 1, DEVICE_MAX_STRING_REGISTERS, &length) ||
+	    !form_opt_choice(ctx, options, "padding", PADDING_NAMES, ARRAY_COUNT(PADDING_NAMES), &padding))
+		return false;
+	point->length  = (u16)length;
+	point->padding = padding == 1 ? ' ' : '\0';
 	return true;
 }
 
 static bool
 parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 {
-	static const char* const keys[] = { "type", "word-order", "static", "ramp", "sine", "lag", "noise", "degradation", "count",
-		"note" };
+	static const char* const keys[] = { "type", "word-order", "byte-order", "length", "padding", "static", "ramp", "sine", "lag",
+		"noise", "degradation", "count", "note" };
 	const char*	head    = form_head_name(item);
 	bool		is_bit  = space_is_bit(space);
 	s7_pointer	options = s7_cddr(item);
@@ -694,7 +773,7 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 	if (!form_opt_int(ctx, options, "count", 1, 65536, &count))
 		return false;
 
-	width = value_width(point.type);
+	width = point_width(&point);
 	if ((u64)count > (u64)DEVICE_MAX_POINTS - dev->point_count)
 		return form_fail(ctx, "%s: count %lld would exceed the %d-point limit for one device (%u already used)",
 				 form_text(ctx, item), (long long)count, DEVICE_MAX_POINTS, dev->point_count);

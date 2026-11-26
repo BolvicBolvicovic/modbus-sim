@@ -116,7 +116,10 @@ typedef enum mogbus_space_t
  * @brief How a number is stored in 16-bit registers.
  *
  * Use MOGBUS_TYPE_BOOL for coils and discrete inputs, and only for them. The 32-bit types use
- * two registers.
+ * two registers and the 64-bit types four. MOGBUS_TYPE_STRING is text: `length` registers of two
+ * ASCII bytes each, holding or input tables only, static only. Values are doubles inside the
+ * library, so 64-bit integers above 2^53 lose precision through mogbus_device_get_value() and
+ * ramps; raw register access is exact. New types are appended, so values stay stable.
  */
 typedef enum mogbus_value_type_t
 {
@@ -126,14 +129,25 @@ typedef enum mogbus_value_type_t
 	MOGBUS_TYPE_S32,
 	MOGBUS_TYPE_F32,
 	MOGBUS_TYPE_BOOL,
+	MOGBUS_TYPE_U64,
+	MOGBUS_TYPE_S64,
+	MOGBUS_TYPE_F64,
+	MOGBUS_TYPE_STRING,
 } mogbus_value_type_t;
 
-/** @brief For 32-bit values: which register holds the high half. */
+/** @brief For 32- and 64-bit values: which register holds the most significant part. */
 typedef enum mogbus_word_order_t
 {
 	MOGBUS_WORDS_HIGH_FIRST,
 	MOGBUS_WORDS_LOW_FIRST,
 } mogbus_word_order_t;
+
+/** @brief Whether the two bytes inside every register of a point are swapped. */
+typedef enum mogbus_byte_order_t
+{
+	MOGBUS_BYTES_BIG,	/**< high byte first, as on the wire */
+	MOGBUS_BYTES_LITTLE,	/**< bytes swapped inside every register */
+} mogbus_byte_order_t;
 
 /** @brief How a point's value behaves over time. */
 typedef enum mogbus_point_kind_t
@@ -155,14 +169,15 @@ typedef enum mogbus_ramp_mode_t
  *
  * Zero-initialise it, then set the fields you need: a zeroed point is a static 0 of type U16
  * in the coil table, so set `type` for any space but holding/input. A point occupies 1
- * address, or 2 for 32-bit types. Addresses may not overlap and must fit below 65536.
+ * address, 2 for 32-bit types, 4 for 64-bit types and `length` for strings. Addresses may not
+ * overlap and must fit below 65536.
  */
 typedef struct mogbus_point_t
 {
 	mogbus_space_t		space;		/**< table the point lives in */
 	uint32_t		address;	/**< first address, below 65536 */
 	mogbus_value_type_t	type;		/**< register encoding */
-	mogbus_word_order_t	word_order;	/**< 32-bit types only */
+	mogbus_word_order_t	word_order;	/**< 32- and 64-bit types only */
 	mogbus_point_kind_t	kind;		/**< static or ramp */
 	double			value;		/**< MOGBUS_POINT_STATIC; bits: nonzero = on */
 	struct
@@ -172,6 +187,10 @@ typedef struct mogbus_point_t
 		uint32_t		every_ms;	/**< > 0 */
 		mogbus_ramp_mode_t	mode;		/**< what happens at the end */
 	} ramp;					/**< MOGBUS_POINT_RAMP */
+	mogbus_byte_order_t	byte_order;	/**< swaps the bytes of every register; not for bits */
+	uint32_t		length;		/**< MOGBUS_TYPE_STRING: registers, 1 to 123 */
+	const char*		text;		/**< MOGBUS_TYPE_STRING: initial text, at most 2*length bytes,
+						     NUL padded; copied; NULL means empty */
 } mogbus_point_t;
 
 /**
@@ -313,13 +332,14 @@ MOGBUS_API bool		mogbus_device_write(mogbus_device_t* dev, mogbus_space_t space,
  * @brief Reads the decoded value of the point that starts at @p address.
  *
  * @p address is the point's first address, not an address inside it. Bit points read as
- * 0.0 or 1.0.
+ * 0.0 or 1.0. 64-bit integers above 2^53 are rounded to the nearest double.
  *
  * @param dev Device.
  * @param space Table.
  * @param address First address of the point.
  * @param out Receives the value.
- * @return false if no point starts at @p address.
+ * @return false if no point starts at @p address, or the point is a string (use
+ *         mogbus_device_get_string()).
  */
 MOGBUS_API bool		mogbus_device_get_value(mogbus_device_t* dev, mogbus_space_t space,
 						uint32_t address, double* out);
@@ -334,10 +354,41 @@ MOGBUS_API bool		mogbus_device_get_value(mogbus_device_t* dev, mogbus_space_t sp
  * @param space Table.
  * @param address First address of the point.
  * @param value New value; for bit points nonzero means on.
- * @return false if no point starts at @p address.
+ * @return false if no point starts at @p address, or the point is a string (use
+ *         mogbus_device_set_string()).
  */
 MOGBUS_API bool		mogbus_device_set_value(mogbus_device_t* dev, mogbus_space_t space,
 						uint32_t address, double value);
+
+/**
+ * @brief Reads a string point as text, up to its first NUL byte.
+ *
+ * Reflects client writes. The bytes are returned as stored; clients can write any byte.
+ *
+ * @param dev Device.
+ * @param space MOGBUS_HOLDING or MOGBUS_INPUT.
+ * @param address First address of the string point.
+ * @param out Receives the NUL-terminated text.
+ * @param size Size of @p out; at most 2*length + 1 bytes are needed.
+ * @return false if no string point starts at @p address or @p out is too small.
+ */
+MOGBUS_API bool		mogbus_device_get_string(mogbus_device_t* dev, mogbus_space_t space,
+						 uint32_t address, char* out, size_t size);
+
+/**
+ * @brief Replaces a string point's text from the host side, NUL padded.
+ *
+ * Unlike mogbus_device_set_value() it does not make the point host-owned: clients can still
+ * write it, and a restart restores the configured text.
+ *
+ * @param dev Device.
+ * @param space MOGBUS_HOLDING or MOGBUS_INPUT.
+ * @param address First address of the string point.
+ * @param text NUL-terminated text, at most 2*length bytes.
+ * @return false if no string point starts at @p address or @p text is too long.
+ */
+MOGBUS_API bool		mogbus_device_set_string(mogbus_device_t* dev, mogbus_space_t space,
+						 uint32_t address, const char* text);
 
 /* ---- Server ---- */
 

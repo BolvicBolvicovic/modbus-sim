@@ -20,6 +20,7 @@
 #define DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX	249
 #define DEVICE_MAX_EXTENDED_IDS	32
 #define DEVICE_MAX_POINTS	8192
+#define DEVICE_MAX_STRING_REGISTERS	123	/**< a whole string fits one FC 03/04 read */
 #define ADDRESS_SPACE_SIZE	65536
 
 /** @brief The four Modbus data tables. */
@@ -46,7 +47,7 @@ enum point_kind_t
  * @brief One configured data point: where it lives, how it is encoded, and how its value
  *        behaves.
  *
- * A point occupies value_width(type) addresses.
+ * A point occupies point_width() addresses.
  */
 typedef struct point_t point_t;
 struct point_t
@@ -55,9 +56,19 @@ struct point_t
 	u32		address;
 	value_type_t	type;
 	word_order_t	order;
+	byte_order_t	byte_order;		/**< swaps the two bytes of every register */
 	point_kind_t	kind;
 	point_kind_t	configured_kind;	/**< kind as configured, before client writes */
 	f64		static_value;
+	u64		static_raw;		/**< exact VT_U64/VT_S64 static value when static_exact */
+	bool		static_exact;
+	u16		length;			/**< VT_STRING: registers (1..DEVICE_MAX_STRING_REGISTERS) */
+	char		padding;		/**< VT_STRING: fills text up to 2*length bytes (0 or ' ') */
+	/**
+	 * VT_STRING: initial text. device_add_point() takes a NUL-terminated string of at most
+	 * 2*length bytes and replaces it with its own copy, padded to exactly 2*length bytes.
+	 */
+	const char*	text;
 	ramp_params_t	ramp;
 	model_t		model;			/**< POINT_MODEL shape; noise modifier of POINT_RAMP */
 };
@@ -261,6 +272,9 @@ device_t*	device_new(arena_t* arena, u64 start_ms);
  */
 const char*	device_add_point(device_t* dev, const point_t* point);
 
+/** @brief Registers (or bits) the point occupies: value_width(type), or `length` for a string. */
+u32		point_width(const point_t* point);
+
 /** @brief Index of the point whose first address is `address`, or DEVICE_MAX_POINTS. */
 u32		device_find_point(const device_t* dev, space_kind_t space, u32 address);
 
@@ -322,13 +336,25 @@ bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, cons
 /**
  * @brief Reads/writes one decoded point value.
  *
- * Machine-driven points use these instead of raw register access.
+ * Machine-driven points use these instead of raw register access. Both fail on strings.
  */
 bool		device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out);
 bool		device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in);
 
-/** @brief Inverse of encode_value(): decodes the first value of a point from raw words. */
-f64		decode_value(value_type_t type, word_order_t order, const u16* words);
+/**
+ * @brief Reads a string point as text, up to its first NUL byte.
+ *
+ * Fails if no string point starts at `address` or `size` is smaller than the text plus its NUL.
+ */
+bool		device_get_string(const device_t* dev, space_kind_t space, u32 address, char* out,
+				  size_t size);
+
+/**
+ * @brief Replaces a string point's registers with `text`, NUL padded; clients may still write it.
+ *
+ * Fails if no string point starts at `address` or the text is longer than 2*length bytes.
+ */
+bool		device_set_string(device_t* dev, space_kind_t space, u32 address, const char* text);
 
 /**
  * @brief Adds `length` consecutive file-record register values starting at `record` in file
