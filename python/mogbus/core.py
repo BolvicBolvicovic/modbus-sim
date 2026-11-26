@@ -334,9 +334,11 @@ class Device:
 
     @_locked
     def add_point(self, space, address, type="u16", value=0, word_order="high-first", ramp=None,
-                  byte_order="big", length=0, text=None):
+                  byte_order="big", length=0, text=None, read_only=False):
         """Adds a point. `byte_order` swaps the bytes inside every register; for type "string",
-        `length` is the number of registers (1-123) and `text` the initial text."""
+        `length` is the number of registers (1-123) and `text` the initial text. `read_only`
+        (coils and holding registers) makes Modbus writes fail with exception 02; `Device.write`
+        and `set_value` still work."""
         p = _lib.PointC()
         p.space = int(_coerce(Space, space, "space"))
         p.address = _u(address, "address", 65536)
@@ -344,6 +346,7 @@ class Device:
         p.word_order = int(_coerce(WordOrder, word_order, "word_order"))
         p.byte_order = int(_coerce(ByteOrder, byte_order, "byte_order"))
         p.length = _u(length, "length", 1 << 32)
+        p.read_only = bool(read_only)
         if text is not None:
             if p.type != ValueType.STRING:
                 raise MogbusError("text only applies to type \"string\"")

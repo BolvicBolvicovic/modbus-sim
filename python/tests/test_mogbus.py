@@ -521,6 +521,32 @@ class ControlApiTest(unittest.TestCase):
 
 
 class ServeHelperTest(unittest.TestCase):
+    def test_read_only_points(self):
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 5, read_only=True)
+            dev.add_point("holding", 1, "u16", 6)
+            dev.add_point("coil", 0, "bool", 1, read_only=True)
+            with self.assertRaisesRegex(MogbusError, "read-only"):
+                dev.add_point("input", 0, "u16", 1, read_only=True)
+            dev.write("holding", 0, 9)  # the host may write read-only points
+            dev.set_value("holding", 0, 10)
+            self.assertEqual(dev.read("holding", 0, 1), [10])
+            port = free_port()
+            options = mogbus.ServerOptions(mode="tcp", port=port)
+            with ctx.serve(options).start() as server:
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                    def write(fc, *words):
+                        sock.sendall(struct.pack(">HHHBB%dH" % len(words), 1, 0, 2 + 2 * len(words), 1, fc, *words))
+                        reply = sock.recv(256)
+                        return reply[8] if reply[7] & 0x80 else None
+
+                    self.assertEqual(write(6, 0, 1), 2)
+                    self.assertEqual(write(6, 1, 77), None)
+                    self.assertEqual(write(5, 0, 0), 2)
+                    self.assertEqual(mbap_read(sock, 1, 0, 2), [10, 77])
+                self.assertEqual(dev.read("coil", 0, 1), [1])
+
     def test_serve_config_text(self):
         with mogbus.serve(config_text=DEVICES, port=0) as srv:
             self.assertGreater(srv.port, 0)

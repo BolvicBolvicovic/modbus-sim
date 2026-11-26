@@ -19,6 +19,7 @@ static const value_type_t TYPE_VALUES[ARRAY_COUNT(TYPE_NAMES)] = { VT_U16, VT_S1
 static const char* const ORDER_NAMES[] = { "high-first", "low-first" };
 static const char* const BYTE_NAMES[]  = { "big", "little" };
 static const char* const PADDING_NAMES[] = { "nul", "space" };
+static const char* const ACCESS_NAMES[]  = { "read-write", "read-only" };
 static const char* const MODE_NAMES[]  = { "wrap", "bounce", "hold" };
 static const char* const DIST_NAMES[]  = { "uniform", "gaussian" };
 static const char* const SPACE_NAMES[] = { "coil", "discrete", "input", "holding" };
@@ -745,13 +746,14 @@ static bool
 parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 {
 	static const char* const keys[] = { "type", "word-order", "byte-order", "length", "padding", "static", "ramp", "sine", "lag",
-		"noise", "degradation", "count", "note" };
+		"noise", "degradation", "count", "note", "access" };
 	const char*	head    = form_head_name(item);
 	bool		is_bit  = space_is_bit(space);
 	s7_pointer	options = s7_cddr(item);
 	point_t		point   = { 0 };
 	s64		address = 0;
 	s64		count   = 1;
+	u32		access  = 0;
 	u32		width   = 0;
 
 	if (s7_list_length(ctx->sc, item) < 2 || !s7_is_integer(s7_cadr(item)))
@@ -766,6 +768,14 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 		return false;
 
 	point.space = space;
+	if (!form_opt_choice(ctx, options, "access", ACCESS_NAMES, ARRAY_COUNT(ACCESS_NAMES), &access))
+		return false;
+	if (space != SPACE_COIL &&
+	    space != SPACE_HOLDING &&
+	    !form_is_absent(ctx, form_find(ctx, options, "access")))
+		return form_fail(ctx, "%s are always read-only for clients: remove (access ...)",
+				 space == SPACE_INPUT ? "input registers" : "discrete inputs");
+	point.read_only = access == 1;
 	if (!parse_encoding(ctx, options, is_bit, &point))
 		return false;
 

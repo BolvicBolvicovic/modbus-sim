@@ -10,6 +10,7 @@
 ;   5-6  Energy counter (32-bit, high word first)
 ; Holding registers (read/write):
 ;   0  Control word             1  Frequency setpoint (0.01 Hz)
+;   2  Fault code (read-only: a client write gets exception 02)
 ; Bits:
 ;   coil 0 run command   coil 1 fault reset
 ;   discrete 0 running   discrete 1 fault active
@@ -29,6 +30,7 @@
 
   (holding 0 (static 0))
   (holding 1 (static 5000))
+  (holding 2 (access read-only) (static 0))
 
   (coil 0 (static on))
   (coil 1 (static off))

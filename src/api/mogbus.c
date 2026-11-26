@@ -363,6 +363,7 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in, char*
 	point.type    = (value_type_t)in->type;
 	point.order   = (word_order_t)in->word_order;
 	point.byte_order = (byte_order_t)in->byte_order;
+	point.read_only  = in->read_only;
 	if (point.type == VT_STRING)
 	{
 		if (in->length > DEVICE_MAX_STRING_REGISTERS)

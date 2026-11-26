@@ -104,7 +104,7 @@ write_single_coil(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	bit = (raw == 0xFF00);
-	if (!device_write(dev, SPACE_COIL, address, 1, &bit))
+	if (!device_client_write(dev, SPACE_COIL, address, 1, &bit))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	memcpy(resp, req, 5);
@@ -122,7 +122,7 @@ write_single_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 
 	address = get_be16(req + 1);
 	value   = get_be16(req + 3);
-	if (!device_write(dev, SPACE_HOLDING, address, 1, &value))
+	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &value))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	memcpy(resp, req, 5);
@@ -150,7 +150,7 @@ write_multiple_coils(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	for (u32 i = 0; i < qty; i++)
 		bits[i] = (req[6 + i / 8] >> (i % 8)) & 1;
 
-	if (!device_write(dev, SPACE_COIL, address, qty, bits))
+	if (!device_client_write(dev, SPACE_COIL, address, qty, bits))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	memcpy(resp, req, 5);
@@ -178,7 +178,7 @@ write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	for (u32 i = 0; i < qty; i++)
 		words[i] = get_be16(req + 6 + i * 2);
 
-	if (!device_write(dev, SPACE_HOLDING, address, qty, words))
+	if (!device_client_write(dev, SPACE_HOLDING, address, qty, words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	memcpy(resp, req, 5);
@@ -218,14 +218,15 @@ read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* res
 		write_words[i] = get_be16(req + 10 + i * 2);
 
 	/* All-or-nothing: validate availability of both ranges before applying any write. */
-	if (!device_read(dev, SPACE_HOLDING, write_addr, write_qty, read_words))
+	if (!device_read(dev, SPACE_HOLDING, write_addr, write_qty, read_words) ||
+	    !device_range_writable(dev, SPACE_HOLDING, write_addr, write_qty))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 	if (!device_read(dev, SPACE_HOLDING, read_addr, read_qty, read_words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 	if (device_range_failed(dev, SPACE_HOLDING, read_addr, read_qty))
 		return modbus_exception(resp, req[0], EXC_SLAVE_DEVICE_FAILURE);
 
-	if (!device_write(dev, SPACE_HOLDING, write_addr, write_qty, write_words))
+	if (!device_client_write(dev, SPACE_HOLDING, write_addr, write_qty, write_words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	/* Write happens before read; result reflects post-write values (including overlap). */
@@ -490,7 +491,7 @@ mask_write_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	result = (u16)((current & and_mask) | (or_mask & (u16)~and_mask));
-	if (!device_write(dev, SPACE_HOLDING, address, 1, &result))
+	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &result))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	memcpy(resp, req, 7);

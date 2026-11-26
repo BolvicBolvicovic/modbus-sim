@@ -96,8 +96,8 @@ New modes are appended to the enum, so existing values keep their numbers. All m
 `mogbus_server_options_defaults()`, which matches the config defaults (TCP on `127.0.0.1:1502`, 8N1).
 
 `mogbus_device_write()` is what a client write does: it works on every space (the host plays the
-physical side), turns a ramp static and runs machine on-write handlers, but fails on points a
-machine drives. `mogbus_device_set_value()` is the host side of a point, like a machine output: it
+physical side) and on points marked `read_only` (which Modbus clients cannot write), turns a ramp
+static and runs machine on-write handlers, but fails on points a machine drives. `mogbus_device_set_value()` is the host side of a point, like a machine output: it
 also works on read-only spaces, but the point becomes host-owned, so ramps stop and client writes to
 it get exception 02. Both address a point by its first address. Reads advance ramps to the current
 time first.
@@ -135,8 +135,12 @@ or input table. `mogbus_device_get_string()` copies the text up to its first NUL
 (it fails when the buffer is smaller than the text plus the NUL) and `mogbus_device_set_string()`
 replaces it, NUL padded. Unlike `mogbus_device_set_value()` the latter does not make the point
 host-owned: clients can still write the registers. `mogbus_device_get_value()` and `set_value()`
-return false on a string point. `byte_order`, `length` and `text` were appended to the struct, so
+return false on a string point. `byte_order`, `length`, `text` and `read_only` were appended to the struct, so
 code built against the older header keeps working if it zero-initialises the struct.
+
+`read_only` (coils and holding registers; other spaces reject it) makes every Modbus write that touches
+the point fail with exception 02, like `(access read-only)` in a config. `mogbus_device_write()`,
+`mogbus_device_set_value()` and `set_string()` still change it.
 
 [`examples/embed_tcp.c`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
 adds a device with one holding register, starts a TCP server on a free loopback port, connects as a

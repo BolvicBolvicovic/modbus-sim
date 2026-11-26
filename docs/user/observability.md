@@ -76,8 +76,8 @@ effect for the very next request.
 
 `{space}` is `coil`, `discrete`, `input` or `holding`; `{unit}` and `{address}` are decimal.
 
-- **Raw write** works like a client write that also works on every space, including the read-only ones (you
-  play the physical side): a ramp or model that is written becomes static, and machine `on-write`
+- **Raw write** works like a client write that also works on every space, including the read-only ones and
+  points configured `(access read-only)` (you play the physical side): a ramp or model that is written becomes static, and machine `on-write`
   handlers run. Bits take 0 or 1, registers 0-65535; the write is all-or-nothing and refused
   (422) if an address is undefined or a point is driven by a machine or was claimed with `/value`.
 - **Value write** (`/value`) sets the decoded number of a point by its first address, like a machine

@@ -146,6 +146,11 @@ validate_point(const device_t* dev, const point_t* point)
 	if (space_is_bit(point->space) != (point->type == VT_BOOL))
 		return "bit tables hold on/off values, register tables hold numbers";
 
+	if (point->read_only &&
+	    point->space != SPACE_COIL &&
+	    point->space != SPACE_HOLDING)
+		return "only coils and holding registers can be read-only";
+
 	if (point->byte_order != BYTES_BIG &&
 	    point->byte_order != BYTES_LITTLE)
 		return "invalid byte order";
@@ -431,6 +436,29 @@ device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16*
 	}
 	device_machines_on_write(dev, space, address, qty, dev->now_ms);
 	return true;
+}
+
+bool
+device_range_writable(const device_t* dev, space_kind_t space, u32 address, u32 qty)
+{
+	const space_t*	table = &dev->spaces[space];
+
+	for (u32 i = 0; i < qty && address + i < ADDRESS_SPACE_SIZE; i++)
+	{
+		u16 owner = table->owner[address + i];
+
+		if (owner != 0 &&
+		    dev->points[owner - 1].read_only)
+			return false;
+	}
+	return true;
+}
+
+bool
+device_client_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in)
+{
+	return device_range_writable(dev, space, address, qty) &&
+	       device_write(dev, space, address, qty, in);
 }
 
 bool

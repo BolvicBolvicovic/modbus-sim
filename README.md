@@ -117,7 +117,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
-| Writes | Clients can write coils and holding registers. Writing a ramp freezes it at the written value. |
+| Writes | Clients can write coils and holding registers, except points marked `(access read-only)`. Writing a ramp freezes it at the written value. |
 | Observability | `(server (http ...))` serves `/healthz`, `/readyz` and Prometheus `/metrics`; `--log-format json` writes one JSON object per log line, with structured request events under `-v`. `(http (control on))` adds an opt-in JSON API to read and write registers and set or clear faults while the server runs. |
 | Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`), and a Python package on top of it (`python/`, for pytest and scripts); the `mogbus` binary is itself a client of the C API. |
 

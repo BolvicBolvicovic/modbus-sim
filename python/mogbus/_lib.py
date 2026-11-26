@@ -54,6 +54,7 @@ class PointC(ctypes.Structure):
         ("byte_order", ctypes.c_int),
         ("length", ctypes.c_uint32),
         ("text", ctypes.c_char_p),
+        ("read_only", ctypes.c_bool),
     ]
 
 

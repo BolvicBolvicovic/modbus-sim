@@ -61,7 +61,7 @@ a network mode picks a free loopback port; without a config you get TCP on a fre
 | `Context()`, `.close()`, `with` | `mogbus_create`, `mogbus_destroy` |
 | `ctx.load_config(path)` | `mogbus_load_config` |
 | `ctx.add_device(unit_id, name=None)`, `ctx.find_device(unit_id)`, `ctx.devices`, `iter(ctx)`, `len(ctx)` | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_at/count` |
-| `dev.add_point(space, address, type="u16", value=0, word_order="high-first", ramp=None, byte_order="big", length=0, text=None)` | `mogbus_device_add_point` |
+| `dev.add_point(space, address, type="u16", value=0, word_order="high-first", ramp=None, byte_order="big", length=0, text=None, read_only=False)` | `mogbus_device_add_point` |
 | `dev.read(space, address, count)`, `dev.write(space, address, values)` | `mogbus_device_read/write` (raw registers) |
 | `dev.get_value(space, address)`, `dev.set_value(space, address, value)` | `mogbus_device_get_value/set_value` (decoded) |
 | `dev.get_string(space, address)`, `dev.set_string(space, address, text)` | `mogbus_device_get_string/set_string` (string points) |
@@ -86,6 +86,8 @@ Anything else raises `MogbusError` listing the valid names.
   the first NUL as `str` (Latin-1), `set_string()` replaces it. `get_value()` and `set_value()`
   raise on strings. `u64`/`s64` values are Python floats in `value`, so integers above 2^53 round;
   `dev.read()` is exact.
+- `read_only=True` (coils and holding registers) makes Modbus writes fail with exception 02; `dev.write()`
+  and `set_value()` still change the point.
 - A ramp is a dict or `mogbus.Ramp`: `{"from": 0, "to": 100, "step": 10, "every_ms": 1000, "mode": "bounce"}`.
 - `ServerOptions` has the fields of `mogbus_server_options_t` in snake_case with the defaults of
   `mogbus_server_options_defaults()` (TCP on `127.0.0.1:1502`). Strings are encoded and kept
@@ -94,7 +96,7 @@ Anything else raises `MogbusError` listing the valid names.
   (only configured kinds, e.g. `"delay"`) and `custom_function_codes`.
 - Errors raise `MogbusError` with the message of the C `err` buffer. A failed server creation
   also sets `error.status` (`mogbus.Status.INVALID`, `SERIAL`, `LISTEN`).
-- `dev.write()` is what a client write does (it fails on a point claimed by `set_value()`);
+- `dev.write()` is what a client write does (it also writes `read_only` points, and fails on a point claimed by `set_value()`);
   `dev.set_value()` is the host side and makes the point host-owned. See [library.md](library.md).
 - `probe()` returns a bool; `probe_or_raise()` raises with the reason. Both block the caller and
   take no lock, so they work while a started server runs on its background thread.

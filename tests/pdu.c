@@ -3263,3 +3263,164 @@ TEST(ReadHoldingRegistersReturnsSixtyFourBitAndStringBytes)
 	}
 	arena_release(arena);
 }
+
+/* Holding 0 = 100 (read-only), holding 1 = 200, holding 2 = 300 (read-only), holding 3 = 400;
+ * coil 0 = on (read-only), coil 1 = off, coil 2 = off (read-only), coil 3 = off;
+ * holding 10 ramps 0..1000 every 1000 ms (read-only). */
+static device_t*
+make_read_only_device(arena_t* arena)
+{
+	device_t*	dev = device_new(arena, 0);
+	point_t		p   = { 0 };
+
+	p.kind  = POINT_STATIC;
+	p.space = SPACE_HOLDING;
+	p.type  = VT_U16;
+	for (u32 i = 0; i < 4; i++)
+	{
+		p.address      = i;
+		p.static_value = 100 * (i + 1);
+		p.read_only    = i % 2 == 0;
+		ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	}
+	p.space = SPACE_COIL;
+	p.type  = VT_BOOL;
+	for (u32 i = 0; i < 4; i++)
+	{
+		p.address      = i;
+		p.static_value = i == 0;
+		p.read_only    = i % 2 == 0;
+		ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	}
+	p.space     = SPACE_HOLDING;
+	p.type      = VT_U16;
+	p.kind      = POINT_RAMP;
+	p.address   = 10;
+	p.read_only = true;
+	p.ramp      = (ramp_params_t){ .from = 0, .to = 1000, .step = 1, .every_ms = 1000, .mode = RAMP_HOLD };
+	ASSERT_SUCCESS(device_add_point(dev, &p) == NULL);
+	return dev;
+}
+
+static void
+assert_regs(device_t* dev, u16 a, u16 b, u16 c, u16 d)
+{
+	u16	out[4];
+
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, out));
+	ASSERT_EQ(out[0] == a && out[1] == b && out[2] == c && out[3] == d);
+}
+
+TEST(ReadOnlyHoldingRefusesEveryClientWrite)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_read_only_device(arena);
+	u8		resp[MODBUS_MAX_PDU];
+	u8		fc06[]   = { 0x06, 0x00, 0x00, 0x00, 0x09 };
+	u8		fc16[]   = { 0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x09, 0x00, 0x08 };	/* 1 and 2 */
+	u8		fc16ok[] = { 0x10, 0x00, 0x03, 0x00, 0x01, 0x02, 0x00, 0x09 };
+	u8		fc22[]   = { 0x16, 0x00, 0x02, 0x00, 0x00, 0x00, 0x07 };
+	u8		fc22ok[] = { 0x16, 0x00, 0x01, 0x00, 0xF0, 0x00, 0x0F };
+	u8		fc23[]   = { 0x17, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x02, 0x00, 0x09 };
+	u8		fc23ok[] = { 0x17, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x01, 0x02, 0x00, 0x09 };
+	u8		fc23rd[] = { 0x17, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x08 };
+
+	ASSERT_EQ(run(dev, fc06, sizeof(fc06), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x86 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	assert_regs(dev, 100, 200, 300, 400);
+
+	/* One read-only register in the middle of the range rejects the whole write. */
+	ASSERT_EQ(run(dev, fc16, sizeof(fc16), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x90 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	assert_regs(dev, 100, 200, 300, 400);
+
+	ASSERT_EQ(run(dev, fc22, sizeof(fc22), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	assert_regs(dev, 100, 200, 300, 400);
+
+	/* FC 23: the write range is checked like an undefined one, nothing is written or read. */
+	ASSERT_EQ(run(dev, fc23, sizeof(fc23), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	assert_regs(dev, 100, 200, 300, 400);
+
+	/* Reads are unaffected, and so are the writable neighbours. */
+	ASSERT_EQ(run(dev, fc16ok, sizeof(fc16ok), resp) == 5);
+	ASSERT_EQ(run(dev, fc22ok, sizeof(fc22ok), resp) == 7);
+	ASSERT_EQ(run(dev, fc23ok, sizeof(fc23ok), resp) == 6);
+	ASSERT_EQ(resp[2] == 0 && resp[3] == 100 && resp[4] == 0 && resp[5] == 207);
+	assert_regs(dev, 100, 207, 300, 9);
+
+	/* A read-only register may be read with FC 23 while another range is written. */
+	ASSERT_EQ(run(dev, fc23rd, sizeof(fc23rd), resp) == 10);
+	assert_regs(dev, 100, 8, 300, 9);
+	arena_release(arena);
+}
+
+TEST(ReadOnlyCoilRefusesClientWrites)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_read_only_device(arena);
+	u8		resp[MODBUS_MAX_PDU];
+	u8		fc05[]   = { 0x05, 0x00, 0x00, 0x00, 0x00 };
+	u8		fc05b[]  = { 0x05, 0x00, 0x01, 0xFF, 0x00 };
+	u8		fc15[]   = { 0x0F, 0x00, 0x01, 0x00, 0x02, 0x01, 0x03 };	/* coils 1 and 2 on */
+	u8		fc15ok[] = { 0x0F, 0x00, 0x03, 0x00, 0x01, 0x01, 0x01 };
+	u16		out[4];
+
+	ASSERT_EQ(run(dev, fc05, sizeof(fc05), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x85 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_EQ(run(dev, fc15, sizeof(fc15), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x8F && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	ASSERT_SUCCESS(device_read(dev, SPACE_COIL, 0, 4, out));
+	ASSERT_EQ(out[0] == 1 && out[1] == 0 && out[2] == 0 && out[3] == 0);
+
+	ASSERT_EQ(run(dev, fc05b, sizeof(fc05b), resp) == 5);
+	ASSERT_EQ(run(dev, fc15ok, sizeof(fc15ok), resp) == 5);
+	ASSERT_SUCCESS(device_read(dev, SPACE_COIL, 0, 4, out));
+	ASSERT_EQ(out[0] == 1 && out[1] == 1 && out[2] == 0 && out[3] == 1);
+	arena_release(arena);
+}
+
+TEST(ReadOnlyRefusalCountsAsException)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_read_only_device(arena);
+	u8		resp[MODBUS_MAX_PDU];
+	u8		fc06[] = { 0x06, 0x00, 0x00, 0x00, 0x09 };
+
+	ASSERT_EQ(run(dev, fc06, sizeof(fc06), resp) == 2);
+	assert_exception_counters(dev, 1, 0, 0);
+	arena_release(arena);
+}
+
+TEST(ReadOnlyRampKeepsMovingAfterRefusedWrite)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_read_only_device(arena);
+	u8		resp[MODBUS_MAX_PDU];
+	u8		fc06[] = { 0x06, 0x00, 0x0A, 0x00, 0x09 };
+	u16		out = 0;
+
+	device_tick(dev, 3000);
+	ASSERT_EQ(run(dev, fc06, sizeof(fc06), resp) == 2);
+	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	device_tick(dev, 7000);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 10, 1, &out));
+	ASSERT_EQ(out == 7);
+	arena_release(arena);
+}
+
+TEST(HostWriteIgnoresReadOnly)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_read_only_device(arena);
+	u16		value = 42;
+	u16		out   = 0;
+
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, &value));
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, &out));
+	ASSERT_EQ(out == 42);
+	ASSERT_FAILURE(device_client_write(dev, SPACE_HOLDING, 0, 1, &value));
+	ASSERT_SUCCESS(device_client_write(dev, SPACE_HOLDING, 1, 1, &value));
+	arena_release(arena);
+}

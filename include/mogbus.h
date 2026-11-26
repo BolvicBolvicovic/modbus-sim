@@ -208,6 +208,9 @@ struct mogbus_point_t
 	uint32_t		length;		/**< MOGBUS_TYPE_STRING: registers, 1 to 123 */
 	const char*		text;		/**< MOGBUS_TYPE_STRING: initial text, at most 2*length bytes,
 						     NUL padded; copied; NULL means empty */
+	bool			read_only;	/**< coils and holding registers only: Modbus writes are
+						     refused with exception 02; mogbus_device_write() and
+						     the set_value calls still work */
 };
 
 /**
@@ -332,8 +335,8 @@ MOGBUS_API bool		mogbus_device_read(mogbus_device_t* dev, mogbus_space_t space, 
 /**
  * @brief Writes consecutive raw 16-bit values, as a client write would.
  *
- * Works on every space, including the read-only ones (the host plays the physical side). A
- * written ramp becomes static, and matching machine on-write handlers run. Bit spaces accept
+ * Works on every space, including the read-only ones and points configured with
+ * `(access read-only)` (the host plays the physical side). A written ramp becomes static, and matching machine on-write handlers run. Bit spaces accept
  * only 0 or 1.
  *
  * @param dev Device.

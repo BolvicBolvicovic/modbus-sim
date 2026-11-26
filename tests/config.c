@@ -3012,3 +3012,35 @@ TEST(ConfigSixtyFourBitPointsWorkInMachines)
 	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 4, 4, w));
 	ASSERT_EQ(w[0] == 0x4016 && w[1] == 0 && w[2] == 0 && w[3] == 0);	/* 5.5 */
 }
+
+TEST(ConfigParsesPointAccess)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev    = NULL;
+	u16		nine   = 9;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)\n"
+		"  (holding 0 (access read-only) (type u32) (static 7))\n"
+		"  (holding 2 (access read-write) (static 1))\n"
+		"  (holding 3 (static 1) (count 2) (access read-only))\n"
+		"  (coil 0 (access read-only) (static on) (count 2))\n"
+		"  (coil 2))",
+		&config, err, sizeof(err)));
+	dev = config.devices[0];
+	ASSERT_EQ(dev->points[0].read_only && !dev->points[1].read_only);
+	ASSERT_EQ(dev->points[2].read_only && dev->points[3].read_only);
+	ASSERT_EQ(dev->points[4].read_only && dev->points[5].read_only && !dev->points[6].read_only);
+	ASSERT_FAILURE(device_client_write(dev, SPACE_HOLDING, 3, 1, &nine));
+	ASSERT_SUCCESS(device_client_write(dev, SPACE_HOLDING, 2, 1, &nine));
+}
+
+TEST(ConfigRejectsBadPointAccess)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (access sometimes)))", "access");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (access)))", "access");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (access read-only)))", "input registers are always read-only");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (access read-write)))", "remove (access");
+	EXPECT_ERROR("(device (unit-id 1) (discrete 0 (access read-only)))", "discrete inputs are always read-only");
+}

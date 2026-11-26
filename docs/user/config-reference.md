@@ -309,6 +309,7 @@ Shape of a point:
   (static VALUE)      ; or (ramp ...), (sine ...) or (lag ...): only one. None: 0 / off
   (noise ...)         ; optional, registers only: added to any of the above
   (degradation ...)   ; optional: drift, noise growth, stuck and fail over time
+  (access ...)        ; coil and holding only: read-write (default) or read-only
   (count N)           ; optional: repeat for N consecutive points
   (note "Text"))      ; optional comment
 ```
@@ -558,6 +559,22 @@ Clients can write `coil` and `holding` points. The written value is stored and r
 later reads. If the point was a ramp, sine or lag (or had noise or degradation), **it stops moving** and keeps the written value as a
 static value until the simulator is restarted. Machine-owned points, including state registers,
 reject client writes with exception 02 (see `(machine ...)` below).
+
+### `(access ...)`
+
+`(access read-only)` makes a coil or holding point refuse every Modbus write while clients can still
+read it, like a status word or a counter in a real device. `(access read-write)` is the default.
+A write (FC 05, 06, 15, 16, 22 or the write part of FC 23) that touches any address of a read-only
+point fails as a whole with exception 02, exactly like a write to an undefined address: nothing is
+written, and a ramp, sine or lag on the point keeps moving because clients cannot freeze it.
+Machines, `(set! ...)` and the host side of the [library](library.md) and the HTTP control API
+(`PUT` of raw values and `/value`) can still change the point. `(access ...)` is rejected on `input`
+and `discrete` points, which are always read-only for clients.
+
+```scheme
+(holding 0 (access read-only) (static #x0001))     ; status word
+(holding 10 (access read-only) (ramp (from 0) (to 65535) (step 1) (every-ms 1000) (mode wrap)))
+```
 
 ### `(count N)`
 
@@ -1030,6 +1047,8 @@ is wrong and show the entry. Common ones:
 | `strings have no word order: remove (word-order ...)` | Only `byte-order` applies to strings |
 | `(byte-order ...)`: `expected one of: big, little` | The only byte orders are `big` and `little` |
 | `coils and discrete inputs are single bits: remove (byte-order ...)` | Byte order is for register points |
+| `(access ...)`: `expected one of: read-write, read-only` | The access is `read-write` or `read-only` |
+| `input registers are always read-only for clients: remove (access ...)` / `discrete inputs are always ...` | Only `coil` and `holding` points take `(access ...)`; remove it |
 | `machine cannot drive a string point` / `a string point has no number to read` / `state register cannot name a string point` / `on-write cannot watch a string point` | Machines work on numbers; use a numeric point |
 | `coils and discrete inputs can only be (static on/off)` | No ramps and no `type` for bit tables |
 | `a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)` | Choose one |

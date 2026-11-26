@@ -72,6 +72,7 @@ struct point_t
 	f64		static_value;
 	u64		static_raw;		/**< exact VT_U64/VT_S64 static value when static_exact */
 	bool		static_exact;
+	bool		read_only;		/**< coil/holding only: refused by client writes (host writes allowed) */
 	u16		length;			/**< VT_STRING: registers (1..DEVICE_MAX_STRING_REGISTERS) */
 	char		padding;		/**< VT_STRING: fills text up to 2*length bytes (0 or ' ') */
 	/**
@@ -337,6 +338,16 @@ bool		device_read(const device_t* dev, space_kind_t space, u32 address, u32 qty,
  * in the same request.
  */
 bool		device_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
+
+/** @brief True when no address in the range belongs to a read-only point (client writes). */
+bool		device_range_writable(const device_t* dev, space_kind_t space, u32 address, u32 qty);
+
+/**
+ * @brief device_write() as a Modbus client: also fails if any point in the range is read-only.
+ *
+ * Host-side writes (the C API, the HTTP control API) use device_write() and may write them.
+ */
+bool		device_client_write(device_t* dev, space_kind_t space, u32 address, u32 qty, const u16* in);
 
 /**
  * @brief Reads/writes one decoded point value.

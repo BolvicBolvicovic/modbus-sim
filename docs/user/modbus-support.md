@@ -350,7 +350,7 @@ a user-defined code changes no device state, and `(registers ...)` only reads.
 | Code | Name | When |
 |---|---|---|
 | 01 | Illegal Function | the function code is not in the table above |
-| 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535), or a write targets a machine-owned point such as a state register |
+| 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535), a write targets a machine-owned point such as a state register, or a write touches a point configured `(access read-only)` |
 | 03 | Illegal Data Value | quantity is 0 or above the limit, the request has the wrong length or byte count, or a single-coil value is not `FF00` / `0000` |
 | 04 | Slave Device Failure | FC 01/02/03/04/23 and user-defined `(registers ...)` reads covering a point whose `(degradation (fail-after-ms ...))` has passed; successful FC 02/04 reads via `(fault (kind sensor-disconnect))`; any response via `(fault (kind exception) (code 4))` |
 | 05 | Acknowledge | only via `(fault (kind exception) (code 5))` |
@@ -409,7 +409,7 @@ that writes input registers or discrete inputs. A write to an address that exist
 input register or discrete input is exception 02, because the target table has no such point.
 A machine-owned point, including a machine state register, is read-only to Modbus clients: a write
 that touches any of its addresses fails all-or-nothing with exception 02 and leaves the value
-unchanged. Successful writes run any matching machine `on-write` handlers in the same request after
+unchanged. A coil or holding point configured `(access read-only)` is refused the same way (all-or-nothing, exception 02, counted as an exception); FC 22 and the write range of FC 23 are checked before anything is written or read. Successful writes run any matching machine `on-write` handlers in the same request after
 the raw values are applied; those handlers do not fire transitions or advance the machine.
 Read/Write Multiple Registers (FC 23, 0x17) is also all-or-nothing: availability of both the read and
 write holding-register ranges is validated before applying the write, so an unavailable/malformed

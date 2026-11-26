@@ -293,6 +293,28 @@ TEST(ObsControlIsOffByDefault)
 	arena_release(arena);
 }
 
+TEST(ObsControlWritesReadOnlyPoints)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { make_control_device(arena) };
+	net_obs_t	obs;
+	u16		port = ts_free_port();
+	u16		value = 0;
+	static char	resp[NET_OBS_HTTP_OUT];
+
+	devs[0]->points[0].read_only = true;
+	ASSERT_EQ(port != 0 && net_obs_init(&obs, "tcp", devs, 1, "127.0.0.1", port) == 0);
+	obs.control.enabled = true;
+
+	/* The host plays the physical side: a raw PUT writes a point clients cannot. */
+	ASSERT_EQ(control(&obs, port, "PUT", "/api/devices/3/holding/0", "{\"values\":[9]}", resp, sizeof(resp)));
+	ASSERT_EQ(status_is(resp, 200));
+	ASSERT_EQ(device_read(devs[0], SPACE_HOLDING, 0, 1, &value) && value == 9);
+	ASSERT_EQ(!device_client_write(devs[0], SPACE_HOLDING, 0, 1, &value));
+	net_obs_close(&obs);
+	arena_release(arena);
+}
+
 TEST(ObsControlReadsAndWritesDevices)
 {
 	arena_t*	arena = ARENA_ALLOC();

@@ -106,6 +106,27 @@ TEST(ApiDevicesPointsAndValues)
 	mogbus_destroy(ctx);
 }
 
+TEST(ApiReadOnlyPointsRefuseClientsButNotTheHost)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "ro", NULL, 0);
+	mogbus_point_t	p = holding(0, 5);
+	uint16_t	words[1] = { 77 };
+	double		v = 0;
+	char		err[128];
+
+	p.read_only = true;
+	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	p = (mogbus_point_t){ .space = MOGBUS_INPUT, .address = 0, .type = MOGBUS_TYPE_U16, .read_only = true };
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+
+	ASSERT_EQ(mogbus_device_write(dev, MOGBUS_HOLDING, 0, 1, words));
+	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v == 77);
+	ASSERT_EQ(mogbus_device_set_value(dev, MOGBUS_HOLDING, 0, 12));
+	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v == 12);
+	mogbus_destroy(ctx);
+}
+
 TEST(ApiRejectsBadInput)
 {
 	mogbus_t*	ctx = mogbus_create();

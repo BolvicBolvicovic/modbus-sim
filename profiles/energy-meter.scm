@@ -13,6 +13,7 @@
 ;   28-35  Model name                 string, 8 registers (16 bytes), space padded
 ; Holding registers (function code 03/06/16):
 ;   0      CT ratio
+;   1      Firmware version (0x0102), read-only: a client write gets exception 02
 ; Bits:
 ;   coil 0      reset energy counter (writable)
 ;
@@ -35,4 +36,5 @@
   (input 28 (type string) (length 8) (padding space) (static "EM-100 3P"))
 
   (holding 0 (static 1))
+  (holding 1 (access read-only) (static #x0102))
   (coil 0 (static off)))
