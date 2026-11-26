@@ -331,7 +331,7 @@ with mogbus.serve(config="profiles/minimal.scm", port=0) as srv:
 ```
 
 See [docs/user/python.md](docs/user/python.md) for the API, the threading model and a pytest fixture, and
-[`examples/python/`](examples/python/) for a runnable embedding example and a pytest example.
+[`examples/python/`](https://github.com/BolvicBolvicovic/mogbus/tree/main/examples/python) for a runnable embedding example and a pytest example.
 
 ## Documentation
 

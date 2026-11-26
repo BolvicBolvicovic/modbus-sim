@@ -7,7 +7,7 @@ them from its own loop. The only header is [`include/mogbus.h`](https://github.c
 version is 0.0.1 (`MOGBUS_VERSION_*`, `mogbus_version()`).
 
 From Python, see [python.md](python.md) (a `ctypes` package over `libmogbus.so`; the same embedding as
-`examples/embed_tcp.c` is in [`examples/python/embed.py`](../../examples/python/embed.py)).
+`examples/embed_tcp.c` is in [`examples/python/embed.py`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/python/embed.py)).
 
 ## Build and link
 
