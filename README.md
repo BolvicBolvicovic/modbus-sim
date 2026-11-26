@@ -141,6 +141,8 @@ See [docs/profiles.md](docs/profiles.md).
 mogbus [options] CONFIG.scm
 
   -c, --check          check the config, print a summary and exit
+      --health         probe the running server described by the config; exit 0 if healthy, 1 if not
+      --timeout-ms N   reply timeout of --health in milliseconds (default 2000)
   -v, --verbose        log every request
   -V, --version        print the version (and git revision, when built from a checkout) and exit
   -h, --help           show this help
@@ -151,6 +153,23 @@ There are no server CLI options: the transport mode, path and all server setting
 a config error, a serial/PTY open failure or a runtime poll error, 2 for invalid CLI arguments or a
 listener (TCP/UDP bind) or TLS start-up failure. Port 502 is the Modbus standard but needs root on Linux; the
 plaintext TCP default here is **1502**, or **802** when `(tls ...)` is enabled.
+
+`mogbus --health CONFIG.scm` is a liveness probe for containers and scripts: it loads the config like
+`--check`, sends one Modbus FC 08 echo request to the first device over the configured network transport
+(`tcp`, `udp`, `rtu-tcp`, `rtu-udp`, `ascii-tcp`, `ascii-udp`; a TLS server is only connected to) and exits 0
+if the unit answers, 1 otherwise with the reason on stderr. Serial and PTY modes cannot be probed. See
+[docs/deployment.md](docs/deployment.md).
+
+## Docker
+
+```
+docker build -t mogbus .
+docker run --rm -p 127.0.0.1:1502:1502 mogbus
+```
+
+The image runs as UID 10001 with a read-only root filesystem and no capabilities, and has a built-in
+health check. Compose and Kubernetes examples live in `deploy/`; see
+[docs/deployment.md](docs/deployment.md).
 
 ## Transports
 
@@ -284,6 +303,7 @@ and `examples/embed_tcp.c`.
 - [docs/config-reference.md](docs/config-reference.md) - every config entry, with examples and error help
 - [docs/profiles.md](docs/profiles.md) - the profiles, and how to write your own
 - [docs/modbus-support.md](docs/modbus-support.md) - what the server answers, exceptions, limits
+- [docs/deployment.md](docs/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
 - [docs/library.md](docs/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
 - [docs/release.md](docs/release.md) - cutting a release, reproducible builds, SBOM, verifying downloads
 - [docs/architecture.md](docs/architecture.md) - code layout, coding rules, roadmap

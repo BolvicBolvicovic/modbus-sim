@@ -48,11 +48,11 @@
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `rtu_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
-| `src/api` | `mogbus.c` | the public C API behind `include/mogbus.h` (see [library.md](library.md)): context, devices and points, server handles, logging; the top layer, nothing includes it |
+| `src/api` | `mogbus.c`, `probe.c` | the public C API behind `include/mogbus.h` (see [library.md](library.md)): context, devices and points, server handles, logging, and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it |
 | `src/main.c` | | command line, signal handlers, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
 Dependencies point one way: `server → net → modbus → device → util`, `config → device → util`,
-`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, device, util` (`net` only for the RTU timing helpers). `config` includes only
+`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, modbus, device, util` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
 `server/server_mode.h` (the transport enum) and `server/server_limits.h` (array limits and option defaults shared with `api`),
 each in its own header so config does not pull in `net`, and `api` does not need config for them.
 A host that builds `server_options_t` itself can drop `config/` and `server_config.c`: `WITH_CONFIG=0`
@@ -282,6 +282,9 @@ build directories (`tools/check_reproducible.sh`, CI job `reproducible`). `make 
 build into a deterministic tarball and `tools/gen_sbom.sh` writes the SPDX SBOM; `release.yml` runs
 both on tags and attests the results. `mogbus --version` prints the `mogbus_version()` string plus the
 `git describe` revision, which only `main.o` receives. See [release.md](release.md).
+The `Dockerfile` (digest-pinned Debian base, non-root UID 10001, `mogbus --health` check),
+`deploy/docker-compose.yml` and `deploy/kubernetes/mogbus.yaml` are verified by the `docker` CI job;
+see [deployment.md](deployment.md).
 
 The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s7.h`.
 
@@ -311,11 +314,6 @@ only outstanding work is listed here.
   and fault statistics. Why: automated test platforms need machine-readable status.
 - Health/readiness and Prometheus endpoints. Why: container orchestration and monitoring need
   standard probes and scrape targets.
-
-### Deployment and portability
-
-- Docker image with deployment examples, container health checks, non-root execution and resource
-  limits. Why: safe, repeatable deployment.
 
 ### Protocol validation and compatibility
 

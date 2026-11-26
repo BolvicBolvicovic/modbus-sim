@@ -1,0 +1,32 @@
+# Run:  docker compose -f deploy/docker-compose.yml up --build
+# See docs/deployment.md.
+services:
+  mogbus:
+    build:
+      context: ..
+      args:
+        VERSION: "0.0.1"
+    image: mogbus:0.0.1
+    # Loopback only; drop "127.0.0.1:" to accept remote Modbus clients.
+    ports:
+      - "127.0.0.1:1502:1502/tcp"
+    volumes:
+      # Replace the built-in config with your own (the file must be readable by UID 10001).
+      - ./docker/mogbus.scm:/etc/mogbus/mogbus.scm:ro
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # mogbus is single-threaded and sits near 10 MB RSS; these limits leave a wide margin.
+    cpus: 0.5
+    mem_limit: 64m
+    pids_limit: 64
+    restart: unless-stopped
+    stop_grace_period: 10s

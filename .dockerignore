@@ -1,0 +1,17 @@
+# Keep the build context to what `make` needs.
+.git
+.github
+.claude
+.ccache
+**/*.o
+**/*.d
+mogbus
+mogbus-tests
+mogbus-tests.times
+libmogbus.a
+libmogbus.so
+examples/embed_tcp_static
+examples/embed_tcp_shared
+compile_commands.json
+docs
+tests

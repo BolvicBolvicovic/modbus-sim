@@ -1,0 +1,97 @@
+# Apply:  kubectl apply -f deploy/kubernetes/mogbus.yaml
+# The image must be built and pushed to a registry the cluster can pull from, then the `image`
+# below changed to match (see docs/deployment.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mogbus-config
+data:
+  mogbus.scm: |
+    (server
+      (mode tcp)
+      (port 1502)
+      (bind "0.0.0.0")
+      (idle-timeout-ms 60000))
+
+    (device
+      (name "Kubernetes example")
+      (unit-id 1)
+      (holding 0 (static 42)))
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mogbus
+  labels:
+    app: mogbus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mogbus
+  template:
+    metadata:
+      labels:
+        app: mogbus
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mogbus
+          image: mogbus:0.0.1
+          args: ["/etc/mogbus/mogbus.scm"]
+          ports:
+            - name: modbus
+              containerPort: 1502
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 500m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mogbus
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: mogbus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mogbus
+spec:
+  selector:
+    app: mogbus
+  ports:
+    - name: modbus
+      port: 1502
+      targetPort: modbus
+      protocol: TCP

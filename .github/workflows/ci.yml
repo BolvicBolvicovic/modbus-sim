@@ -13,6 +13,9 @@ on:
       - 'vlib/**'
       - 'third_party/**'
       - 'profiles/**'
+      - 'deploy/**'
+      - 'Dockerfile'
+      - '.dockerignore'
       - 'Makefile'
       - '.github/workflows/**'
   pull_request:
@@ -25,6 +28,9 @@ on:
       - 'vlib/**'
       - 'third_party/**'
       - 'profiles/**'
+      - 'deploy/**'
+      - 'Dockerfile'
+      - '.dockerignore'
       - 'Makefile'
       - '.github/workflows/**'
   workflow_dispatch:
@@ -186,3 +192,64 @@ jobs:
           make clean
           make -j$(nproc) third_party/s7/s7.o
           scan-build --status-bugs --use-cc clang --exclude third_party/s7 -o scan-output make -j$(nproc)
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Build image
+        run: docker build --build-arg VERSION=ci -t mogbus:ci .
+
+      - name: Image runs as the non-root user
+        run: |
+          user=$(docker inspect -f '{{.Config.User}}' mogbus:ci)
+          echo "Config.User=$user"
+          test "$user" = "10001:10001"
+
+      - name: Run hardened (read-only, no capabilities, limits)
+        run: |
+          docker run -d --name mogbus --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --memory 64m --pids-limit 64 \
+            -p 127.0.0.1:1502:1502 mogbus:ci
+
+      - name: Wait for the Docker health check
+        run: |
+          for _ in $(seq 1 45); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' mogbus)
+            echo "health: $status"
+            [ "$status" = healthy ] && exit 0
+            [ "$(docker inspect -f '{{.State.Running}}' mogbus)" = true ] || break
+            sleep 2
+          done
+          docker logs mogbus
+          docker inspect -f '{{json .State.Health}}' mogbus
+          exit 1
+
+      - name: Read a register from the host
+        run: |
+          out=$(./tools/modbus_probe.py holding 0 1)
+          echo "$out"
+          echo "$out" | grep -q 42
+
+      - name: Process is PID 1, unprivileged and without capabilities
+        run: |
+          docker exec mogbus cat /proc/1/cmdline | tr '\0' ' '; echo
+          docker exec mogbus grep -E '^(Uid|Gid|CapEff|NoNewPrivs):' /proc/1/status
+          docker exec mogbus grep -qE '^Uid:[[:space:]]+10001[[:space:]]' /proc/1/status
+          docker exec mogbus grep -qE '^CapEff:[[:space:]]+0+$' /proc/1/status
+          docker top mogbus
+
+      - name: SIGTERM stops the container promptly and cleanly
+        run: |
+          start=$(date +%s)
+          docker stop -t 10 mogbus
+          elapsed=$(( $(date +%s) - start ))
+          code=$(docker inspect -f '{{.State.ExitCode}}' mogbus)
+          echo "stopped in ${elapsed}s, exit code $code"
+          test "$code" = 0
+          test "$elapsed" -lt 8
+
+      - name: Compose file is valid
+        run: docker compose -f deploy/docker-compose.yml config --quiet

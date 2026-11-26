@@ -51,7 +51,7 @@ set serves the binary and both libraries.
 | Context | `mogbus_create`, `mogbus_destroy`, `mogbus_load_config` |
 | Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point`, `mogbus_device_count`, `mogbus_device_at`, `mogbus_device_info` |
 | Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded) |
-| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_rtu_timing` |
+| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_probe`, `mogbus_rtu_timing` |
 | Logging | `mogbus_set_log_sink`, `mogbus_set_log_level` |
 
 Introspection (used by the binary's `--check` summary): `mogbus_device_count()`/`mogbus_device_at()`
@@ -66,6 +66,15 @@ inter-frame gap for a baud/frame-gap pair. Both create functions take an optiona
 (`MOGBUS_ERR_INVALID`, `MOGBUS_ERR_SERIAL` for a serial/PTY open failure, `MOGBUS_ERR_LISTEN` for a
 listener or TLS failure); the binary maps serial to exit status 1 and listen/TLS to 2. A TLS setup failure is
 also logged at WARN, like the transports log their own start-up errors.
+
+`mogbus_probe(options, unit_id, timeout_ms, err, err_size)` is the binary's `--health`: it sends one FC 08
+Return Query Data request to a unit of a server (this process's or another) and returns true for the echo or a
+Modbus exception reply. It works for the TCP, UDP, RTU-over-TCP/UDP and ASCII-over-TCP/UDP modes, reaches
+a `0.0.0.0` or `::` bind through loopback, only connects to a TLS server (no client certificate), and fails
+with `health check needs a network mode` for serial/fd modes. It needs no context or config, uses blocking
+sockets with a deadline and does not allocate, so it cannot probe a server that the calling thread
+steps; call it from another thread or process. A fault that drops or delays replies on the probed unit
+fails it.
 
 A context holds up to `MOGBUS_MAX_DEVICES` (16) devices and `MOGBUS_MAX_SERVERS` (8) servers. A
 server serves every device the context has when it is created. Points support static values and
