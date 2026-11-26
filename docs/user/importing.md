@@ -121,7 +121,7 @@ become `?`.
 ### Byte layout
 
 mogbus describes the four common 32-bit layouts with `word-order` and `byte-order` (see
-[the config reference](config-reference.md#byte-order)). The layout cell (or the type cell, as in
+[the config reference](config-reference.md#byte-order-)). The layout cell (or the type cell, as in
 `float32 CDAB`) is read as:
 
 | Layout | Written as | mogbus |
@@ -164,9 +164,9 @@ defaults.
 
 ### Example
 
-[`examples/import/meter-map.csv`](../../examples/import/meter-map.csv) is a made-up meter map with
+[`examples/import/meter-map.csv`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/import/meter-map.csv) is a made-up meter map with
 Modicon addresses, CDAB floats, a `u64` counter, strings, units, a scale and an access column. The
-committed result, [`meter-map.scm`](../../examples/import/meter-map.scm), is made with:
+committed result, [`meter-map.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/import/meter-map.scm), is made with:
 
 ```bash
 ./tools/mogbus_import.py csv examples/import/meter-map.csv --server tcp --port 1502 \
@@ -256,8 +256,8 @@ Anything else gets a warning and no server section.
 
 ### Example
 
-[`examples/import/pymodbus-setup.json`](../../examples/import/pymodbus-setup.json) has two devices and
-two servers; the committed result [`pymodbus-setup.scm`](../../examples/import/pymodbus-setup.scm) is made
+[`examples/import/pymodbus-setup.json`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/import/pymodbus-setup.json) has two devices and
+two servers; the committed result [`pymodbus-setup.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/import/pymodbus-setup.scm) is made
 with:
 
 ```bash
