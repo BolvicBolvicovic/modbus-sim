@@ -7,7 +7,6 @@
 #include "util/log.h"
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 _Static_assert(NET_OBS_MAX_DEVICES == SERVER_MAX_DEVICES, "metrics keep one slot per device");
 
@@ -168,7 +167,7 @@ server_init(server_t* server, const server_options_t* options)
 
 			if (options->mode != SERVER_MODE_RTU_FD)
 			{
-				fd = open_serial_fd(options->mode == SERVER_MODE_RTU_PTY, "RTU",
+				fd = os_serial_open(options->mode == SERVER_MODE_RTU_PTY, "RTU",
 						    options->path, options->baud, 8, options->parity,
 						    options->stop_bits, &server->slave_fd,
 						    server->pty_name, sizeof(server->pty_name));
@@ -177,7 +176,7 @@ server_init(server_t* server, const server_options_t* options)
 				server->fd = fd;
 				/* PTY master/slave have no real UART baud; only auto-detect on real tty devices. */
 				if (o.baud == 0 && options->mode == SERVER_MODE_RTU_DEVICE)
-					o.baud = serial_tty_baud(fd);
+					o.baud = os_serial_baud(fd);
 			}
 			o.fd = fd;
 			rc = rtu_server_init(&server->rtu, &o);
@@ -197,7 +196,7 @@ server_init(server_t* server, const server_options_t* options)
 			if (options->mode != SERVER_MODE_ASCII_FD)
 			{
 				/* Baud sets only the serial line speed here; it never affects ASCII framing. */
-				fd = open_serial_fd(options->mode == SERVER_MODE_ASCII_PTY, "ASCII",
+				fd = os_serial_open(options->mode == SERVER_MODE_ASCII_PTY, "ASCII",
 						    options->path, options->baud, options->data_bits,
 						    options->parity, options->stop_bits, &server->slave_fd,
 						    server->pty_name, sizeof(server->pty_name));
@@ -279,9 +278,9 @@ server_close(server_t* server)
 	}
 	net_obs_close(&server->obs);
 	if (server->slave_fd >= 0)
-		close(server->slave_fd);
+		os_serial_close(server->slave_fd);
 	if (server->fd >= 0)
-		close(server->fd);
+		os_serial_close(server->fd);
 	server->slave_fd = -1;
 	server->fd       = -1;
 }

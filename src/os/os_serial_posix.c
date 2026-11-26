@@ -1,22 +1,159 @@
 /**
  * @file
- * @brief tty setup: raw mode, baud, data bits, parity and stop bits.
+ * @brief POSIX serial devices and PTYs: termios line setup, baud table, raw byte-stream I/O.
  */
-#include "util/serial.h"
-#include "util/baud.h"
+#include "os/os_serial.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <pty.h>
-#include <sys/ioctl.h>
 #endif
 
+_Static_assert(sizeof(tcflag_t) == sizeof(u32), "tcflag_t is not 32 bits");
+
+typedef struct baud_entry_t baud_entry_t;
+
+/** @brief A baud rate and its termios speed constant. */
+struct baud_entry_t
+{
+	u32	baud;
+	speed_t	speed;
+};
+
+#define BAUD_ENTRY(rate) { rate, B##rate }
+
+static const baud_entry_t g_baud_table[] = {
+#ifdef B50
+	BAUD_ENTRY(50),
+#endif
+#ifdef B75
+	BAUD_ENTRY(75),
+#endif
+#ifdef B110
+	BAUD_ENTRY(110),
+#endif
+#ifdef B134
+	BAUD_ENTRY(134),
+#endif
+#ifdef B150
+	BAUD_ENTRY(150),
+#endif
+#ifdef B200
+	BAUD_ENTRY(200),
+#endif
+#ifdef B300
+	BAUD_ENTRY(300),
+#endif
+#ifdef B600
+	BAUD_ENTRY(600),
+#endif
+#ifdef B1200
+	BAUD_ENTRY(1200),
+#endif
+#ifdef B1800
+	BAUD_ENTRY(1800),
+#endif
+#ifdef B2400
+	BAUD_ENTRY(2400),
+#endif
+#ifdef B4800
+	BAUD_ENTRY(4800),
+#endif
+#ifdef B9600
+	BAUD_ENTRY(9600),
+#endif
+#ifdef B19200
+	BAUD_ENTRY(19200),
+#endif
+#ifdef B38400
+	BAUD_ENTRY(38400),
+#endif
+#ifdef B57600
+	BAUD_ENTRY(57600),
+#endif
+#ifdef B115200
+	BAUD_ENTRY(115200),
+#endif
+#ifdef B230400
+	BAUD_ENTRY(230400),
+#endif
+#ifdef B460800
+	BAUD_ENTRY(460800),
+#endif
+#ifdef B500000
+	BAUD_ENTRY(500000),
+#endif
+#ifdef B576000
+	BAUD_ENTRY(576000),
+#endif
+#ifdef B921600
+	BAUD_ENTRY(921600),
+#endif
+#ifdef B1000000
+	BAUD_ENTRY(1000000),
+#endif
+#ifdef B1152000
+	BAUD_ENTRY(1152000),
+#endif
+#ifdef B1500000
+	BAUD_ENTRY(1500000),
+#endif
+#ifdef B2000000
+	BAUD_ENTRY(2000000),
+#endif
+#ifdef B2500000
+	BAUD_ENTRY(2500000),
+#endif
+#ifdef B3000000
+	BAUD_ENTRY(3000000),
+#endif
+#ifdef B3500000
+	BAUD_ENTRY(3500000),
+#endif
+#ifdef B4000000
+	BAUD_ENTRY(4000000),
+#endif
+};
+
+static bool
+baud_to_speed(u32 baud, speed_t* out)
+{
+	for (u32 i = 0; i < (u32)(sizeof(g_baud_table) / sizeof(g_baud_table[0])); i++)
+	{
+		if (g_baud_table[i].baud != baud)
+			continue;
+		*out = g_baud_table[i].speed;
+		return true;
+	}
+	return false;
+}
+
 bool
-serial_line_flags(u32 data_bits, parity_t parity, u32 stop_bits,
-		  tcflag_t* clear, tcflag_t* set)
+os_baud_is_standard(u32 baud)
+{
+	speed_t	speed;
+
+	return baud_to_speed(baud, &speed);
+}
+
+static u32
+baud_from_speed(speed_t speed)
+{
+	for (u32 i = 0; i < (u32)(sizeof(g_baud_table) / sizeof(g_baud_table[0])); i++)
+	{
+		if (g_baud_table[i].speed == speed)
+			return g_baud_table[i].baud;
+	}
+	return 0;
+}
+
+bool
+os_serial_line_flags(u32 data_bits, parity_t parity, u32 stop_bits, u32* clear, u32* set)
 {
 	*clear = CSIZE | PARENB | PARODD | CSTOPB;
 	*set   = data_bits == 7 ? CS7 : CS8;
@@ -43,7 +180,7 @@ serial_line_flags(u32 data_bits, parity_t parity, u32 stop_bits,
 }
 
 static bool
-tty_is_pty(int fd)
+tty_is_pty(os_serial_t fd)
 {
 	char		name[64];
 #if defined(__linux__)
@@ -68,7 +205,7 @@ tty_is_pty(int fd)
 }
 
 u32
-serial_tty_baud(int fd)
+os_serial_baud(os_serial_t fd)
 {
 	struct termios	tio;
 
@@ -86,18 +223,18 @@ serial_tty_baud(int fd)
  * speed. Non-tty fds are skipped.
  */
 static bool
-set_tty_raw(int fd, u32 baud, u32 data_bits, parity_t parity, u32 stop_bits)
+set_tty_raw(os_serial_t fd, u32 baud, u32 data_bits, parity_t parity, u32 stop_bits)
 {
 	struct termios	tio;
 	speed_t		ispeed;
 	speed_t		ospeed;
 	speed_t		requested = B9600;
-	tcflag_t	clear = 0;
-	tcflag_t	set = 0;
+	u32		clear = 0;
+	u32		set = 0;
 
 	if (!isatty(fd))
 		return true;
-	if (!serial_line_flags(data_bits, parity, stop_bits, &clear, &set))
+	if (!os_serial_line_flags(data_bits, parity, stop_bits, &clear, &set))
 	{
 		errno = EOPNOTSUPP;
 		return false;
@@ -149,10 +286,10 @@ set_tty_raw(int fd, u32 baud, u32 data_bits, parity_t parity, u32 stop_bits)
 	return true;
 }
 
-int
-open_serial_fd(bool pty, const char* label, const char* path, u32 baud,
+os_serial_t
+os_serial_open(bool pty, const char* label, const char* path, u32 baud,
 	       u32 data_bits, parity_t parity, u32 stop_bits,
-	       int* slave_fd, char* name, size_t name_size)
+	       os_serial_t* slave_fd, char* name, size_t name_size)
 {
 #if defined(__linux__)
 	char	pty_name[128];
@@ -217,4 +354,22 @@ fail:
 	close(fd);
 	*slave_fd = -1;
 	return -1;
+}
+
+s64
+os_serial_read(os_serial_t fd, void* buf, u32 len)
+{
+	return read(fd, buf, len);
+}
+
+s64
+os_serial_write(os_serial_t fd, const void* buf, u32 len)
+{
+	return write(fd, buf, len);
+}
+
+void
+os_serial_close(os_serial_t fd)
+{
+	close(fd);
 }

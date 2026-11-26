@@ -6,8 +6,8 @@
 #include "config/config_device.h"
 #include "config/config_machine.h"
 #include "device/machine.h"
-#include "util/baud.h"
 #include "util/clock.h"
+#include "os/os_serial.h"
 #include "os/os_socket.h"
 #include "vlib/macros.h"
 #include "vlib/readfile.h"
@@ -361,7 +361,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 
 	if (!form_opt_int(ctx, options, "baud", 1, 4000000, &baud))
 		return false;
-	if (baud > 0 && !baud_is_standard((u32)baud))
+	if (baud > 0 && !os_baud_is_standard((u32)baud))
 		return form_fail(ctx, "server: baud must be a standard termios rate (e.g. 9600, 19200, 38400, 115200)");
 
 	if (!form_opt_bool(ctx, options, "strict-t15", &strict_t15))

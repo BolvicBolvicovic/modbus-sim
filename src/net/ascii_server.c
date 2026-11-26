@@ -4,12 +4,12 @@
 #include "modbus/pdu.h"
 #include "net/net_common.h"
 #include "net/net_obs.h"
+#include "os/os_serial.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
 #include <string.h>
-#include <unistd.h>
 
 /**
  * @file
@@ -172,7 +172,7 @@ ascii_read_available(ascii_server_t* server, u64 now_ms)
 	if (server->rx_len == sizeof(server->rx))
 		server->rx_len = 0; /* cannot resync a full buffer without a colon */
 
-	got = read(server->options.fd, server->rx + server->rx_len,
+	got = os_serial_read(server->options.fd, server->rx + server->rx_len,
 		   sizeof(server->rx) - server->rx_len);
 	if (got == 0)
 	{
@@ -195,12 +195,12 @@ static bool
 ascii_write_pending(ascii_server_t* server)
 {
 	pending_response_t*	p = &server->pending;
-	ssize_t		sent;
+	s64		sent;
 
 	if (!p->active || p->due_ms > clock_now_ms())
 		return true;
 
-	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
+	sent = os_serial_write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
 		if (os_retry())

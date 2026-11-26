@@ -16,7 +16,7 @@
 #include "net/tcp_server.h"
 #include "net/udp_server.h"
 #include "server/server_mode.h"
-#include "util/serial.h"
+#include "os/os_serial.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 

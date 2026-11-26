@@ -11,7 +11,7 @@
 #include "device/device.h"
 #include "server/server_limits.h"
 #include "server/server_mode.h"
-#include "util/serial.h"
+#include "os/os_serial.h"
 #include <stdbool.h>
 
 typedef enum config_tls_version_t config_tls_version_t;

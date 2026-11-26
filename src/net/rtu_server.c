@@ -5,12 +5,12 @@
 #include "net/net_common.h"
 #include "net/net_obs.h"
 #include "net/rtu_framer.h"
+#include "os/os_serial.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
 #include <string.h>
-#include <unistd.h>
 
 /**
  * @file
@@ -54,7 +54,7 @@ read_available(rtu_server_t* server, u64 now_ms)
 	now_us = clock_now_us();
 	rtu_framer_note_gap(f, &server->ctx, now_ms, now_us);
 
-	got = read(server->options.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
+	got = os_serial_read(server->options.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
 	if (got == 0)
 	{
 		server->read_closed = true;
@@ -79,7 +79,7 @@ read_available(rtu_server_t* server, u64 now_ms)
 static bool
 write_pending(rtu_server_t* server)
 {
-	ssize_t	sent = 0;
+	s64	sent = 0;
 	pending_response_t*	p = &server->framer.pending;
 
 	if (!p->active)
@@ -87,7 +87,7 @@ write_pending(rtu_server_t* server)
 	if (p->due_ms > clock_now_ms())
 		return true;
 
-	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
+	sent = os_serial_write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
 		if (os_retry())
