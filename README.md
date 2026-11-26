@@ -95,6 +95,12 @@ when checking a no-TLS binary.
 support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or the binary. See
 [docs/library.md](docs/library.md).
 
+`make dist` builds the prod configuration and writes a reproducible release tarball
+`dist/mogbus-<version>-linux-<arch>.tar.gz` (binary, both libraries, header, docs, profiles), an
+SPDX SBOM and `dist/SHA256SUMS`. Builds are bit-for-bit reproducible across directories
+(`tools/check_reproducible.sh`). Tagged releases are built and attested by GitHub Actions; see
+[docs/release.md](docs/release.md).
+
 ## What it does today
 
 | Feature | Details |
@@ -136,6 +142,7 @@ mogbus [options] CONFIG.scm
 
   -c, --check          check the config, print a summary and exit
   -v, --verbose        log every request
+  -V, --version        print the version (and git revision, when built from a checkout) and exit
   -h, --help           show this help
 ```
 
@@ -278,6 +285,7 @@ and `examples/embed_tcp.c`.
 - [docs/profiles.md](docs/profiles.md) - the profiles, and how to write your own
 - [docs/modbus-support.md](docs/modbus-support.md) - what the server answers, exceptions, limits
 - [docs/library.md](docs/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
+- [docs/release.md](docs/release.md) - cutting a release, reproducible builds, SBOM, verifying downloads
 - [docs/architecture.md](docs/architecture.md) - code layout, coding rules, roadmap
 
 ## Project layout
@@ -296,7 +304,7 @@ src/            the program, one folder per module (headers next to their .c fil
   util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
-tools/          modbus_probe.py, check_deps.sh, check_doc_examples.sh, check_toolchain.sh, run_tests.sh
+tools/          modbus_probe.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 ```

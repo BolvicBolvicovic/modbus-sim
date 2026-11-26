@@ -116,6 +116,18 @@ jobs:
       - name: Unit tests without config loader and TLS
         run: make -j$(nproc) WITH_CONFIG=0 WITH_TLS=0 tests
 
+  reproducible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install OpenSSL development files and clang
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev clang
+
+      - name: Reproducible build check (two builds in different directories)
+        run: ./tools/check_reproducible.sh
+
   dev:
     runs-on: ubuntu-latest
     timeout-minutes: 15

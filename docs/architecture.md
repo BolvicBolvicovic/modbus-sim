@@ -276,6 +276,13 @@ The `mogbus` binary is `main.o` linked with a static library of the same build v
 both, so switching configurations without a clean rebuild is safe. s7 is compiled with its own relaxed flags
 (`-DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0`, so even s7's file and OS functions are off).
 
+Release builds are reproducible: `REPRO_FLAGS` (`-ffile-prefix-map`), sorted source discovery,
+`ar rcsD` and no embedded timestamps make `mogbus`, `libmogbus.a` and `libmogbus.so` identical across
+build directories (`tools/check_reproducible.sh`, CI job `reproducible`). `make dist` packs the prod
+build into a deterministic tarball and `tools/gen_sbom.sh` writes the SPDX SBOM; `release.yml` runs
+both on tags and attests the results. `mogbus --version` prints the `mogbus_version()` string plus the
+`git describe` revision, which only `main.o` receives. See [release.md](release.md).
+
 The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s7.h`.
 
 ## Roadmap
@@ -309,8 +316,6 @@ only outstanding work is listed here.
 
 - Docker image with deployment examples, container health checks, non-root execution and resource
   limits. Why: safe, repeatable deployment.
-- Automated release builds with versioned binaries, reproducible builds and an SBOM. Why:
-  traceable and verifiable binaries.
 
 ### Protocol validation and compatibility
 
