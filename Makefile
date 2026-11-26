@@ -333,7 +333,7 @@ FUZZ_DIR      = build/fuzz
 FUZZ_NAMES    = $(patsubst tests/fuzz/fuzz_%.c,%,$(sort $(wildcard tests/fuzz/fuzz_*.c)))
 FUZZ_BINS     = $(addprefix $(FUZZ_DIR)/fuzz_,$(FUZZ_NAMES))
 FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/device/*.c src/util/*.c)) \
-		src/net/net_common.c src/net/net_obs.c src/net/rtu_framer.c
+		src/net/net_common.c src/net/net_control.c src/net/net_obs.c src/net/rtu_framer.c
 FUZZ_FLAGS    = -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
 		-DWITH_TLS=0 -DWITH_CONFIG=0 $(INC) -Itests/fuzz
 FUZZ_SECONDS ?= 60

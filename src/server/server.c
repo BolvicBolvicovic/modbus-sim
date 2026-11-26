@@ -4,6 +4,7 @@
  */
 #include "server/server.h"
 #include "server/server_limits.h"
+#include "util/log.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -41,6 +42,17 @@ server_init(server_t* server, const server_options_t* options)
 	{
 		net_obs_close(&server->obs);
 		return 2;
+	}
+	if (options->http_control && options->http_bind_address)
+	{
+		server->obs.control.enabled  = true;
+		server->obs.control.tcp_like = options->mode == SERVER_MODE_TCP ||
+					       options->mode == SERVER_MODE_RTU_TCP ||
+					       options->mode == SERVER_MODE_ASCII_TCP;
+		server->obs.control.mbap     = options->mode == SERVER_MODE_TCP ||
+					       options->mode == SERVER_MODE_UDP;
+		LOG_WARN("HTTP control API enabled on %s:%u: anyone who can reach this port can change "
+			 "device state and faults", options->http_bind_address, options->http_port);
 	}
 
 	switch (options->mode)

@@ -187,17 +187,19 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 }
 #endif
 
-/* (http (port N) (bind "ADDR")): the health, readiness and Prometheus endpoint, any mode. */
+/* (http (port N) (bind "ADDR") (control on)): the health, readiness, Prometheus and optional control endpoint, any mode. */
 static bool
 parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind" };
+	static const char* const keys[] = { "port", "bind", "control" };
 	s64		port = SERVER_DEFAULT_HTTP_PORT;
 	const char*	bind = NULL;
+	bool		control = false;
 
 	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "http") ||
 	    !form_opt_int(ctx, options, "port", 1, 65535, &port) ||
-	    !form_opt_string(ctx, options, "bind", &bind))
+	    !form_opt_string(ctx, options, "bind", &bind) ||
+	    !form_opt_bool(ctx, options, "control", &control))
 		return false;
 	if (bind && strlen(bind) >= SERVER_BIND_MAX)
 		return form_fail(ctx, "http: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
@@ -205,6 +207,7 @@ parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
 		return form_fail(ctx, "http: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
 	strcpy(config->http_bind_address, bind ? bind : "127.0.0.1");
 	config->http_port    = (u16)port;
+	config->http_control = control;
 	config->http_enabled = true;
 	return true;
 }

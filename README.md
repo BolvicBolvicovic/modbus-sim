@@ -112,7 +112,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
 | Writes | Clients can write coils and holding registers. Writing a ramp freezes it at the written value. |
-| Observability | `(server (http ...))` serves `/healthz`, `/readyz` and Prometheus `/metrics`; `--log-format json` writes one JSON object per log line, with structured request events under `-v`. |
+| Observability | `(server (http ...))` serves `/healthz`, `/readyz` and Prometheus `/metrics`; `--log-format json` writes one JSON object per log line, with structured request events under `-v`. `(http (control on))` adds an opt-in JSON API to read and write registers and set or clear faults while the server runs. |
 | Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`); the `mogbus` binary is itself a client of it. |
 
 ## Ready-made profiles
@@ -311,7 +311,7 @@ For users, in [docs/user/](docs/user):
 - [docs/user/profiles.md](docs/user/profiles.md) - the profiles, and how to write your own
 - [docs/user/modbus-support.md](docs/user/modbus-support.md) - what the server answers, exceptions, limits
 - [docs/user/deployment.md](docs/user/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
-- [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness and Prometheus metrics, JSON logs
+- [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness, Prometheus metrics, runtime control API, JSON logs
 - [docs/user/library.md](docs/user/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
 For contributors and maintainers, in [docs/dev/](docs/dev):
 

@@ -7,6 +7,7 @@
 #include "net/net_obs.h"
 #include "mogbus.h"
 #include "net/net_common.h"
+#include "net/net_control.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "vlib/macros.h"
@@ -15,6 +16,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <strings.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -29,16 +31,6 @@ static const char* const RESULT_NAMES[NET_RESULT_COUNT] = {
 	[NET_RESULT_EXCEPTION] = "exception",
 	[NET_RESULT_NONE]      = "none",
 	[NET_RESULT_DROPPED]   = "dropped",
-};
-
-static const char* const FAULT_NAMES[FAULT_KIND_COUNT] = {
-	[FAULT_DELAY]             = "delay",
-	[FAULT_DROP]              = "drop",
-	[FAULT_EXCEPTION]         = "exception",
-	[FAULT_CORRUPT]           = "corrupt",
-	[FAULT_DISCONNECT]        = "disconnect",
-	[FAULT_RESTART]           = "restart",
-	[FAULT_SENSOR_DISCONNECT] = "sensor-disconnect",
 };
 
 s32
@@ -171,9 +163,9 @@ net_obs_request(net_obs_t* obs, const char* peer, const device_t* dev, u8 unit, 
 			if (!fired[k])
 				continue;
 			fl += (u32)snprintf(faults + fl, sizeof(faults) - fl, "%s\"%s\"",
-					    fl ? "," : "", FAULT_NAMES[k]);
+					    fl ? "," : "", fault_kind_name((fault_kind_t)k));
 			tl += (u32)snprintf(text_faults + tl, sizeof(text_faults) - tl, "%s%s",
-					    tl ? "," : " (fault: ", FAULT_NAMES[k]);
+					    tl ? "," : " (fault: ", fault_kind_name((fault_kind_t)k));
 		}
 		if (tl)
 			snprintf(text_faults + tl, sizeof(text_faults) - tl, ")");
@@ -309,6 +301,13 @@ net_obs_render_metrics(const net_obs_t* obs, char* out, u32 size)
 			      "# TYPE mogbus_connections_total counter\nmogbus_connections_total %llu\n",
 	    m->connections_active, (unsigned long long)m->connections_total);
 
+	if (obs->control.enabled)
+		put(out, size, &used, "# HELP mogbus_control_requests_total Runtime control API requests.\n"
+				      "# TYPE mogbus_control_requests_total counter\n"
+				      "mogbus_control_requests_total{result=\"ok\"} %llu\n"
+				      "mogbus_control_requests_total{result=\"error\"} %llu\n",
+		    (unsigned long long)m->control_requests[0], (unsigned long long)m->control_requests[1]);
+
 	put(out, size, &used, "# HELP mogbus_device_info Configured devices.\n# TYPE mogbus_device_info gauge\n");
 	for (u32 i = 0; i < obs->device_count; i++)
 	{
@@ -351,7 +350,7 @@ net_obs_render_metrics(const net_obs_t* obs, char* out, u32 size)
 		{
 			if (obs->devices[i]->faults.present & FAULT_BIT(k) || m->device[i].faults[k])
 				put(out, size, &used, "mogbus_device_faults_total{unit=\"%u\",kind=\"%s\"} %llu\n",
-				    obs->devices[i]->unit_id, FAULT_NAMES[k],
+				    obs->devices[i]->unit_id, fault_kind_name((fault_kind_t)k),
 				    (unsigned long long)m->device[i].faults[k]);
 		}
 	}
@@ -373,9 +372,10 @@ http_close(struct net_http_conn_t* conn)
 }
 
 /* Builds the whole response into conn->out: the body is rendered behind room for the head,
- * then the head is written and the body moved up against it. */
+ * then the head is written and the body moved up against it. `forced` is a status for a
+ * request that cannot be parsed (400, 413); 0 routes it. */
 static void
-http_respond(const net_obs_t* obs, struct net_http_conn_t* conn)
+http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 {
 	enum { HEAD_ROOM = 256 };
 	char*		body = conn->out + HEAD_ROOM;
@@ -385,24 +385,46 @@ http_respond(const net_obs_t* obs, struct net_http_conn_t* conn)
 	char		head[HEAD_ROOM];
 	const char*	status = "200 OK";
 	const char*	type = "text/plain; charset=utf-8";
+	const char*	query = "";
 	bool		is_head;
+	bool		api;
 	u32		body_len;
+	int		code = 200;
 	int		n;
 
 	sscanf(conn->in, "%7s %127s", method, path);
+	if (path[strcspn(path, "?")] == '?')
+		query = path + strcspn(path, "?") + 1;
 	path[strcspn(path, "?")] = '\0';
 	is_head = strcmp(method, "HEAD") == 0;
-	if (strcmp(method, "GET") != 0 && !is_head)
+	api = strncmp(path, "/api/", 5) == 0;
+	if (api && !obs->control.enabled)
+		code = 404, body_len = (u32)snprintf(body, cap, "not found; try /healthz, /readyz or /metrics\n");
+	else if (forced != 0 || api)
 	{
-		status   = "405 Method Not Allowed";
-		body_len = (u32)snprintf(body, cap, "only GET and HEAD\n");
+		if (forced != 0)
+		{
+			code     = forced;
+			body_len = (u32)snprintf(body, cap, "{\"error\":\"%s\"}",
+						 forced == 413 ? "request body too large" : "bad Content-Length");
+		}
+		else
+		{
+			conn->in[conn->head_len + conn->body_len] = '\0';
+			body_len = net_control_handle(obs, method, path, query, conn->in + conn->head_len,
+						      body, cap, &code);
+		}
+		type = "application/json";
+		obs->metrics.control_requests[code >= 400]++;
 	}
+	else if (strcmp(method, "GET") != 0 && !is_head)
+		code = 405, body_len = (u32)snprintf(body, cap, "only GET and HEAD\n");
 	else if (strcmp(path, "/healthz") == 0)
 		body_len = (u32)snprintf(body, cap, "ok\n");
 	else if (strcmp(path, "/readyz") == 0)
 	{
 		if (!obs->ready)
-			status = "503 Service Unavailable";
+			code = 503;
 		body_len = (u32)snprintf(body, cap, obs->ready ? "ready\n" : "not ready\n");
 	}
 	else if (strcmp(path, "/metrics") == 0)
@@ -411,14 +433,22 @@ http_respond(const net_obs_t* obs, struct net_http_conn_t* conn)
 		body_len = net_obs_render_metrics(obs, body, cap);
 		if (body_len == 0)
 		{
-			status   = "500 Internal Server Error";
+			code     = 500;
 			body_len = (u32)snprintf(body, cap, "metrics too large\n");
 		}
 	}
 	else
+		code = 404, body_len = (u32)snprintf(body, cap, "not found; try /healthz, /readyz or /metrics\n");
+	switch (code)
 	{
-		status   = "404 Not Found";
-		body_len = (u32)snprintf(body, cap, "not found; try /healthz, /readyz or /metrics\n");
+		case 400: status = "400 Bad Request"; break;
+		case 404: status = "404 Not Found"; break;
+		case 405: status = "405 Method Not Allowed"; break;
+		case 413: status = "413 Payload Too Large"; break;
+		case 422: status = "422 Unprocessable Entity"; break;
+		case 500: status = "500 Internal Server Error"; break;
+		case 503: status = "503 Service Unavailable"; break;
+		default: break;
 	}
 	n = snprintf(head, sizeof(head),
 		     "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %u\r\nConnection: close\r\n\r\n",
@@ -437,8 +467,61 @@ http_respond(const net_obs_t* obs, struct net_http_conn_t* conn)
 	conn->writing  = true;
 }
 
+bool
+net_obs_http_feed(net_obs_t* obs, struct net_http_conn_t* conn)
+{
+	conn->in[conn->in_len] = '\0';
+	if (conn->head_len == 0)
+	{
+		const char*	crlf = strstr(conn->in, "\r\n\r\n");
+		const char*	lf   = strstr(conn->in, "\n\n");
+		const char*	line;
+		bool		bad_length = false;
+
+		if (!crlf && !lf)
+			return conn->in_len < NET_OBS_HTTP_IN;	/* else the head is too large */
+		if (crlf && (!lf || crlf < lf))
+			conn->head_len = (u32)(crlf - conn->in) + 4;
+		else
+			conn->head_len = (u32)(lf - conn->in) + 2;
+		if (conn->head_len > NET_OBS_HTTP_IN)
+			return false;
+		/* Header lines start after the request line. */
+		for (line = strchr(conn->in, '\n'); line && line < conn->in + conn->head_len;
+		     line = strchr(line + 1, '\n'))
+		{
+			const char* v = line + 1;
+			u64	    len = 0;
+
+			if (strncasecmp(v, "content-length:", 15) != 0)
+				continue;
+			v += 15;
+			while (*v == ' ' || *v == '\t')
+				v++;
+			bad_length = !(*v >= '0' && *v <= '9');
+			for (; *v >= '0' && *v <= '9' && len < 0xFFFFFFF; v++)
+				len = len * 10 + (u64)(*v - '0');
+			bad_length = bad_length || (*v != '\r' && *v != '\n' && *v != ' ' && *v != '\t');
+			conn->body_len = (u32)len;
+		}
+		if (bad_length)
+		{
+			http_respond(obs, conn, 400);
+			return true;
+		}
+		if (conn->body_len > NET_OBS_HTTP_BODY)
+		{
+			http_respond(obs, conn, 413);
+			return true;
+		}
+	}
+	if (conn->in_len >= conn->head_len + conn->body_len)
+		http_respond(obs, conn, 0);
+	return true;
+}
+
 static void
-http_read(const net_obs_t* obs, struct net_http_conn_t* conn)
+http_read(net_obs_t* obs, struct net_http_conn_t* conn)
 {
 	ssize_t got = recv(conn->fd, conn->in + conn->in_len, sizeof(conn->in) - 1 - conn->in_len, 0);
 
@@ -450,11 +533,8 @@ http_read(const net_obs_t* obs, struct net_http_conn_t* conn)
 		return;
 	}
 	conn->in_len += (u32)got;
-	conn->in[conn->in_len] = '\0';
-	if (strstr(conn->in, "\r\n\r\n") || strstr(conn->in, "\n\n"))
-		http_respond(obs, conn);
-	else if (conn->in_len >= sizeof(conn->in) - 1)
-		http_close(conn);	/* head too large */
+	if (!net_obs_http_feed(obs, conn))
+		http_close(conn);
 }
 
 static void

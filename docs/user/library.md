@@ -48,7 +48,7 @@ set serves the binary and both libraries.
 | Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded) |
 | Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_probe`, `mogbus_rtu_timing` |
 | Logging | `mogbus_set_log_sink`, `mogbus_set_log_level`, `mogbus_set_log_format` |
-| Observability | `http_bind_address`/`http_port` in `mogbus_server_options_t` (NULL bind = no endpoint), `mogbus_server_metrics` |
+| Observability | `http_bind_address`/`http_port`/`http_control` in `mogbus_server_options_t` (NULL bind = no endpoint; `http_control` also serves the unauthenticated `/api/` runtime control API), `mogbus_server_metrics` |
 
 Introspection (used by the binary's `--check` summary): `mogbus_device_count()`/`mogbus_device_at()`
 enumerate devices in order, and `mogbus_device_info()` fills a `mogbus_device_info_t` with name, unit id,

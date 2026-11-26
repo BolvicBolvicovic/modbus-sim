@@ -56,9 +56,38 @@ def mbap(tid, unit, pdu):
     return struct.pack('>HHHB', tid, 0, len(pdu) + 1, unit) + pdu
 
 
+def http_seeds():
+    """First byte: transport rules (bit 0 TCP-like, bit 1 MBAP), then one HTTP request."""
+    requests = [
+        'GET /healthz HTTP/1.1\r\n\r\n',
+        'GET /metrics HTTP/1.1\r\n\r\n',
+        'GET /api/devices HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/holding/0?count=4 HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/coil/0?count=24 HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/holding/100/value HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/faults HTTP/1.1\r\n\r\n',
+        'DELETE /api/devices/1/faults/delay HTTP/1.1\r\n\r\n',
+    ]
+    bodies = [
+        ('PUT /api/devices/1/holding/0', '{"values":[1,2,3]}'),
+        ('PUT /api/devices/1/coil/0', '{"values":[1,0,1]}'),
+        ('PUT /api/devices/1/holding/100/value', '{"value":-12.5}'),
+        ('PUT /api/devices/1/faults/delay', '{"delay_ms":100,"percent":50}'),
+        ('PUT /api/devices/1/faults/exception', '{"exception_code":6}'),
+        ('PUT /api/devices/1/faults/corrupt', '{"mode":"checksum"}'),
+        ('PUT /api/devices/1/faults/disconnect', '{}'),
+        ('PUT /api/devices/1/faults/drop', '{"percent":10}'),
+    ]
+    out = [('\x03' + r).encode() for r in requests]
+    for path, body in bodies:
+        req = f'{path} HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n{body}'
+        out += [('\x03' + req).encode(), ('\x00' + req).encode()]
+    return out
+
+
 def main():
     out = sys.argv[1]
-    seeds = {'pdu': [], 'mbap': [], 'rtu': [], 'ascii': []}
+    seeds = {'pdu': [], 'mbap': [], 'rtu': [], 'ascii': [], 'http': http_seeds()}
     for i, pdu in enumerate(PDUS):
         seeds['pdu'].append(pdu)
         seeds['mbap'].append(mbap(i, 1, pdu))

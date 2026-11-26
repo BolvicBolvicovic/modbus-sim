@@ -3225,6 +3225,98 @@ TEST(NetHttpEndpointServesMetricsAndJsonLogs)
 	ASSERT_EQ(ok);
 }
 
+/* One HTTP request with a JSON body against the running binary's endpoint. */
+static bool
+http_send_binary(u16 port, const char* method, const char* path, const char* body, char* out, u32 cap)
+{
+	char	req[512];
+	int	fd = ts_connect_loopback(port, AF_INET, 1000);
+	u32	len = 0;
+
+	if (fd < 0)
+		return false;
+	snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: test\r\nContent-Length: %zu\r\n\r\n%s", method,
+		 path, strlen(body), body);
+	ts_set_recv_timeout(fd, 2000);
+	if (!ts_send_socket(fd, (const u8*)req, (u32)strlen(req)))
+	{
+		close(fd);
+		return false;
+	}
+	while (len + 1 < cap)
+	{
+		ssize_t got = recv(fd, out + len, cap - 1 - len, 0);
+
+		if (got <= 0)
+			break;
+		len += (u32)got;
+	}
+	out[len] = '\0';
+	close(fd);
+	return len > 0;
+}
+
+TEST(NetHttpControlChangesRegistersAndFaults)
+{
+	client_t	client = { .fd = -1 };
+	u16		http_port = ts_free_port();
+	char		options[96];
+	static char	text[4096];
+	u8		req[8];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	bool		ok;
+
+	snprintf(options, sizeof(options), "(http (port %u) (control on))", http_port);
+	ok = server_start(options, "(device (unit-id 1) (holding 0 (static 5)))");
+	ok = ok && ts_file_contains(g_server.stderr_path, "HTTP control API enabled");
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
+
+	/* A holding register written over HTTP is what a Modbus client reads next. */
+	ok = ok && http_send_binary(http_port, "PUT", "/api/devices/1/holding/0", "{\"values\":[77]}",
+				    text, sizeof(text)) && strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) && len == 4 && resp[3] == 77;
+
+	/* An exception fault set over HTTP shows up on the wire and is gone after DELETE. */
+	ok = ok && http_send_binary(http_port, "PUT", "/api/devices/1/faults/exception",
+				    "{\"exception_code\":6}", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) && len == 2 &&
+	     resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80) && resp[1] == 6;
+	ok = ok && http_send_binary(http_port, "DELETE", "/api/devices/1/faults/exception", "",
+				    text, sizeof(text)) && strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) && len == 4 && resp[3] == 77;
+
+	/* The Modbus side is visible over HTTP, and the endpoint counts its requests. */
+	ok = ok && http_send_binary(http_port, "GET", "/api/devices/1/holding/0", "", text, sizeof(text)) &&
+	     strstr(text, "{\"values\":[77]}") != NULL;
+	ok = ok && http_send_binary(http_port, "GET", "/api/devices/1/holding/4", "", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 422 ", 13) == 0;
+	ok = ok && http_get_binary(http_port, "/metrics", text, sizeof(text)) &&
+	     strstr(text, "\nmogbus_control_requests_total{result=\"ok\"} 4\n") != NULL &&
+	     strstr(text, "\nmogbus_control_requests_total{result=\"error\"} 1\n") != NULL;
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetHttpControlIsOffUnlessEnabled)
+{
+	u16		http_port = ts_free_port();
+	char		options[64];
+	static char	text[4096];
+	bool		ok;
+
+	snprintf(options, sizeof(options), "(http (port %u))", http_port);
+	ok = server_start(options, "(device (unit-id 1) (holding 0 (static 5)))");
+	ok = ok && http_send_binary(http_port, "PUT", "/api/devices/1/holding/0", "{\"values\":[77]}",
+				    text, sizeof(text)) && strncmp(text, "HTTP/1.1 404 ", 13) == 0;
+	ok = ok && !ts_file_contains(g_server.stderr_path, "control API enabled");
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
 /* The HTTP endpoint opens before the transport: a taken port fails start-up with status 2. */
 TEST(NetHttpPortInUseFailsToStart)
 {

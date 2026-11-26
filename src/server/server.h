@@ -50,6 +50,7 @@ struct server_options_t
 	net_tls_config_t tls;
 	const char*	http_bind_address;	/**< HTTP health/metrics endpoint; NULL = off */
 	u16		http_port;
+	bool		http_control;		/**< serve the runtime control API under /api/ */
 	device_t**	devices;
 	u32		device_count;
 };

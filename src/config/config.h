@@ -48,6 +48,7 @@ struct config_t
 	u32		stop_bits;		/**< RTU and ASCII byte streams: 1 or 2 */
 	bool		http_enabled;		/**< (http ...): health, readiness and metrics endpoint */
 	u16		http_port;
+	bool		http_control;		/**< (http (control on)): runtime control API under /api/ */
 	char		http_bind_address[SERVER_BIND_MAX];
 	bool		tls_enabled;		/**< tcp mode only: wrap MBAP in TLS */
 	u32		tls_handshake_timeout_ms;	/**< TLS only: deadline from accept to handshake completion */

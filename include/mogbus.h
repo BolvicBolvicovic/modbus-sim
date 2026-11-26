@@ -406,6 +406,7 @@ typedef struct mogbus_server_options_t
 	const char*	tls_ciphersuites_1_3;	/**< NULL = OpenSSL default */
 	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint; NULL = off */
 	uint16_t	http_port;		/**< endpoint port, used when http_bind_address is set */
+	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
 } mogbus_server_options_t;
 
 /**

@@ -21,6 +21,7 @@ enum
 	NET_OBS_LATENCY_BUCKETS	= 12,
 	NET_OBS_HTTP_CONNS	= 4,	/**< concurrent HTTP clients; others wait in the backlog */
 	NET_OBS_HTTP_IN		= 1024,	/**< request head limit */
+	NET_OBS_HTTP_BODY	= 1024,	/**< request body limit (runtime control) */
 	NET_OBS_HTTP_OUT	= 32768,	/**< response limit, enough for 16 fully used devices */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
 	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per poll */
@@ -64,6 +65,7 @@ struct net_obs_t
 		u64	latency_sum_ms;
 		u64	connections_total;
 		u32	connections_active;
+		u64	control_requests[2];	/**< runtime control requests: [0] ok, [1] error */
 		struct net_device_metrics_t
 		{
 			u64	requests;
@@ -72,6 +74,13 @@ struct net_obs_t
 			u64	faults[FAULT_KIND_COUNT];	/**< fired, by fault kind */
 		} device[NET_OBS_MAX_DEVICES];
 	} metrics;
+
+	struct net_control_t
+	{
+		bool	enabled;	/**< `/api/` answers; set by the server after net_obs_init() */
+		bool	tcp_like;	/**< transport has connections: the disconnect fault is valid */
+		bool	mbap;		/**< transport frames have no checksum: corrupt checksum is invalid */
+	} control;
 
 	struct net_http_t
 	{
@@ -83,8 +92,10 @@ struct net_obs_t
 			u32	in_len;
 			u32	out_len;
 			u32	out_sent;
+			u32	head_len;	/**< 0 until the request head is complete */
+			u32	body_len;	/**< Content-Length */
 			bool	writing;
-			char	in[NET_OBS_HTTP_IN];
+			char	in[NET_OBS_HTTP_IN + NET_OBS_HTTP_BODY + 1];
 			char	out[NET_OBS_HTTP_OUT];
 		} conns[NET_OBS_HTTP_CONNS];
 	} http;
@@ -133,6 +144,15 @@ void	net_obs_connection(net_obs_t* obs, bool opened);
  * @return Length written, or 0 if @p size is too small.
  */
 u32	net_obs_render_metrics(const net_obs_t* obs, char* out, u32 size);
+
+/**
+ * @brief Handles the bytes in `conn->in` (`in_len`, as a socket read left them).
+ *
+ * Once the head and the Content-Length body are complete it builds the response into
+ * `conn->out` and sets `writing`. Split from the socket code so a fuzzer can call it.
+ * @return false if the connection must be closed (head too large).
+ */
+bool	net_obs_http_feed(net_obs_t* obs, struct net_http_conn_t* conn);
 
 /**
  * @brief poll() for a transport: adds the endpoint's fds, polls, then serves the endpoint.

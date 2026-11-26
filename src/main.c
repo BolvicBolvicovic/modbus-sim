@@ -260,8 +260,8 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 	}
 
 	if (options->http_bind_address)
-		printf("  HTTP /healthz, /readyz and /metrics on %s:%u\n", options->http_bind_address,
-		       options->http_port);
+		printf("  HTTP /healthz, /readyz and /metrics on %s:%u%s\n", options->http_bind_address,
+		       options->http_port, options->http_control ? ", control on" : "");
 	for (size_t i = 0; i < count; i++)
 	{
 		mogbus_device_info_t info;

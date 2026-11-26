@@ -260,6 +260,13 @@ Each server owns a `net_obs_t` (in `server_t`): counters updated by `net_handle_
 transports, the DEBUG request log line (text, or JSON fields via `log_write_fields`), and the optional
 HTTP endpoint. Transports call `net_poll()` instead of `poll()`, which adds the endpoint's sockets to the
 same poll set, so the endpoint runs on the server thread with no locking and no allocation.
+`net_obs_http_feed()` takes the bytes of one request (head, then a `Content-Length` body of at most
+1024 bytes) and builds the response; it is separate from the socket code so `tests/fuzz/fuzz_http.c`
+can drive it. With `(http (control on))` the server sets `net_obs_t.control`, and `/api/` requests
+go to `net_control_handle()` in `net/net_control.c`: routing, a flat JSON reader and writer, and
+the `device_*` calls (including fault changes, validated by `fault_check()` in `device/fault.c`,
+which shares its limits with the config loader). `net` must not include `config`, so the transport rules for
+faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
 
 ## Coding rules used here
 
@@ -364,8 +371,6 @@ only outstanding work is listed here.
 - Python package: `ctypes` bindings over `libmogbus.so` (context, devices, servers stepped on a
   background thread behind a lock, a `serve()` context manager for pytest). Why: most simulator
   users write their tests in Python and cannot drive a C API or a subprocess conveniently.
-- Runtime control API: read and write values and inject or clear faults over the HTTP endpoint,
-  opt-in. Why: a binary user cannot change a running device today; every change needs a restart.
 - Data types: 64-bit integers and float64, strings packed into registers, and byte-swapped word
   layouts (BADC/CDAB) besides word order. Why: energy counters, names and serial numbers in real
   register maps need them.
