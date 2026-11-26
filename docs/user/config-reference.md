@@ -230,6 +230,7 @@ carries the same frames over TCP and accepts only `mode`, `port`, `bind`, `seed`
 | `(file ...)` | File record data for Read/Write File Record (FC 20/21), see below | none |
 | `(fifo ...)` | FIFO queue data for Read FIFO Queue (FC 24), see below | none |
 | `(canopen-object ...)` | Repeatable CANopen object used by FC 43 MEI `0x0D` SDO uploads/downloads, see below | none |
+| `(function-code CODE ...)` | Repeatable user-defined function code (up to 8 per device), see below | none |
 | `(machine NAME ...)` | Repeatable scripted state machine, see below (max 8 per device) | none |
 | `(coil ...)` `(discrete ...)` `(input ...)` `(holding ...)` | Data points, see below | - |
 
@@ -750,6 +751,62 @@ configured values and is always at most 31. Config is limited to 16 FIFO queues 
 [modbus-support.md](modbus-support.md) for the exact request/response format and exception
 conditions.
 
+## `(function-code ...)` (user-defined function codes)
+
+Defines how a device answers a function code that mogbus does not implement, such as the vendor
+codes of commercial PLCs and meters. Without a definition, those codes get exception 01 (illegal
+function). The Modbus specification reserves 65-72 and 100-110 for user-defined codes, but any code
+1-127 that mogbus does not implement is allowed, because real products use others too.
+
+```scheme
+(function-code CODE
+  (name "TEXT")                  ; optional, shown by --check
+  (on "HEX PREFIX" ACTION)       ; repeatable, up to 16 cases
+  ...)
+
+(function-code CODE ACTION)      ; a bare ACTION is (on "" ACTION)
+```
+
+- `CODE` is 1-127 and must not be a code mogbus implements (01-08, 0B, 0C, 0F, 10, 11, 14-18 and
+  2B). At most 8 codes per device, each defined once.
+- `(name "TEXT")` is up to 63 characters and appears in `--check` and `mogbus_device_info()`.
+- A request is matched against the cases in the order written. A case matches when the request
+  data (the bytes after the function code) starts with its prefix; the first match answers. `""`
+  matches every request. The prefix is up to 16 bytes.
+- A request that matches no case gets exception 03 (illegal data value).
+- Hex strings (`"01 0A FF"`) take two digits per byte, upper or lower case; spaces between bytes
+  are allowed and `""` is the empty string.
+
+| Action | Response data (after the function code) |
+|---|---|
+| `(reply "HEX")` | The bytes given, up to 252 |
+| `(echo)` | The request data, unchanged |
+| `(exception N)` | Exception response with code `N`, 1-255 |
+| `(registers SPACE ADDRESS COUNT)` | A byte count and the current values of the range, laid out like FC 01-04 (bits packed least significant first for `coil` and `discrete`, big-endian 16-bit words for `input` and `holding`). `SPACE` is `coil`, `discrete`, `input` or `holding`; `COUNT` is 1-125 registers or 1-2000 bits. If any address in the range is undefined the answer is exception 02 |
+| `(no-response)` | Nothing is sent |
+
+```scheme
+(device
+  (unit-id 1)
+  (holding 0 (count 2) (static 7))
+  (function-code #x41
+    (name "Vendor info")
+    (on "01" (reply "04 56 45 4E 44"))   ; request 41 01 -> 41 04 56 45 4E 44
+    (on "02" (registers holding 0 2))    ; request 41 02 -> 41 04 00 07 00 07
+    (on "03" (echo)))
+  (function-code #x64
+    (on "7E" (no-response))
+    (exception 4)))                      ; any other request -> exception 04
+```
+
+User-defined codes go through the same processing as the built-in ones: the device tick, the
+diagnostic counters of FC 08/11/12, [metrics](observability.md), listen-only mode and
+[faults](#fault-) (a `delay`, `drop`, `exception`, `corrupt` or `restart` fault applies to a
+user-defined request like any other). A `sensor-disconnect` fault changes only FC 02 and 04 reads,
+not user-defined codes. See [modbus-support.md](modbus-support.md#function-codes).
+
+Codes are config-only: the C API cannot add them yet, but `mogbus_device_info()` lists them.
+
 ## Serial communication status and event log (FC 11/12)
 
 ```scheme
@@ -820,6 +877,17 @@ is wrong and show the entry. Common ones:
 | `on-write must follow states and precede transitions` | Keep on-write handlers after all states and before the first transition |
 | `on-write is given more than once for the same point` | Combine the statements into one on-write handler for that point |
 | `on-write cannot watch a machine-driven point` | Watch a client-writable point instead of a state register or machine-driven point |
+| `function code N (0xNN) is implemented by mogbus and cannot be redefined` | Pick a code that is not one of 01-08, 0B, 0C, 0F, 10, 11, 14-18, 2B |
+| `expected (function-code CODE ...) with CODE 1-127` | `CODE` must be a whole number from 1 to 127 |
+| `needs at least one (on "HEX" ACTION) or ACTION` | A function code needs an action |
+| `function code is already defined on this device` | Define each code once per device; put several cases in one `(function-code ...)` |
+| `too many user-defined function codes on one device (max 8)` | Remove a code or move it to another device |
+| `too many cases (max 16)` | Merge or remove `(on ...)` cases |
+| `"..." is not a list of hex bytes (two digits ...)` | A `reply` or `on` string has an odd digit count or a non-hex character |
+| `too many bytes (max 252)` / `(max 16)` | A `reply` holds at most 252 bytes, an `on` prefix 16 |
+| `expected (reply "HEX"), (echo), (exception N), (registers SPACE ADDRESS COUNT) or (no-response)` | The action is misspelled or has the wrong number of arguments |
+| `the space must be coil, discrete, input or holding` | Fix the space name in `(registers ...)` |
+| `expected ADDRESS 0-65535 and COUNT 1-125 that stay below 65536` | `COUNT` is at most 125 registers (2000 for `coil` and `discrete`) and the range must end by address 65535 |
 | `unknown top-level form` | Only `(server ...)` and `(device ...)` are allowed at the top |
 
 ## A complete example

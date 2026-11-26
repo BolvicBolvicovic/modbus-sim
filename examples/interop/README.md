@@ -23,9 +23,18 @@ FC 03 read holding registers              pass      pass      pass      pass    
 ...
 FC 18 read FIFO queue                     known     known     known     known     known     known
 FC 2B read device identification          pass      pass      pass      pass      pass      pass
+FC 41 user-defined code: fixed reply      pass      pass      pass      pass      pass      pass
+FC 41 user-defined code: live registers   pass      pass      pass      pass      pass      pass
 known client issue, not counted: read FIFO queue: pymodbus 3.8.6 FC 24 decoder bug
 all checks passed
 ```
+
+The two `FC 41` rows cover a user-defined function code: `device.scm` defines `0x41` with
+`(function-code ...)`, and the script sends it through pymodbus' custom PDU support (a `ModbusPDU`
+subclass for the request, another registered with `client.register()` for the response). One case
+answers a fixed reply, the other the live value of holding register 0, so the check shows that an
+independent client decodes both over every framing, including the RTU frame length it derives from
+the response's byte count.
 
 It exits non-zero on any mismatch, so it can run in CI. Pass mode names to test a subset.
 
@@ -57,6 +66,9 @@ The same method applies to products you cannot script directly:
 5. **Inject faults** (`delay`, `drop`, `exception`, `corrupt`, `disconnect`) and check the
    product's timeouts, retries and alarms.
 
-Products often use vendor-specific function codes or quirks on top of the standard ones. mogbus
-answers only the standard codes it implements, so testing those needs user-defined function codes,
-which are planned (see the roadmap in [docs/dev/architecture.md](../../docs/dev/architecture.md)).
+Products often use vendor-specific function codes or quirks on top of the standard ones. Model
+those with `(function-code ...)` (see the
+[config reference](../../docs/user/config-reference.md#function-code--user-defined-function-codes)
+and [`profiles/vendor-function-codes.scm`](../../profiles/vendor-function-codes.scm)): a fixed
+reply, an echo, an exception, live register values or silence per request prefix. The logs and
+`/metrics` then show the vendor codes like any other.

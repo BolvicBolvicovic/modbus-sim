@@ -31,6 +31,7 @@ instead of a manual.
 | `slow-sensor.scm` | 1 | temperature sensor; 30% of answers arrive 1.5 s late |
 | `unreliable-meter.scm` | 1 | energy counter; 20% of answers never arrive |
 | `two-devices.scm` | 1, 2 | two devices on one port |
+| `vendor-function-codes.scm` | 1 | status, serial number, setpoint, 2 live inputs; user-defined function codes 0x41 (fixed reply, live registers, echo) and 0x64 (acknowledge, exception, no response) |
 
 Every profile except the three UDP ones uses Modbus TCP, so `tools/modbus_probe.py` (a Modbus TCP
 client) can read it. To serve any profile over another transport, change its `(server ...)` line,
@@ -70,6 +71,8 @@ Tips:
   Write the *raw* number in the config, and put the scale in a `(note ...)` or a comment.
 - **Realistic noise.** Use a small `bounce` ramp around the normal value, for example
   `(from 228) (to 232) (step 0.5)` for a mains voltage.
+- **Vendor function codes.** If the product also uses its own function codes, define them with
+  `(function-code ...)`; see `vendor-function-codes.scm`.
 - **Counters.** A `wrap` ramp with a large range and a small step makes a counter that keeps
   growing (energy, totalizers).
 - **Start-up behaviour.** A `hold` ramp climbs once and stays, good for "motor accelerating".

@@ -6,6 +6,8 @@
 ;   input 0-1             float32 230.5
 ;   file 1, records 0-2   0x1234 0x5678 0x9ABC
 ;   FIFO pointer 5        values 1 2 3
+;   function code 0x41    selector 01: fixed reply 04 DE AD BE EF; selector 02: holding 0-1 as
+;                         byte count + 2 registers
 
 (device
   (name "Interop test device")
@@ -20,4 +22,8 @@
   (holding 1 (count 9))
   (input 0 (type float32) (static 230.5))
   (file 1 (record 0 #x1234 #x5678 #x9ABC))
-  (fifo 5 (values 1 2 3)))
+  (fifo 5 (values 1 2 3))
+  (function-code #x41
+    (name "Vendor test")
+    (on "01" (reply "04 DE AD BE EF"))
+    (on "02" (registers holding 0 2))))

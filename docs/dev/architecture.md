@@ -29,7 +29,9 @@
    framing over TCP), `net/rtu_tcp_server` (RTU CRC-framed over TCP), `net/udp_server` (one MBAP ADU per UDP datagram), `net/ascii_udp_server` (one ASCII frame per UDP datagram), or `net/rtu_udp_server` (one RTU frame per UDP datagram) finds the device by
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
-   tables), then reads or writes the tables.
+   tables), then reads or writes the tables. A function code with no built-in handler goes to
+   `custom_respond` when the device defines it with `(function-code ...)` (`device_custom_fc_t`:
+   cases matched by prefix on the request data), otherwise to exception 01.
 4. `fault_decide_at` evaluates every effective fault kind (a percent roll or a schedule step) and the
    transport applies the combined decision (drop, delay, exception, pdu/register/checksum corrupt,
    or disconnect on TCP-like transports). Effective faults are device faults with overlays from the
@@ -345,8 +347,6 @@ only outstanding work is listed here.
 
 ### Protocol validation and compatibility
 
-- User-defined function codes (vendor-specific FCs answered from config). Why: commercial PLC,
-  SCADA and HMI clients often use them, and conformance testing against such products needs them.
 - Conformance and interoperability runs against commercial PLC/SCADA products, following the method
   of `examples/interop/` (which already checks every FC against pymodbus). Why: supporting an FC does
   not prove interoperability.

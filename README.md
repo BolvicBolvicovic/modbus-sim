@@ -105,7 +105,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. |
+| Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. User-defined function codes (`(function-code ...)`: fixed reply, echo, exception, live registers or no response). |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), and **machine** (bounded scripted state machine, see [config reference](docs/user/config-reference.md#machine-)). |
 | Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
@@ -132,6 +132,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | [`profiles/slow-sensor.scm`](profiles/slow-sensor.scm) | Sensor with late answers | delay fault |
 | [`profiles/unreliable-meter.scm`](profiles/unreliable-meter.scm) | Meter that goes silent | drop fault |
 | [`profiles/two-devices.scm`](profiles/two-devices.scm) | Two devices, one port | unit ids |
+| [`profiles/vendor-function-codes.scm`](profiles/vendor-function-codes.scm) | Vendor-style device | user-defined function codes 0x41 and 0x64 |
 
 Each profile starts with a comment listing its register map. Copy one, change what you need.
 See [docs/user/profiles.md](docs/user/profiles.md).

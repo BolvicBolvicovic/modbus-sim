@@ -329,7 +329,21 @@ CANopen General Reference (FC 43 / MEI `0x0D`) supports SDO upload (read) and SD
 
 CANopen failures use the extended exception form `AB FF <len-hi> <len-lo> 0D <AE|CE> <payload>` (the length counts the MEI type, exception byte and payload). Unsupported options return `AE` with the supported-control byte `0x04 | (0x01 if write)` and length `0003`. CANopen service failures return `CE` with a 4-byte little-endian error code and length `0006`: `0xFFFF000B` object does not exist, `0xFFFF0011` invalid count/length (`count = 0` or a count/data-length mismatch), `0x06070012` requested length exceeds the configured object, `0xFFFF001E` response too large for a Modbus PDU, and `0xFFFF1003` service not supported. A truncated MEI 0x0D header still returns standard exception 03. Command addressing (`node = 0x7F`, `index = 0xFFFF`) is recognized but always returns `CE / 0xFFFF1003` because the simulator has no CAN gateway or virtual nodes. Only object-dictionary SDO access is implemented; PDO, NMT, LSS and extended-fragment services are not. Known CiA data-type values are used only for RTU length calculation (Unsigned8 `0x00`, Unsigned16 `0x01`, Unsigned24 `0x02`, Unsigned32 `0x03`, Integer16 `0x11`, Integer32 `0x13`, Real32 `0x20`, Real64 `0x21`, Visible string `0x50`, Domain `0x60`; unknown values default to one byte), so a request that selects encoded data can still be answered with AE.
 
-Any other function code gets exception 01.
+### User-defined function codes
+
+Any other function code gets exception 01, unless the device defines it with
+`(function-code ...)` (see [config-reference.md](config-reference.md#function-code--user-defined-function-codes)).
+A device can answer a code 1-127 that mogbus does not implement with a fixed reply, an echo of the
+request data, an exception, live register or bit values like FC 01-04, or no response, selected by
+the leading bytes of the request data; a request that no case matches gets exception 03. The Modbus
+specification reserves 65-72 and 100-110 for user-defined codes; other unused codes are allowed too,
+because real products use them. The 19 codes in the table above cannot be redefined.
+
+A user-defined code is processed like a built-in one: the request counts in the FC 08/11/12
+diagnostic counters and in [metrics](observability.md), exception answers are counted as exceptions,
+listen-only mode suppresses the response, and faults apply (`delay`, `drop`, `exception`, `corrupt`,
+`disconnect`, `restart`). `sensor-disconnect` affects only FC 02 and 04. Writes are not implied:
+a user-defined code changes no device state, and `(registers ...)` only reads.
 
 ## Exceptions
 

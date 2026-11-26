@@ -22,6 +22,7 @@ import time
 
 from pymodbus.client import ModbusTcpClient, ModbusUdpClient
 from pymodbus.framer import FramerType
+from pymodbus.pdu import ModbusPDU
 from pymodbus.pdu.file_message import FileRecord
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,6 +35,36 @@ MODES = {
     "ascii-tcp": (ModbusTcpClient, FramerType.ASCII),
     "ascii-udp": (ModbusUdpClient, FramerType.ASCII),
 }
+
+
+class VendorRequest(ModbusPDU):
+    """User-defined function code 0x41: one selector byte after the function code."""
+
+    function_code = 0x41
+    rtu_frame_size = 5
+
+    def __init__(self, selector=0, dev_id=1, transaction_id=0):
+        super().__init__(dev_id=dev_id, transaction_id=transaction_id)
+        self.selector = selector
+
+    def encode(self):
+        return bytes([self.selector])
+
+    def decode(self, data):
+        self.selector = data[0]
+
+
+class VendorResponse(ModbusPDU):
+    """Answer of 0x41: a byte count and that many data bytes (what the device.scm cases send)."""
+
+    function_code = 0x41
+    rtu_byte_count_pos = 2
+
+    def encode(self):
+        return bytes([len(self.data)]) + self.data
+
+    def decode(self, data):
+        self.data = bytes(data[1:1 + data[0]])
 
 
 def free_port():
@@ -53,6 +84,11 @@ KNOWN_CLIENT_ISSUES = {
     # empty. mogbus answers 18 00 08 00 03 00 01 00 02 00 03 (byte count 2 + 2*N, FIFO count N).
     "fifo": "pymodbus 3.8.6 FC 24 decoder bug",
 }
+
+
+def vendor(c, selector):
+    """Sends user-defined function code 0x41 with one selector byte; returns the response PDU."""
+    return c.execute(False, VendorRequest(selector))
 
 
 def checks(c):
@@ -97,6 +133,10 @@ def checks(c):
          KNOWN_CLIENT_ISSUES.get("fifo")),
         ("read device identification", 0x2B, lambda: ok(r := c.read_device_information(read_code=1))
          and r.information.get(0) == b"mogbus" and r.information.get(1) == b"interop"),
+        ("user-defined code: fixed reply", 0x41, lambda: ok(r := vendor(c, 0x01))
+         and r.data == bytes.fromhex("deadbeef")),
+        ("user-defined code: live registers", 0x41, lambda: ok(c.write_register(0, 1234))
+         and ok(r := vendor(c, 0x02)) and r.data == bytes.fromhex("04d2") + bytes.fromhex("0000")),
         ("exception 02 on undefined address", 0x03, lambda: (r := c.read_holding_registers(500, count=1))
          .isError() and getattr(r, "exception_code", None) == 2),
     ]
@@ -118,6 +158,7 @@ def run_mode(mode, results, notes):
         client = client_class("127.0.0.1", port=port, framer=framer, timeout=2, retries=0)
         if not client.connect():
             sys.exit("%s: pymodbus could not connect" % mode)
+        client.register(VendorResponse)
         for name, fc, check, *known in checks(client):
             try:
                 passed = bool(check())

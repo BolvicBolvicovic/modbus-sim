@@ -53,7 +53,10 @@ set serves the binary and both libraries.
 Introspection (used by the binary's `--check` summary): `mogbus_device_count()`/`mogbus_device_at()`
 enumerate devices in order, and `mogbus_device_info()` fills a `mogbus_device_info_t` with name, unit id,
 point counts per space and, per `mogbus_fault_kind_t`, whether the fault is configured, whether it fires by
-schedule, its percent, delay and exception code. `mogbus_config_server_options()` returns the loaded
+schedule, its percent, delay and exception code. `custom_fc_count` and `custom_fcs[]` (up to 8 entries of
+`code` and a borrowed `name`, `""` when unnamed) list the user-defined function codes of the device. These
+come only from `(function-code ...)` in a config loaded with `mogbus_load_config`; the C API cannot add
+them yet. `mogbus_config_server_options()` returns the loaded
 `(server ...)` section as `mogbus_server_options_t` (strings borrowed from the context; false without a
 config). `mogbus_server_check()` validates options exactly like create (device path, fd, serial line,
 string lengths, and TLS files through a throwaway TLS context) without opening a listener, PTY or serial
