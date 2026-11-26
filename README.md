@@ -303,6 +303,13 @@ from your own loop. The `mogbus` binary is built the same way: `src/main.c` incl
 config file loader for hosts that build devices in code. See [docs/user/library.md](docs/user/library.md)
 and `examples/embed_tcp.c`.
 
+## Use from Python
+
+The `python/` package wraps `libmogbus.so` with `ctypes` (standard library only) for tests that
+start simulated devices, change their values while a client talks to them and check the result:
+`make python && pip install ./python`, then `with mogbus.serve(config="profiles/minimal.scm") as srv:`.
+See [docs/user/python.md](docs/user/python.md).
+
 ## Documentation
 
 For users, in [docs/user/](docs/user):
@@ -313,6 +320,7 @@ For users, in [docs/user/](docs/user):
 - [docs/user/deployment.md](docs/user/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
 - [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness, Prometheus metrics, runtime control API, JSON logs
 - [docs/user/library.md](docs/user/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
+- [docs/user/python.md](docs/user/python.md) - the Python package: install, API, threading, pytest fixture
 For contributors and maintainers, in [docs/dev/](docs/dev):
 
 - [docs/dev/architecture.md](docs/dev/architecture.md) - code layout, coding rules, roadmap

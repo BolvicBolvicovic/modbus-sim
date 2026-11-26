@@ -368,9 +368,6 @@ only outstanding work is listed here.
 
 ### Adoption (gaps compared with pymodbus as a server/simulator)
 
-- Python package: `ctypes` bindings over `libmogbus.so` (context, devices, servers stepped on a
-  background thread behind a lock, a `serve()` context manager for pytest). Why: most simulator
-  users write their tests in Python and cannot drive a C API or a subprocess conveniently.
 - Data types: 64-bit integers and float64, strings packed into registers, and byte-swapped word
   layouts (BADC/CDAB) besides word order. Why: energy counters, names and serial numbers in real
   register maps need them.

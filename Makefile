@@ -208,6 +208,14 @@ endif
 
 lib: $(LIB_STATIC) $(LIB_SHARED)
 
+# Python package (python/): `python` copies the shared library next to the sources so that
+# `pip install ./python` ships it; `python-tests` runs the unittest suite against it.
+python: $(LIB_SHARED)
+	cp $(LIB_SHARED) python/mogbus/libmogbus.so
+
+python-tests: $(LIB_SHARED)
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 -m unittest discover -s python/tests
+
 # Fast local build: make -j$(nproc) dev [tests|clean|...]. With no other goal,
 # `dev` builds the default binary; with extra goals it is just a mode switch.
 ifeq ($(filter-out dev,$(MAKECMDGOALS)),)
@@ -355,7 +363,8 @@ clean:
 	$(RM) -r $(DIST_DIR) build/api $(FUZZ_DIR)
 	rm -f $(REV_STAMP)
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
-		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times
+		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times \
+		python/mogbus/libmogbus.so
 
 distclean: clean
 
@@ -366,4 +375,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib lib-check tests asan dist api-docs fuzz fuzz-run clean distclean re commands FORCE
+.PHONY: all dev lib python python-tests lib-check tests asan dist api-docs fuzz fuzz-run clean distclean re commands FORCE

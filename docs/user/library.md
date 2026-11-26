@@ -6,6 +6,8 @@ them from its own loop. The only header is [`include/mogbus.h`](../../include/mo
 `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`; every symbol is `mogbus_*` / `MOGBUS_*`). The current
 version is 0.0.1 (`MOGBUS_VERSION_*`, `mogbus_version()`).
 
+From Python, see [python.md](python.md) (a `ctypes` package over `libmogbus.so`).
+
 ## Build and link
 
 ```bash

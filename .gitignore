@@ -18,3 +18,7 @@ mogbus*-tests.times
 dist/
 .revision
 build/
+python/mogbus/libmogbus.so
+__pycache__/
+*.egg-info/
+python/build/

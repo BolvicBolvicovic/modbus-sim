@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mogbus"
+version = "0.0.1"
+description = "Python bindings for the mogbus Modbus device simulator"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+]
+
+[tool.setuptools]
+packages = ["mogbus"]
+
+[tool.setuptools.package-data]
+mogbus = ["libmogbus.so"]

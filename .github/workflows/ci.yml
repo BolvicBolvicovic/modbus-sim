@@ -14,6 +14,7 @@ on:
       - 'vlib/**'
       - 'third_party/**'
       - 'profiles/**'
+      - 'python/**'
       - 'deploy/**'
       - 'Dockerfile'
       - '.dockerignore'
@@ -30,6 +31,7 @@ on:
       - 'vlib/**'
       - 'third_party/**'
       - 'profiles/**'
+      - 'python/**'
       - 'deploy/**'
       - 'Dockerfile'
       - '.dockerignore'
@@ -245,6 +247,23 @@ jobs:
 
       - name: pymodbus against every network transport
         run: .venv/bin/python examples/interop/pymodbus_interop.py
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install OpenSSL development files
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Build the library
+        run: make -j$(nproc) lib
+
+      - name: Python package tests
+        run: make python-tests
 
   api-docs:
     needs: changes

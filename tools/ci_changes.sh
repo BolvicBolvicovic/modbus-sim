@@ -48,7 +48,7 @@ for f in $(git diff --name-only "$base" "$head"); do
 		docs=true ;;
 	Dockerfile|.dockerignore|deploy/*)
 		docker=true ;;
-	src/*|include/*|examples/*|tests/*|tools/*|vlib/*|third_party/*|profiles/*|Makefile|.github/workflows/ci.yml)
+	src/*|include/*|examples/*|tests/*|tools/*|vlib/*|third_party/*|profiles/*|python/*|Makefile|.github/workflows/ci.yml)
 		code=true ;;
 	esac
 done
