@@ -13,9 +13,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/** @brief Serial device, PTY or byte-stream handle. */
 typedef int os_serial_t;
 typedef enum parity_t parity_t;
 
+/** @brief Invalid serial handle. */
 enum
 {
 	OS_SERIAL_INVALID = -1,

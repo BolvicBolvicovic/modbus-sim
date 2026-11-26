@@ -12,9 +12,11 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+/** @brief Socket handle. */
 typedef int os_socket_t;
 typedef struct os_addr_t os_addr_t;
 
+/** @brief Invalid socket handle and address text size. */
 enum
 {
 	OS_SOCKET_INVALID = -1,
