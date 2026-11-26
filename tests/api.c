@@ -3,6 +3,7 @@
 #include "vtest.h"
 #include "build_config.h"
 #include "mogbus.h"
+#include "modbus/ascii.h"
 #include "modbus/pdu.h"
 #include "tests/tests_utils/test_support.h"
 #include "util/clock.h"
@@ -247,7 +248,50 @@ TEST(ApiServesDevicesOverUdp)
 	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
 	mogbus_server_close(server);
 
-	o.mode = (mogbus_mode_t)(MOGBUS_MODE_UDP + 1);
+	o.mode = (mogbus_mode_t)(MOGBUS_MODE_ASCII_UDP + 1);
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiServesDevicesOverAsciiUdp)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev;
+	mogbus_point_t	p = holding(0, 0x1234);
+	mogbus_server_options_t o = mogbus_server_options_defaults();
+	mogbus_server_t* server;
+	char		err[256];
+	u8		raw[MODBUS_ASCII_MAX_FRAME];
+	u8		decoded[MODBUS_MAX_PDU + 2];
+	u8		addr = 0;
+	const u8*	pdu = NULL;
+	u32		pdu_len = 0;
+	s32		got;
+	int		fd;
+
+	ASSERT_EQ(ctx != NULL);
+	dev = mogbus_add_device(ctx, 1, "ascii-udp", err, sizeof(err));
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	o.mode = MOGBUS_MODE_ASCII_UDP;
+	o.port = ts_free_port();
+	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	ASSERT_EQ(server != NULL);
+
+	fd = ts_udp_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0);
+	got = (s32)modbus_ascii_encode(raw, 1, READ_HOLDING, sizeof(READ_HOLDING));
+	ASSERT_EQ(got > 0 && send(fd, raw, (size_t)got, 0) == got);
+	ASSERT_EQ(pump(server, fd));
+	got = ts_udp_recv(fd, raw, sizeof(raw), 1000);
+	ASSERT_EQ(got > 0 && modbus_ascii_decode(raw, (u32)got, decoded, &addr, &pdu, &pdu_len));
+	ASSERT_EQ(addr == 1 && pdu_len == 4 && pdu[2] == 0x12 && pdu[3] == 0x34);
+	close(fd);
+
+	mogbus_server_stop(server);
+	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
+	mogbus_server_close(server);
+
+	o.mode = (mogbus_mode_t)(MOGBUS_MODE_ASCII_UDP + 1);
 	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
 	mogbus_destroy(ctx);
 }

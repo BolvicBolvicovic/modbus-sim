@@ -8,7 +8,8 @@
  RTU   client ──addr+PDU+CRC───► net/rtu_server  ───────┤                        ▲
  ASCII client ──:hex+LRC+CRLF──► net/ascii_server       ├          device_tick() │ ramps → registers
  ASCII/TCP client ──same frames──► net/ascii_tcp_server ┤
- UDP   client ──MBAP+PDU datagram► net/udp_server ──────┘
+ UDP   client ──MBAP+PDU datagram► net/udp_server ──────┤
+ ASCII/UDP client ──:hex+LRC+CRLF datagram► net/ascii_udp_server ┘
                       │                                       fault_decide_at()
                       ▼
      device/fault (delay / drop / exception / corrupt / disconnect /
@@ -24,7 +25,7 @@
    `device_t` objects (data tables plus a list of points).
 2. `net/tcp_server` (Modbus TCP MBAP, optionally TLS-wrapped via `net/net_tls`), `net/rtu_server` (RTU CRC-framed byte stream),
    `net/ascii_server` (ASCII hex/LRC-framed byte stream), `net/ascii_tcp_server` (the same ASCII
-   framing over TCP), `net/rtu_tcp_server` (RTU CRC-framed over TCP), or `net/udp_server` (one MBAP ADU per UDP datagram) finds the device by
+   framing over TCP), `net/rtu_tcp_server` (RTU CRC-framed over TCP), `net/udp_server` (one MBAP ADU per UDP datagram), or `net/ascii_udp_server` (one ASCII frame per UDP datagram) finds the device by
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
@@ -43,7 +44,7 @@
 | `src/util` | `clock`, `rng`, `log`, `arena_impl` | monotonic milliseconds, reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
 | `src/api` | `mogbus.c` | the public C API behind `include/mogbus.h` (see [library.md](library.md)): context, devices and points, server handles, logging; the top layer, nothing includes it |
@@ -214,6 +215,14 @@ exception `0B`, PDU handling and fault decisions go through `net_mbap_respond`, 
 `tcp_server`; the reply goes to the source address. There is no per-peer state, no idle timeout and no
 disconnect fault. Selected by `(server (mode udp))`; UDP gives no delivery guarantee and the simulator
 never retransmits.
+
+`net/ascii_udp_server` has the same loop and reply path but frames with `src/modbus/ascii.c`: a datagram
+is accepted only when `modbus_ascii_scan` reports one complete frame spanning the whole datagram and
+`modbus_ascii_decode` accepts it, so there is no buffer, resync or partial-frame timeout. Every other
+non-empty datagram up to `NET_UDP_MAX_DATAGRAM` counts one FC08 `0x000C` error on every device (as in
+`ascii_tcp_server`); empty and longer datagrams are dropped by `net_udp` before it sees them. Broadcast
+and unknown units are silent, the response is encoded uppercase, a `checksum` corrupt fault damages
+only the LRC, and the encoded frame goes through `net_udp_send_at`. Selected by `(server (mode ascii-udp))`.
 
 ## Coding rules used here
 

@@ -106,6 +106,7 @@ support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or t
 |---|---|---|
 | [`profiles/minimal.scm`](profiles/minimal.scm) | Two registers | The smallest config |
 | [`profiles/modbus-udp.scm`](profiles/modbus-udp.scm) | Two registers over UDP | `(mode udp)` transport |
+| [`profiles/ascii-udp.scm`](profiles/ascii-udp.scm) | Two registers, ASCII over UDP | `(mode ascii-udp)` transport |
 | [`profiles/power-meter.scm`](profiles/power-meter.scm) | Three-phase power meter | float32 values, ramps, energy counter |
 | [`profiles/temperature-controller.scm`](profiles/temperature-controller.scm) | Temperature controller | signed values, setpoint, alarms |
 | [`profiles/vfd-drive.scm`](profiles/vfd-drive.scm) | Motor drive | start-up ramp that holds, 32-bit counter |
@@ -147,12 +148,13 @@ plaintext TCP default here is **1502**, or **802** when `(tls ...)` is enabled.
 | `ascii-device` | Modbus ASCII over an existing byte-stream device | `path`, plus the `ascii-pty` entries |
 | `ascii-tcp` | Raw Modbus ASCII frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms` |
 | `udp` | Modbus UDP: one MBAP ADU per datagram (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed` |
+| `ascii-udp` | Modbus ASCII: one `:`...CR LF frame per UDP datagram (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed` |
 
 `mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
 Any other entry is rejected at load time, even when its value is the default. See
 [docs/config-reference.md](docs/config-reference.md) for ranges and defaults.
 
-TCP-family listeners (`tcp`, `rtu-tcp`, `ascii-tcp`) and `udp` bind to loopback (`127.0.0.1`) by default, so
+TCP-family listeners (`tcp`, `rtu-tcp`, `ascii-tcp`) `udp` and `ascii-udp` bind to loopback (`127.0.0.1`) by default, so
 they accept only local clients. Bind explicitly to `0.0.0.0` (or `::` for IPv6) to accept remote
 connections.
 
@@ -209,6 +211,9 @@ role-based authorization based on certificate fields. See
 ```scheme
 ; Modbus UDP (one MBAP ADU per datagram, replies to the sender)
 (server (mode udp) (port 1502))
+
+; Modbus ASCII over UDP (exactly one :...CR LF frame per datagram)
+(server (mode ascii-udp) (port 1502))
 ```
 
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC and unknown unit produce no response. Broadcast
@@ -265,7 +270,7 @@ src/            the program, one folder per module (headers next to their .c fil
   config/       reads the Scheme file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
-  net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, ASCII-over-TCP, and UDP network loops; OpenSSL TLS wrapper or no-TLS stub
+  net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, ASCII-over-TCP, UDP, and ASCII-over-UDP network loops; OpenSSL TLS wrapper or no-TLS stub
   api/          the public C API implementation (top layer)
   server/       transport-independent server facade and the config adapter
   util/         arena implementation, clock, random numbers, logging

@@ -14,7 +14,7 @@ clients requires an explicit `(bind "0.0.0.0")` or `(bind "::")`. IPv6 listen so
 used: a config may contain at most one `(server ...)` block (defaults apply if omitted), there is
 no dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
 config validator. This default
-applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`; `udp` binds the same way). MBAP has no checksum field, so
+applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`; `udp` and `ascii-udp` bind the same way). MBAP has no checksum field, so
 `(fault (kind corrupt) (mode checksum))` is rejected in `tcp` and `udp` modes; the RTU and ASCII transports
 carry checksums and accept it.
 
@@ -204,6 +204,23 @@ delayed response waits in a 16-slot table and is dropped with a WARN if the tabl
 (default `"127.0.0.1"`) select the socket; only `mode`, `port`, `bind` and `seed` are accepted. There
 is no TLS (no DTLS) and no idle timeout. It is not RTU or ASCII over UDP.
 
+### Modbus ASCII over UDP
+
+`(server (mode ascii-udp))` carries Modbus ASCII frames (`:` + uppercase hex `[addr][PDU][LRC]` +
+`CR LF`) one per datagram, no connection. Each datagram must be exactly one complete frame: there is
+no stream, so no reassembly, no resynchronization on a second colon, no partial-frame timeout, and no
+tolerated inter-frame whitespace. A datagram without CR LF, with bytes before the colon or after the
+LF, with two frames, with an odd or invalid hex count or with a bad LRC is ignored (no response, never
+reaches PDU dispatch) and counts one FC08 `0x000C` communication error on every device, as in
+`ascii-tcp`. Empty datagrams and those longer than 515 bytes (the largest ASCII frame) are dropped
+before decoding without counting. Lowercase hex is accepted on RX; replies are uppercase, one frame per
+datagram to the request's source address. Unit 0 (broadcast) and unknown units get no response and
+never execute; FC08 `0x0003` is rejected with exception 03. Faults behave as in `ascii-tcp`
+(`corrupt` mode `checksum` damages the reply LRC; delayed responses use the 16-slot table), except
+`disconnect`, which is rejected at load time. `port` (default 1502) and `bind` (default `"127.0.0.1"`)
+select the socket; only `mode`, `port`, `bind` and `seed` are accepted. There is no TLS, idle timeout,
+serial line configuration or `broadcast-execute`.
+
 ## Function codes
 
 | Code | Name | Table | Max per request |
@@ -345,7 +362,7 @@ communication-error counters. `checksum` instead corrupts the emitted RTU CRC or
 framing, so the receiver sees a bad frame; MBAP/TCP has no checksum and rejects this mode at load.
 
 A drop fault suppresses the response, and a disconnect fault implies a drop and closes the
-connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes and `udp` reject disconnect). A fired `restart`
+connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes, `udp` and `ascii-udp` reject disconnect). A fired `restart`
 leaves the current response intact, even when it is dropped or delayed, but resets configured
 points, ramp timelines and machines after the response is built and re-arms fault schedules from
 the restart time (the restart kind keeps its own schedule progress); it does not clear protocol
@@ -427,7 +444,7 @@ baud-derived-auto-mode approximation).
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
-- TLS for RTU-over-TCP, ASCII-over-TCP and UDP (no DTLS); `(server (tls ...))` is rejected outside `mode tcp`
+- TLS for RTU-over-TCP, ASCII-over-TCP, UDP and ASCII-over-UDP (no DTLS); `(server (tls ...))` is rejected outside `mode tcp`
 - Certificate revocation checking (CRL/OCSP); a client certificate signed by the configured CA is accepted for the lifetime configured in the certificate
 - Modbus Security role authorization from x.509 role OIDs; a valid client certificate is either required or optional, with no per-role access control
 - Dual-stack IPv6 listening: IPv6 sockets are `IPV6_V6ONLY` and a config may contain at most one `(server ...)` block, so `"::"` and `"0.0.0.0"` cannot be served together; scoped link-local literals such as `fe80::1%eth0` are rejected
