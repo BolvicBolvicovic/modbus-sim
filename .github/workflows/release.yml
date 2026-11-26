@@ -17,7 +17,9 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        # x86_64 only: the vendored vlib test framework (vlib/vtest.h) is x86-only, so an
+        # aarch64 build could not run the tests before release. Add ubuntu-24.04-arm once it is.
+        runner: [ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:

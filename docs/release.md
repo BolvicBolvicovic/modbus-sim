@@ -9,14 +9,16 @@ A release is a tag `vX.Y.Z` whose version equals `MOGBUS_VERSION_MAJOR/MINOR/PAT
 1. Bump `MOGBUS_VERSION_*` in `include/mogbus.h`, merge to `main` once CI is green.
 2. `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
 3. The workflow fails immediately if the tag and the header disagree. Otherwise, on `ubuntu-24.04`
-   (x86_64) and `ubuntu-24.04-arm` (aarch64) it runs `make tests`, then `make dist` with
+   (x86_64) it runs `make tests`, then `make dist` with
    `SOURCE_DATE_EPOCH` set to the tagged commit time. The `publish` job then writes a combined
    `SHA256SUMS`, creates build provenance attestations (`actions/attest-build-provenance`) and the
    GitHub release (`gh release create --generate-notes`).
 4. Dry run: start the workflow manually (`workflow_dispatch`); it builds and uploads workflow
    artifacts only and publishes nothing.
 
-Release assets per architecture: `mogbus-X.Y.Z-linux-<arch>.tar.gz` and
+Releases are x86_64 only for now: the vendored test framework (`vlib/vtest.h`) uses x86
+intrinsics, so the tests cannot run on aarch64 and untested binaries are not published. Release
+assets per architecture: `mogbus-X.Y.Z-linux-<arch>.tar.gz` and
 `mogbus-X.Y.Z-linux-<arch>.spdx.json`, plus one `SHA256SUMS`.
 
 ## Tarball layout
