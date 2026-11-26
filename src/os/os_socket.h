@@ -11,15 +11,30 @@
 #include "os/os_error.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
+#include <stdint.h>
 
-/** @brief Socket handle. */
-typedef int os_socket_t;
 typedef struct os_addr_t os_addr_t;
 
-/** @brief Invalid socket handle and address text size. */
+#ifdef _WIN32
+/** @brief Socket handle (a Winsock SOCKET, which is unsigned). */
+typedef uintptr_t os_socket_t;
+
+/** @brief Invalid socket handle; an enum constant cannot hold INVALID_SOCKET. */
+#define OS_SOCKET_INVALID ((os_socket_t)~(os_socket_t)0)
+#else
+/** @brief Socket handle. */
+typedef int os_socket_t;
+
+/** @brief Invalid socket handle. */
 enum
 {
 	OS_SOCKET_INVALID = -1,
+};
+#endif
+
+/** @brief Address text size. */
+enum
+{
 	OS_ADDR_TEXT_SIZE = 64,	/**< fits "[ipv6]:65535" */
 };
 
@@ -29,6 +44,13 @@ struct os_addr_t
 	_Alignas(16) u8	raw[128];
 	u32		len;
 };
+
+/** @brief True for a handle returned by a successful open, listen or accept. */
+static inline bool
+os_socket_valid(os_socket_t s)
+{
+	return s != OS_SOCKET_INVALID;
+}
 
 /** @brief True for an IPv4 or IPv6 literal. */
 bool		os_ip_is_literal(const char* text);
@@ -68,7 +90,8 @@ s64		os_socket_send(os_socket_t s, const void* buf, u32 len);
 
 /**
  * @brief Receives one datagram and its sender; returns the datagram's real size even when it
- *        did not fit in cap (truncated), or -1 on error.
+ *        did not fit in cap (truncated), or -1 on error. Where the OS cannot report the real
+ *        size of a truncated datagram (Windows), the result is cap + 1.
  */
 s64		os_udp_recv(os_socket_t s, void* buf, u32 cap, os_addr_t* peer);
 

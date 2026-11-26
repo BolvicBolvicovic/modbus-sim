@@ -78,10 +78,10 @@ _Static_assert((int)MOGBUS_FAULT_DELAY == (int)FAULT_DELAY &&
 	       (int)MOGBUS_FAULT_RESTART == (int)FAULT_RESTART &&
 	       (int)MOGBUS_FAULT_SENSOR_DISCONNECT == (int)FAULT_SENSOR_DISCONNECT &&
 	       (int)MOGBUS_FAULT_KIND_COUNT == (int)FAULT_KIND_COUNT, "fault kind enum");
-_Static_assert(MOGBUS_STEP_CONTINUE == NET_STEP_CONTINUE &&
-	       MOGBUS_STEP_DONE == NET_STEP_DONE &&
-	       MOGBUS_STEP_ERROR == NET_STEP_ERROR, "step results");
-_Static_assert(MOGBUS_MAX_DEVICES == SERVER_MAX_DEVICES, "device limit");
+_Static_assert((int)MOGBUS_STEP_CONTINUE == (int)NET_STEP_CONTINUE &&
+	       (int)MOGBUS_STEP_DONE == (int)NET_STEP_DONE &&
+	       (int)MOGBUS_STEP_ERROR == (int)NET_STEP_ERROR, "step results");
+_Static_assert((int)MOGBUS_MAX_DEVICES == (int)SERVER_MAX_DEVICES, "device limit");
 _Static_assert(sizeof(((mogbus_device_info_t*)0)->custom_fcs) /
 	       sizeof(((mogbus_device_info_t*)0)->custom_fcs[0]) == DEVICE_MAX_CUSTOM_FCS,
 	       "custom function code limit");

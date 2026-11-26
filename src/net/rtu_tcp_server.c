@@ -61,7 +61,7 @@ conn_on_accept(void* ctx, net_tcp_conn_t* base, u64 now_ms)
 static bool
 conn_check_fault_disconnect(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
-	if (conn->base.fd < 0 || !conn->framer.fault_disconnect)
+	if (!os_socket_valid(conn->base.fd) || !conn->framer.fault_disconnect)
 		return false;
 	conn_close(server, conn);
 	return true;
@@ -235,7 +235,7 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		if (f->have_rx && f->rx_len > 0)
 		{
 			conn_process(server, conn, os_now_ms());
-			if (conn->base.fd < 0)
+			if (!os_socket_valid(conn->base.fd))
 				return;
 			if (f->pending.active)
 			{
@@ -251,7 +251,7 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 static void
 conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u32 revents)
 {
-	if (conn->base.fd < 0)
+	if (!os_socket_valid(conn->base.fd))
 		return;
 	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
@@ -260,14 +260,14 @@ conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u32 revents)
 	}
 	if (revents & OS_WAIT_IN)
 		conn_read(server, conn);
-	if (conn->base.fd >= 0 && (revents & OS_WAIT_OUT))
+	if (os_socket_valid(conn->base.fd) && (revents & OS_WAIT_OUT))
 		conn_write(server, conn);
-	if (conn->base.fd >= 0 && (revents & OS_WAIT_HUP))
+	if (os_socket_valid(conn->base.fd) && (revents & OS_WAIT_HUP))
 	{
 		conn_handle_hangup(server, conn);
 		return;
 	}
-	if (conn->base.fd >= 0 &&
+	if (os_socket_valid(conn->base.fd) &&
 	    rtu_framer_gap_due(&conn->framer, conn->read_closed, os_now_ms(), server->gap_ms))
 		conn_process_gap_due(server, conn, os_now_ms(), os_now_us());
 }
@@ -306,7 +306,7 @@ rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 	{
 		rtu_tcp_conn_t* conn = &server->conns[i];
 
-		if (conn->base.fd >= 0 &&
+		if (os_socket_valid(conn->base.fd) &&
 		    rtu_framer_gap_due(&conn->framer, conn->read_closed, now_ms, server->gap_ms))
 			conn_process_gap_due(server, conn, now_ms, os_now_us());
 	}
@@ -351,7 +351,7 @@ rtu_tcp_server_init(rtu_tcp_server_t* server, const rtu_tcp_server_options_t* op
 	server->pool.conn_count = ARRAY_COUNT(server->conns);
 	server->pool.conn_size = sizeof(server->conns[0]);
 	server->pool.idle_timeout_ms = options->idle_timeout_ms;
-	server->pool.listen_fd = -1;
+	server->pool.listen_fd = OS_SOCKET_INVALID;
 	server->pool.ctx = server;
 	server->pool.obs = options->obs;
 	server->pool.on_accept = conn_on_accept;
@@ -361,7 +361,7 @@ rtu_tcp_server_init(rtu_tcp_server_t* server, const rtu_tcp_server_options_t* op
 	rtu_tcp_init_ctx(server);
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
-		server->conns[i].base.fd = -1;
+		server->conns[i].base.fd = OS_SOCKET_INVALID;
 		rtu_framer_init(&server->conns[i].framer);
 	}
 
@@ -374,7 +374,7 @@ rtu_tcp_server_init(rtu_tcp_server_t* server, const rtu_tcp_server_options_t* op
 void
 rtu_tcp_server_close(rtu_tcp_server_t* server)
 {
-	bool was_listening = server->pool.listen_fd >= 0;
+	bool was_listening = os_socket_valid(server->pool.listen_fd);
 
 	net_tcp_pool_close_all(&server->pool);
 	if (was_listening)

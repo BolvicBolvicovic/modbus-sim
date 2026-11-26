@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-_Static_assert(NET_OBS_MAX_DEVICES == SERVER_MAX_DEVICES, "metrics keep one slot per device");
+_Static_assert((int)NET_OBS_MAX_DEVICES == (int)SERVER_MAX_DEVICES, "metrics keep one slot per device");
 
 static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_TCP]          = "tcp",
@@ -178,6 +178,11 @@ server_init(server_t* server, const server_options_t* options)
 				if (o.baud == 0 && options->mode == SERVER_MODE_RTU_DEVICE)
 					o.baud = os_serial_baud(fd);
 			}
+			else if (!os_serial_supported())
+			{
+				fprintf(stderr, "RTU fd mode is not supported on this platform\n");
+				return 1;
+			}
 			o.fd = fd;
 			rc = rtu_server_init(&server->rtu, &o);
 			break;
@@ -203,6 +208,11 @@ server_init(server_t* server, const server_options_t* options)
 				if (fd < 0)
 					return 1;
 				server->fd = fd;
+			}
+			else if (!os_serial_supported())
+			{
+				fprintf(stderr, "ASCII fd mode is not supported on this platform\n");
+				return 1;
 			}
 			o.fd = fd;
 			rc = ascii_server_init(&server->ascii, &o);

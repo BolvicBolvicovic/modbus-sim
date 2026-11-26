@@ -91,7 +91,7 @@ udp_server_init(udp_server_t* server, const udp_server_options_t* options)
 {
 	memset(server, 0, sizeof(*server));
 	server->options = *options;
-	server->udp.fd  = -1;
+	server->udp.fd  = OS_SOCKET_INVALID;
 	rng_seed(&server->rng, options->seed);
 	if (net_udp_open(&server->udp, options->bind_address, options->port) < 0)
 		return 2;
@@ -104,7 +104,7 @@ udp_server_init(udp_server_t* server, const udp_server_options_t* options)
 void
 udp_server_close(udp_server_t* server)
 {
-	bool was_open = server->udp.fd >= 0;
+	bool was_open = os_socket_valid(server->udp.fd);
 
 	net_udp_close(&server->udp);
 	if (was_open)

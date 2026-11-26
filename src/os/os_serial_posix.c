@@ -134,6 +134,12 @@ baud_to_speed(u32 baud, speed_t* out)
 }
 
 bool
+os_serial_supported(void)
+{
+	return true;
+}
+
+bool
 os_baud_is_standard(u32 baud)
 {
 	speed_t	speed;

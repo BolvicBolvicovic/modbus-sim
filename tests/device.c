@@ -876,7 +876,7 @@ TEST(CanopenObjectRejectsDuplicatesAndBounds)
 
 TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
 {
-	u16	w[2] = { 0, 0 };
+	u16	w[4] = { 0, 0, 0, 0 };
 	u32	raw  = 0;
 	f32	real = 0;
 
@@ -1009,7 +1009,7 @@ TEST(Encode64BitIntegersClampAndFloat64KeepsNonFinite)
 
 TEST(DecodeValueHandlesNonFiniteAndWordOrder)
 {
-	u16	words[2] = { 0x1234, 0x5678 };
+	u16	words[4] = { 0x1234, 0x5678 };
 
 	ASSERT_EQ(decode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, words) == 0x12345678u);
 	ASSERT_EQ(decode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, words) == 0x12345678);

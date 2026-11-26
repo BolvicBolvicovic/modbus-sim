@@ -59,11 +59,11 @@ net_obs_close(net_obs_t* obs)
 		return;
 	for (u32 i = 0; i < NET_OBS_HTTP_CONNS; i++)
 	{
-		if (obs->http.conns[i].fd >= 0)
+		if (os_socket_valid(obs->http.conns[i].fd))
 			os_socket_close(obs->http.conns[i].fd);
 		obs->http.conns[i].fd = OS_SOCKET_INVALID;
 	}
-	if (obs->http.listen_fd >= 0)
+	if (os_socket_valid(obs->http.listen_fd))
 		os_socket_close(obs->http.listen_fd);
 	obs->http.listen_fd = OS_SOCKET_INVALID;
 	obs->ready = false;
@@ -361,7 +361,7 @@ net_obs_render_metrics(const net_obs_t* obs, char* out, u32 size)
 static void
 http_close(struct net_http_conn_t* conn)
 {
-	if (conn->fd >= 0)
+	if (os_socket_valid(conn->fd))
 		os_socket_close(conn->fd);
 	conn->fd = OS_SOCKET_INVALID;
 }
@@ -563,7 +563,7 @@ net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 	bool				slot_free = false;
 	int				rc;
 
-	if (!http || http->listen_fd < 0)
+	if (!http || !os_socket_valid(http->listen_fd))
 		return os_wait(fds, count, timeout_ms);
 	if (count)
 		memcpy(all, fds, count * sizeof(*fds));
@@ -571,7 +571,7 @@ net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 	{
 		struct net_http_conn_t* conn = &http->conns[i];
 
-		if (conn->fd < 0)
+		if (!os_socket_valid(conn->fd))
 		{
 			slot_free = true;
 			continue;
@@ -612,7 +612,7 @@ net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 				os_addr_t	peer;
 				os_socket_t	fd;
 
-				if (http->conns[s].fd >= 0)
+				if (os_socket_valid(http->conns[s].fd))
 					continue;
 				fd = os_tcp_accept(http->listen_fd, &peer);
 				if (fd == OS_SOCKET_INVALID)

@@ -33,7 +33,7 @@ find_free(net_tcp_pool_t* pool)
 	{
 		net_tcp_conn_t* conn = conn_at(pool, i);
 
-		if (conn->fd < 0)
+		if (!os_socket_valid(conn->fd))
 			return conn;
 	}
 	return NULL;
@@ -125,7 +125,7 @@ net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn)
 {
 	os_socket_t fd;
 
-	if (!conn || conn->fd < 0)
+	if (!conn || !os_socket_valid(conn->fd))
 		return;
 	log_connection(pool, conn, "disconnect", "disconnected");
 	net_obs_connection(pool->obs, false);
@@ -148,7 +148,7 @@ net_tcp_pool_close_idle(net_tcp_pool_t* pool, u64 now_ms)
 		net_tcp_conn_t* conn = conn_at(pool, i);
 		u64		deadline;
 
-		if (conn->fd < 0)
+		if (!os_socket_valid(conn->fd))
 			continue;
 		if (pool->skip_idle && pool->skip_idle(pool->ctx, conn))
 			continue;
@@ -165,7 +165,7 @@ net_tcp_pool_close_all(net_tcp_pool_t* pool)
 {
 	for (u32 i = 0; i < pool->conn_count; i++)
 		net_tcp_pool_close_conn(pool, conn_at(pool, i));
-	if (pool->listen_fd >= 0)
+	if (os_socket_valid(pool->listen_fd))
 	{
 		os_socket_close(pool->listen_fd);
 		pool->listen_fd = OS_SOCKET_INVALID;
@@ -191,7 +191,7 @@ net_tcp_pool_build_poll(net_tcp_pool_t* pool, os_wait_entry_t* fds, net_tcp_conn
 		net_tcp_conn_t* conn = conn_at(pool, i);
 		u64		idle_deadline;
 
-		if (conn->fd < 0)
+		if (!os_socket_valid(conn->fd))
 			continue;
 		fds[count] = (os_wait_entry_t){ .fd = conn->fd, .events = OS_WAIT_IN };
 		owners[count++] = conn;

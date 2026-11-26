@@ -132,7 +132,7 @@ conn_process(tcp_server_t* server, tcp_conn_t* conn)
 	mbap_header_t	header = { 0 };
 	u32		frame  = 0;
 
-	while (conn->base.fd >= 0 && conn->tx_len == 0 && conn->rx_len >= MBAP_HEADER_SIZE)
+	while (os_socket_valid(conn->base.fd) && conn->tx_len == 0 && conn->rx_len >= MBAP_HEADER_SIZE)
 	{
 		mbap_decode(conn->rx, &header);
 		if (!mbap_is_valid(&header))
@@ -148,7 +148,7 @@ conn_process(tcp_server_t* server, tcp_conn_t* conn)
 			return;
 
 		handle_frame(server, conn, &header, os_now_ms());
-		if (conn->base.fd < 0)
+		if (!os_socket_valid(conn->base.fd))
 			return; /* a fault closed the connection */
 		conn_consume(conn, frame);
 	}
@@ -273,7 +273,7 @@ close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
 		tcp_conn_t*	conn     = &server->conns[i];
 		u64	deadline = net_tls_conn_handshake_deadline(conn->tls);
 
-		if (conn->base.fd < 0 ||
+		if (!os_socket_valid(conn->base.fd) ||
 		    !conn->tls ||
 		    net_tls_conn_handshake_done(conn->tls) ||
 		    deadline == 0 ||
@@ -377,7 +377,7 @@ serve_ready(tcp_server_t* server, const os_wait_entry_t* fd, net_tcp_conn_t* own
 		return;
 	}
 
-	if (conn->base.fd < 0 || fd->fd != conn->base.fd)
+	if (!os_socket_valid(conn->base.fd) || fd->fd != conn->base.fd)
 		return;
 
 	if (fd->revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
@@ -479,7 +479,7 @@ tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 	server->pool.conn_count = ARRAY_COUNT(server->conns);
 	server->pool.conn_size = sizeof(server->conns[0]);
 	server->pool.idle_timeout_ms = options->idle_timeout_ms;
-	server->pool.listen_fd = -1;
+	server->pool.listen_fd = OS_SOCKET_INVALID;
 	server->pool.ctx = server;
 	server->pool.obs = options->obs;
 	server->pool.on_accept = conn_on_accept;
@@ -487,7 +487,7 @@ tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 	server->pool.skip_idle = conn_skip_idle;
 	rng_seed(&server->rng, options->seed);
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
-		server->conns[i].base.fd = -1;
+		server->conns[i].base.fd = OS_SOCKET_INVALID;
 
 	if (options->tls_enabled)
 	{
@@ -517,7 +517,7 @@ tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 void
 tcp_server_close(tcp_server_t* server)
 {
-	bool was_listening = server->pool.listen_fd >= 0;
+	bool was_listening = os_socket_valid(server->pool.listen_fd);
 
 	net_tcp_pool_close_all(&server->pool);
 	net_tls_ctx_close(&server->tls);

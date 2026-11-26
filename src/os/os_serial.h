@@ -33,6 +33,9 @@ enum parity_t
 	PARITY_SPACE,
 };
 
+/** @brief False where serial devices, PTYs and byte-stream handles are not implemented (Windows). */
+bool		os_serial_supported(void);
+
 /** @brief True for a standard termios baud rate (9600, 19200, 115200, ...). */
 bool		os_baud_is_standard(u32 baud);
 

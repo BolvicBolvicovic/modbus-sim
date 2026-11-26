@@ -2,13 +2,15 @@
  * @file
  * @brief Event wait over sockets and byte-stream (serial/fd) handles; the only place poll() lives.
  *
- * A Windows implementation fits this shape: WSAPoll for the socket entries and overlapped I/O
- * plus WaitForMultipleObjects (comm events) for serial entries, which is why every entry
- * carries its kind and why the table is a plain fixed-size caller-owned array.
+ * Every entry carries its kind so a Windows implementation can wait on sockets (WSAPoll) and
+ * on serial handles (overlapped I/O plus WaitForMultipleObjects) differently; the Windows
+ * build waits on sockets only and flags serial entries as invalid. The table is a plain
+ * fixed-size caller-owned array.
  */
 #ifndef OS_WAIT_H
 #define OS_WAIT_H
 
+#include "os/os_socket.h"
 #include "vlib/c_types.h"
 
 typedef enum os_wait_kind_t os_wait_kind_t;
@@ -35,7 +37,7 @@ enum
 /** @brief One handle to wait on: events is the request, revents the result. */
 struct os_wait_entry_t
 {
-	int		fd;		/**< socket or serial handle; negative entries are ignored */
+	os_socket_t	fd;		/**< socket or serial handle; OS_SOCKET_INVALID (-1) entries are ignored */
 	os_wait_kind_t	kind;
 	u32		events;
 	u32		revents;

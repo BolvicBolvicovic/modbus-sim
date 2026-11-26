@@ -30,7 +30,7 @@ net_udp_open(net_udp_t* udp, const char* bind_address, u16 port)
 void
 net_udp_close(net_udp_t* udp)
 {
-	if (udp->fd >= 0)
+	if (os_socket_valid(udp->fd))
 		os_socket_close(udp->fd);
 	udp->fd = OS_SOCKET_INVALID;
 	for (u32 i = 0; i < ARRAY_COUNT(udp->pending); i++)

@@ -308,7 +308,7 @@ conn_handle_hangup(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_m
 static void
 conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u32 revents, u64 now_ms)
 {
-	if (conn->base.fd < 0)
+	if (!os_socket_valid(conn->base.fd))
 		return;
 	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
@@ -316,21 +316,21 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u32 reve
 		return;
 	}
 	conn_process(server, conn, now_ms); /* expire stale bytes before adding new ones */
-	if (conn->base.fd < 0)
+	if (!os_socket_valid(conn->base.fd))
 		return;
 	if (revents & OS_WAIT_IN)
 		conn_read(server, conn, now_ms);
-	if (conn->base.fd < 0)
+	if (!os_socket_valid(conn->base.fd))
 		return;
 	conn_process(server, conn, now_ms);
-	if (conn->base.fd >= 0 && (revents & OS_WAIT_OUT))
+	if (os_socket_valid(conn->base.fd) && (revents & OS_WAIT_OUT))
 		conn_write(server, conn);
-	if (conn->base.fd >= 0 && (revents & OS_WAIT_HUP))
+	if (os_socket_valid(conn->base.fd) && (revents & OS_WAIT_HUP))
 	{
 		conn_handle_hangup(server, conn, now_ms);
 		return;
 	}
-	if (conn->base.fd >= 0 &&
+	if (os_socket_valid(conn->base.fd) &&
 	    conn->read_closed &&
 	    !conn->pending.active)
 		conn_close(server, conn);
@@ -351,7 +351,7 @@ ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 	net_tcp_pool_close_idle(&server->pool, now_ms);
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
 	{
-		if (server->conns[i].base.fd >= 0)
+		if (os_socket_valid(server->conns[i].base.fd))
 			conn_process(server, &server->conns[i], now_ms);
 	}
 
@@ -399,14 +399,14 @@ ascii_tcp_server_init(ascii_tcp_server_t* server, const ascii_tcp_server_options
 	server->pool.conn_count = ARRAY_COUNT(server->conns);
 	server->pool.conn_size = sizeof(server->conns[0]);
 	server->pool.idle_timeout_ms = options->idle_timeout_ms;
-	server->pool.listen_fd = -1;
+	server->pool.listen_fd = OS_SOCKET_INVALID;
 	server->pool.ctx = server;
 	server->pool.obs = options->obs;
 	server->pool.on_close = conn_on_close;
 	server->pool.skip_idle = conn_skip_idle;
 	rng_seed(&server->rng, options->seed);
 	for (u32 i = 0; i < ARRAY_COUNT(server->conns); i++)
-		server->conns[i].base.fd = -1;
+		server->conns[i].base.fd = OS_SOCKET_INVALID;
 
 	if (net_tcp_pool_listen(&server->pool, options->bind_address, options->port) < 0)
 		return 2;
@@ -419,7 +419,7 @@ ascii_tcp_server_init(ascii_tcp_server_t* server, const ascii_tcp_server_options
 void
 ascii_tcp_server_close(ascii_tcp_server_t* server)
 {
-	bool was_listening = server->pool.listen_fd >= 0;
+	bool was_listening = os_socket_valid(server->pool.listen_fd);
 
 	net_tcp_pool_close_all(&server->pool);
 	if (was_listening)

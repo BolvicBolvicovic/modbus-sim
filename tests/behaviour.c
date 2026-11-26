@@ -100,7 +100,7 @@ TEST(RampBounceAboveU64LimitIsRobust)
 
 TEST(EncodeIntegers)
 {
-	u16	w[2] = { 0, 0 };
+	u16	w[4] = { 0, 0, 0, 0 };
 
 	ASSERT_EQ(encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, 70000, w) == 1);
 	ASSERT_EQ(w[0] == 65535);
@@ -118,7 +118,7 @@ TEST(EncodeIntegers)
 
 TEST(EncodeThirtyTwoBitWordOrder)
 {
-	u16	w[2] = { 0, 0 };
+	u16	w[4] = { 0, 0, 0, 0 };
 
 	ASSERT_EQ(encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, 0x12345678, w) == 2);
 	ASSERT_EQ(w[0] == 0x1234 && w[1] == 0x5678);
@@ -130,7 +130,7 @@ TEST(EncodeThirtyTwoBitWordOrder)
 
 TEST(EncodeFloat32)
 {
-	u16	w[2] = { 0, 0 };
+	u16	w[4] = { 0, 0, 0, 0 };
 	u32	raw  = 0;
 	f32	real = 0;
 
@@ -157,7 +157,7 @@ TEST(EncodeFloat32)
 
 TEST(EncodeBool)
 {
-	u16	w[2] = { 0, 0 };
+	u16	w[4] = { 0, 0, 0, 0 };
 
 	encode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, 5, w);
 	ASSERT_EQ(w[0] == 1);
