@@ -213,8 +213,12 @@ lib: $(LIB_STATIC) $(LIB_SHARED)
 python: $(LIB_SHARED)
 	cp $(LIB_SHARED) python/mogbus/libmogbus.so
 
+# layout.c prints the C struct layouts that the ctypes classes must match (test_layout).
 python-tests: $(LIB_SHARED)
-	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 -m unittest discover -s python/tests
+	mkdir -p build
+	$(CC) -Iinclude python/tests/layout.c -o build/py_layout
+	build/py_layout > build/py_layout.txt
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) MOGBUS_LAYOUT=$(CURDIR)/build/py_layout.txt PYTHONPATH=python python3 -m unittest discover -s python/tests
 
 # Fast local build: make -j$(nproc) dev [tests|clean|...]. With no other goal,
 # `dev` builds the default binary; with extra goals it is just a mode switch.

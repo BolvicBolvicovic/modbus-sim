@@ -1,4 +1,5 @@
 import contextlib
+import ctypes
 import json
 import os
 import socket
@@ -17,6 +18,9 @@ CONFIG = """
   (holding 0 (static 42))
   (holding 1 (ramp (from 0) (to 100) (step 10) (every-ms 1000) (mode wrap))))
 """
+
+
+DEVICES = CONFIG.split("\n", 2)[2]  # the config without its (server ...) line
 
 
 def free_port(kind=socket.SOCK_STREAM):
@@ -60,6 +64,45 @@ class VersionTest(unittest.TestCase):
         from mogbus import _lib
         c = _lib.lib.mogbus_server_options_defaults()
         self.assertEqual(ServerOptions._from_c(c), ServerOptions())
+
+
+class LayoutTest(unittest.TestCase):
+    """The ctypes structs must match the C structs field by field (see python/tests/layout.c)."""
+
+    def test_layout(self):
+        path = os.environ.get("MOGBUS_LAYOUT")
+        if not path:
+            self.skipTest("MOGBUS_LAYOUT not set; run `make python-tests`")
+        from mogbus import _lib
+        c = {}
+        for line in Path(path).read_text().split("\n"):
+            if line:
+                name, *nums = line.split()
+                c[name] = tuple(int(n) for n in nums)
+
+        def mine(prefix, cls, nested):
+            """Top-level fields plus the given (path, member, struct) nested ones."""
+            out = {prefix: (ctypes.sizeof(cls),)}
+            for name, _ in cls._fields_:
+                d = getattr(cls, name)
+                out[f"{prefix}.{name.rstrip('_')}"] = (d.offset, d.size)
+            for base, inner in nested:
+                off = getattr(cls, base.split("[")[0]).offset
+                for name, _ in inner._fields_:
+                    d = getattr(inner, name)
+                    out[f"{prefix}.{base}.{name.rstrip('_')}"] = (off + d.offset, d.size)
+            return out
+
+        expected = {}
+        expected.update(mine("O", _lib.ServerOptionsC, []))
+        expected.update(mine("P", _lib.PointC, [("ramp", _lib._Ramp)]))
+        expected.update(mine("I", _lib.DeviceInfoC, [("faults[0]", _lib._FaultInfo),
+                                                     ("custom_fcs[0]", _lib._CustomFc)]))
+        for key in ("faults_count", "space_count"):
+            self.assertIn(key, c)
+        self.assertEqual(c.pop("faults_count"), (7,))
+        self.assertEqual(c.pop("space_count"), (4,))
+        self.assertEqual(c, expected)
 
 
 class DeviceTest(unittest.TestCase):
@@ -306,7 +349,7 @@ class LogTest(unittest.TestCase):
 
 class ServeHelperTest(unittest.TestCase):
     def test_serve_config_text(self):
-        with mogbus.serve(config_text=CONFIG.format(port=1)) as srv:
+        with mogbus.serve(config_text=DEVICES) as srv:
             self.assertGreater(srv.port, 0)
             with socket.create_connection(("127.0.0.1", srv.port), timeout=2) as sock:
                 self.assertEqual(mbap_read(sock, 7, 0), [42])
@@ -320,10 +363,26 @@ class ServeHelperTest(unittest.TestCase):
 
     def test_serve_config_file_udp(self):
         with tempfile.NamedTemporaryFile("w", suffix=".scm") as f:
-            f.write(CONFIG.format(port=1))
+            f.write(DEVICES)
             f.flush()
             with mogbus.serve(config=f.name, mode="udp") as srv:
                 self.assertTrue(mogbus.probe(ServerOptions(mode="udp", port=srv.port), 7))
+
+    def test_serve_uses_config_server_section(self):
+        port = free_port(socket.SOCK_DGRAM)
+        text = "(server (mode udp) (port %d))\n" % port + DEVICES
+        with mogbus.serve(config_text=text) as srv:
+            self.assertEqual(srv.port, port)
+            self.assertTrue(mogbus.probe(ServerOptions(mode="udp", port=port), 7))
+        with mogbus.serve(config_text=text, port=0) as srv:
+            self.assertNotEqual(srv.port, port)
+            self.assertGreater(srv.port, 0)
+            self.assertTrue(mogbus.probe(ServerOptions(mode="udp", port=srv.port), 7))
+        tcp_port = free_port()
+        with mogbus.serve(config_text=text, mode="tcp", port=tcp_port) as srv:  # override wins
+            self.assertEqual(srv.port, tcp_port)
+            with socket.create_connection(("127.0.0.1", tcp_port), timeout=2) as sock:
+                self.assertEqual(mbap_read(sock, 7, 0), [42])
 
     def test_serve_errors(self):
         with self.assertRaises(MogbusError):
@@ -336,7 +395,7 @@ class ServeHelperTest(unittest.TestCase):
 
 class LockTest(unittest.TestCase):
     def test_concurrent_access_while_serving(self):
-        with mogbus.serve(config_text=CONFIG.format(port=1)) as srv:
+        with mogbus.serve(config_text=DEVICES) as srv:
             dev = srv.device(7)
             errors = []
 

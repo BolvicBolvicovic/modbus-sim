@@ -307,7 +307,7 @@ and `examples/embed_tcp.c`.
 
 The `python/` package wraps `libmogbus.so` with `ctypes` (standard library only) for tests that
 start simulated devices, change their values while a client talks to them and check the result:
-`make python && pip install ./python`, then `with mogbus.serve(config="profiles/minimal.scm") as srv:`.
+`make python && pip install ./python`, then `with mogbus.serve(config="profiles/minimal.scm", port=0) as srv:`.
 See [docs/user/python.md](docs/user/python.md).
 
 ## Documentation

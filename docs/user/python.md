@@ -45,11 +45,15 @@ with mogbus.serve(config_text=config) as srv:           # TCP on a free loopback
         print(struct.unpack(">H", s.recv(256)[9:11]))   # (100,)
 ```
 
-`serve(config=path, config_text=text, mode="tcp", port=0, **server_options)` creates a context,
-loads the config, picks a free port when `port` is 0 (network modes), starts the server on a
-background thread and yields an object with `.context`, `.server`, `.port` and `.device(unit_id)`.
-On exit it stops the thread and destroys the context. The `(server ...)` section of the config is
-ignored; pass transport settings as keyword arguments (`mode="rtu-tcp"`, `idle_timeout_ms=...`).
+`serve(config=path, config_text=text, **server_options)` creates a context, loads the config,
+serves it from a background thread and yields an object with `.context`, `.server`, `.port` (the
+port actually served) and `.device(unit_id)`. On exit it stops the thread and destroys the context.
+
+The server uses the config's own `(server ...)` section (mode, port, bind address, serial, TLS,
+HTTP, all of it). Keyword arguments override single fields of it: `mogbus.serve(config=path,
+mode="rtu-tcp", idle_timeout_ms=500)`. Passing `port=0` in a network mode picks a free loopback
+port, which is also what you get without a config or when the config has no `(server ...)` section
+(then TCP on a free port).
 
 ## API overview
 
@@ -114,7 +118,7 @@ import mogbus, pytest
 
 @pytest.fixture
 def meter():
-    with mogbus.serve(config="profiles/power-meter.scm") as srv:
+    with mogbus.serve(config="profiles/power-meter.scm", port=0) as srv:
         yield srv
 
 def test_voltage(meter):
