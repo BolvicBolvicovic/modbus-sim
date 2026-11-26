@@ -41,6 +41,9 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	conn->fd = -1;
 	memcpy(conn->in, data, size);
 	conn->in_len = (u32)size;
+	conn->in[size] = '\0';
+	/* The feed call may consume conn->in, so read the method first, as the server does. */
+	sscanf(conn->in, "%7s", method);
 	if (!net_obs_http_feed(&obs, conn) || !conn->writing)
 		return 0;
 	FUZZ_CHECK(conn->out_len <= sizeof(conn->out));
@@ -49,7 +52,6 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	FUZZ_CHECK(body != NULL);
 	body += 4;
 	FUZZ_CHECK(sscanf(strstr(conn->out, "Content-Length: ") + 16, "%u", &length) == 1);
-	sscanf(conn->in, "%7s", method);
 	if (strcmp(method, "HEAD") != 0)
 		FUZZ_CHECK(length == (u32)(conn->out + conn->out_len - body));
 	return 0;
