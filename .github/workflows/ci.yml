@@ -175,6 +175,26 @@ jobs:
       - name: Unit tests without config loader and TLS
         run: make -j$(nproc) WITH_CONFIG=0 WITH_TLS=0 tests
 
+  windows-cross:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
+
+      - name: Install MinGW-w64, Wine and venv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix wine wine64 python3-venv
+
+      # Cross-compiles with PLATFORM=win32, runs the unit tests and the integration checks under
+      # Wine and the pymodbus interop against mogbus.exe (the same script runs locally).
+      - name: Windows cross build, tests and interop under Wine
+        run: PYMODBUS=1 ./tools/win32_check.sh
+
   reproducible:
     needs: changes
     if: needs.changes.outputs.code == 'true'

@@ -382,7 +382,7 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 - Built as plain C (gnu11) with the [vlib](https://github.com/BolvicBolvicovic/vlib) toolchain.
 - All memory in this program comes from vlib arenas. The embedded s7 interpreter manages its own
   memory internally (it is only alive while the config is read).
-- Linux only for now (uses `poll`, `accept4`, and vlib's `mmap` arenas). On Windows, run it in Docker Desktop or WSL2, see [docs/user/windows.md](docs/user/windows.md).
+- Linux first (the OS calls live in `src/os`). On Windows, run it in Docker Desktop or WSL2, or try the experimental native build of the network modes (`make PLATFORM=win32 WITH_TLS=0`, MinGW-w64), see [docs/user/windows.md](docs/user/windows.md).
 
 ## Contributing and security
 

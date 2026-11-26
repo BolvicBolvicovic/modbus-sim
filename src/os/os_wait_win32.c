@@ -7,9 +7,10 @@
 #include <winsock2.h>
 #include <windows.h>
 
+/** @brief Longest single WSAPoll wait, so a stop request is seen quickly. */
 enum
 {
-	WAIT_SLICE_MS = 50,	/**< longest single wait, so a stop request is seen quickly */
+	WAIT_SLICE_MS = 50,
 };
 
 int
