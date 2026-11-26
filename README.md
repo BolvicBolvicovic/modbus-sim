@@ -347,6 +347,7 @@ For users, in [docs/user/](https://github.com/BolvicBolvicovic/mogbus/tree/main/
 - [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness, Prometheus metrics, runtime control API, JSON logs
 - [docs/user/library.md](docs/user/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
 - [docs/user/python.md](docs/user/python.md) - the Python package: install, API, threading, pytest fixture
+- [docs/user/windows.md](docs/user/windows.md) - running on Windows with Docker Desktop or WSL2: networking, serial adapters
 For contributors and maintainers, in [docs/dev/](https://github.com/BolvicBolvicovic/mogbus/tree/main/docs/dev):
 
 - [docs/dev/architecture.md](docs/dev/architecture.md) - code layout, coding rules, roadmap
@@ -378,7 +379,7 @@ vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 - Built as plain C (gnu11) with the [vlib](https://github.com/BolvicBolvicovic/vlib) toolchain.
 - All memory in this program comes from vlib arenas. The embedded s7 interpreter manages its own
   memory internally (it is only alive while the config is read).
-- Linux only for now (uses `poll`, `accept4`, and vlib's `mmap` arenas).
+- Linux only for now (uses `poll`, `accept4`, and vlib's `mmap` arenas). On Windows, run it in Docker Desktop or WSL2, see [docs/user/windows.md](docs/user/windows.md).
 
 ## Contributing and security
 

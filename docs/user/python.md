@@ -1,7 +1,7 @@
 # Using mogbus from Python
 
 The `mogbus` Python package wraps [`libmogbus.so`](library.md) with `ctypes`: no compiled
-extension, standard library only, Python 3.9 or newer, Linux only. It mirrors the C API in
+extension, standard library only, Python 3.9 or newer, Linux only (on Windows it works inside WSL2, see [windows.md](windows.md)). It mirrors the C API in
 `include/mogbus.h`, so the limits are the same (16 devices and 8 servers per context, machines and
 faults only from config files). Use it to start simulated devices from a test, change their
 values while a client talks to them, and read what the client did.

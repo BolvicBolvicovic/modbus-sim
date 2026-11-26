@@ -387,5 +387,16 @@ only outstanding work is listed here.
 
 - Importers for vendor register maps (CSV) and pymodbus simulator JSON. Why: users start from a
   map they already have, and the config syntax is new to them.
-- Windows: a native build, or documented Docker/WSL use including serial ports. Why: many PLC and
-  SCADA engineers work on Windows.
+- Windows: Docker Desktop and WSL2 (including serial adapters through usbipd-win) are documented in
+  `docs/user/windows.md`; only the native port remains. Why: many PLC and SCADA engineers work on
+  Windows. Plan:
+  - A `src/os/` layer is the only code that includes OS headers (enforced by `tools/check_deps.sh`):
+    `os_socket`, `os_wait` (event waiting replacing `poll`: `poll` on POSIX, `WSAEventSelect` plus
+    overlapped COM I/O plus `WaitForMultipleObjects` on Windows; the transports already go through
+    `net_poll`), `os_serial` (termios versus DCB/COMMTIMEOUTS; no PTY on Windows), `os_clock` and
+    `os_console` (signals versus `SetConsoleCtrlHandler`). The Makefile picks `os_*_posix.c` or
+    `os_*_win32.c`, like `net_tls`/`net_tls_stub`.
+  - vlib arenas need a `VirtualAlloc` backend upstream.
+  - Toolchain: MinGW-w64 clang, not MSVC, because the code uses GNU C extensions.
+  - CI order: refactor on Linux first, then a MinGW cross-compile, then tests on `windows-latest`
+    (unit, Python, interop), then native COM tests with com0com, then release artifacts.

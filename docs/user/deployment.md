@@ -2,6 +2,7 @@
 
 mogbus ships a `Dockerfile` and examples for Docker Compose and Kubernetes. The image runs as an
 unprivileged user, needs no writable filesystem and no capabilities, and has a built-in health check.
+On Windows, see [windows.md](windows.md) for Docker Desktop and WSL2.
 
 ## Build and run the image
 
