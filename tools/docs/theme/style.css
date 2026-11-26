@@ -201,9 +201,9 @@ main { flex: 1; min-width: 0; padding: 0 clamp(1.25rem, 4vw, 3.5rem); }
   max-width: calc(var(--measure) + 4rem);
 }
 .doc > * { grid-column: 1; min-width: 0; }
-@media (min-width: 1100px) {
+@media (min-width: 1360px) {
   .doc.guide, .doc.entry, .doc.apipage {
-    grid-template-columns: minmax(0, var(--measure)) var(--right-w);
+    grid-template-columns: minmax(0, var(--measure)) minmax(var(--right-w), 1fr);
     max-width: none;
     align-content: start;
   }
@@ -213,6 +213,7 @@ main { flex: 1; min-width: 0; padding: 0 clamp(1.25rem, 4vw, 3.5rem); }
     align-self: start;
     max-height: calc(100vh - var(--top-h) - 3rem); overflow: auto;
   }
+  .doc .ex { max-width: 44rem; }
   .doc.guide .toc { margin-top: 3.2rem; }
   /* the sticky column of an API item or entry starts at its own block */
   .api-item { display: grid; grid-template-columns: minmax(0, var(--measure)) var(--right-w); column-gap: 3.5rem; }
@@ -221,7 +222,7 @@ main { flex: 1; min-width: 0; padding: 0 clamp(1.25rem, 4vw, 3.5rem); }
   .doc.apipage { grid-template-columns: minmax(0, 1fr); max-width: none; }
   .doc.apipage > * { grid-column: 1; }
 }
-@media (max-width: 1099.98px) {
+@media (max-width: 1359.98px) {
   .doc .toc { display: none; }
   .doc .ex { margin: 1.25rem 0 1.5rem; }
 }
@@ -346,6 +347,9 @@ blockquote { margin: 1.25rem 0; padding: .2rem 1.1rem; border-left: 3px solid va
 .ex p { font-size: .88rem; color: var(--fg-muted); margin: .7rem 0 0; }
 .ex h3, .ex h4 { margin: 1.1rem 0 0; font-size: .95rem; }
 .ex .anchor { display: none; }
+/* examples are read, not scrolled: long lines wrap */
+.ex .code pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; }
+.ex .code pre code { overflow-wrap: anywhere; }
 .api-fn .ex { padding: 0; border: 0; background: none; }
 .api-fn .ex .code { margin: 0; }
 
@@ -419,7 +423,7 @@ blockquote { margin: 1.25rem 0; padding: .2rem 1.1rem; border-left: 3px solid va
 }
 
 /* polish */
-.doc h1 code { background: none; padding: 0; font-size: .9em; color: inherit; }
+.doc h1 code { background: none; padding: 0; font-size: .78em; color: inherit; overflow-wrap: anywhere; }
 .sidenav code, .pager code { background: none; color: inherit; padding: 0; font-size: .95em; }
 .code.syntax pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .doc h2.idx-group { border-top: 0; padding-top: 0; margin-top: 2rem; }
