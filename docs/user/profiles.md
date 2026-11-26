@@ -59,6 +59,9 @@ for example `(server (mode rtu-pty))` or `(server (mode udp))`; the devices stay
 
 ## Write your own profile
 
+If you already have the register map as a CSV table or a pymodbus simulator file, start from
+[`tools/mogbus_import.py`](importing.md) instead of typing it.
+
 1. Copy the closest profile: `cp profiles/power-meter.scm my-meter.scm`.
 2. Open your device's register table. For each entry you care about, write one line:
    - which table: `coil`, `discrete`, `input` or `holding`

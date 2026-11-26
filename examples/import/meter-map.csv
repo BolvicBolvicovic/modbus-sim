@@ -1,0 +1,19 @@
+Acme PM-300 three-phase meter - Modbus register map (example, not a real vendor document)
+Revision 2.1. Addresses are Modicon style; floats are word swapped (CDAB).
+
+Address,Register Type,Name,Description,Data Type,Byte Order,Unit,Scale,Default,Access
+30001,Input Register,Voltage L1,Phase to neutral voltage,float32,CDAB,V,,230.4,R
+30003,Input Register,Voltage L2,Phase to neutral voltage,float32,CDAB,V,,231.1,R
+30005,Input Register,Voltage L3,Phase to neutral voltage,float32,CDAB,V,,229.8,R
+30007,Input Register,Current L1,Line current,float32,CDAB,A,,12.5,R
+30009,Input Register,Active power,Total active power,float32,CDAB,kW,,8.6,R
+30011,Input Register,Frequency,Line frequency,u16,,Hz,0.01,5000,R
+30013,Input Register,Active energy,Total imported energy,u64,,Wh,,1234567890,R
+30021,Input Register,Serial number,Factory serial number,STRING(16),,,,PM300-2026-0042,R
+40001,Holding Register,CT ratio,Current transformer ratio,u16,,,,100,RW
+40002,Holding Register,Demand period,Demand integration period,u16,,min,,15,RW
+40003,Holding Register,Device label,User label,STRING[8],,,,Plant 1,RW
+00001,Coil,Reset energy,Write 1 to reset the energy counter,bool,,,,off,RW
+00002,Coil,Alarm ack,Acknowledge the alarm,bool,,,,off,RW
+10001,Discrete Input,Alarm,Over-voltage alarm,bool,,,,off,R
+10002,Discrete Input,Relay state,Output relay closed,bool,,,,on,R

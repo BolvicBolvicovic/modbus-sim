@@ -123,6 +123,8 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 
 ## Ready-made profiles
 
+Already have a register map? `tools/mogbus_import.py` converts a CSV table or a pymodbus simulator file into a config; see [docs/user/importing.md](docs/user/importing.md).
+
 | File | Device | Shows |
 |---|---|---|
 | [`profiles/minimal.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/minimal.scm) | Two registers | The smallest config |
@@ -339,6 +341,7 @@ For users, in [docs/user/](https://github.com/BolvicBolvicovic/mogbus/tree/main/
 
 - [docs/user/config-reference.md](docs/user/config-reference.md) - every config entry, with examples and error help
 - [docs/user/profiles.md](docs/user/profiles.md) - the profiles, and how to write your own
+- [docs/user/importing.md](docs/user/importing.md) - turn a vendor CSV register map or a pymodbus simulator file into a config
 - [docs/user/modbus-support.md](docs/user/modbus-support.md) - what the server answers, exceptions, limits
 - [docs/user/deployment.md](docs/user/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
 - [docs/user/observability.md](docs/user/observability.md) - HTTP health, readiness, Prometheus metrics, runtime control API, JSON logs

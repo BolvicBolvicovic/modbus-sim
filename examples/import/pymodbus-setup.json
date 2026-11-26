@@ -1,0 +1,74 @@
+{
+    "server_list": {
+        "main": {
+            "comm": "tcp",
+            "host": "127.0.0.1",
+            "port": 5020,
+            "framer": "socket",
+            "ignore_missing_slaves": false,
+            "identity": {
+                "VendorName": "Example Co",
+                "ProductCode": "EX-1",
+                "ProductName": "Example simulator",
+                "MajorMinorRevision": "1.0"
+            }
+        },
+        "field-bus": {
+            "comm": "serial",
+            "port": "/dev/ttyUSB0",
+            "framer": "rtu",
+            "baudrate": 19200,
+            "bytesize": 8,
+            "parity": "E",
+            "stopbits": 1
+        }
+    },
+    "device_list": {
+        "plant": {
+            "setup": {
+                "co size": 64,
+                "di size": 64,
+                "hr size": 200,
+                "ir size": 200,
+                "shared blocks": true,
+                "type exception": false,
+                "defaults": {
+                    "value": {"bits": 0, "uint16": 0, "uint32": 0, "float32": 0.0, "string": " "},
+                    "action": {"bits": null, "uint16": null, "uint32": null, "float32": null, "string": null}
+                }
+            },
+            "invalid": [[150, 160]],
+            "write": [10, [20, 21]],
+            "bits": [
+                {"addr": 0, "value": 5},
+                {"addr": [1, 2], "value": 65535}
+            ],
+            "uint16": [
+                {"addr": 10, "value": 1500},
+                {"addr": 11, "value": 50, "action": "increment", "parameters": {"minval": 0, "maxval": 100}},
+                {"addr": 12, "value": 50, "action": "random", "parameters": {"minval": 45, "maxval": 55}},
+                {"addr": [20, 21], "value": 7},
+                {"addr": 22, "action": "uptime"}
+            ],
+            "uint32": [
+                {"addr": [30, 31], "value": 617001},
+                {"addr": [32, 33], "value": 5, "action": "increment"}
+            ],
+            "float32": [
+                {"addr": [40, 41], "value": 404.17},
+                {"addr": [42, 43], "value": 20.5, "action": "random", "parameters": {"minval": 19.0, "maxval": 22.0}}
+            ],
+            "string": [
+                {"addr": [50, 55], "value": "Pump station"}
+            ],
+            "repeat": []
+        },
+        "spare": {
+            "setup": {"co size": 0, "di size": 0, "hr size": 10, "ir size": 0, "shared blocks": true,
+                      "type exception": false,
+                      "defaults": {"value": {}, "action": {}}},
+            "invalid": [], "write": [], "bits": [], "uint16": [{"addr": 0, "value": 1}],
+            "uint32": [], "float32": [], "string": [], "repeat": []
+        }
+    }
+}

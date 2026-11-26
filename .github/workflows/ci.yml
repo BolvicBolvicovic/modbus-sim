@@ -272,8 +272,8 @@ jobs:
       - name: Install OpenSSL development files
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
 
-      - name: Build the library
-        run: make -j$(nproc) lib
+      - name: Build the library and the binary (the importer tests run --check)
+        run: make -j$(nproc) lib && make -j$(nproc)
 
       - name: Python package tests
         run: make python-tests
