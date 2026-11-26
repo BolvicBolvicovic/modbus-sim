@@ -35,6 +35,15 @@ typedef enum fault_kind_t {
 	FAULT_KIND_COUNT,
 } fault_kind_t;
 
+/** @brief Accepted ranges of fault parameters, shared by the config loader and runtime control. */
+enum
+{
+	FAULT_MIN_DELAY_MS	= 1,
+	FAULT_MAX_DELAY_MS	= 60000,
+	FAULT_MIN_EXCEPTION	= 1,
+	FAULT_MAX_EXCEPTION	= 11,	/**< standard codes 01-08, 0A, 0B; 09 is reserved */
+};
+
 #define FAULT_BIT(kind) ((u8)(1u << (kind)))
 _Static_assert(FAULT_KIND_COUNT <= 8, "fault mask no longer fits in u8");
 
@@ -141,5 +150,21 @@ struct fault_runtime_t
  */
 fault_decision_t	fault_decide_at(const fault_set_t* set, rng_t* rng,
 					fault_runtime_t* runtime, u64 now_ms, u64 start_ms);
+
+/** @brief Name of a fault kind as written in configs and URLs, e.g. "sensor-disconnect". */
+const char*	fault_kind_name(fault_kind_t kind);
+
+/** @brief Name of a corrupt mode ("pdu", "register", "checksum"); NONE reads as "pdu". */
+const char*	fault_corrupt_mode_name(fault_corrupt_mode_t mode);
+
+/**
+ * @brief Checks a fault the way the config loader does, for faults set at runtime.
+ *
+ * Parameter ranges, the reserved exception code 9, and the transport rules: checksum
+ * corruption needs a transport with a checksum (`mbap` false) and disconnect needs a
+ * connection (`tcp_like`).
+ * @return NULL if valid, else a static message.
+ */
+const char*	fault_check(fault_kind_t kind, const fault_t* fault, bool tcp_like, bool mbap);
 
 #endif

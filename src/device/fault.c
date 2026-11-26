@@ -3,8 +3,51 @@
  * @brief Fault decisions: percent dice, schedules and the combined per-request decision.
  */
 #include "device/fault.h"
+#include <stddef.h>
 
-enum { FAULT_MAX_DELAY_MS = 60000 };
+static const char* const KIND_NAMES[FAULT_KIND_COUNT] = {
+	[FAULT_DELAY]             = "delay",
+	[FAULT_DROP]              = "drop",
+	[FAULT_EXCEPTION]         = "exception",
+	[FAULT_CORRUPT]           = "corrupt",
+	[FAULT_DISCONNECT]        = "disconnect",
+	[FAULT_RESTART]           = "restart",
+	[FAULT_SENSOR_DISCONNECT] = "sensor-disconnect",
+};
+
+const char*
+fault_kind_name(fault_kind_t kind)
+{
+	return (unsigned)kind < FAULT_KIND_COUNT ? KIND_NAMES[kind] : "";
+}
+
+const char*
+fault_corrupt_mode_name(fault_corrupt_mode_t mode)
+{
+	return mode == FAULT_CORRUPT_REGISTER ? "register" :
+	       mode == FAULT_CORRUPT_CHECKSUM ? "checksum" : "pdu";
+}
+
+const char*
+fault_check(fault_kind_t kind, const fault_t* fault, bool tcp_like, bool mbap)
+{
+	if (fault->percent > 100)
+		return "percent must be 0-100";
+	if (kind == FAULT_DELAY &&
+	    (fault->delay_ms < FAULT_MIN_DELAY_MS || fault->delay_ms > FAULT_MAX_DELAY_MS))
+		return "delay_ms must be 1-60000";
+	if (kind == FAULT_EXCEPTION &&
+	    (fault->exception_code < FAULT_MIN_EXCEPTION ||
+	     fault->exception_code > FAULT_MAX_EXCEPTION))
+		return "exception_code must be 1-11";
+	if (kind == FAULT_EXCEPTION && fault->exception_code == 9)
+		return "exception_code 9 is reserved";
+	if (kind == FAULT_CORRUPT && fault->corrupt_mode == FAULT_CORRUPT_CHECKSUM && mbap)
+		return "corrupt mode checksum is not valid in this mode (MBAP frames have no checksum)";
+	if (kind == FAULT_DISCONNECT && !tcp_like)
+		return "disconnect is not valid in this mode (TCP-like transports only)";
+	return NULL;
+}
 
 static void
 schedule_advance(fault_schedule_state_t* state, const fault_t* fault, u64 from_ms)

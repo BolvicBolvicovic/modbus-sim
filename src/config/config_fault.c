@@ -148,11 +148,11 @@ config_parse_fault(form_ctx_t* ctx, s7_pointer item, fault_set_t* set, const cha
 		return form_fail(ctx, "%s: percent cannot be combined with schedule",
 				 form_text(ctx, percent_f));
 
-	if (kind == FAULT_DELAY && !form_get_int(ctx, delay_f, 1, 60000, &delay))
+	if (kind == FAULT_DELAY && !form_get_int(ctx, delay_f, FAULT_MIN_DELAY_MS, FAULT_MAX_DELAY_MS, &delay))
 		return false;
 	if (kind == FAULT_EXCEPTION)
 	{
-		if (!form_get_int(ctx, code_f, 1, 11, &code))
+		if (!form_get_int(ctx, code_f, FAULT_MIN_EXCEPTION, FAULT_MAX_EXCEPTION, &code))
 			return false;
 		/* Standard codes 01-08, 0A, 0B; 09 is reserved. */
 		if (code == 9)
