@@ -444,14 +444,20 @@ fuzz: $(FUZZ_BINS)
 fuzz-run: fuzz
 	./tools/run_fuzz.sh $(FUZZ_SECONDS) $(FUZZ_NAMES)
 
-# HTML reference of the sources and Markdown pages in build/api/html (needs doxygen; warnings are
-# errors), then a check that every file, struct, union, enum and opaque typedef has a brief.
-api-docs:
-	mkdir -p build/api && doxygen Doxyfile
+# Documentation site in build/docs (needs doxygen and python3; warnings are errors): Doxygen XML
+# and the source browser (build/docs/internals), a check that every file, struct, union, enum and
+# opaque typedef has a brief, then tools/docs/build.py renders the site from the XML.
+docs:
+	mkdir -p build/docs && doxygen Doxyfile
 	./tools/check_doc_briefs.sh
+	python3 tools/docs/build.py
+
+# Builds the reference-template fixtures (tools/docs/fixtures) into build/docs-fixtures.
+docs-fixtures:
+	./tools/docs/fixtures.sh
 
 clean:
-	$(RM) -r $(DIST_DIR) build/api $(FUZZ_DIR)
+	$(RM) -r $(DIST_DIR) build/docs build/docs-fixtures $(FUZZ_DIR)
 	rm -f $(REV_STAMP)
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times \
@@ -466,4 +472,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib python python-tests python-examples lib-check tests asan dist api-docs fuzz fuzz-run clean distclean re commands FORCE
+.PHONY: all dev lib python python-tests python-examples lib-check tests asan dist docs docs-fixtures fuzz fuzz-run clean distclean re commands FORCE

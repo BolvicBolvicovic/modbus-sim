@@ -1,6 +1,6 @@
 # doxygen-awesome-css
 
-Theme of the generated API site (`make api-docs`, see `Doxyfile`), vendored unmodified.
+Theme of the generated source browser (`build/docs/internals`, `make docs`, see `Doxyfile`), vendored unmodified.
 
 - Source: https://github.com/jothepro/doxygen-awesome-css, tag `v2.5.0`, MIT (see `LICENSE`).
 - Files: `doxygen-awesome.css`, `doxygen-awesome-sidebar-only.css`,

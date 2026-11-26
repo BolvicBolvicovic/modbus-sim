@@ -1,9 +1,10 @@
-# Doxygen configuration for the mogbus sources. `make api-docs` writes HTML to
-# build/api/html; warnings are errors so the comment style stays valid.
+# Doxygen configuration for the mogbus sources. `make docs` writes XML (the data tools/docs/build.py
+# renders the site from) to build/docs/xml and the source browser to build/docs/internals; warnings are
+# errors so the comment style stays valid.
 PROJECT_NAME           = mogbus
 PROJECT_BRIEF          = Modbus device simulator
 PROJECT_LOGO           = docs/assets/mogbus-logo.svg
-OUTPUT_DIRECTORY       = build/api
+OUTPUT_DIRECTORY       = build/docs
 INPUT                  = README.md CONTRIBUTING.md SECURITY.md NOTICE.md AGENTS.md docs/user docs/dev include src examples tests/fuzz
 FILE_PATTERNS          = *.c *.h *.md
 # Example READMEs are not site pages (older Doxygen also takes any README.md as a main page).
@@ -22,6 +23,10 @@ AUTOLINK_SUPPORT       = NO
 JAVADOC_AUTOBRIEF      = NO
 GENERATE_LATEX         = NO
 GENERATE_HTML          = YES
+HTML_OUTPUT            = internals
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+XML_PROGRAMLISTING     = NO
 SOURCE_BROWSER         = NO
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES

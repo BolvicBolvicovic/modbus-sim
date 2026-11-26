@@ -1,0 +1,39 @@
+{
+  "title": "mogbus",
+  "home": "README.md",
+  "home_nav": "Overview",
+  "sections": [
+    {
+      "title": "Guide",
+      "items": [
+        "docs/user/profiles.md",
+        "docs/user/importing.md",
+        "docs/user/deployment.md",
+        "docs/user/windows.md",
+        "docs/user/observability.md",
+        "docs/user/library.md",
+        "docs/user/python.md"
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        "docs/user/config-reference.md",
+        "docs/user/modbus-support.md",
+        {"api": "include/mogbus.h", "title": "C API"}
+      ]
+    },
+    {
+      "title": "Contributing",
+      "items": [
+        "CONTRIBUTING.md",
+        "docs/dev/architecture.md",
+        "docs/dev/release.md",
+        "docs/dev/docs.md",
+        "AGENTS.md",
+        "SECURITY.md",
+        "NOTICE.md"
+      ]
+    }
+  ]
+}

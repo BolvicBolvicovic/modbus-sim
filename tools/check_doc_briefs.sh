@@ -1,20 +1,12 @@
 #!/bin/sh
 # Fails when a file, struct, union, enum or opaque/function-pointer typedef has no Doxygen brief.
-# Runs Doxygen with XML output only (build/api/xml) and reads the result with python3.
+# Reads the XML that `doxygen Doxyfile` wrote to build/docs/xml with python3 (make docs runs it first).
 set -eu
 
 cd "$(dirname "$0")/.."
-out=build/api/xml
+out=build/docs/xml
 
-rm -rf "$out"
-mkdir -p build/api
-{
-	cat Doxyfile
-	echo "GENERATE_HTML = NO"
-	echo "GENERATE_XML = YES"
-	echo "XML_OUTPUT = xml"
-	echo "XML_PROGRAMLISTING = NO"
-} | doxygen - >/dev/null
+[ -d "$out" ] || { echo "check_doc_briefs: $out missing (run doxygen Doxyfile first)" >&2; exit 1; }
 
 python3 -I - "$out" <<'EOF'
 import glob, os, sys
