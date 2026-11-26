@@ -41,12 +41,23 @@ class ValueType(enum.IntEnum):
     U32 = 2
     S32 = 3
     F32 = 4
+    FLOAT32 = 4  # alias of F32, as in the config file
     BOOL = 5
+    U64 = 6
+    S64 = 7
+    F64 = 8
+    FLOAT64 = 8  # alias of F64, as in the config file
+    STRING = 9
 
 
 class WordOrder(enum.IntEnum):
     HIGH_FIRST = 0
     LOW_FIRST = 1
+
+
+class ByteOrder(enum.IntEnum):
+    BIG = 0
+    LITTLE = 1
 
 
 class RampMode(enum.IntEnum):
@@ -322,12 +333,21 @@ class Device:
         return self.info().name
 
     @_locked
-    def add_point(self, space, address, type="u16", value=0, word_order="high-first", ramp=None):
+    def add_point(self, space, address, type="u16", value=0, word_order="high-first", ramp=None,
+                  byte_order="big", length=0, text=None):
+        """Adds a point. `byte_order` swaps the bytes inside every register; for type "string",
+        `length` is the number of registers (1-123) and `text` the initial text."""
         p = _lib.PointC()
         p.space = int(_coerce(Space, space, "space"))
         p.address = _u(address, "address", 65536)
         p.type = int(_coerce(ValueType, type, "type"))
         p.word_order = int(_coerce(WordOrder, word_order, "word_order"))
+        p.byte_order = int(_coerce(ByteOrder, byte_order, "byte_order"))
+        p.length = _u(length, "length", 1 << 32)
+        if text is not None:
+            if p.type != ValueType.STRING:
+                raise MogbusError("text only applies to type \"string\"")
+            p.text = text.encode("latin-1")
         if ramp is None:
             p.kind = 0
             p.value = float(value)
@@ -386,6 +406,25 @@ class Device:
         address = _u(address, "address", 65536)
         if not lib.mogbus_device_set_value(self._live(), space, address, float(value)):
             raise MogbusError(f"no point starts at {Space(space).name.lower()} {address}")
+
+    @_locked
+    def get_string(self, space, address) -> str:
+        """The text of the string point at `address`, up to its first NUL byte (bytes as Latin-1)."""
+        space = int(_coerce(Space, space, "space"))
+        address = _u(address, "address", 65536)
+        buf = ctypes.create_string_buffer(2 * 123 + 1)
+        if not lib.mogbus_device_get_string(self._live(), space, address, buf, len(buf)):
+            raise MogbusError(f"no string point starts at {Space(space).name.lower()} {address}")
+        return buf.value.decode("latin-1")
+
+    @_locked
+    def set_string(self, space, address, text: str) -> None:
+        """Replaces the text of a string point, NUL padded; clients can still write it."""
+        space = int(_coerce(Space, space, "space"))
+        address = _u(address, "address", 65536)
+        if not lib.mogbus_device_set_string(self._live(), space, address, text.encode("latin-1")):
+            raise MogbusError(f"no string point starts at {Space(space).name.lower()} {address}, "
+                              "or the text is longer than its registers")
 
     @_locked
     def info(self) -> DeviceInfo:

@@ -214,7 +214,7 @@ class DeviceTest(unittest.TestCase):
         with self.assertRaisesRegex(MogbusError, "invalid space"):
             d.read("nowhere", 0, 1)
         with self.assertRaisesRegex(MogbusError, "invalid type"):
-            d.add_point("holding", 5, "f64")
+            d.add_point("holding", 5, "f128")
         with self.assertRaises(MogbusError):
             d.add_point("holding", 0)  # overlap: the C message comes through
         with self.assertRaisesRegex(MogbusError, "undefined or out of range"):
@@ -237,6 +237,115 @@ class DeviceTest(unittest.TestCase):
             self.dev.read("holding", 0, 1)
         with self.assertRaisesRegex(MogbusError, "closed"):
             self.ctx.add_device(3)
+
+
+class DataTypeTest(unittest.TestCase):
+    """64-bit types, byte order and strings, checked against Python's struct module."""
+
+    def setUp(self):
+        self.ctx = mogbus.Context()
+        self.addCleanup(self.ctx.close)
+        self.dev = self.ctx.add_device(1)
+
+    @staticmethod
+    def registers(raw, word_order, byte_order):
+        """The registers for the big-endian bytes `raw` the way the point layouts define them."""
+        words = [raw[i:i + 2] for i in range(0, len(raw), 2)]
+        if word_order == "low-first":
+            words.reverse()
+        if byte_order == "little":
+            words = [w[::-1] for w in words]
+        return [struct.unpack(">H", w)[0] for w in words]
+
+    def test_every_type_word_order_and_byte_order(self):
+        cases = [("u16", ">H", 0xBEEF), ("s16", ">h", -1234), ("u32", ">I", 0xDEADBEEF),
+                 ("s32", ">i", -123456789), ("f32", ">f", 1.5),
+                 ("u64", ">Q", 0x0102030405060000), ("s64", ">q", -0x0102030405060000),
+                 ("f64", ">d", -123.456), ("float64", ">d", 2.5)]
+        address = 0
+        for name, fmt, value in cases:
+            for word_order in ("high-first", "low-first"):
+                for byte_order in ("big", "little"):
+                    # Only 16-bit types ignore the word order, so skip the duplicate.
+                    width = struct.calcsize(fmt) // 2
+                    self.dev.add_point("holding", address, name, value, word_order=word_order,
+                                       byte_order=byte_order)
+                    want = self.registers(struct.pack(fmt, value), word_order, byte_order)
+                    with self.subTest(type=name, word_order=word_order, byte_order=byte_order):
+                        self.assertEqual(self.dev.read("holding", address, width), want)
+                        if name in ("u64", "s64"):
+                            # Above 2^53 the decoded value is a double; compare as one.
+                            self.assertEqual(self.dev.get_value("holding", address), float(value))
+                        else:
+                            self.assertEqual(self.dev.get_value("holding", address),
+                                             struct.unpack(fmt, struct.pack(fmt, value))[0])
+                    address += width
+
+    def test_four_common_32_bit_layouts(self):
+        # 1.5f = 3F C0 00 00
+        for word_order, byte_order, want in (("high-first", "big", [0x3FC0, 0x0000]),   # ABCD
+                                              ("low-first", "big", [0x0000, 0x3FC0]),    # CDAB
+                                              ("high-first", "little", [0xC03F, 0x0000]),  # BADC
+                                              ("low-first", "little", [0x0000, 0xC03F])):  # DCBA
+            ctx = mogbus.Context()
+            self.addCleanup(ctx.close)
+            dev = ctx.add_device(1)
+            dev.add_point("input", 0, "f32", 1.5, word_order=word_order, byte_order=byte_order)
+            self.assertEqual(dev.read("input", 0, 2), want)
+
+    def test_set_value_and_client_writes_use_the_layout(self):
+        d = self.dev
+        d.add_point("holding", 0, "f64", 0, word_order="low-first", byte_order="little")
+        d.write("holding", 0, self.registers(struct.pack(">d", 99.5), "low-first", "little"))
+        self.assertEqual(d.get_value("holding", 0), 99.5)
+        d.set_value("holding", 0, -7.25)  # claims the point for the host
+        want = self.registers(struct.pack(">d", -7.25), "low-first", "little")
+        self.assertEqual(d.read("holding", 0, 4), want)
+
+    def test_sixty_four_bit_ramp(self):
+        self.dev.add_point("holding", 0, "u64", ramp={"from": 5, "to": 5, "step": 1,
+                                                       "every_ms": 1000, "mode": "hold"})
+        self.assertEqual(self.dev.read("holding", 0, 4), [0, 0, 0, 5])
+
+    def test_strings(self):
+        d = self.dev
+        d.add_point("holding", 0, "string", length=3, text="ABCDE")
+        d.add_point("input", 0, "string", length=2, text="AB", byte_order="little")
+        d.add_point("holding", 10, "string", length=2)
+        self.assertEqual(d.read("holding", 0, 3), [0x4142, 0x4344, 0x4500])
+        self.assertEqual(d.read("input", 0, 2), [0x4241, 0x0000])
+        self.assertEqual(d.get_string("holding", 0), "ABCDE")
+        self.assertEqual(d.get_string("input", 0), "AB")
+        self.assertEqual(d.get_string("holding", 10), "")
+        # A client write of raw registers updates the text.
+        d.write("holding", 0, list(struct.unpack(">3H", b"Hi\0\0\0\0")))
+        self.assertEqual(d.get_string("holding", 0), "Hi")
+        d.set_string("holding", 0, "XYZ")
+        self.assertEqual(d.read("holding", 0, 3), [0x5859, 0x5A00, 0])
+        d.write("holding", 0, [0x5859, 0x5A00, 0x1234])  # clients may write anything
+        with self.assertRaisesRegex(MogbusError, "longer than its registers"):
+            d.set_string("holding", 0, "1234567")
+        with self.assertRaises(MogbusError):
+            d.get_string("holding", 5)
+        with self.assertRaises(MogbusError):
+            d.get_value("holding", 0)  # a string has no number
+        with self.assertRaises(MogbusError):
+            d.set_value("holding", 0, 1)
+
+    def test_string_errors(self):
+        d = self.dev
+        with self.assertRaisesRegex(MogbusError, "between 1 and 123"):
+            d.add_point("holding", 0, "string")
+        with self.assertRaisesRegex(MogbusError, "between 1 and 123"):
+            d.add_point("holding", 0, "string", length=124)
+        with self.assertRaisesRegex(MogbusError, "longer than its registers"):
+            d.add_point("holding", 0, "string", length=1, text="abc")
+        with self.assertRaisesRegex(MogbusError, "only applies"):
+            d.add_point("holding", 0, "u16", text="abc")
+        with self.assertRaisesRegex(MogbusError, "invalid byte_order"):
+            d.add_point("holding", 0, "u16", byte_order="middle")
+        d.add_point("holding", 0, "string", length=123, text="x" * 246)
+        self.assertEqual(d.get_string("holding", 0), "x" * 246)
 
 
 class ConfigTest(unittest.TestCase):

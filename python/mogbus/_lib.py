@@ -51,6 +51,9 @@ class PointC(ctypes.Structure):
         ("kind", ctypes.c_int),
         ("value", ctypes.c_double),
         ("ramp", _Ramp),
+        ("byte_order", ctypes.c_int),
+        ("length", ctypes.c_uint32),
+        ("text", ctypes.c_char_p),
     ]
 
 
@@ -145,6 +148,8 @@ _sig("mogbus_device_read", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_uint32, 
 _sig("mogbus_device_write", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_uint32, _p(_c.c_uint16))
 _sig("mogbus_device_get_value", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _p(_c.c_double))
 _sig("mogbus_device_set_value", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_double)
+_sig("mogbus_device_get_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_char_p, _c.c_size_t)
+_sig("mogbus_device_set_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_char_p)
 _sig("mogbus_server_options_defaults", ServerOptionsC)
 _sig("mogbus_server_create", _ptr, _ptr, _p(ServerOptionsC), *_err, _p(_c.c_int))
 _sig("mogbus_server_create_from_config", _ptr, _ptr, *_err, _p(_c.c_int))
