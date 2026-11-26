@@ -203,6 +203,18 @@ put(char* out, u32 cap, u32* used, const char* fmt, ...)
 	*used = n < 0 ? cap : *used + (u32)n;
 }
 
+/* Why a decoded value read or write was refused: string points have no numeric value. */
+static const char*
+value_refusal(const device_t* dev, space_kind_t space, u32 address)
+{
+	u32 idx = device_find_point(dev, space, address);
+
+	if (idx < dev->point_count &&
+	    dev->points[idx].type == VT_STRING)
+		return "string points have no numeric value; read or write their registers";
+	return "no point starts at this address";
+}
+
 static u32
 fail(char* out, u32 cap, int* status, int code, const char* message)
 {
@@ -428,7 +440,7 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 		if (get)
 		{
 			if (!device_get_point(dev, (space_kind_t)space, address, &val))
-				return fail(out, cap, status, 422, "no point starts at this address");
+				return fail(out, cap, status, 422, value_refusal(dev, (space_kind_t)space, address));
 			if (val.type != VAL_BOOL && !isfinite(val.n))
 				return (u32)snprintf(out, cap, "{\"value\":null}");
 			if (val.type == VAL_BOOL)
@@ -452,7 +464,7 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 			val.n    = parsed.num[F_VALUE];
 		}
 		if (!device_set_point(dev, (space_kind_t)space, address, &val))
-			return fail(out, cap, status, 422, "no point starts at this address");
+			return fail(out, cap, status, 422, value_refusal(dev, (space_kind_t)space, address));
 		return done(out, cap, status);
 	}
 
