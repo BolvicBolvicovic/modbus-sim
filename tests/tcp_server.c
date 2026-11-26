@@ -2880,7 +2880,7 @@ TEST(NetPipelinedRequestsAreAnsweredPromptly)
 
 TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 {
-	client_t	held[64];
+	client_t	held[24];
 	client_t	client = { .fd = -1 };
 	u8		req[8];
 	u8		resp[MODBUS_MAX_PDU];
@@ -2895,7 +2895,9 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 
 	/* Low RLIMIT_NOFILE: server can start, but accept() will eventually hit EMFILE.
 	 * The limit must leave room for startup fds while being small enough that
-	 * accepted connections exhaust the table before SERVER_MAX_CONNECTIONS. */
+	 * accepted connections exhaust the table before SERVER_MAX_CONNECTIONS.
+	 * Hold only a few clients beyond that point: every extra one waits in the
+	 * listen backlog and costs another 1 s accept backoff during recovery. */
 	g_server_nofile = 20;
 	ok = server_start("", "(device (unit-id 1) (holding 0 (static 5)))");
 

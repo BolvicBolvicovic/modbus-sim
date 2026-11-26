@@ -257,8 +257,10 @@ and `mogbus-tests`, and `lib-check`, and runs the tests through `tools/run_tests
 for whole suites, so the script runs each test by
 name and fails if any one fails. `tests/tcp_server.c` and the other `*_server.c` integration files start the real binary on a private
 loopback port and exercise the documented protocol behaviour of each transport (routing, exceptions,
-faults, connection limit, malformed frames and datagrams); override the binary with `MOGBUS_BIN`. Independent suites run in parallel with
-`RUN_TESTS_JOBS` workers (default 3, capped by suite count); tests inside a suite stay sequential.
+faults, connection limit, malformed frames and datagrams); override the binary with `MOGBUS_BIN`. Tests run in parallel with
+`RUN_TESTS_JOBS` workers (default `nproc`) through `xargs -P`, one test per process; integration tests
+pick free ports, so no two tests share a resource. The queue is ordered slowest first from the
+durations of the previous run (`BIN.times`, or `RUN_TESTS_TIMES`); new tests go first.
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
 Compilations emit `.d` dependency files (`-MMD -MP`), so editing a header rebuilds every

@@ -14,3 +14,4 @@ libmogbus*.a
 libmogbus.so
 examples/embed_tcp_shared
 examples/embed_tcp_static
+mogbus*-tests.times

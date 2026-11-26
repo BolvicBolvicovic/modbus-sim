@@ -12,6 +12,8 @@
 #include <poll.h>
 #include <signal.h>
 #include <string.h>
+#include <linux/sockios.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <stdio.h>
@@ -2204,7 +2206,20 @@ TEST(RtuServerBaudTruncatedFrameDoesNotLoseValidRequest)
 
 	good_len = modbus_rtu_encode(good, 1, req, sizeof(req));
 	ASSERT_EQ(send_all_fd(child.fd, trunc, sizeof(trunc)));
-	usleep(10000); /* within two gaps: keep truncated bytes */
+	/* Time the gap from when the server has read the truncated bytes: if it
+	 * read both writes at once (busy machine) there would be no silence at all. */
+	{
+		int unread = 1;
+
+		for (int i = 0; i < 1000 && unread > 0; i++)
+		{
+			ASSERT_EQ(ioctl(child.fd, SIOCOUTQ, &unread) == 0);
+			if (unread > 0)
+				usleep(1000);
+		}
+		ASSERT_EQ(unread == 0);
+	}
+	usleep(7000); /* between one and two 5 ms gaps: truncated bytes are kept */
 	ASSERT_EQ(send_all_fd(child.fd, good, good_len));
 	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
 	ASSERT_EQ(addr == 1);

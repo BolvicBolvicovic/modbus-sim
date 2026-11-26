@@ -41,8 +41,9 @@ Check a config without starting the server:
 `--check` prints the same summary as a normal start (transport, devices, point counts, faults) and
 validates the server settings, including TLS files, without opening any socket or device.
 
-Run the tests: `make tests`. Independent suites run in parallel (3 workers by default; set
-`RUN_TESTS_JOBS=N` to change, capped by the number of suites); tests inside a suite stay sequential.
+Run the tests: `make tests`. Every test runs in its own process, one per CPU in parallel (set
+`RUN_TESTS_JOBS=N` to change), slowest first: durations of the last run are kept in
+`mogbus-tests.times` / `mogbus-asan-tests.times` (ignored by git, removed by `make clean`).
 Run them under AddressSanitizer and UBSan: `make asan` (the vendored s7 interpreter is excluded
 from instrumentation). The suite includes network integration tests that start the real server on
 loopback; set `MOGBUS_BIN` to test a different binary.

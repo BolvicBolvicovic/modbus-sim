@@ -496,20 +496,37 @@ ts_wait_eof(int fd, u32 timeout_ms)
 u16
 ts_free_port(void)
 {
-	struct sockaddr_in addr = { 0 };
-	socklen_t           len = sizeof(addr);
-	int                 fd  = socket(AF_INET, SOCK_STREAM, 0);
-	u16                 port = 0;
+	/* Tests run in parallel. A port from bind(0) is an ephemeral port, which any
+	 * test's outgoing connection may take before the server binds it, so pick a
+	 * random port below the usual ephemeral range (32768+) and check that it is
+	 * free for both TCP and UDP. */
+	static u32 state;
 
-	if (fd < 0)
-		return 0;
-	addr.sin_family      = AF_INET;
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 &&
-	    getsockname(fd, (struct sockaddr*)&addr, &len) == 0)
-		port = ntohs(addr.sin_port);
-	close(fd);
-	return port;
+	if (state == 0)
+		state = (u32)getpid() * 2654435761u ^ (u32)clock_now_ms();
+	for (u32 attempt = 0; attempt < 200; attempt++)
+	{
+		struct sockaddr_in addr = { 0 };
+		bool               free_port = true;
+		u16                port;
+
+		state = state * 1103515245u + 12345u;
+		port  = (u16)(10000 + (state >> 8) % 22000);
+		addr.sin_family      = AF_INET;
+		addr.sin_port        = htons(port);
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		for (int type = 0; type < 2 && free_port; type++)
+		{
+			int fd = socket(AF_INET, type == 0 ? SOCK_STREAM : SOCK_DGRAM, 0);
+
+			free_port = fd >= 0 && bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0;
+			if (fd >= 0)
+				close(fd);
+		}
+		if (free_port)
+			return port;
+	}
+	return 0;
 }
 
 bool

@@ -1,8 +1,11 @@
 #!/bin/sh
 # vlib's vtest always exits 0 when running whole suites, even if tests fail.
 # Running tests one by one (-s suite -t name) gives a real exit code per test.
-# Suites are independent, so workers run whole suites in parallel; tests inside
-# a suite stay sequential. Results are collected by test index for stable output.
+# Every test runs in its own process and integration tests pick free ports, so
+# xargs -P workers take single tests from one queue. The queue starts with the
+# slowest tests of the previous run (durations cached in BIN.times, or
+# RUN_TESTS_TIMES), so long tests do not end up last; tests without a recorded
+# time go first. Results are collected by test index for stable output.
 set -u
 
 usage() {
@@ -94,7 +97,42 @@ FAKE
 	printf 'run_tests.sh self-test: ok\n'
 }
 
+# One queue line "seq<TAB>suite-index<TAB>test", run by an xargs worker.
+run_one() {
+	tab=$(printf '\t')
+	IFS="$tab" read -r seq sidx test <<EOF_LINE
+$1
+EOF_LINE
+	tmp=$RUN_TESTS_TMP
+	suite=$(sed -n "${sidx}p" "$tmp/suites")
+	out=$tmp/out.$seq
+	start=$(date +%s%N)
+	# shellcheck disable=SC2086
+	"$RUN_TESTS_TIMEOUT_CMD" $RUN_TESTS_KILL_FLAG "$RUN_TESTS_TIMEOUT" \
+		"$RUN_TESTS_BIN" -s "$suite" -t "$test" >"$out" 2>&1
+	rc=$?
+	printf '%s\t%s\t%s\n' "$(( ($(date +%s%N) - start) / 1000000 ))" "$suite" "$test" >"$tmp/time.$seq"
+	if [ "$rc" -ne 0 ]; then
+		{
+			if [ "$rc" -eq 124 ]; then
+				printf 'FAIL %s :: %s (timeout after %s)\n' "$suite" "$test" "$RUN_TESTS_TIMEOUT"
+			elif [ "$rc" -eq 137 ] && [ -n "$RUN_TESTS_KILL_FLAG" ]; then
+				printf 'FAIL %s :: %s (killed after timeout %s)\n' "$suite" "$test" "$RUN_TESTS_TIMEOUT"
+			else
+				printf 'FAIL %s :: %s (exit %s)\n' "$suite" "$test" "$rc"
+			fi
+			cat "$out"
+		} >"$tmp/result.$seq"
+	fi
+	rm -f "$out"
+	return 0
+}
+
 case "${1:-}" in
+--run-one)
+	run_one "$2"
+	exit 0
+	;;
 --self-test)
 	self_test
 	exit 0
@@ -107,7 +145,7 @@ esac
 bin=${1:-./mogbus-tests}
 timeout_cmd=${TEST_TIMEOUT_CMD:-timeout}
 test_timeout=${TEST_TIMEOUT:-120s}
-jobs=${RUN_TESTS_JOBS:-3}
+jobs=${RUN_TESTS_JOBS:-$(nproc 2>/dev/null || echo 4)}
 case "$jobs" in
 ''|*[!0-9]*) printf 'run_tests.sh: invalid RUN_TESTS_JOBS: %s\n' "$jobs" >&2; exit 1 ;;
 esac
@@ -157,7 +195,7 @@ suite=''
 sidx=0
 total=0
 : >"$tmp/suites"
-: >"$tmp/gids"
+: >"$tmp/all"
 while IFS= read -r line; do
 	case "$line" in
 	'For '*)
@@ -166,17 +204,6 @@ while IFS= read -r line; do
 		suite=${suite% suite:}
 		printf '%s\n' "$suite" >>"$tmp/suites"
 		printf '0\n' >"$tmp/count.$sidx"
-		# Both suites bind a fixed port 1502, so one worker must own both.
-		case "$suite" in
-		tests/rtu_cli.c|tests/rtu_tcp_server.c) gid=fixed1502 ;;
-		*) gid=$sidx ;;
-		esac
-		if [ ! -f "$tmp/group.$gid.order" ]; then
-			printf '%s\n' "$gid" >>"$tmp/gids"
-			printf '%s\n' "$sidx" >"$tmp/group.$gid.order"
-			: >"$tmp/group.$gid.idx"
-		fi
-		printf '%s\n' "$sidx" >>"$tmp/group.$gid.idx"
 		;;
 	'setup-suite='*|'pre-test='*|'') : ;;
 	*)
@@ -185,7 +212,7 @@ while IFS= read -r line; do
 			exit 1
 		fi
 		total=$((total + 1))
-		printf '%s\t%s\n' "$total" "$line" >>"$tmp/tests.$sidx"
+		printf '%s\t%s\t%s\n' "$total" "$sidx" "$line" >>"$tmp/all"
 		IFS= read -r count <"$tmp/count.$sidx"
 		printf '%s\n' "$((count + 1))" >"$tmp/count.$sidx"
 		;;
@@ -198,113 +225,33 @@ if [ "$total" -eq 0 ]; then
 	exit 1
 fi
 
-# Groups are claimed largest-first by whichever worker becomes free, so slow
-# integration suites do not cluster on one worker.
-: >"$tmp/groups"
-while IFS= read -r gid; do
-	weight=0
-	while IFS= read -r idx; do
-		IFS= read -r count <"$tmp/count.$idx"
-		weight=$((weight + count))
-	done <"$tmp/group.$gid.idx"
-	IFS= read -r order <"$tmp/group.$gid.order"
-	indices=$(tr '\n' ' ' <"$tmp/group.$gid.idx")
-	printf '%s %s %s\n' "$weight" "$order" "$indices" >>"$tmp/groups"
-done <"$tmp/gids"
-sort -k1,1nr -k2,2n "$tmp/groups" >"$tmp/queue"
+# Queue lines are "ms<TAB>seq<TAB>suite-index<TAB>test", slowest first.
+cache=${RUN_TESTS_TIMES:-$bin.times}
+times=$cache
+[ -r "$times" ] || times=/dev/null
+awk -F "$tab" -v OFS="$tab" '
+	NR == FNR { ms[$2 FS $3] = $1; next }
+	FILENAME ~ /suites$/ { name[FNR] = $0; next }
+	{ key = name[$2] FS $3; print (key in ms ? ms[key] : 999999999), $1, $2, $3 }
+' "$times" "$tmp/suites" "$tmp/all" | sort -t "$tab" -k1,1nr -k2,2n >"$tmp/queue"
 
-if [ "$jobs" -gt "$suites" ]; then
-	jobs=$suites
+if [ "$jobs" -gt "$total" ]; then
+	jobs=$total
 fi
 
-worker_abort() {
-	trap - HUP INT TERM
-	if [ -n "$child" ]; then
-		kill "$child" 2>/dev/null || true
-	fi
-	if [ "$have_lock" -eq 1 ]; then
-		rmdir "$tmp/claim" 2>/dev/null || true
-	fi
-	exit 1
-}
-
-worker() {
-	w=$1
-	child=''
-	have_lock=0
-	trap 'worker_abort' HUP INT TERM
-
-	while :; do
-		line=''
-		while :; do
-			if mkdir "$tmp/claim" 2>/dev/null; then
-				have_lock=1
-				IFS= read -r line <"$tmp/queue" || line=''
-				if [ -n "$line" ]; then
-					sed '1d' "$tmp/queue" >"$tmp/queue.$w" && mv "$tmp/queue.$w" "$tmp/queue"
-				fi
-				rmdir "$tmp/claim"
-				have_lock=0
-				break
-			fi
-			sleep 0.01
-		done
-		[ -n "$line" ] || break
-
-		set -- $line
-		shift 2
-		for sidx in "$@"; do
-			suite=$(sed -n "${sidx}p" "$tmp/suites")
-			while IFS="$tab" read -r seq test; do
-				"$timeout_cmd" $timeout_kill_flag "$test_timeout" "$bin" -s "$suite" -t "$test" >"$tmp/out.$w" 2>&1 &
-				child=$!
-				wait "$child"
-				rc=$?
-				child=''
-				if [ "$rc" -ne 0 ]; then
-					{
-						if [ "$rc" -eq 124 ]; then
-							printf 'FAIL %s :: %s (timeout after %s)\n' "$suite" "$test" "$test_timeout"
-						elif [ "$rc" -eq 137 ] && [ -n "$timeout_kill_flag" ]; then
-							printf 'FAIL %s :: %s (killed after timeout %s)\n' "$suite" "$test" "$test_timeout"
-						else
-							printf 'FAIL %s :: %s (exit %s)\n' "$suite" "$test" "$rc"
-						fi
-						cat "$tmp/out.$w"
-					} >"$tmp/result.$seq"
-				fi
-			done <"$tmp/tests.$sidx"
-		done
-	done
-	printf 'ok\n' >"$tmp/worker.$w.done"
-}
-
-: >"$tmp/pids"
-w=1
-while [ "$w" -le "$jobs" ]; do
-	worker "$w" &
-	printf '%s\n' "$!" >>"$tmp/pids"
-	worker_pids="$worker_pids $!"
-	w=$((w + 1))
-done
-
-worker_failed=0
-while IFS= read -r pid; do
-	if ! wait "$pid"; then
-		worker_failed=1
-	fi
-done <"$tmp/pids"
-w=1
-while [ "$w" -le "$jobs" ]; do
-	if [ ! -f "$tmp/worker.$w.done" ]; then
-		printf 'run_tests.sh: worker %s did not finish\n' "$w" >&2
-		worker_failed=1
-	fi
-	w=$((w + 1))
-done
-if [ "$worker_failed" -ne 0 ]; then
+# xargs -P hands queue lines to free workers; each line runs one test via
+# --run-one, which writes result.SEQ only on failure.
+cut -f2- "$tmp/queue" |
+	RUN_TESTS_TMP=$tmp RUN_TESTS_BIN=$bin RUN_TESTS_TIMEOUT_CMD=$timeout_cmd \
+	RUN_TESTS_TIMEOUT=$test_timeout RUN_TESTS_KILL_FLAG=$timeout_kill_flag \
+	xargs -d '\n' -n 1 -P "$jobs" "$0" --run-one &
+worker_pids=$!
+if ! wait "$worker_pids"; then
+	worker_pids=''
+	printf 'run_tests.sh: a test worker failed to run\n' >&2
 	exit 1
 fi
+worker_pids=''
 
 failed=0
 seq=1
@@ -316,6 +263,9 @@ while [ "$seq" -le "$total" ]; do
 	fi
 	seq=$((seq + 1))
 done
+
+# Best effort: an unwritable cache only loses the ordering hint.
+cat "$tmp"/time.* >"$tmp/times" 2>/dev/null && cp "$tmp/times" "$cache" 2>/dev/null
 
 printf 'Suites: %u, tests: %u, failed: %u\n' "$suites" "$total" "$failed"
 [ "$failed" -eq 0 ]
