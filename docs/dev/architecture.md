@@ -358,3 +358,18 @@ only outstanding work is listed here.
 - Conformance and interoperability runs against commercial PLC/SCADA products, following the method
   of `examples/interop/` (which already checks every FC against pymodbus). Why: supporting an FC does
   not prove interoperability.
+
+### Adoption (gaps compared with pymodbus as a server/simulator)
+
+- Python package: `ctypes` bindings over `libmogbus.so` (context, devices, servers stepped on a
+  background thread behind a lock, a `serve()` context manager for pytest). Why: most simulator
+  users write their tests in Python and cannot drive a C API or a subprocess conveniently.
+- Runtime control API: read and write values and inject or clear faults over the HTTP endpoint,
+  opt-in. Why: a binary user cannot change a running device today; every change needs a restart.
+- Data types: 64-bit integers and float64, strings packed into registers, and byte-swapped word
+  layouts (BADC/CDAB) besides word order. Why: energy counters, names and serial numbers in real
+  register maps need them.
+- Importers for vendor register maps (CSV) and pymodbus simulator JSON. Why: users start from a
+  map they already have, and the config syntax is new to them.
+- Windows: a native build, or documented Docker/WSL use including serial ports. Why: many PLC and
+  SCADA engineers work on Windows.
