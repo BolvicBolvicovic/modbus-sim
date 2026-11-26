@@ -9,13 +9,15 @@
 #include "os/os_time.h"
 #include "vlib/arena.h"
 #include <errno.h>
-#include <poll.h>
-#include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 static void
 set_fault(device_t* dev, fault_kind_t kind, u32 delay_ms, u32 percent)
@@ -346,6 +348,7 @@ TEST(AsciiScanResyncsAtSecondColon)
 	ASSERT_EQ(len == good_len);
 }
 
+#ifndef _WIN32	/* the server tests below fork and use socketpair() */
 typedef struct ascii_child_t ascii_child_t;
 struct ascii_child_t
 {
@@ -923,3 +926,4 @@ TEST(AsciiServerIgnoresInterFrameWhitespace)
 	arena_release(arena);
 	ASSERT_EQ(ok);
 }
+#endif

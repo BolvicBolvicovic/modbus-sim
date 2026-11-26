@@ -68,7 +68,17 @@ typedef struct mogbus_server_t	mogbus_server_t;
 extern "C" {
 #endif
 
+/* Windows: the library build exports (MOGBUS_BUILD); DLL users define MOGBUS_DLL to import; a static
+ * library user defines neither. */
+#if defined(_WIN32) && defined(MOGBUS_BUILD)
+#define MOGBUS_API __declspec(dllexport)
+#elif defined(_WIN32) && defined(MOGBUS_DLL)
+#define MOGBUS_API __declspec(dllimport)
+#elif defined(_WIN32)
+#define MOGBUS_API
+#else
 #define MOGBUS_API __attribute__((visibility("default")))
+#endif
 
 #define MOGBUS_VERSION_MAJOR	0
 #define MOGBUS_VERSION_MINOR	0

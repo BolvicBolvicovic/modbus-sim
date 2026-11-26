@@ -5,13 +5,15 @@
 #include "net/net_obs.h"
 #include "modbus/pdu.h"
 #include "os/os_time.h"
-#include "tests/tests_utils/test_support.h"
 #include "vlib/arena.h"
-#include <poll.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#include "tests/tests_utils/test_support.h"
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 static device_t*
 make_device(arena_t* arena, u8 unit, const char* name)
@@ -90,6 +92,7 @@ TEST(ObsRendersPrometheusText)
 	arena_release(arena);
 }
 
+#ifndef _WIN32	/* the HTTP and control tests below drive real loopback sockets with POSIX calls */
 /* True when the peer closed the connection: EOF, or a reset because the server closed with
  * unread input (an oversized request). */
 static bool
@@ -538,3 +541,4 @@ TEST(ObsControlLimitsAndCountsRequests)
 	net_obs_close(&obs);
 	arena_release(arena);
 }
+#endif
