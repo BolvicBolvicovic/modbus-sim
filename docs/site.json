@@ -433,7 +433,7 @@
             }
           ]
         },
-        "docs/user/config/errors.md",
+        {"page": "docs/user/config/errors.md", "errors": true, "errors_from": ["docs/user/config/format.md"]},
         "docs/user/command-line.md",
         {
           "api": "include/mogbus.h",

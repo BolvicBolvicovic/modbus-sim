@@ -38,6 +38,10 @@ Anything else at the top level is rejected with `unknown top-level form`: only `
 and exits. Messages say what is wrong and show the entry; every entry page lists its own messages
 under Errors, and the [error index](errors.md) lists them all.
 
+## Errors
+
+- `unknown top-level form`: only `(server ...)` and `(device ...)` are allowed at the top level of the file.
+
 ## How to read the reference
 
 The reference has one page per key or form, grouped by where the key is written:

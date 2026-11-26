@@ -55,9 +55,12 @@ relies on:
   GitHub-style slug of the heading; duplicates on a page get `-2`, `-3`. Links to files that are
   not pages use absolute GitHub URLs.
 - Code fences carry a language (`scheme`, `bash`, `c`, `python`, `json`, `yaml`, `ini`,
-  `powershell`, `text`). Code blocks that follow each other directly and have different languages
-  become one tab group (Stripe-style language switcher, the choice is remembered); put a paragraph
-  between blocks that are not alternatives. `text` blocks never join a group.
+  `powershell`, `text`). Only alternatives are grouped: code blocks that follow each other
+  directly in different languages (`bash`, `python`, `scheme`, ...) become one tab group (Stripe-style
+  language switcher, the choice is remembered). `json`, `text` and unlabelled blocks are output or
+  data and never join a group, so a request followed by its response, or a command followed by its
+  output, stays visible. In the examples column a `json`/`text` block directly after a `bash` block
+  is labelled Response. Put a paragraph between blocks that are not alternatives.
 - Callouts are blockquotes that start with a bold keyword, which also reads well on GitHub:
   `> **Note:** ...`, `> **Warning:** ...`, `> **Tip:** ...`. In header comments `@note` and
   `@warning` give the same result.
@@ -96,9 +99,15 @@ One-sentence summary.
 - The `##` sections are optional, but only these names, in this order: `Syntax`, `Default`,
   `Valid in`, `Behaviour`, `Errors`, `Examples`, `See also`.
 - `Syntax` (its code block), `Default` and `Valid in` (a bullet list renders as chips) become one
-  compact definition block at the top. `Examples` moves into the sticky right column; below
-  1100 px it appears inline before `See also`. Other sections render in the reading column;
+  compact definition block at the top. `Examples` moves into the sticky right column (long lines wrap there); below
+  1360 px it appears inline before `See also`. Other sections render in the reading column;
   `###` subsections are allowed inside them.
+- An **error index** is a guide page declared as `{"page": "docs/user/config/errors.md", "errors": true,
+  "errors_from": ["docs/user/config/format.md"]}`. Its Markdown is a short intro; the generator appends one
+  table per reference index under the page's directory (message, link to the entry's Errors section) built
+  from the `## Errors` bullets of every entry, plus the guide pages listed in `errors_from`. The message of
+  a bullet is its first code span (with any `` `A` / `B` `` alternatives); write
+  ``- `message`: what to do``. A bullet that does not start with a code span fails the build.
 - An **index** page is a short Markdown page (title and intro). The generator appends a filter box
   and the list of its entries (title and summary, with the manifest's group headings). Typing narrows
   the list as you type.

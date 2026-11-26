@@ -29,7 +29,7 @@ which are always read-only for clients.
 
 ## Errors
 
-- `(access ...)`: `expected one of: read-write, read-only`: the access is `read-write` or `read-only`.
+- `(access ...): expected one of: read-write, read-only`: the access is `read-write` or `read-only`.
 - `input registers are always read-only for clients: remove (access ...)` / `discrete inputs are always ...`: only `coil` and `holding` points take `(access ...)`; remove it.
 
 ## Examples

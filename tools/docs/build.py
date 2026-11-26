@@ -104,6 +104,7 @@ class Page:
         self.anchors = set()
         self.body = ''
         self.parent = None      # index page for entries
+        self.errors_from = None  # error index page: guide pages that also contribute rows
         self.__dict__.update(kw)
 
 
@@ -214,6 +215,8 @@ class Site:
                     nodes.append({'api': True})
                 elif 'page' in item:
                     p = make(item['page'], 'guide', sec['title'], item.get('title'))
+                    if p and item.get('errors'):
+                        p.errors_from = item.get('errors_from', [])
                     if p:
                         nodes.append({'page': p})
                 else:
@@ -462,36 +465,40 @@ class Render:
                 '</table></div></div>' % (label, ''.join(rows)))
 
     # ---- grouping and code ------------------------------------------------------------------------------
-    def group(self, items, tight=False):
-        """Join items; runs of code blocks in different languages become a tab group."""
+    def group(self, items, tight=False, responses=False):
+        """Join items; a run of code blocks in different languages becomes a tab group. Only
+        alternatives are grouped: `json`, `text` and unlabelled blocks are output or data and never
+        join a group. With responses, such a block right after a `bash` block is labelled Response."""
         out = []
         i = 0
+        alt = lambda it: it[0] == 'code' and it[1] not in ('', 'text', 'json')
         while i < len(items):
             it = items[i]
-            if it[0] == 'code':
+            if alt(it):
                 j = i
-                while j < len(items) and items[j][0] == 'code':
+                langs = []
+                while j < len(items) and alt(items[j]) and items[j][1] not in langs:
+                    langs.append(items[j][1])
                     j += 1
                 run = items[i:j]
-                langs = [r[1] for r in run]
-                if (len(run) > 1 and
-                        '' not in langs and
-                        'text' not in langs and
-                        len(set(langs)) == len(langs)):
-                    out.append(self.tabs(run))
-                else:
-                    out.extend(self.code(r[1], r[2]) for r in run)
+                out.append(self.tabs(run) if len(run) > 1 else self.code(run[0][1], run[0][2]))
                 i = j
                 continue
-            out.append(it[1])
+            if it[0] == 'code':
+                label = None
+                if responses and i > 0 and items[i - 1][0] == 'code' and items[i - 1][1] == 'bash':
+                    label = 'Response'
+                out.append(self.code(it[1], it[2], label=label))
+            else:
+                out.append(it[1])
             i += 1
         s = ''.join(out)
         if tight and s.startswith('<p>') and s.count('<p>') == 1 and s.endswith('</p>'):
             return s[3:-4]
         return s
 
-    def code(self, lang, text, cls=''):
-        label = LANG_NAMES.get(lang, lang or 'Text')
+    def code(self, lang, text, cls='', label=None):
+        label = label or LANG_NAMES.get(lang, lang or 'Text')
         return ('<div class="code%s" data-lang="%s"><span class="code-lang">%s</span>'
                 '<button class="copy" type="button" aria-label="Copy code">Copy</button>'
                 '<pre><code data-lang="%s">%s</code></pre></div>' %
@@ -770,9 +777,71 @@ def render_entry(site, rd, page):
         hid = heading_id(page, ex)
         page.headings.append((2, hid, 'Examples'))
         parts.append('<aside class="ex" id="%s"><div class="ex-title">Examples</div>%s</aside>' %
-                     (esc(hid), rd.group(body_of(ex))))
+                     (esc(hid), rd.group(body_of(ex), responses=True)))
     parts.append(section('See also'))
     page.body = ''.join(parts)
+
+
+def error_rows(site, rd, page):
+    """Message (HTML) of each bullet of the page's Errors section: the code span it starts with (with any
+    ` / `-joined alternatives)."""
+    rows = []
+    sects = [s for s in split_dd(page.cd.find('detaileddescription'))[1]
+             if plain(s.find('title')).strip() == 'Errors']
+    for s in sects:
+        for li in s.iter('listitem'):
+            para = next(li.iter('para'), None)
+            code = para[0] if para is not None and len(para) and para[0].tag == 'computeroutput' and \
+                not (para.text or '').strip() else None
+            if code is None:
+                site.error('Errors bullet has no message in a code span: %s' % plain(li).strip()[:60])
+                continue
+            msg = rd.node(code)
+            # alternatives written as `A` / `B` stay one message
+            kids = list(para)
+            k = kids.index(code) if code in kids else -1
+            while k >= 0 and k + 1 < len(kids) and kids[k].tail and kids[k].tail.strip() == '/' and \
+                    kids[k + 1].tag == 'computeroutput':
+                k += 1
+                msg += ' / ' + rd.node(kids[k])
+            rows.append(msg)
+    return rows
+
+
+def render_errors(site, rd, page):
+    """Error index: one table per area (reference index under the page's directory) built from
+    the Errors sections of its entries, plus the guide pages named in errors_from."""
+    root = posixpath.dirname(page.src) + '/'
+    areas = []
+    extra = [site.by_src[f] for f in page.errors_from if f in site.by_src]
+    if extra:
+        areas.append(('Top level', extra))
+    for ix in site.pages:
+        if ix.kind == 'index' and ix.src.startswith(root):
+            areas.append((ix.title, [e for _, g in ix.groups for e in g]))
+    out = []
+    total = 0
+    for title, pages in areas:
+        trs = []
+        for e in pages:
+            site.cur = e
+            rows = error_rows(site, rd, e)
+            site.cur = page
+            hid = next((h[1] for h in e.headings if h[2] == 'Errors'), '')
+            href = esc(site.cur_root + e.url + ('#' + hid if hid else ''))
+            for r in rows:
+                trs.append('<tr><td>%s</td><td><a href="%s">%s</a></td></tr>' % (r, href, e.title_html))
+        if not trs:
+            continue
+        total += len(trs)
+        hid = slugify(title)
+        page.headings.append((2, hid, title))
+        out.append('<h2 id="%s">%s<a class="anchor" href="#%s" aria-label="Link to this section">#</a></h2>'
+                   '<div class="table-wrap"><table><thead><tr><th>Message</th><th>Entry</th></tr></thead>'
+                   '<tbody>%s</tbody></table></div>' % (esc(hid), esc(title), esc(hid), ''.join(trs)))
+    if not total:
+        site.error('error index found no Errors bullets')
+    page.body += ''.join(out)
 
 
 def render_index(site, rd, page):
@@ -1307,6 +1376,8 @@ def main():
         for p in site.pages:
             site.cur = p
             site.cur_root = '../' * p.url.count('/')
+            if p.errors_from is not None:
+                render_errors(site, rd, p)
             if p.kind == 'index':
                 render_index(site, rd, p)
             elif p.kind == 'api':
