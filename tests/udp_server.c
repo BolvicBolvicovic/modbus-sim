@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Integration tests for Modbus UDP. Each test starts the real binary on a loopback
@@ -304,5 +305,27 @@ TEST(UdpExceptionFaultReplacesResponse)
 	ASSERT_EQ(exchange(fd, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
 	ASSERT_EQ(len == 2 && resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80) && resp[1] == 6);
 	close(fd);
+	server_stop();
+}
+
+/* A second server on a port already bound must fail to start (exit 2), not share it. */
+TEST(UdpPortInUseFailsToStart)
+{
+	const char* bin    = getenv("MOGBUS_BIN");
+	ts_server_t second = { .pid = -1, .master_fd = -1, .label = "udp second",
+			       .flags = TS_CAPTURE_STDERR | TS_NULL_STDIN | TS_EXIT_IS_READY };
+	char*	    argv[3];
+	int	    status = 0;
+	bool	    ok;
+
+	server_start("", "(device (unit-id 1) (holding 0 (static 1)))\n");
+	argv[0] = (char*)(bin ? bin : "./mogbus");
+	argv[1] = g_fx.config;
+	argv[2] = NULL;
+	ASSERT_EQ(ts_server_start(&second, argv));
+	ok = ts_wait_pid(second.pid, &status, 5000);
+	second.pid = -1;
+	ts_server_cleanup(&second);
+	ASSERT_EQ(ok && WIFEXITED(status) && WEXITSTATUS(status) == 2);
 	server_stop();
 }

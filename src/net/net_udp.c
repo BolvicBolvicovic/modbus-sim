@@ -37,7 +37,6 @@ net_udp_open(net_udp_t* udp, const char* bind_address, u16 port)
 	struct sockaddr_storage	addr;
 	socklen_t		addr_len = 0;
 	int			family = net_bind_addr(bind_address, port, &addr, &addr_len);
-	int			yes = 1;
 	int			fd;
 
 	memset(udp, 0, sizeof(*udp));
@@ -51,9 +50,8 @@ net_udp_open(net_udp_t* udp, const char* bind_address, u16 port)
 		LOG_WARN("cannot create UDP socket for %s:%u: %s", bind_address, port, strerror(errno));
 		return -1;
 	}
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 	if (family == AF_INET6)
-		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &yes, sizeof(yes));
+		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &(int){ 1 }, sizeof(int));
 	if (bind(fd, (struct sockaddr*)&addr, addr_len) < 0)
 	{
 		LOG_WARN("cannot bind UDP %s:%u: %s", bind_address, port, strerror(errno));
