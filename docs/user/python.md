@@ -142,6 +142,13 @@ def test_voltage(meter):
     # connect your client to 127.0.0.1:meter.port
 ```
 
+## Examples
+
+[`examples/python/`](../../examples/python/) has `embed.py`, the Python version of
+`examples/embed_tcp.c` (device built in code, background server, raw MBAP client, `set_value()`
+while serving; CI runs it with `make python-examples`), and a pytest example (`conftest.py`
+fixture plus `test_device.py`, which needs pytest). See its README for how to run them.
+
 ## Limits
 
 Linux only. Same limits as the C API: 16 devices and 8 servers per context, servers serve the

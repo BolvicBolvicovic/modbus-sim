@@ -265,6 +265,9 @@ jobs:
       - name: Python package tests
         run: make python-tests
 
+      - name: Python examples
+        run: make python-examples
+
   api-docs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'

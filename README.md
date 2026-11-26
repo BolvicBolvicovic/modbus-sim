@@ -324,7 +324,8 @@ with mogbus.serve(config="profiles/minimal.scm", port=0) as srv:
     srv.device(1).set_value("holding", 0, 1234)   # a client now reads 1234
 ```
 
-See [docs/user/python.md](docs/user/python.md) for the API, the threading model and a pytest fixture.
+See [docs/user/python.md](docs/user/python.md) for the API, the threading model and a pytest fixture, and
+[`examples/python/`](examples/python/) for a runnable embedding example and a pytest example.
 
 ## Documentation
 
@@ -346,7 +347,7 @@ For contributors and maintainers, in [docs/dev/](docs/dev):
 
 ```
 include/        mogbus.h, the public C API of the library
-examples/       embed_tcp.c (a host program using only mogbus.h), interop/ (pymodbus interoperability check)
+examples/       embed_tcp.c (a host program using only mogbus.h), python/ (embed.py and a pytest example), interop/ (pymodbus interoperability check)
 src/            the program, one folder per module (headers next to their .c files)
   build_config.h  WITH_TLS and WITH_CONFIG compile-time fallbacks shared by sources and tests
   config/       reads the config file, checks it, builds devices
