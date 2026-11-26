@@ -342,8 +342,10 @@ Robustness evidence beyond the unit tests:
   framer (fed in fuzzer-chosen chunks with simulated gaps), and ASCII scanning/decoding. Each checks
   invariants (response sizes, echoed function codes, encode/decode round trips). `make fuzz` builds
   them in `build/fuzz/`, `make fuzz-run FUZZ_SECONDS=N` seeds them with one valid request per FC
-  (`tools/fuzz_seeds.py`) and runs each for N s; the CI `fuzz` job runs 60 s each and uploads crash
-  reproducers. Replay one with `build/fuzz/fuzz_NAME FILE`.
+  (`tools/fuzz_seeds.py`) and runs each for N s, in parallel (at most `FUZZ_JOBS`, default `nproc`); the CI `fuzz` job runs
+  30 s each per push, restoring and saving the corpus (`build/fuzz/corpus`) with `actions/cache`, and
+  uploads crash reproducers. `.github/workflows/fuzz-nightly.yml` runs 600 s daily on the same corpus and
+  opens (or comments on) the issue "Nightly fuzzing found a crash" on failure. Replay one with `build/fuzz/fuzz_NAME FILE`.
 - **Malformed and fragmented frames:** `tests/robustness.c` runs every network transport in-process
   through the API: a request sent one byte at a time is answered, and after seeded random garbage
   (biased to frame-start bytes) in random chunks or datagrams, and frames split across datagrams,
