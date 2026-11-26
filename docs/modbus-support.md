@@ -14,8 +14,8 @@ clients requires an explicit `(bind "0.0.0.0")` or `(bind "::")`. IPv6 listen so
 used: a config may contain at most one `(server ...)` block (defaults apply if omitted), there is
 no dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
 config validator. This default
-applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`). MBAP has no checksum field, so
-`(fault (kind corrupt) (mode checksum))` is rejected in `tcp` mode; the RTU and ASCII transports
+applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`; `udp` binds the same way). MBAP has no checksum field, so
+`(fault (kind corrupt) (mode checksum))` is rejected in `tcp` and `udp` modes; the RTU and ASCII transports
 carry checksums and accept it.
 
 `(server (tls ...))` wraps the TCP connection in TLS; the bytes inside the tunnel are the same MBAP
@@ -189,6 +189,21 @@ config is rejected in `rtu-tcp` mode.
 RTU-over-TCP is not Modbus TCP and is not a transparent gateway/proxy implementation; it is an
 explicit listen mode selected in `(server ...)`.
 
+### Modbus UDP
+
+`(server (mode udp))` serves Modbus TCP's MBAP ADU over UDP: one complete ADU (7-byte MBAP header
+plus PDU) per datagram, no connection. Unit-id routing, PDU handlers, the unknown-unit exception
+`0B` and fault injection are the same as in `tcp` mode; the reply is one datagram sent to the
+request's source address, so several peers can talk to the same socket and each gets its own
+answer. The MBAP header is echoed except for the length. A datagram is ignored (no response, DEBUG
+log) when it is empty, longer than 260 bytes, has a protocol id other than 0, or its MBAP length
+does not equal the datagram size minus 6. UDP gives no ordering or delivery guarantee, and the
+simulator never retransmits; `drop` and `delay` faults model the loss and latency on top of it (a
+delayed response waits in a 16-slot table and is dropped with a WARN if the table is full).
+`disconnect` and `corrupt` mode `checksum` are rejected at load time. `port` (default 1502) and `bind`
+(default `"127.0.0.1"`) select the socket; only `mode`, `port`, `bind` and `seed` are accepted. There
+is no TLS (no DTLS) and no idle timeout. It is not RTU or ASCII over UDP.
+
 ## Function codes
 
 | Code | Name | Table | Max per request |
@@ -330,7 +345,7 @@ communication-error counters. `checksum` instead corrupts the emitted RTU CRC or
 framing, so the receiver sees a bad frame; MBAP/TCP has no checksum and rejects this mode at load.
 
 A drop fault suppresses the response, and a disconnect fault implies a drop and closes the
-connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes reject disconnect). A fired `restart`
+connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes and `udp` reject disconnect). A fired `restart`
 leaves the current response intact, even when it is dropped or delayed, but resets configured
 points, ramp timelines and machines after the response is built and re-arms fault schedules from
 the restart time (the restart kind keeps its own schedule progress); it does not clear protocol
@@ -412,7 +427,7 @@ baud-derived-auto-mode approximation).
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
-- TLS for RTU-over-TCP and ASCII-over-TCP; `(server (tls ...))` is rejected outside `mode tcp`
+- TLS for RTU-over-TCP, ASCII-over-TCP and UDP (no DTLS); `(server (tls ...))` is rejected outside `mode tcp`
 - Certificate revocation checking (CRL/OCSP); a client certificate signed by the configured CA is accepted for the lifetime configured in the certificate
 - Modbus Security role authorization from x.509 role OIDs; a valid client certificate is either required or optional, with no per-role access control
 - Dual-stack IPv6 listening: IPv6 sockets are `IPV6_V6ONLY` and a config may contain at most one `(server ...)` block, so `"::"` and `"0.0.0.0"` cannot be served together; scoped link-local literals such as `fe80::1%eth0` are rejected

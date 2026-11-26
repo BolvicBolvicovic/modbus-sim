@@ -7,6 +7,7 @@
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
 #include "net/tcp_server.h"
+#include "net/udp_server.h"
 #include "server/server_mode.h"
 #include "util/serial.h"
 #include "vlib/c_types.h"
@@ -23,8 +24,8 @@ typedef struct server_options_t server_options_t;
 struct server_options_t
 {
 	server_mode_t	mode;
-	const char*	bind_address;		/* TCP-family modes */
-	u16		port;			/* TCP-family modes */
+	const char*	bind_address;		/* TCP-family and UDP modes */
+	u16		port;			/* TCP-family and UDP modes */
 	const char*	path;			/* *_DEVICE modes */
 	int		fd;			/* *_FD modes: borrowed, never closed */
 	u32		seed;
@@ -58,6 +59,7 @@ struct server_t
 		ascii_tcp_server_t	ascii_tcp;
 		rtu_server_t		rtu;
 		ascii_server_t		ascii;
+		udp_server_t		udp;
 	};
 	int		fd;		/* opened by init in PTY/device modes, else -1 */
 	int		slave_fd;	/* PTY slave kept open, else -1 */
@@ -65,7 +67,7 @@ struct server_t
 };
 
 /* Opens the PTY/serial device when the mode needs one, then starts the transport.
- * Returns 0, 1 if the serial fd could not be opened/configured, or 2 if a TCP
+ * Returns 0, 1 if the serial fd could not be opened/configured, or 2 if a TCP/UDP
  * listener or TLS context could not be created. Nothing is left open on failure. */
 s32	server_init(server_t* server, const server_options_t* options);
 

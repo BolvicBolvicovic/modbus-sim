@@ -161,7 +161,8 @@ endif
 # These tests start the real binary or call config_load; the others run unchanged.
 ifeq ($(WITH_CONFIG),0)
 TEST_SRCS   := $(filter-out tests/config.c tests/ascii_cli.c tests/rtu_cli.c tests/tcp_server.c \
-                            tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c,$(TEST_SRCS))
+                            tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
+                            tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif
 # vtest.c defines the arena implementation itself, so the project's is left out.
 TEST_OBJS   = $(filter-out $(SRC_DIR)/util/arena_impl$(OBJEXT),$(SRCS:.c=$(OBJEXT))) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OBJEXT))

@@ -55,6 +55,7 @@ print_usage(void)
 	     "RTU-over-TCP serves Modbus RTU frames on a TCP listen socket (separate transport).\n"
 	     "Frame boundaries use Modbus t3.5 when baud is known, or frame-gap-ms/default.\n"
 	     "t1.5 discard and unit-0 broadcast execution are opt-in via (server ...).\n"
+	     "(mode udp) serves Modbus UDP: one MBAP ADU per datagram on a UDP socket.\n"
 	     "Modbus TCP may be TLS-wrapped with (server (mode tcp) (tls ...)); it then\n"
 	     "defaults to port 802 unless (port N) is given, and requires OpenSSL at build time.\n"
 	     "\n"
@@ -168,6 +169,10 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 			if (options->broadcast_execute)
 				printf(", broadcast-execute on");
 			putchar('\n');
+			break;
+		case MOGBUS_MODE_UDP:
+			printf("%zu device%s, UDP %s:%u\n",
+			       count, count == 1 ? "" : "s", options->bind_address, options->port);
 			break;
 		case MOGBUS_MODE_ASCII_TCP:
 			printf("%zu device%s, ASCII-over-TCP %s:%u\n",

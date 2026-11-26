@@ -32,6 +32,18 @@ server_init(server_t* server, const server_options_t* options)
 
 			return tcp_server_init(&server->tcp, &o);
 		}
+		case SERVER_MODE_UDP:
+		{
+			udp_server_options_t o = {
+				.bind_address = options->bind_address,
+				.port         = options->port,
+				.seed         = options->seed,
+				.devices      = options->devices,
+				.device_count = options->device_count,
+			};
+
+			return udp_server_init(&server->udp, &o);
+		}
 		case SERVER_MODE_RTU_TCP:
 		{
 			rtu_tcp_server_options_t o = {
@@ -129,6 +141,7 @@ server_step(server_t* server, s32 max_wait_ms)
 	switch (server->mode)
 	{
 		case SERVER_MODE_TCP:		return tcp_server_step(&server->tcp, max_wait_ms);
+		case SERVER_MODE_UDP:		return udp_server_step(&server->udp, max_wait_ms);
 		case SERVER_MODE_RTU_TCP:	return rtu_tcp_server_step(&server->rtu_tcp, max_wait_ms);
 		case SERVER_MODE_ASCII_TCP:	return ascii_tcp_server_step(&server->ascii_tcp, max_wait_ms);
 		case SERVER_MODE_RTU_PTY:
@@ -147,6 +160,7 @@ server_stop(server_t* server)
 	switch (server->mode)
 	{
 		case SERVER_MODE_TCP:		tcp_server_stop(&server->tcp); break;
+		case SERVER_MODE_UDP:		udp_server_stop(&server->udp); break;
 		case SERVER_MODE_RTU_TCP:	rtu_tcp_server_stop(&server->rtu_tcp); break;
 		case SERVER_MODE_ASCII_TCP:	ascii_tcp_server_stop(&server->ascii_tcp); break;
 		case SERVER_MODE_RTU_PTY:
@@ -164,6 +178,7 @@ server_close(server_t* server)
 	switch (server->mode)
 	{
 		case SERVER_MODE_TCP:		tcp_server_close(&server->tcp); break;
+		case SERVER_MODE_UDP:		udp_server_close(&server->udp); break;
 		case SERVER_MODE_RTU_TCP:	rtu_tcp_server_close(&server->rtu_tcp); break;
 		case SERVER_MODE_ASCII_TCP:	ascii_tcp_server_close(&server->ascii_tcp); break;
 		case SERVER_MODE_RTU_PTY:

@@ -2,8 +2,11 @@
 #define NET_COMMON_H
 
 #include "modbus/ascii.h"
+#include "modbus/mbap.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
+#include "vlib/macros.h"
+#include <sys/socket.h>
 
 typedef struct device_t device_t;
 typedef struct rng_t rng_t;
@@ -50,6 +53,19 @@ void		pending_response_clear(pending_response_t* pending);
 /* Drops a response that cannot be delivered after POLLHUP and stops the
  * byte-stream server loop. */
 bool		net_handle_hangup(pending_response_t* pending);
+
+/* Parses an IPv4 or IPv6 literal plus port into a socket address. Returns the
+ * address family, or AF_UNSPEC (after a WARN) when bind_address is not a literal. */
+int		net_bind_addr(const char* bind_address, u16 port,
+			      struct sockaddr_storage* addr, socklen_t* addr_len);
+
+/* Handles one validated MBAP request (`request` = the PDU after the header) and
+ * writes the complete reply frame to `out` (MBAP_MAX_FRAME bytes): unknown units
+ * get exception 0x0B like every MBAP transport. Returns the frame length, or 0
+ * when nothing is to be sent (no response or drop fault). `peer` is for logs. */
+u32		net_mbap_respond(device_t** devices, u32 count, rng_t* rng, u64 now_ms,
+				 const char* peer, const mbap_header_t* header,
+				 const u8* request, u8* out, fault_decision_t* decision);
 
 /* Opens, binds, and listens on a nonblocking TCP socket. bind_address must be
  * an IPv4 or IPv6 literal. IPv6 sockets set IPV6_V6ONLY. Returns fd or -1. */

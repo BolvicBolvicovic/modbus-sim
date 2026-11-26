@@ -19,6 +19,7 @@ instead of a manual.
 | Profile | Unit | What it offers |
 |---|---|---|
 | `minimal.scm` | 1 | holding 0 fixed, holding 1 counts 0-100 |
+| `modbus-udp.scm` | 1 | same registers served over Modbus UDP (`mode udp`), with a small delay fault |
 | `power-meter.scm` | 1 | 3 voltages, 3 currents, power, frequency, power factor, energy (float32 input registers); 2 settings; reset coil; alarm |
 | `temperature-controller.scm` | 1 | process value (s16, 0.1 C), output %, setpoint and mode (writable), run coil, 2 alarms |
 | `vfd-drive.scm` | 1 | status, frequency and current that climb and hold, DC voltage, temperature, 32-bit energy; control word, setpoint, run and reset coils |

@@ -7,7 +7,8 @@
                                                         ├─► modbus/pdu ──► device/device ──► data tables
  RTU   client ──addr+PDU+CRC───► net/rtu_server  ───────┤                        ▲
  ASCII client ──:hex+LRC+CRLF──► net/ascii_server       ├          device_tick() │ ramps → registers
- ASCII/TCP client ──same frames──► net/ascii_tcp_server ┘
+ ASCII/TCP client ──same frames──► net/ascii_tcp_server ┤
+ UDP   client ──MBAP+PDU datagram► net/udp_server ──────┘
                       │                                       fault_decide_at()
                       ▼
      device/fault (delay / drop / exception / corrupt / disconnect /
@@ -23,7 +24,7 @@
    `device_t` objects (data tables plus a list of points).
 2. `net/tcp_server` (Modbus TCP MBAP, optionally TLS-wrapped via `net/net_tls`), `net/rtu_server` (RTU CRC-framed byte stream),
    `net/ascii_server` (ASCII hex/LRC-framed byte stream), `net/ascii_tcp_server` (the same ASCII
-   framing over TCP), or `net/rtu_tcp_server` (RTU CRC-framed over TCP) finds the device by
+   framing over TCP), `net/rtu_tcp_server` (RTU CRC-framed over TCP), or `net/udp_server` (one MBAP ADU per UDP datagram) finds the device by
    unit/address and calls `modbus_handle_pdu`.
 3. The handler calls `device_tick` (ramps compute their value for "now" and write it into the
    tables), then reads or writes the tables.
@@ -42,7 +43,7 @@
 | `src/util` | `clock`, `rng`, `log`, `arena_impl` | monotonic milliseconds, reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
 | `src/api` | `mogbus.c` | the public C API behind `include/mogbus.h` (see [library.md](library.md)): context, devices and points, server handles, logging; the top layer, nothing includes it |
@@ -194,6 +195,25 @@ carries Modbus RTU frames instead of MBAP. It reuses `net/rtu_framer` for shared
 t1.5 discard is not enforced on RTU-over-TCP because TCP read() boundaries do not reflect UART
 character timing. This is an explicit separate transport selected by `(server (mode rtu-tcp))`; it does not alter
 TCP MBAP behavior or RTU byte-stream behavior.
+
+### UDP (`net/udp_server.c`, `net/net_udp.c`)
+
+`net/net_udp` is the shared datagram layer: one bound nonblocking socket (IPv4 or IPv6 literal, same
+address parsing as the TCP listeners, `IPV6_V6ONLY` on IPv6), `recvfrom` with `MSG_TRUNC` so empty
+datagrams and datagrams longer than the caller's buffer are consumed and dropped (DEBUG log), `sendto`
+the peer, `ip:port` peer text for logs, and a fixed 16-slot table of delayed responses (peer address,
+bytes, deadline) with `net_udp_flush_due` and `net_udp_poll_timeout`, so the `delay` fault never blocks
+and nothing is allocated; a full table drops the new response with a WARN. It carries no framing, so
+RTU and ASCII servers over UDP can reuse it unchanged (`NET_UDP_MAX_DATAGRAM` is the largest ASCII frame).
+
+`net/udp_server` is a single-threaded `poll()` loop on that one socket (timeout = earliest delayed
+response, at most 1 s) that reads up to 32 datagrams per step. One datagram is one complete MBAP ADU:
+the protocol id must be 0 and the MBAP length must match the datagram size exactly, otherwise the
+datagram is ignored (there is no stream to resynchronize or close). Unit routing, the unknown-unit
+exception `0B`, PDU handling and fault decisions go through `net_mbap_respond`, shared with
+`tcp_server`; the reply goes to the source address. There is no per-peer state, no idle timeout and no
+disconnect fault. Selected by `(server (mode udp))`; UDP gives no delivery guarantee and the simulator
+never retransmits.
 
 ## Coding rules used here
 

@@ -72,6 +72,11 @@ u16	ts_free_port(void);
 bool	ts_ipv6_loopback_available(void);
 int	ts_connect_loopback(u16 port, int family, u32 timeout_ms);
 
+/* UDP: a connected datagram socket to the loopback port; one datagram per recv */
+int	ts_udp_loopback(u16 port, int family, u32 timeout_ms);
+s32	ts_udp_recv(int fd, u8* buf, u32 cap, u32 timeout_ms);	/* length, or -1 on timeout */
+bool	ts_udp_mbap_recv(int fd, u8 unit, u16 tid, u8* pdu, u32* pdu_len, u32 timeout_ms);
+
 /* wire frames; `on_socket` selects send()/recv() instead of write()/poll() */
 u16	ts_next_tid(void);
 u32	ts_mbap_encode(u8* frame, u8 unit, u16 tid, const u8* pdu, u32 pdu_len);

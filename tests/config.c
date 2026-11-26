@@ -1280,8 +1280,8 @@ TEST(ConfigServerModeDefaultsToTcp)
 
 TEST(ConfigServerModeRejectsUnknownNames)
 {
-	EXPECT_ERROR("(server (mode rtu)) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
-	EXPECT_ERROR("(server (mode \"tcp\")) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp");
+	EXPECT_ERROR("(server (mode rtu)) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp, udp");
+	EXPECT_ERROR("(server (mode \"tcp\")) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp, udp");
 }
 
 TEST(ConfigServerPathIsParsedForDeviceModes)
@@ -2378,4 +2378,63 @@ TEST(ConfigMachineAcceptsTcpLikeDisconnectOverlay)
 		ASSERT_SUCCESS(load_text(text, &config, err, sizeof(err)));
 		ASSERT_EQ(device_machine_fault_present(config.devices[0], FAULT_DISCONNECT));
 	}
+}
+
+TEST(ConfigUdpModeLoadsWithDefaults)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode udp)) (device (unit-id 1) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_UDP);
+	ASSERT_EQ(config.port == 1502);
+	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode udp) (port 1503) (bind \"::1\") (seed 9))"
+		" (device (unit-id 0) (holding 0)) (device (unit-id 255) (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_UDP && config.port == 1503 && config.seed == 9);
+	ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
+	ASSERT_EQ(config.device_count == 2);
+}
+
+TEST(ConfigUdpModeRejectsConnectionAndSerialOptions)
+{
+	static const char* const options[] = {
+		"(idle-timeout-ms 100)", "(broadcast-execute on)", "(broadcast-execute off)",
+		"(baud 9600)", "(frame-gap-ms 20)", "(strict-t15 on)", "(parity none)",
+		"(stop-bits 1)", "(data-bits 8)", "(tls)",
+	};
+	char	text[256];
+
+	for (u32 i = 0; i < ARRAY_COUNT(options); i++)
+	{
+		snprintf(text, sizeof(text), "(server (mode udp) %s) (device (unit-id 1) (holding 0))",
+			 options[i]);
+		EXPECT_ERROR(text, WITH_TLS || strcmp(options[i], "(tls)") != 0 ?
+			     "is not valid in udp mode" : "built without TLS support");
+	}
+	EXPECT_ERROR("(server (mode udp) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))",
+		     "(path ...) is only valid");
+	EXPECT_ERROR("(server (mode udp) (bind \"localhost\")) (device (unit-id 1) (holding 0))",
+		     "not a valid IPv4 or IPv6 address");
+}
+
+TEST(ConfigUdpModeFaultRules)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	EXPECT_ERROR("(server (mode udp)) (device (unit-id 1) (fault (kind disconnect)) (holding 0))",
+		     "(fault (kind disconnect)) is not valid in udp mode");
+	EXPECT_ERROR("(server (mode udp)) (device (unit-id 1) (fault (kind corrupt) (mode checksum)) (holding 0))",
+		     "checksum is not valid in udp mode");
+	ASSERT_SUCCESS(load_text(
+		"(server (mode udp)) (device (unit-id 1) (holding 0)"
+		" (fault (kind drop) (percent 5)) (fault (kind delay) (delay-ms 10))"
+		" (fault (kind exception) (code 6) (percent 5)) (fault (kind corrupt) (mode register))"
+		" (fault (kind restart) (percent 1)) (fault (kind sensor-disconnect) (percent 1)))",
+		&config, err, sizeof(err)));
 }

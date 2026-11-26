@@ -26,8 +26,7 @@ static const char READ_ALL_FORMS[] =
 	"                   (object->string info))))))";
 
 static const char* const PARITY_NAMES[] = { "none", "even", "odd", "mark", "space" };
-/* Indexed by every server_mode_t so messages never read past the table; a config
- * file may select only the first CONFIG_MODE_COUNT names (the _FD modes are host-only). */
+/* Indexed by every server_mode_t so messages never read past the table. */
 static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_TCP]          = "tcp",
 	[SERVER_MODE_RTU_PTY]      = "rtu-pty",
@@ -38,8 +37,16 @@ static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_ASCII_TCP]    = "ascii-tcp",
 	[SERVER_MODE_RTU_FD]       = "rtu-fd",
 	[SERVER_MODE_ASCII_FD]     = "ascii-fd",
+	[SERVER_MODE_UDP]          = "udp",
 };
-enum { CONFIG_MODE_COUNT = SERVER_MODE_ASCII_TCP + 1 };
+/* What (mode ...) accepts, in selection order; the _FD modes are host-only. */
+static const char* const CONFIG_MODE_NAMES[] = {
+	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp", "udp",
+};
+static const server_mode_t CONFIG_MODE_VALUES[] = {
+	SERVER_MODE_TCP, SERVER_MODE_RTU_PTY, SERVER_MODE_RTU_DEVICE, SERVER_MODE_RTU_TCP,
+	SERVER_MODE_ASCII_PTY, SERVER_MODE_ASCII_DEVICE, SERVER_MODE_ASCII_TCP, SERVER_MODE_UDP,
+};
 #if WITH_TLS
 static const char* const TLS_VERSION_NAMES[] = { "tls1.2", "tls1.3" };
 #endif
@@ -173,6 +180,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 {
 	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls" };
 	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls" };
+	static const char* const udp_keys[] = { "mode", "port", "bind", "seed" };
 	static const char* const ascii_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
 	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
 	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
@@ -189,6 +197,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	s64		stop_bits         = config->stop_bits;
 	u32		parity            = config->parity;
 	u32		mode              = config->mode;
+	u32		mode_index        = 0;
 	bool		strict_t15        = config->strict_t15;
 	bool		broadcast_execute = config->broadcast_execute;
 	const char*	bind              = NULL;
@@ -206,8 +215,11 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return form_fail(ctx, "tls: built without TLS support");
 #endif
 
-	if (!form_opt_choice(ctx, options, "mode", MODE_NAMES, CONFIG_MODE_COUNT, &mode))
+	if (!form_opt_choice(ctx, options, "mode", CONFIG_MODE_NAMES, ARRAY_COUNT(CONFIG_MODE_NAMES),
+			     &mode_index))
 		return false;
+	if (!form_is_absent(ctx, form_find(ctx, options, "mode")))
+		mode = CONFIG_MODE_VALUES[mode_index];
 
 	if (!form_opt_string(ctx, options, "path", &path))
 		return false;
@@ -217,6 +229,10 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		case SERVER_MODE_TCP:
 			allowed = tcp_keys;
 			allowed_count = ARRAY_COUNT(tcp_keys);
+			break;
+		case SERVER_MODE_UDP:
+			allowed = udp_keys;
+			allowed_count = ARRAY_COUNT(udp_keys);
 			break;
 		case SERVER_MODE_ASCII_TCP:
 			allowed = ascii_tcp_keys;
@@ -370,7 +386,8 @@ check_unit_ids_unique(form_ctx_t* ctx, const config_t* config)
 static bool
 check_mode_rules(form_ctx_t* ctx, const config_t* config)
 {
-	if (config->mode == SERVER_MODE_TCP)
+	if (config->mode == SERVER_MODE_TCP ||
+	    config->mode == SERVER_MODE_UDP)
 		return true;
 
 	for (u32 i = 0; i < config->device_count; i++)
@@ -401,11 +418,12 @@ check_fault_modes(form_ctx_t* ctx, const config_t* config)
 		bool base_disconnect =
 			(dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) != 0;
 
-		if (config->mode == SERVER_MODE_TCP &&
+		if ((config->mode == SERVER_MODE_TCP ||
+		     config->mode == SERVER_MODE_UDP) &&
 		    (base_checksum ||
 		     device_machine_corrupt_mode_present(dev, FAULT_CORRUPT_CHECKSUM)))
-			return form_fail(ctx, "device '%s': corrupt mode checksum is not valid in tcp mode (MBAP frames have no checksum)",
-					 dev->name);
+			return form_fail(ctx, "device '%s': corrupt mode checksum is not valid in %s mode (MBAP frames have no checksum)",
+					 dev->name, MODE_NAMES[config->mode]);
 		if (!tcp_like &&
 		    (base_disconnect ||
 		     device_machine_fault_present(dev, FAULT_DISCONNECT)))

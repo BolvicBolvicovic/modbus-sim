@@ -105,44 +105,24 @@ conn_consume(tcp_conn_t* conn, u32 size)
 static void
 handle_frame(tcp_server_t* server, tcp_conn_t* conn, const mbap_header_t* header, u64 now_ms)
 {
-	u8			pdu[MODBUS_MAX_PDU];
-	device_t*		dev      = net_find_device(server->options.devices,
-							   server->options.device_count,
-							   header->unit);
-	const u8*		request  = conn->rx + MBAP_HEADER_SIZE;
-	u32			req_len  = (u32)header->length - 1;
-	u32			pdu_len  = 0;
 	fault_decision_t	decision = { 0 };
-	mbap_header_t		reply    = *header;
-
-	if (!dev)
-		pdu_len = modbus_exception(pdu, request[0], EXC_GATEWAY_TARGET_FAILED);
-	else
-		pdu_len = net_handle_pdu(dev, &server->rng, now_ms, request, req_len, pdu, &decision);
-
-	LOG_DEBUG("%s tid=%u unit=%u fc=0x%02X -> %s%s", conn->base.peer, header->transaction,
-		  header->unit, request[0], pdu_len == 0 ? "no response" :
-		  (pdu[0] & 0x80) ? "exception" : "ok",
-		  decision.drop ? " (dropped by fault)" : decision.delay_ms ? " (delayed by fault)" : "");
+	u32			len = net_mbap_respond(server->options.devices,
+						       server->options.device_count, &server->rng,
+						       now_ms, conn->base.peer, header,
+						       conn->rx + MBAP_HEADER_SIZE, conn->tx, &decision);
 
 	if (decision.disconnect)
 	{
 		conn_close(server, conn);
 		return;
 	}
-	if (decision.drop || pdu_len == 0)
-	{
-		conn->base.last_activity_ms = now_ms;
-		return;
-	}
-
-	reply.length = (u16)(pdu_len + 1);
-	mbap_encode(conn->tx, &reply);
-	memcpy(conn->tx + MBAP_HEADER_SIZE, pdu, pdu_len);
-	conn->tx_len           = MBAP_HEADER_SIZE + pdu_len;
-	conn->tx_sent          = 0;
-	conn->tx_due_ms        = now_ms + decision.delay_ms;
 	conn->base.last_activity_ms = now_ms;
+	if (len == 0)
+		return;
+
+	conn->tx_len    = len;
+	conn->tx_sent   = 0;
+	conn->tx_due_ms = now_ms + decision.delay_ms;
 }
 
 /* Handles every complete request waiting in the receive buffer, one at a time. */

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "net/net_common.h"
+#include "modbus/mbap.h"
 #include "modbus/pdu.h"
 #include "util/log.h"
 #include <arpa/inet.h>
@@ -56,41 +57,47 @@ net_handle_hangup(pending_response_t* pending)
 }
 
 int
+net_bind_addr(const char* bind_address, u16 port, struct sockaddr_storage* addr, socklen_t* addr_len)
+{
+	struct in_addr	addr4;
+	struct in6_addr	addr6;
+
+	memset(addr, 0, sizeof(*addr));
+	if (inet_pton(AF_INET, bind_address, &addr4) == 1)
+	{
+		struct sockaddr_in* a = (struct sockaddr_in*)addr;
+
+		a->sin_family = AF_INET;
+		a->sin_port = htons(port);
+		a->sin_addr = addr4;
+		*addr_len = sizeof(*a);
+		return AF_INET;
+	}
+	if (inet_pton(AF_INET6, bind_address, &addr6) == 1)
+	{
+		struct sockaddr_in6* a = (struct sockaddr_in6*)addr;
+
+		a->sin6_family = AF_INET6;
+		a->sin6_port = htons(port);
+		a->sin6_addr = addr6;
+		*addr_len = sizeof(*a);
+		return AF_INET6;
+	}
+	LOG_WARN("bind address '%s' is not a valid IPv4 or IPv6 address", bind_address);
+	return AF_UNSPEC;
+}
+
+int
 net_tcp_listen(const char* bind_address, u16 port, int backlog)
 {
 	struct sockaddr_storage	addr = { 0 };
 	socklen_t		addr_len = 0;
-	struct in_addr		addr4;
-	struct in6_addr		addr6;
-	int			family = AF_UNSPEC;
+	int			family = net_bind_addr(bind_address, port, &addr, &addr_len);
 	int			yes = 1;
 	int			fd;
 
-	if (inet_pton(AF_INET, bind_address, &addr4) == 1)
-	{
-		struct sockaddr_in* a = (struct sockaddr_in*)&addr;
-
-		family = AF_INET;
-		a->sin_family = AF_INET;
-		a->sin_port = htons(port);
-		a->sin_addr = addr4;
-		addr_len = sizeof(*a);
-	}
-	else if (inet_pton(AF_INET6, bind_address, &addr6) == 1)
-	{
-		struct sockaddr_in6* a = (struct sockaddr_in6*)&addr;
-
-		family = AF_INET6;
-		a->sin6_family = AF_INET6;
-		a->sin6_port = htons(port);
-		a->sin6_addr = addr6;
-		addr_len = sizeof(*a);
-	}
-	else
-	{
-		LOG_WARN("bind address '%s' is not a valid IPv4 or IPv6 address", bind_address);
+	if (family == AF_UNSPEC)
 		return -1;
-	}
 
 	fd = socket(family, SOCK_STREAM | SOCK_NONBLOCK, 0);
 	if (fd < 0)
@@ -109,4 +116,33 @@ net_tcp_listen(const char* bind_address, u16 port, int backlog)
 		return -1;
 	}
 	return fd;
+}
+
+u32
+net_mbap_respond(device_t** devices, u32 count, rng_t* rng, u64 now_ms, const char* peer,
+		 const mbap_header_t* header, const u8* request, u8* out,
+		 fault_decision_t* decision)
+{
+	u8		pdu[MODBUS_MAX_PDU];
+	device_t*	dev     = net_find_device(devices, count, header->unit);
+	u32		req_len = (u32)header->length - 1;
+	u32		pdu_len = 0;
+	mbap_header_t	reply   = *header;
+
+	if (!dev)
+		pdu_len = modbus_exception(pdu, request[0], EXC_GATEWAY_TARGET_FAILED);
+	else
+		pdu_len = net_handle_pdu(dev, rng, now_ms, request, req_len, pdu, decision);
+
+	LOG_DEBUG("%s tid=%u unit=%u fc=0x%02X -> %s%s", peer, header->transaction,
+		  header->unit, request[0], pdu_len == 0 ? "no response" :
+		  (pdu[0] & 0x80) ? "exception" : "ok",
+		  decision->drop ? " (dropped by fault)" : decision->delay_ms ? " (delayed by fault)" : "");
+
+	if (decision->drop || pdu_len == 0)
+		return 0;
+	reply.length = (u16)(pdu_len + 1);
+	mbap_encode(out, &reply);
+	memcpy(out + MBAP_HEADER_SIZE, pdu, pdu_len);
+	return MBAP_HEADER_SIZE + pdu_len;
 }

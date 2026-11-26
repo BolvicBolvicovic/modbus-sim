@@ -238,6 +238,7 @@ typedef enum mogbus_mode_t
 	MOGBUS_MODE_ASCII_TCP,		/* ASCII frames over TCP */
 	MOGBUS_MODE_RTU_FD,		/* RTU on an open byte-stream fd you own */
 	MOGBUS_MODE_ASCII_FD,		/* ASCII on an open byte-stream fd you own */
+	MOGBUS_MODE_UDP,		/* Modbus UDP: one MBAP ADU per datagram */
 } mogbus_mode_t;
 
 typedef enum mogbus_parity_t
@@ -260,8 +261,8 @@ typedef enum mogbus_tls_version_t
 typedef struct mogbus_server_options_t
 {
 	mogbus_mode_t	mode;
-	const char*	bind_address;		/* TCP-family modes; "0.0.0.0" opts in to remote access */
-	uint16_t	port;			/* TCP-family modes; use 802 by convention with TLS */
+	const char*	bind_address;		/* TCP-family and UDP modes; "0.0.0.0" opts in to remote access */
+	uint16_t	port;			/* TCP-family and UDP modes; use 802 by convention with TLS */
 	const char*	path;			/* *_DEVICE modes */
 	int		fd;			/* *_FD modes: yours, never closed by the library */
 	uint32_t	seed;			/* fault dice seed; 0 = fixed default */

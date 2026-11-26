@@ -44,7 +44,8 @@ _Static_assert((int)MOGBUS_MODE_TCP == (int)SERVER_MODE_TCP &&
 	       (int)MOGBUS_MODE_ASCII_DEVICE == (int)SERVER_MODE_ASCII_DEVICE &&
 	       (int)MOGBUS_MODE_ASCII_TCP == (int)SERVER_MODE_ASCII_TCP &&
 	       (int)MOGBUS_MODE_RTU_FD == (int)SERVER_MODE_RTU_FD &&
-	       (int)MOGBUS_MODE_ASCII_FD == (int)SERVER_MODE_ASCII_FD, "mode enum");
+	       (int)MOGBUS_MODE_ASCII_FD == (int)SERVER_MODE_ASCII_FD &&
+	       (int)MOGBUS_MODE_UDP == (int)SERVER_MODE_UDP, "mode enum");
 _Static_assert((int)MOGBUS_PARITY_NONE == (int)PARITY_NONE &&
 	       (int)MOGBUS_PARITY_EVEN == (int)PARITY_EVEN &&
 	       (int)MOGBUS_PARITY_ODD == (int)PARITY_ODD &&
@@ -594,7 +595,7 @@ fail:
 static bool
 options_from_public(const mogbus_server_options_t* in, server_options_t* o, char* err, size_t err_size)
 {
-	if ((unsigned)in->mode > MOGBUS_MODE_ASCII_FD ||
+	if ((unsigned)in->mode > MOGBUS_MODE_UDP ||
 	    (unsigned)in->parity > MOGBUS_PARITY_SPACE ||
 	    (unsigned)in->tls_min_version > MOGBUS_TLS_1_3)
 	{

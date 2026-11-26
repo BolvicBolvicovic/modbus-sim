@@ -532,12 +532,12 @@ ts_ipv6_loopback_available(void)
 	return true;
 }
 
-int
-ts_connect_loopback(u16 port, int family, u32 timeout_ms)
+static int
+connect_loopback(u16 port, int family, int type, u32 timeout_ms)
 {
 	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
 			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	int            fd = socket(family, SOCK_STREAM, 0);
+	int            fd = socket(family, type, 0);
 
 	if (fd < 0)
 		return -1;
@@ -565,6 +565,44 @@ ts_connect_loopback(u16 port, int family, u32 timeout_ms)
 	}
 	close(fd);
 	return -1;
+}
+
+int
+ts_connect_loopback(u16 port, int family, u32 timeout_ms)
+{
+	return connect_loopback(port, family, SOCK_STREAM, timeout_ms);
+}
+
+int
+ts_udp_loopback(u16 port, int family, u32 timeout_ms)
+{
+	return connect_loopback(port, family, SOCK_DGRAM, timeout_ms);
+}
+
+s32
+ts_udp_recv(int fd, u8* buf, u32 cap, u32 timeout_ms)
+{
+	ssize_t got;
+
+	ts_set_recv_timeout(fd, timeout_ms);
+	do
+		got = recv(fd, buf, cap, 0);
+	while (got < 0 && errno == EINTR);
+	return got < 0 ? -1 : (s32)got;
+}
+
+bool
+ts_udp_mbap_recv(int fd, u8 unit, u16 tid, u8* pdu, u32* pdu_len, u32 timeout_ms)
+{
+	u8  raw[MBAP_MAX_FRAME];
+	s32 got = ts_udp_recv(fd, raw, sizeof(raw), timeout_ms);
+
+	if (got < MBAP_HEADER_SIZE + 1 ||
+	    !ts_mbap_reply_header(raw, unit, tid, pdu_len) ||
+	    MBAP_HEADER_SIZE + *pdu_len != (u32)got)
+		return false;
+	memcpy(pdu, raw + MBAP_HEADER_SIZE, *pdu_len);
+	return true;
 }
 
 /* Wire-frame helpers. */
