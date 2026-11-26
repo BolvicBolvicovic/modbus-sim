@@ -254,7 +254,8 @@ device_add_point(device_t* dev, const point_t* point)
 	{
 		size_t	len = point->text ? strlen(point->text) : 0;
 
-		text = ARENA_PUSH_ARRAY(dev->arena, char, 2u * point->length);
+		/* Rounded up to 8 so that the next arena struct stays aligned. */
+		text = ARENA_PUSH_ARRAY_ALIGNED(dev->arena, char, (2u * point->length + 7) & ~7u, 8);
 		if (!text)
 			return "out of memory while storing a string";
 		memset(text, point->padding, 2u * point->length);
