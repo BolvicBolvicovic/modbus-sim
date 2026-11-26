@@ -108,6 +108,15 @@ The C library is not thread-safe, so the package serialises it: every `Context`,
   thread that logs (the server thread, with the context lock held), so keep it short and do not
   block; `None` restores stderr. `set_log_format("json")` makes `message` a JSON object.
 
+## Runtime control over HTTP
+
+The Python calls above change a device from inside the test process. A server also has an opt-in
+HTTP control API (`http_bind_address`, `http_port` and `http_control=True` in `ServerOptions`, or
+`mogbus.serve(..., http_bind_address="127.0.0.1", http_port=9102, http_control=True)`) that other
+processes can use to read and write values and inject faults; see
+[observability.md](observability.md#runtime-control). It has no authentication, so keep it on
+loopback.
+
 ## pytest
 
 pytest is not required; a fixture is a few lines:

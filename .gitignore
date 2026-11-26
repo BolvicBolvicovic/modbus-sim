@@ -1,7 +1,7 @@
 *.o
 *.d
 *.asan.o
-mogbus
+/mogbus
 mogbus-tests
 mogbus-asan
 mogbus-asan-tests

@@ -2,6 +2,7 @@ import contextlib
 import ctypes
 import json
 import os
+import re
 import socket
 import struct
 import tempfile
@@ -66,6 +67,31 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(ServerOptions._from_c(c), ServerOptions())
 
 
+def header_fields(text, tag):
+    """Field names of `typedef struct TAG { ... } TAG;` in mogbus.h; nested anonymous structs
+    give "outer.inner" names next to "outer"."""
+    body = re.search(r"typedef struct %s\s*\{(.*?)\n\}\s*%s;" % (tag, tag), text, re.S).group(1)
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    stack = [[]]
+    for line in body.split("\n"):
+        line = line.strip()
+        if not line or line == "struct":
+            continue
+        if line == "{":
+            stack.append([])
+        elif line.startswith("}"):
+            name = re.match(r"\}\s*(\w+)", line).group(1)
+            inner = stack.pop()
+            stack[-1].append(name)
+            stack[-1].extend(f"{name}.{n}" for n in inner)
+        else:
+            for part in line.rstrip(";").split(","):
+                part = re.sub(r"\[.*?\]", "", part).strip()
+                stack[-1].append(part.split()[-1].lstrip("*"))
+    assert len(stack) == 1
+    return set(stack[0])
+
+
 class LayoutTest(unittest.TestCase):
     """The ctypes structs must match the C structs field by field (see python/tests/layout.c)."""
 
@@ -103,6 +129,28 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual(c.pop("faults_count"), (7,))
         self.assertEqual(c.pop("space_count"), (4,))
         self.assertEqual(c, expected)
+
+        # The field lists come from the header itself, so a field added to a C struct without
+        # a matching ctypes field or layout.c entry fails here.
+        header = Path(__file__).resolve().parents[2] / "include" / "mogbus.h"
+        if not header.exists():
+            self.skipTest("include/mogbus.h not found")
+        text = header.read_text()
+        nested = {"P": {"ramp": _lib._Ramp},
+                  "I": {"faults": _lib._FaultInfo, "custom_fcs": _lib._CustomFc}}
+        for key, tag, cls in (("O", "mogbus_server_options_t", _lib.ServerOptionsC),
+                              ("P", "mogbus_point_t", _lib.PointC),
+                              ("I", "mogbus_device_info_t", _lib.DeviceInfoC)):
+            want = header_fields(text, tag)
+            have = set()
+            for name, _ in cls._fields_:
+                have.add(name.rstrip("_"))
+                for inner, icls in nested.get(key, {}).items():
+                    if name == inner:
+                        have.update(f"{inner}.{n.rstrip('_')}" for n, _ in icls._fields_)
+            laid_out = {re.sub(r"\[\d+\]", "", k[2:]) for k in c if k.startswith(key + ".")}
+            self.assertEqual(want, have, f"{tag}: header and ctypes fields differ")
+            self.assertEqual(want, laid_out, f"{tag}: header and layout.c fields differ")
 
 
 class DeviceTest(unittest.TestCase):
@@ -345,6 +393,22 @@ class LogTest(unittest.TestCase):
         self.assertTrue(any(p.get("event") for p in parsed))
         with self.assertRaises(MogbusError):
             mogbus.set_log_level("loud")
+
+
+class ControlApiTest(unittest.TestCase):
+    def test_http_control(self):
+        import urllib.request
+        http_port = free_port()
+        with mogbus.serve(config_text=DEVICES, port=0, http_bind_address="127.0.0.1",
+                          http_port=http_port, http_control=True) as srv:
+            base = f"http://127.0.0.1:{http_port}/api/devices"
+            with urllib.request.urlopen(base, timeout=5) as r:
+                devices = json.load(r)
+            self.assertEqual(devices[0]["unit"], 7)
+            self.assertEqual(devices[0]["name"], "cfg")
+            srv.device(7).set_value("holding", 0, 55)
+            with urllib.request.urlopen(base + "/7/holding/0", timeout=5) as r:
+                self.assertEqual(json.load(r), {"values": [55]})
 
 
 class ServeHelperTest(unittest.TestCase):
