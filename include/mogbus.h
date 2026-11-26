@@ -46,8 +46,8 @@ extern "C" {
 #define MOGBUS_API __attribute__((visibility("default")))
 
 #define MOGBUS_VERSION_MAJOR	0
-#define MOGBUS_VERSION_MINOR	2
-#define MOGBUS_VERSION_PATCH	0
+#define MOGBUS_VERSION_MINOR	0
+#define MOGBUS_VERSION_PATCH	1
 
 /* Same as the MOGBUS_VERSION_* macros, as "major.minor.patch". */
 MOGBUS_API const char*	mogbus_version(void);

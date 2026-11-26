@@ -4,7 +4,7 @@ The `mogbus` binary is one front end; the same code builds as `libmogbus.a` and 
 with a small C API, so a test harness or application can embed simulated Modbus devices and drive
 them from its own loop. The only header is [`include/mogbus.h`](../include/mogbus.h) (it needs just
 `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`; every symbol is `mogbus_*` / `MOGBUS_*`). The current
-version is 0.2.0 (`MOGBUS_VERSION_*`, `mogbus_version()`).
+version is 0.0.1 (`MOGBUS_VERSION_*`, `mogbus_version()`).
 
 ## Build and link
 

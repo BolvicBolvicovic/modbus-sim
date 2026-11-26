@@ -45,7 +45,7 @@ TEST(ApiVersionAndDefaults)
 {
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 
-	ASSERT_EQ(strcmp(mogbus_version(), "0.2.0") == 0);
+	ASSERT_EQ(strcmp(mogbus_version(), "0.0.1") == 0);
 	ASSERT_EQ(o.mode == MOGBUS_MODE_TCP && strcmp(o.bind_address, "127.0.0.1") == 0);
 	ASSERT_EQ(o.port == 1502 && o.fd == -1 && o.idle_timeout_ms == 0);
 	ASSERT_EQ(o.data_bits == 8 && o.parity == MOGBUS_PARITY_NONE && o.stop_bits == 1);
