@@ -1,5 +1,6 @@
 import contextlib
 import ctypes
+import io
 import json
 import os
 import re
@@ -590,6 +591,70 @@ class ServeHelperTest(unittest.TestCase):
         with self.assertRaises(MogbusError):
             with mogbus.serve(config_text="(device", ):
                 pass
+
+
+class AccessHookTest(unittest.TestCase):
+    def raw_write(self, sock, unit, address, value):
+        """FC 06; returns the echoed value or ("exception", code)."""
+        sock.sendall(struct.pack(">HHHBBHH", 2, 0, 6, unit, 6, address, value))
+        reply = sock.recv(256)
+        if reply[7] & 0x80:
+            return ("exception", reply[8])
+        return struct.unpack(">H", reply[10:12])[0]
+
+    def test_hook_refreshes_values_and_calls_back_into_the_device(self):
+        port = free_port()
+        seen = []
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 1)
+            dev.add_point("holding", 1, "u16", 2)
+
+            def hook(access):
+                seen.append(access)
+                if access.kind == mogbus.AccessKind.READ:
+                    dev.set_value("holding", 0, 500 + len(seen))  # reentrant: the lock is an RLock
+                    dev.get_value("holding", 1)
+
+            dev.set_access_hook(hook)
+            with ctx.serve(port=port).start():
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                    self.assertEqual(mbap_read(sock, 1, 0, 2), [501, 2])
+                    self.assertEqual(mbap_read(sock, 1, 0), [502])
+                    self.assertEqual(seen[0].kind, mogbus.AccessKind.READ)
+                    self.assertEqual(
+                        (seen[0].space, seen[0].address, seen[0].count, seen[0].values, seen[0].function_code),
+                        (mogbus.Space.HOLDING, 0, 2, None, 3))
+                    self.assertEqual(self.raw_write(sock, 1, 1, 77), 77)
+                    self.assertEqual(seen[-1].kind, mogbus.AccessKind.WRITE)
+                    self.assertEqual((seen[-1].values, seen[-1].function_code), ([77], 6))
+                    dev.set_access_hook(None)
+                    n = len(seen)
+                    self.assertEqual(mbap_read(sock, 1, 0), [502])
+                    self.assertEqual(len(seen), n)
+
+    def test_hook_veto_and_raising_hook(self):
+        port = free_port()
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 1)
+            mode = {"v": "veto"}
+
+            def hook(access):
+                if mode["v"] == "raise":
+                    raise RuntimeError("boom")
+                return 6 if access.kind == mogbus.AccessKind.WRITE else None
+
+            dev.set_access_hook(hook)
+            with ctx.serve(port=port).start():
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                    self.assertEqual(self.raw_write(sock, 1, 0, 9), ("exception", 6))
+                    self.assertEqual(dev.read("holding", 0), [1])
+                    mode["v"] = "raise"
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(mbap_read(sock, 1, 0), ("exception", 4))
+                        self.assertEqual(self.raw_write(sock, 1, 0, 9), ("exception", 4))
+                    self.assertEqual(dev.read("holding", 0), [1])
 
 
 class LockTest(unittest.TestCase):

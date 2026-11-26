@@ -127,6 +127,195 @@ TEST(ApiReadOnlyPointsRefuseClientsButNotTheHost)
 	mogbus_destroy(ctx);
 }
 
+/* ---- access hook ---- */
+
+static struct hook_log_t
+{
+	int		calls;
+	int		reads;
+	int		writes;
+	mogbus_access_t	last;
+	uint16_t	values[8];
+	uint8_t		order[4];	/* kinds in call order */
+	uint8_t		answer;		/* exception to return */
+	double		refresh;	/* READ: set holding 0 to this */
+} hook_log;
+
+static uint8_t
+test_hook(void* user, mogbus_device_t* dev, const mogbus_access_t* a)
+{
+	(void)user;
+	if (hook_log.calls < 4)
+		hook_log.order[hook_log.calls] = (uint8_t)a->kind;
+	hook_log.calls++;
+	hook_log.last = *a;
+	if (a->values)
+		memcpy(hook_log.values, a->values, a->count * sizeof(uint16_t) > sizeof(hook_log.values) ?
+		       sizeof(hook_log.values) : a->count * sizeof(uint16_t));
+	if (a->kind == MOGBUS_ACCESS_READ)
+	{
+		hook_log.reads++;
+		if (!hook_log.answer)
+			mogbus_device_set_value(dev, MOGBUS_HOLDING, 0, hook_log.refresh);
+	}
+	else
+		hook_log.writes++;
+	return hook_log.answer;
+}
+
+static uint32_t
+hook_pdu(mogbus_device_t* dev, const u8* req, u32 len, u8* resp)
+{
+	return modbus_handle_pdu((device_t*)dev, 0, req, len, resp);
+}
+
+static mogbus_device_t*
+hook_device(mogbus_t** ctx)
+{
+	mogbus_device_t*	dev = NULL;
+	mogbus_point_t		p   = holding(0, 1);
+	char			err[128];
+
+	*ctx = mogbus_create();
+	dev  = mogbus_add_device(*ctx, 1, "hook", NULL, 0);
+	for (uint32_t i = 0; i < 4; i++)
+	{
+		p = holding(i, 1);
+		(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	}
+	p = holding(10, 5);
+	p.read_only = true;
+	(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	p = (mogbus_point_t){ .space = MOGBUS_COIL, .address = 0, .type = MOGBUS_TYPE_BOOL };
+	(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	memset(&hook_log, 0, sizeof(hook_log));
+	ASSERT_EQ(mogbus_device_set_access_hook(dev, test_hook, NULL));
+	return dev;
+}
+
+TEST(ApiAccessHookRefreshesValuesBeforeAClientRead)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 2 };
+
+	hook_log.refresh = 321;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 6);
+	ASSERT_EQ(resp[2] == 0x01 && resp[3] == 0x41 && resp[5] == 1);
+	ASSERT_EQ(hook_log.calls == 1 && hook_log.last.kind == MOGBUS_ACCESS_READ);
+	ASSERT_EQ(hook_log.last.space == MOGBUS_HOLDING && hook_log.last.address == 0);
+	ASSERT_EQ(hook_log.last.count == 2 && hook_log.last.values == NULL);
+	ASSERT_EQ(hook_log.last.function_code == FC_READ_HOLDING_REGISTERS);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookReadExceptionAnswersIt)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+
+	hook_log.answer = 6;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 2);
+	ASSERT_EQ(resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80) && resp[1] == 6);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookWriteVetoChangesNothing)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_WRITE_MULTIPLE_REGISTERS, 0, 0, 0, 3, 6, 0, 7, 0, 8, 0, 9 };
+	uint16_t	words[3];
+
+	hook_log.answer = 4;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 2 && resp[1] == 4);
+	ASSERT_EQ(hook_log.writes == 1 && hook_log.last.count == 3);
+	ASSERT_EQ(hook_log.values[0] == 7 && hook_log.values[1] == 8 && hook_log.values[2] == 9);
+	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 0, 3, words));
+	ASSERT_EQ(words[0] == 1 && words[1] == 1 && words[2] == 1);
+
+	hook_log.answer = 0;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 0, 3, words));
+	ASSERT_EQ(words[0] == 7 && words[1] == 8 && words[2] == 9);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookSeesSingleCoilAndMaskWriteResults)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		coil[] = { FC_WRITE_SINGLE_COIL, 0, 0, 0xFF, 0x00 };
+	u8		mask[] = { FC_MASK_WRITE_REGISTER, 0, 1, 0x00, 0xF0, 0x00, 0x0A };
+	u8		single[] = { FC_WRITE_SINGLE_REGISTER, 0, 2, 0x12, 0x34 };
+
+	ASSERT_EQ(hook_pdu(dev, coil, sizeof(coil), resp) == 5);
+	ASSERT_EQ(hook_log.last.kind == MOGBUS_ACCESS_WRITE && hook_log.last.space == MOGBUS_COIL);
+	ASSERT_EQ(hook_log.values[0] == 1 && hook_log.last.function_code == FC_WRITE_SINGLE_COIL);
+	/* holding 1 is 1: (1 & 0x00F0) | (0x000A & ~0x00F0) = 0x0A */
+	ASSERT_EQ(hook_pdu(dev, mask, sizeof(mask), resp) == 7);
+	ASSERT_EQ(hook_log.last.address == 1 && hook_log.last.count == 1 && hook_log.values[0] == 0x0A);
+	ASSERT_EQ(hook_log.last.function_code == FC_MASK_WRITE_REGISTER);
+	ASSERT_EQ(hook_pdu(dev, single, sizeof(single), resp) == 5);
+	ASSERT_EQ(hook_log.values[0] == 0x1234 && hook_log.last.function_code == FC_WRITE_SINGLE_REGISTER);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookReadWriteMultipleWritesFirst)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0, 0, 0, 1, 0, 1, 0, 1, 2, 0, 9 };
+
+	hook_log.refresh = 100;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 4);
+	ASSERT_EQ(hook_log.calls == 2 && hook_log.order[0] == MOGBUS_ACCESS_WRITE);
+	ASSERT_EQ(hook_log.order[1] == MOGBUS_ACCESS_READ);
+	ASSERT_EQ(resp[2] == 0 && resp[3] == 100);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookIsSkippedForBadRangesAndHostCalls)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		undefined_read[] = { FC_READ_HOLDING_REGISTERS, 0x01, 0x00, 0, 1 };
+	u8		undefined_write[] = { FC_WRITE_SINGLE_REGISTER, 0x01, 0x00, 0, 1 };
+	u8		read_only_write[] = { FC_WRITE_SINGLE_REGISTER, 0, 10, 0, 1 };
+	uint16_t	word = 5;
+
+	ASSERT_EQ(hook_pdu(dev, undefined_read, sizeof(undefined_read), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(hook_pdu(dev, undefined_write, sizeof(undefined_write), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(hook_pdu(dev, read_only_write, sizeof(read_only_write), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(mogbus_device_write(dev, MOGBUS_HOLDING, 0, 1, &word));
+	ASSERT_EQ(mogbus_device_set_value(dev, MOGBUS_HOLDING, 1, 3));
+	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 0, 1, &word));
+	ASSERT_EQ(hook_log.calls == 0);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookCanBeReplacedAndCleared)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+
+	ASSERT_EQ(mogbus_device_set_access_hook(dev, test_hook, NULL));	/* replace */
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 4 && hook_log.calls == 1);
+	ASSERT_EQ(mogbus_device_set_access_hook(dev, NULL, NULL));
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 4 && hook_log.calls == 1);
+	ASSERT_EQ(!mogbus_device_set_access_hook(NULL, test_hook, NULL));
+	mogbus_destroy(ctx);
+}
+
 TEST(ApiRejectsBadInput)
 {
 	mogbus_t*	ctx = mogbus_create();

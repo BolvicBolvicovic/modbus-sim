@@ -24,6 +24,7 @@ typedef struct device_fifo_t device_fifo_t;
 typedef struct device_canopen_object_t device_canopen_object_t;
 typedef enum custom_action_t custom_action_t;
 typedef struct device_custom_fc_t device_custom_fc_t;
+typedef struct device_access_t device_access_t;
 typedef struct device_t device_t;
 
 #define DEVICE_NAME_MAX		64
@@ -214,6 +215,17 @@ struct device_custom_fc_t
 /** @brief One simulated Modbus device (one unit id). */
 struct machine_system_t; /* defined in device/machine.h */
 
+/** @brief One Modbus client access handed to a device's access hook. */
+struct device_access_t
+{
+	bool		write;		/**< a write (values set) rather than a read */
+	space_kind_t	space;
+	u32		address;
+	u32		count;		/**< registers or bits */
+	const u16*	values;		/**< writes: the values about to be stored; reads: NULL */
+	u8		function_code;
+};
+
 /** @brief One simulated device: its tables, points, faults, machines and counters. */
 struct device_t
 {
@@ -262,6 +274,9 @@ struct device_t
 	u32		extended_id_count;
 	space_t		spaces[SPACE_COUNT];
 	struct machine_system_t* machines; /**< up to MACHINE_MAX_MACHINES, arena-backed */
+	/** @brief Host hook run on Modbus client reads/writes (NULL: none); returns 0 or an exception code. */
+	u8		(*access_fn)(void* user, device_t* dev, const device_access_t* access);
+	void*		access_user;
 };
 
 /**

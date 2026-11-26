@@ -119,6 +119,7 @@
         "docs/user/library/library-start.md",
         "docs/user/library/library-api.md",
         "docs/user/library/library-data.md",
+        "docs/user/library/library-access-hook.md",
         "docs/user/library/library-lifetimes.md",
         "docs/user/python/python-start.md",
         "docs/user/python/python-api.md",

@@ -489,6 +489,55 @@ mogbus_device_get_string(mogbus_device_t* handle, mogbus_space_t space, uint32_t
 	return device_get_string((device_t*)handle, (space_kind_t)space, address, out, size);
 }
 
+/** @brief The host's hook and user pointer of one device, the `user` of its trampoline. */
+struct access_hook_t
+{
+	mogbus_access_fn fn;
+	void*		user;
+};
+
+/* Device-level hook: maps the layer-neutral access onto the public one. */
+static u8
+access_trampoline(void* user, device_t* dev, const device_access_t* in)
+{
+	const struct access_hook_t*	hook   = user;
+	mogbus_access_t			access = {
+		.kind          = in->write ? MOGBUS_ACCESS_WRITE : MOGBUS_ACCESS_READ,
+		.space         = (mogbus_space_t)in->space,
+		.address       = in->address,
+		.count         = in->count,
+		.values        = in->values,
+		.function_code = in->function_code,
+	};
+
+	return hook->fn(hook->user, (mogbus_device_t*)dev, &access);
+}
+
+bool
+mogbus_device_set_access_hook(mogbus_device_t* handle, mogbus_access_fn fn, void* user)
+{
+	device_t*		dev  = (device_t*)handle;
+	struct access_hook_t*	hook = NULL;
+
+	if (!dev)
+		return false;
+	if (!fn)
+	{
+		dev->access_fn   = NULL;
+		dev->access_user = NULL;
+		return true;
+	}
+	/* The holder is allocated once per device and reused by later calls. */
+	hook = dev->access_fn == access_trampoline ? dev->access_user : ARENA_PUSH_ARRAY(dev->arena, struct access_hook_t, 1);
+	if (!hook)
+		return false;
+	hook->fn         = fn;
+	hook->user       = user;
+	dev->access_fn   = access_trampoline;
+	dev->access_user = hook;
+	return true;
+}
+
 bool
 mogbus_device_set_string(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 			 const char* text)

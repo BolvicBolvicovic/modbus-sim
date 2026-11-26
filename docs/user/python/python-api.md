@@ -13,6 +13,7 @@ The Python calls and the C functions they wrap, the accepted names for spaces an
 | `dev.read(space, address, count)`, `dev.write(space, address, values)` | `mogbus_device_read/write` (raw registers) |
 | `dev.get_value(space, address)`, `dev.set_value(space, address, value)` | `mogbus_device_get_value/set_value` (decoded) |
 | `dev.get_string(space, address)`, `dev.set_string(space, address, text)` | `mogbus_device_get_string/set_string` (string points) |
+| `dev.set_access_hook(fn)`, `dev.set_access_hook(None)` | `mogbus_device_set_access_hook` |
 | `dev.info()` | `mogbus_device_info` |
 | `ctx.serve(options=None, **overrides)`, `ctx.serve_config()` | `mogbus_server_create`, `mogbus_server_create_from_config` |
 | `ctx.config_server_options()`, `ctx.check_server(...)` | `mogbus_config_server_options`, `mogbus_server_check` |
@@ -58,6 +59,29 @@ else raises `MogbusError` listing the valid names.
   sets `error.status` (`mogbus.Status.INVALID`, `SERIAL`, `LISTEN`).
 - `probe()` returns a bool; `probe_or_raise()` raises with the reason. Both block the caller and take
   no lock, so they work while a started server runs on its background thread.
+
+## Access hook
+
+`dev.set_access_hook(fn)` calls `fn(access)` on every Modbus client read or write of the device
+(function codes and ordering as in the [C access hook](../library/library-access-hook.md)); `None`
+removes it. `access` is a `mogbus.Access` with `kind` (`mogbus.AccessKind.READ` or `WRITE`), `space`
+(`mogbus.Space`), `address`, `count`, `values` (list of ints for writes, `None` for reads) and
+`function_code`. Return `None` (or 0) to continue, or an exception code (1-255) to answer it; a
+vetoed write changes nothing. Host calls such as `set_value()` and `write()` never reach it.
+
+```python
+def hook(access):
+    if access.kind == mogbus.AccessKind.READ:
+        dev.set_value("holding", 0, read_sensor())   # refresh just before the client reads
+    elif access.values[0] > 1000:
+        return 3                                      # illegal data value
+
+dev.set_access_hook(hook)
+```
+
+The hook runs on the server thread with the context lock held; the lock is reentrant, so calls on
+the same device (or context) from inside it do not deadlock. An exception raised by the hook is
+printed with its traceback and answered with exception 04.
 
 ## See also
 

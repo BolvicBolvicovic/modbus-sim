@@ -11,6 +11,7 @@ import socket
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Union
 
@@ -33,6 +34,11 @@ class Space(enum.IntEnum):
     DISCRETE = 1
     INPUT = 2
     HOLDING = 3
+
+
+class AccessKind(enum.IntEnum):
+    READ = 0
+    WRITE = 1
 
 
 class ValueType(enum.IntEnum):
@@ -159,6 +165,17 @@ def _text(value: Optional[str]) -> Optional[bytes]:
 
 def _decode(value: Optional[bytes]) -> Optional[str]:
     return None if value is None else os.fsdecode(value)
+
+
+@dataclass
+class Access:
+    """A Modbus client access handed to a Device access hook."""
+    kind: AccessKind
+    space: Space
+    address: int
+    count: int  # registers or bits
+    values: Optional[List[int]]  # writes: the raw values about to be stored (bits as 0/1); reads: None
+    function_code: int
 
 
 @dataclass
@@ -314,6 +331,7 @@ class Device:
     def __init__(self, ctx: "Context", handle: int):
         self._ctx = ctx
         self._h = handle
+        self._access_ref = None  # the C callback object, alive while the hook is installed
 
     def _live(self):
         self._ctx._check_open()
@@ -409,6 +427,45 @@ class Device:
         address = _u(address, "address", 65536)
         if not lib.mogbus_device_set_value(self._live(), space, address, float(value)):
             raise MogbusError(f"no point starts at {Space(space).name.lower()} {address}")
+
+    @_locked
+    def set_access_hook(self, hook: Optional[Callable[[Access], Optional[int]]]) -> None:
+        """Runs hook(access) on every Modbus client read or write of this device; None removes it.
+
+        Return None (or 0) to let the request go on, or a Modbus exception code (1-255) to answer
+        it instead; a vetoed write changes nothing. The hook runs on the thread that steps the
+        server with the context lock held (the lock is reentrant, so it may call the methods of
+        this device, e.g. set_value() to refresh a value before a read). An exception raised by
+        the hook is printed and answered with exception 04. Host calls never reach the hook; see
+        mogbus_device_set_access_hook() for the function codes covered.
+        """
+        handle = self._live()
+        if hook is None:
+            if not lib.mogbus_device_set_access_hook(handle, ctypes.cast(None, _lib.ACCESS_FN), None):
+                raise MogbusError("cannot remove the access hook")
+            self._access_ref = None
+            return
+
+        def trampoline(_user, _dev, access):
+            try:
+                a = access.contents
+                values = None
+                if a.kind == AccessKind.WRITE:
+                    values = [a.values[i] for i in range(a.count)]
+                code = hook(Access(AccessKind(a.kind), Space(a.space), a.address, a.count, values,
+                                   a.function_code))
+                code = 0 if code is None else int(code)
+                if not 0 <= code <= 255:
+                    raise ValueError(f"exception code {code} is not in 0..255")
+                return code
+            except BaseException:  # an exception must not unwind into C
+                traceback.print_exc()
+                return 4
+
+        ref = _lib.ACCESS_FN(trampoline)
+        if not lib.mogbus_device_set_access_hook(handle, ref, None):
+            raise MogbusError("cannot install the access hook (out of memory)")
+        self._access_ref = ref
 
     @_locked
     def get_string(self, space, address) -> str:

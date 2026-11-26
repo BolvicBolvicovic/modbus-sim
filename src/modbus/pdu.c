@@ -25,6 +25,37 @@ modbus_exception(u8* resp, u8 function, u8 code)
 	return 2;
 }
 
+/* --- access hook --- */
+
+/** @brief Runs the host's read hook for a range already known to be readable; 0 or an exception. */
+static u8
+access_read(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count)
+{
+	device_access_t	access = { false, space, address, count, NULL, fc };
+
+	return dev->access_fn ? dev->access_fn(dev->access_user, dev, &access) : 0;
+}
+
+/**
+ * @brief Runs the host's write hook once the range is known to be defined and writable.
+ *
+ * Returns 0 to go on, or the exception to answer (02 for a range device_client_write() would
+ * refuse, without calling the hook). Does nothing without a hook.
+ */
+static u8
+access_write(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count, const u16* values)
+{
+	device_access_t	access = { true, space, address, count, values, fc };
+	u16		scratch[MB_MAX_WRITE_BITS];
+
+	if (!dev->access_fn)
+		return 0;
+	if (!device_read(dev, space, address, count, scratch) ||
+	    !device_range_writable(dev, space, address, count))
+		return EXC_ILLEGAL_DATA_ADDRESS;
+	return dev->access_fn(dev->access_user, dev, &access);
+}
+
 /* --- reads --- */
 
 static u32
@@ -45,6 +76,15 @@ read_bits(device_t* dev, space_kind_t space, const u8* req, u32 req_len, u8* res
 
 	if (!device_read(dev, space, address, qty, bits))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	if (dev->access_fn)
+	{
+		u8 code = access_read(dev, req[0], space, address, qty);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+		if (!device_read(dev, space, address, qty, bits))
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	}
 	if (device_range_failed(dev, space, address, qty))
 		return modbus_exception(resp, req[0], EXC_SLAVE_DEVICE_FAILURE);
 
@@ -75,6 +115,15 @@ read_registers(device_t* dev, space_kind_t space, const u8* req, u32 req_len, u8
 
 	if (!device_read(dev, space, address, qty, words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	if (dev->access_fn)
+	{
+		u8 code = access_read(dev, req[0], space, address, qty);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+		if (!device_read(dev, space, address, qty, words))
+			return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	}
 	if (device_range_failed(dev, space, address, qty))
 		return modbus_exception(resp, req[0], EXC_SLAVE_DEVICE_FAILURE);
 
@@ -104,6 +153,12 @@ write_single_coil(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	bit = (raw == 0xFF00);
+	{
+		u8 code = access_write(dev, req[0], SPACE_COIL, address, 1, &bit);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_client_write(dev, SPACE_COIL, address, 1, &bit))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
@@ -122,6 +177,12 @@ write_single_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 
 	address = get_be16(req + 1);
 	value   = get_be16(req + 3);
+	{
+		u8 code = access_write(dev, req[0], SPACE_HOLDING, address, 1, &value);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &value))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
@@ -150,6 +211,12 @@ write_multiple_coils(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	for (u32 i = 0; i < qty; i++)
 		bits[i] = (req[6 + i / 8] >> (i % 8)) & 1;
 
+	{
+		u8 code = access_write(dev, req[0], SPACE_COIL, address, qty, bits);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_client_write(dev, SPACE_COIL, address, qty, bits))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
@@ -178,6 +245,12 @@ write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	for (u32 i = 0; i < qty; i++)
 		words[i] = get_be16(req + 6 + i * 2);
 
+	{
+		u8 code = access_write(dev, req[0], SPACE_HOLDING, address, qty, words);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, qty, words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
@@ -226,10 +299,22 @@ read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* res
 	if (device_range_failed(dev, SPACE_HOLDING, read_addr, read_qty))
 		return modbus_exception(resp, req[0], EXC_SLAVE_DEVICE_FAILURE);
 
+	{
+		u8 code = access_write(dev, req[0], SPACE_HOLDING, write_addr, write_qty, write_words);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_client_write(dev, SPACE_HOLDING, write_addr, write_qty, write_words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	/* Write happens before read; result reflects post-write values (including overlap). */
+	{
+		u8 code = access_read(dev, req[0], SPACE_HOLDING, read_addr, read_qty);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_read(dev, SPACE_HOLDING, read_addr, read_qty, read_words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
@@ -491,6 +576,12 @@ mask_write_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
 	result = (u16)((current & and_mask) | (or_mask & (u16)~and_mask));
+	{
+		u8 code = access_write(dev, req[0], SPACE_HOLDING, address, 1, &result);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &result))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
 
@@ -1097,6 +1188,15 @@ custom_respond(device_t* dev, const device_custom_fc_t* fc, const u8* req, u32 r
 
 				if (!device_read(dev, c->space, c->address, c->count, words))
 					return modbus_exception(resp, fc->code, EXC_ILLEGAL_DATA_ADDRESS);
+				if (dev->access_fn)
+				{
+					u8 code = access_read(dev, fc->code, c->space, c->address, c->count);
+
+					if (code)
+						return modbus_exception(resp, fc->code, code);
+					if (!device_read(dev, c->space, c->address, c->count, words))
+						return modbus_exception(resp, fc->code, EXC_ILLEGAL_DATA_ADDRESS);
+				}
 				if (device_range_failed(dev, c->space, c->address, c->count))
 					return modbus_exception(resp, fc->code, EXC_SLAVE_DEVICE_FAILURE);
 				resp[0] = fc->code;

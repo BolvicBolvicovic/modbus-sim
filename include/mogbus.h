@@ -50,6 +50,8 @@ typedef enum mogbus_ramp_mode_t mogbus_ramp_mode_t;
 typedef struct mogbus_point_t mogbus_point_t;
 typedef enum mogbus_fault_kind_t mogbus_fault_kind_t;
 typedef struct mogbus_device_info_t mogbus_device_info_t;
+typedef enum mogbus_access_kind_t mogbus_access_kind_t;
+typedef struct mogbus_access_t mogbus_access_t;
 typedef enum mogbus_mode_t mogbus_mode_t;
 typedef enum mogbus_parity_t mogbus_parity_t;
 typedef enum mogbus_tls_version_t mogbus_tls_version_t;
@@ -421,6 +423,55 @@ MOGBUS_API bool		mogbus_device_get_string(mogbus_device_t* dev, mogbus_space_t s
  */
 MOGBUS_API bool		mogbus_device_set_string(mogbus_device_t* dev, mogbus_space_t space,
 						 uint32_t address, const char* text);
+
+/** @brief Kind of Modbus client access an access hook is asked about. */
+enum mogbus_access_kind_t
+{
+	MOGBUS_ACCESS_READ,	/**< a client is about to read a range */
+	MOGBUS_ACCESS_WRITE,	/**< a client is about to write a range */
+};
+
+/** @brief A Modbus client access to a device's tables, as seen by an access hook. */
+struct mogbus_access_t
+{
+	mogbus_access_kind_t kind;	/**< read or write */
+	mogbus_space_t	space;		/**< table touched */
+	uint32_t	address;	/**< first address */
+	uint32_t	count;		/**< number of registers or bits */
+	const uint16_t*	values;		/**< writes: the raw registers (bits as 0/1) about to be stored; reads: NULL */
+	uint8_t		function_code;	/**< function code of the request (3, 16, 23, ...) */
+};
+
+/**
+ * @brief Access hook: runs on every Modbus client read or write of a device.
+ *
+ * It runs on the thread that steps the server and may call the other `mogbus_device_*` functions
+ * on the same device (for example mogbus_device_set_value() to refresh a value before a read).
+ *
+ * @param user Pointer given to mogbus_device_set_access_hook().
+ * @param dev Device being accessed.
+ * @param access The access.
+ * @return 0 to let the request go on, or a Modbus exception code (1-255) to answer instead; a
+ *         vetoed write changes nothing.
+ */
+typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogbus_access_t* access);
+
+/**
+ * @brief Installs (or, with @p fn NULL, removes) the access hook of a device.
+ *
+ * Only Modbus client requests call it, after the range is known to be defined (reads) or
+ * defined and writable (writes), never host calls (mogbus_device_write(), mogbus_device_set_value(),
+ * the HTTP control API or machines). Covered: FC 01-04 (before the table is read), 05, 06, 15, 16, 22
+ * (the masked result) and 23 (write hook first, then the read hook once the write is applied), and
+ * the `registers` action of user-defined function codes. Not covered: file records (FC 20, 21),
+ * FIFO (FC 24), CANopen, diagnostics and identification. A device has one hook; a new one replaces it.
+ *
+ * @param dev Device.
+ * @param fn Hook, or NULL to remove it.
+ * @param user Passed back to @p fn.
+ * @return false if @p dev is NULL or out of memory.
+ */
+MOGBUS_API bool		mogbus_device_set_access_hook(mogbus_device_t* dev, mogbus_access_fn fn, void* user);
 
 /* ---- Server ---- */
 
