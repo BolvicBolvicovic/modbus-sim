@@ -551,7 +551,7 @@ Limits are `MACHINE_MAX_MACHINES` 8 per device, `MACHINE_MAX_STATES` 16,
     (transition tripped  idle     (when (coil 1)))))
 ```
 
-See also [`profiles/motor.scm`](../profiles/motor.scm).
+See also [`profiles/motor.scm`](../../profiles/motor.scm).
 
 ## `(fault ...)`
 

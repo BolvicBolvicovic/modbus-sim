@@ -93,13 +93,10 @@ when checking a no-TLS binary.
 `src/config`, `src/server/server_config.c` and the vendored s7, and builds only `libmogbus.a`/`libmogbus.so`
 (there is no `mogbus` binary); the config functions of the C API then fail with `built without config
 support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or the binary. See
-[docs/library.md](docs/library.md).
+[docs/user/library.md](docs/user/library.md).
 
-`make dist` builds the prod configuration and writes a reproducible release tarball
-`dist/mogbus-<version>-linux-<arch>.tar.gz` (binary, both libraries, header, docs, profiles), an
-SPDX SBOM and `dist/SHA256SUMS`. Builds are bit-for-bit reproducible across directories
-(`tools/check_reproducible.sh`). Tagged releases are built and attested by GitHub Actions; see
-[docs/release.md](docs/release.md).
+Packaging, reproducible builds and the release process are maintainer topics, described in
+[docs/dev/release.md](docs/dev/release.md).
 
 ## What it does today
 
@@ -107,7 +104,7 @@ SPDX SBOM and `dist/SHA256SUMS`. Builds are bit-for-bit reproducible across dire
 |---|---|
 | Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
-| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), and **machine** (bounded scripted state machine, see [config reference](docs/config-reference.md#machine-)). |
+| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), and **machine** (bounded scripted state machine, see [config reference](docs/user/config-reference.md#machine-)). |
 | Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
@@ -133,7 +130,7 @@ SPDX SBOM and `dist/SHA256SUMS`. Builds are bit-for-bit reproducible across dire
 | [`profiles/two-devices.scm`](profiles/two-devices.scm) | Two devices, one port | unit ids |
 
 Each profile starts with a comment listing its register map. Copy one, change what you need.
-See [docs/profiles.md](docs/profiles.md).
+See [docs/user/profiles.md](docs/user/profiles.md).
 
 ## Command line
 
@@ -158,7 +155,7 @@ plaintext TCP default here is **1502**, or **802** when `(tls ...)` is enabled.
 `--check`, sends one Modbus FC 08 echo request to the first device over the configured network transport
 (`tcp`, `udp`, `rtu-tcp`, `rtu-udp`, `ascii-tcp`, `ascii-udp`; a TLS server is only connected to) and exits 0
 if the unit answers, 1 otherwise with the reason on stderr. Serial and PTY modes cannot be probed. See
-[docs/deployment.md](docs/deployment.md).
+[docs/user/deployment.md](docs/user/deployment.md).
 
 ## Docker
 
@@ -169,7 +166,7 @@ docker run --rm -p 127.0.0.1:1502:1502 mogbus
 
 The image runs as UID 10001 with a read-only root filesystem and no capabilities, and has a built-in
 health check. Compose and Kubernetes examples live in `deploy/`; see
-[docs/deployment.md](docs/deployment.md).
+[docs/user/deployment.md](docs/user/deployment.md).
 
 ## Transports
 
@@ -190,7 +187,7 @@ health check. Compose and Kubernetes examples live in `deploy/`; see
 
 `mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
 Any other entry is rejected at load time, even when its value is the default. See
-[docs/config-reference.md](docs/config-reference.md) for ranges and defaults.
+[docs/user/config-reference.md](docs/user/config-reference.md) for ranges and defaults.
 
 TCP-family listeners (`tcp`, `rtu-tcp`, `ascii-tcp`), `udp`, `ascii-udp` and `rtu-udp` bind to loopback (`127.0.0.1`) by default, so
 they accept only local clients. Bind explicitly to `0.0.0.0` (or `::` for IPv6) to accept remote
@@ -220,7 +217,7 @@ and in every mode of a no-TLS build.
 Set `(require-client-certificate off)` in `(tls ...)` to simulate anonymous clients; the CA entry is
 then optional. This is a testing relaxation, not a recommended deployment setting. There is no
 role-based authorization based on certificate fields. See
-[docs/config-reference.md](docs/config-reference.md) for TLS options and defaults.
+[docs/user/config-reference.md](docs/user/config-reference.md) for TLS options and defaults.
 
 ```scheme
 ; Modbus RTU: choose a PTY or an existing device, never both in one config
@@ -295,18 +292,22 @@ mogbus also builds as `libmogbus.a` / `libmogbus.so` (`make lib`) with a small C
 `include/mogbus.h`: create devices in code or from a config file, start any transport and step it
 from your own loop. The `mogbus` binary is built the same way: `src/main.c` includes only
 `mogbus.h` and links against the static library. `make WITH_CONFIG=0` builds a library without the
-Scheme config loader for hosts that build devices in code. See [docs/library.md](docs/library.md)
+Scheme config loader for hosts that build devices in code. See [docs/user/library.md](docs/user/library.md)
 and `examples/embed_tcp.c`.
 
 ## Documentation
 
-- [docs/config-reference.md](docs/config-reference.md) - every config entry, with examples and error help
-- [docs/profiles.md](docs/profiles.md) - the profiles, and how to write your own
-- [docs/modbus-support.md](docs/modbus-support.md) - what the server answers, exceptions, limits
-- [docs/deployment.md](docs/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
-- [docs/library.md](docs/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
-- [docs/release.md](docs/release.md) - cutting a release, reproducible builds, SBOM, verifying downloads
-- [docs/architecture.md](docs/architecture.md) - code layout, coding rules, roadmap
+For users, in [docs/user/](docs/user):
+
+- [docs/user/config-reference.md](docs/user/config-reference.md) - every config entry, with examples and error help
+- [docs/user/profiles.md](docs/user/profiles.md) - the profiles, and how to write your own
+- [docs/user/modbus-support.md](docs/user/modbus-support.md) - what the server answers, exceptions, limits
+- [docs/user/deployment.md](docs/user/deployment.md) - Docker image, health check, hardening, resource limits, Kubernetes
+- [docs/user/library.md](docs/user/library.md) - embedding mogbus: build, link flags, API, lifetimes, threading
+For contributors and maintainers, in [docs/dev/](docs/dev):
+
+- [docs/dev/architecture.md](docs/dev/architecture.md) - code layout, coding rules, roadmap
+- [docs/dev/release.md](docs/dev/release.md) - cutting a release, reproducible builds, SBOM
 
 ## Project layout
 

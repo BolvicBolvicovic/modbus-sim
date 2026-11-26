@@ -2,7 +2,7 @@
  *
  * This is the only header a library user needs. It uses only <stdint.h>,
  * <stdbool.h> and <stddef.h> types and every symbol starts with mogbus_ or
- * MOGBUS_. Link with libmogbus.so or libmogbus.a (see docs/library.md).
+ * MOGBUS_. Link with libmogbus.so or libmogbus.a (see docs/user/library.md).
  *
  * Model: a mogbus_t context owns the devices and servers you create. Devices
  * come from a config file (mogbus_load_config) or are built in code
@@ -69,7 +69,7 @@ MOGBUS_API mogbus_t*	mogbus_create(void);
  * including devices and the context itself. NULL is ignored. */
 MOGBUS_API void		mogbus_destroy(mogbus_t* ctx);
 
-/* Reads a config file (see docs/config-reference.md): adds its devices to the
+/* Reads a config file (see docs/user/config-reference.md): adds its devices to the
  * context and remembers its (server ...) section for
  * mogbus_server_create_from_config(). Returns false with a message in err and
  * leaves the context unchanged on failure (bad file, too many devices, or a
@@ -157,7 +157,7 @@ MOGBUS_API mogbus_device_t*	mogbus_find_device(mogbus_t* ctx, uint8_t unit_id);
 MOGBUS_API size_t		mogbus_device_count(const mogbus_t* ctx);
 MOGBUS_API mogbus_device_t*	mogbus_device_at(mogbus_t* ctx, size_t index);
 
-/* Fault kinds a config file can attach to a device (see docs/config-reference.md). */
+/* Fault kinds a config file can attach to a device (see docs/user/config-reference.md). */
 typedef enum mogbus_fault_kind_t
 {
 	MOGBUS_FAULT_DELAY,

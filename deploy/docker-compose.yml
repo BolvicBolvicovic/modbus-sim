@@ -1,5 +1,5 @@
 # Run:  docker compose -f deploy/docker-compose.yml up --build
-# See docs/deployment.md.
+# See docs/user/deployment.md.
 services:
   mogbus:
     build:

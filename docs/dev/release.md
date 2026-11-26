@@ -27,7 +27,7 @@ assets per architecture: `mogbus-X.Y.Z-linux-<arch>.tar.gz` and
 `dist/mogbus-<version>-linux-<arch>.tar.gz`, `dist/<same>.spdx.json` and `dist/SHA256SUMS`
 (`<arch>` is `uname -m`). The tarball has one top directory `mogbus-<version>-linux-<arch>/` with
 `bin/mogbus`, `lib/libmogbus.a`, `lib/libmogbus.so`, `include/mogbus.h`,
-`share/doc/mogbus/` (README.md, LICENSE, NOTICE.md, `docs/*.md`) and `share/mogbus/profiles/*.scm`.
+`share/doc/mogbus/` (README.md, LICENSE, NOTICE.md, the user docs `docs/user/*.md`) and `share/mogbus/profiles/*.scm`.
 `make clean` removes `dist/`.
 
 The binary links OpenSSL dynamically (`libssl.so.3`, `libcrypto.so.3`, glibc): install `libssl3`

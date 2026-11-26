@@ -313,7 +313,7 @@ endif
 	cp $(BIN) $$stage/bin/ && cp $(LIB_STATIC) $(LIB_SHARED) $$stage/lib/ && \
 	cp include/mogbus.h $$stage/include/ && \
 	cp README.md LICENSE NOTICE.md $$stage/share/doc/mogbus/ && \
-	cp docs/*.md $$stage/share/doc/mogbus/docs/ && cp profiles/*.scm $$stage/share/mogbus/profiles/ && \
+	cp docs/user/*.md $$stage/share/doc/mogbus/docs/ && cp profiles/*.scm $$stage/share/mogbus/profiles/ && \
 	find $$stage -type d -exec chmod 755 {} + && find $$stage -type f -exec chmod 644 {} + && \
 	chmod 755 $$stage/bin/$(BIN) $$stage/lib/$(LIB_SHARED) && \
 	tar -C $(DIST_DIR) --sort=name --mtime=@$$epoch --owner=0 --group=0 --numeric-owner \

@@ -70,7 +70,7 @@ print_usage(void)
 	     "defaults to port 802 unless (port N) is given, and requires OpenSSL at build time.\n"
 	     "\n"
 	     "Try:  mogbus profiles/minimal.scm\n"
-	     "Docs: README.md and docs/");
+	     "Docs: README.md and docs/user/");
 }
 
 /* Returns false and prints a message when the arguments make no sense. */

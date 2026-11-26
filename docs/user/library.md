@@ -2,7 +2,7 @@
 
 The `mogbus` binary is one front end; the same code builds as `libmogbus.a` and `libmogbus.so`
 with a small C API, so a test harness or application can embed simulated Modbus devices and drive
-them from its own loop. The only header is [`include/mogbus.h`](../include/mogbus.h) (it needs just
+them from its own loop. The only header is [`include/mogbus.h`](../../include/mogbus.h) (it needs just
 `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`; every symbol is `mogbus_*` / `MOGBUS_*`). The current
 version is 0.0.1 (`MOGBUS_VERSION_*`, `mogbus_version()`).
 
@@ -13,13 +13,10 @@ make -j$(nproc) lib          # libmogbus.a + libmogbus.so
 make -j$(nproc) lib-check    # also builds and runs examples/embed_tcp.c against both
 ```
 
-`make` alone builds only the `mogbus` binary, which is itself `src/main.c` linked against the static
-library of the current build variant (it is the reference client of this API: `main.c` includes only
-`mogbus.h`; `tools/check_deps.sh` enforces it). `make WITH_CONFIG=0` builds the libraries instead,
-since there is no binary then. `make tests` runs `lib-check`. The `.a` contains
-every project object plus the vendored s7 parser and the arena implementation
-(`src/util/arena_impl.c`), so it is self-contained. The `.so` exports only `mogbus_*` symbols
-(`lib-check` fails otherwise); everything else is `-fvisibility=hidden`.
+`make` alone builds only the `mogbus` binary, which is itself a client of this API linked against
+the static library. `make WITH_CONFIG=0` builds the libraries instead, since there is no binary
+then. The `.a` contains the whole simulator, including the vendored s7 parser, so it is
+self-contained. The `.so` exports only `mogbus_*` symbols; everything else is hidden.
 
 ```bash
 # shared (found at run time via rpath or LD_LIBRARY_PATH)
@@ -40,9 +37,7 @@ set serves the binary and both libraries.
   devices built in code. The header and the exported symbols are identical, so the ABI does not
   change: `mogbus_load_config()` returns false and `mogbus_server_create_from_config()` returns NULL,
   both with the error `built without config support`. A `WITH_CONFIG=0` build has no `mogbus` binary
-  (it needs a config), so `make` builds `libmogbus.a`/`.so`; `make WITH_CONFIG=0 tests` runs the tests
-  that do not need the config loader or the binary, and still runs `lib-check`. Combine freely with
-  `WITH_TLS=0`; objects of each combination are kept apart (`.nocfg`, `.notls`).
+  (it needs a config), so `make` builds `libmogbus.a`/`.so`. Combine freely with `WITH_TLS=0`.
 
 ## API overview
 
@@ -117,7 +112,7 @@ time first.
 
 ## Example
 
-[`examples/embed_tcp.c`](../examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
+[`examples/embed_tcp.c`](../../examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
 adds a device with one holding register, starts a TCP server on a free loopback port, connects as a
 raw MBAP client in the same process, calls `mogbus_server_step()` between client I/O, and checks the
 value it reads back. `make lib-check` builds it against `libmogbus.so` (rpath `$ORIGIN/..`) and
@@ -137,7 +132,3 @@ while (mogbus_server_step(server, 10) == MOGBUS_STEP_CONTINUE)
 mogbus_server_close(server);
 mogbus_destroy(ctx);
 ```
-
-The implementation is `src/api/mogbus.c`, the top layer: it depends on `server`, `server_config`,
-`config`, `device` and `util` (plus `net` for the RTU timing helpers), and nothing but the binary's `main.c` uses it through `mogbus.h`. Public enums mirror the internal ones and
-are checked with `_Static_assert`.

@@ -31,7 +31,7 @@ extract() {
 	' "$1"
 }
 
-for f in README.md docs/*.md; do
+for f in README.md docs/*/*.md; do
 	[ -f "$f" ] || continue
 	extract "$f" >> "$status.list"
 done

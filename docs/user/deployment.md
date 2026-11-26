@@ -99,10 +99,6 @@ docker run -d --name mogbus --read-only --cap-drop ALL --security-opt no-new-pri
   --memory 64m --cpus 0.5 --pids-limit 64 -p 127.0.0.1:1502:1502 mogbus:0.0.1
 ```
 
-The CI `docker` job builds the image and runs exactly this, waits for the Docker health status to become
-`healthy`, reads a register from the host, checks that PID 1 runs as UID 10001 with no effective
-capabilities, and checks that `docker stop` exits 0 promptly.
-
 ## Resource limits
 
 mogbus is single-threaded (one `poll` loop), allocates only from mmap arenas created at start-up, and
