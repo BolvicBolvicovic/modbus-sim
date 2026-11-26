@@ -270,7 +270,9 @@ durations of the previous run (`BIN.times`, or `RUN_TESTS_TIMES`); new tests go 
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
 Compilations emit `.d` dependency files (`-MMD -MP`), so editing a header rebuilds every
-object that includes it. CI (`.github/workflows/ci.yml`) runs these checks plus a `WITH_TLS=0` job
+object that includes it. CI (`.github/workflows/ci.yml`) starts only for code paths, and its
+`changes` job (`tools/ci_changes.sh`) skips the build and test jobs when C files changed only in
+comments or only packaging files changed. It runs these checks plus a `WITH_TLS=0` job
 with no OpenSSL install step, which also runs `WITH_CONFIG=0` (and `WITH_CONFIG=0 WITH_TLS=0`) tests. The Makefile is based on the one `vlib/gen_makefile.py` creates, but finds
 sources recursively because modules have sub-folders. `WITH_TLS=auto` (default) detects OpenSSL
 via `pkg-config`; `WITH_TLS=1` requires it and fails early otherwise, while `WITH_TLS=0` compiles

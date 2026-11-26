@@ -1,8 +1,9 @@
 name: CI
 
 on:
-  # Docs-only changes do not affect builds or tests. Profiles and tools stay in
-  # scope because CI validates their contents.
+  # Docs-only changes do not start CI. Profiles and tools stay in scope because CI
+  # validates their contents. Within a run, the changes job skips the build and test jobs
+  # when C files changed only in comments, or only packaging files changed.
   push:
     paths:
       - 'src/**'
@@ -18,7 +19,7 @@ on:
       - '.dockerignore'
       - 'Makefile'
       - 'Doxyfile'
-      - '.github/workflows/**'
+      - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'src/**'
@@ -34,7 +35,7 @@ on:
       - '.dockerignore'
       - 'Makefile'
       - 'Doxyfile'
-      - '.github/workflows/**'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -45,7 +46,30 @@ env:
   CCACHE_DIR: .ccache
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      docs: ${{ steps.classify.outputs.docs }}
+      docker: ${{ steps.classify.outputs.docker }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify the change
+        id: classify
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          [ "$EVENT" = workflow_dispatch ] && BASE=
+          ./tools/ci_changes.sh "$BASE" "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
+
   build-and-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -88,6 +112,8 @@ jobs:
         run: make -j$(nproc) asan
 
   no-tls:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -125,6 +151,8 @@ jobs:
         run: make -j$(nproc) WITH_CONFIG=0 WITH_TLS=0 tests
 
   reproducible:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -137,6 +165,8 @@ jobs:
         run: ./tools/check_reproducible.sh
 
   dev:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -173,6 +203,8 @@ jobs:
         run: make -j$(nproc) asan
 
   api-docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -185,6 +217,8 @@ jobs:
         run: make api-docs
 
   analyzer:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -208,6 +242,8 @@ jobs:
           scan-build --status-bugs --use-cc clang --exclude third_party/s7 -o scan-output make -j$(nproc)
 
   docker:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
