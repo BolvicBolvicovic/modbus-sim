@@ -47,7 +47,7 @@ set serves the binary and both libraries.
 |---|---|
 | Context | `mogbus_create`, `mogbus_destroy`, `mogbus_load_config` |
 | Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point`, `mogbus_device_count`, `mogbus_device_at`, `mogbus_device_info` |
-| Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded) |
+| Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded), `mogbus_device_get_string/set_string` (string points) |
 | Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_probe`, `mogbus_rtu_timing` |
 | Logging | `mogbus_set_log_sink`, `mogbus_set_log_level`, `mogbus_set_log_format` |
 | Observability | `http_bind_address`/`http_port`/`http_control` in `mogbus_server_options_t` (NULL bind = no endpoint; `http_control` also serves the unauthenticated `/api/` runtime control API), `mogbus_server_metrics` |
@@ -117,6 +117,25 @@ time first.
   `mogbus_server_stop()` is signal-safe, so a host handler can call it, as `main.c` does.
 
 ## Example
+
+### Data types
+
+`mogbus_point_t.type` is one of `MOGBUS_TYPE_U16/S16/U32/S32/F32/BOOL` and, appended later,
+`MOGBUS_TYPE_U64/S64/F64` (4 registers) and `MOGBUS_TYPE_STRING`. `word_order` applies to 32- and
+64-bit types; `byte_order` (`MOGBUS_BYTES_BIG`, the zero default, or `MOGBUS_BYTES_LITTLE`) swaps
+the two bytes of every register of any register point. The two together give the ABCD, CDAB, BADC
+and DCBA layouts listed in [config-reference.md](config-reference.md). Decoded access
+goes through a `double`, so `u64`/`s64` above 2^53 round in `value`, `mogbus_device_get_value()`
+and ramps; `mogbus_device_read/write` are exact.
+
+A string point has `type = MOGBUS_TYPE_STRING`, `length` registers (1-123) and the initial `text`
+(copied; NULL means empty; at most `2 * length` bytes, padded with NUL). It must be in the holding
+or input table. `mogbus_device_get_string()` copies the text up to its first NUL into your buffer
+(it fails when the buffer is smaller than the text plus the NUL) and `mogbus_device_set_string()`
+replaces it, NUL padded. Unlike `mogbus_device_set_value()` the latter does not make the point
+host-owned: clients can still write the registers. `mogbus_device_get_value()` and `set_value()`
+return false on a string point. `byte_order`, `length` and `text` were appended to the struct, so
+code built against the older header keeps working if it zero-initialises the struct.
 
 [`examples/embed_tcp.c`](../../examples/embed_tcp.c) includes only `mogbus.h`. It creates a context,
 adds a device with one holding register, starts a TCP server on a free loopback port, connects as a

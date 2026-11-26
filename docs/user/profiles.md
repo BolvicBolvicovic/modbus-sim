@@ -23,6 +23,7 @@ instead of a manual.
 | `ascii-udp.scm` | 1 | same registers served as ASCII frames over UDP (`mode ascii-udp`), with a small delay fault |
 | `rtu-udp.scm` | 1 | same registers served as RTU frames over UDP (`mode rtu-udp`), with a small delay fault |
 | `power-meter.scm` | 1 | 3 voltages, 3 currents, power, frequency, power factor, energy (float32 input registers); 2 settings; reset coil; alarm |
+| `energy-meter.scm` | 1 | u64 energy counter (Wh), float64 power, byte-swapped (BADC) float32 voltage and current, string serial number and model name; CT ratio; reset coil |
 | `temperature-controller.scm` | 1 | process value (s16, 0.1 C), output %, setpoint and mode (writable), run coil, 2 alarms |
 | `heater.scm` | 1 | temperature that lags a writable setpoint with gaussian noise, ambient temperature (sine), setpoint |
 | `aging-sensor.scm` | 1 | pressure that drifts and gets noisier after 1 h, sticks at 3 h and fails with exception 04 at 6 h; a healthy reference pressure |
@@ -81,6 +82,8 @@ Tips:
 - **Unknown addresses fail.** If a client polls an address your profile does not define, it gets
   exception 02. Define every address your client reads, even as `(static 0)`.
 - **Word order.** If a float32 or u32 value looks wrong (huge, tiny or garbage), try
-  `(word-order low-first)` or `--low-first` in the probe tool.
+  `(word-order low-first)` or `--low-first` in the probe tool. If it is still wrong, the bytes
+  inside each register may be swapped: try `(byte-order little)` or `--byte-order little`.
+  The probe tool also reads `--as u64`, `s64`, `float64` and `string`.
 - **Test failures.** Add `(fault (kind drop) (percent 10))` to any profile to test how your
   client handles timeouts, or `(kind delay)` for slow answers.

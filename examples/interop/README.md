@@ -36,6 +36,11 @@ answers a fixed reply, the other the live value of holding register 0, so the ch
 independent client decodes both over every framing, including the RTU frame length it derives from
 the response's byte count.
 
+The `data type` rows read 64-bit integers, float64, byte-swapped float32/s64 and string registers
+from `device.scm` and decode them with pymodbus' `convert_from_registers` (`DATATYPE.UINT64`,
+`INT64`, `FLOAT64`, `STRING`, `word_order="little"` for low-first). pymodbus has no byte-order
+option, so the byte-swapped layouts are decoded by swapping the bytes of every register first.
+
 It exits non-zero on any mismatch, so it can run in CI. Pass mode names to test a subset.
 
 ## What it already found

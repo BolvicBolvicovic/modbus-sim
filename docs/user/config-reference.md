@@ -301,7 +301,10 @@ Shape of a point:
 ```scheme
 (holding ADDRESS
   (type ...)          ; registers only, default u16
-  (word-order ...)    ; 32-bit types only, default high-first
+  (word-order ...)    ; 32- and 64-bit types only, default high-first
+  (byte-order ...)    ; registers only, default big
+  (length N)          ; (type string) only: registers, 1-123
+  (padding ...)       ; (type string) only: nul (default) or space
   (static VALUE)      ; or (ramp ...), (sine ...) or (lag ...): only one. None: 0 / off
   (noise ...)         ; optional, registers only: added to any of the above
   (degradation ...)   ; optional: drift, noise growth, stuck and fail over time
@@ -324,22 +327,77 @@ manual says "40001", that is address `0` of the holding table; "40101" is `100`.
 | `u32` | 2 | 0 to 4294967295 |
 | `s32` | 2 | -2147483648 to 2147483647 |
 | `float32` | 2 | IEEE 754 single precision |
+| `u64` | 4 | 0 to 18446744073709551615 |
+| `s64` | 4 | -9223372036854775808 to 9223372036854775807 |
+| `float64` | 4 | IEEE 754 double precision |
+| `string` | `(length N)` | N registers of text, see below |
 
 Coils and discrete inputs are always on/off; do not give them a `type`.
 Integer register values are rounded to the nearest whole number and limited to the range of the type.
-`float32` can represent `NaN`, `+inf.0`, and `-inf.0` (useful as invalid-sensor sentinels). Finite
-`float32` values outside the representable float range become `+inf.0`/`-inf.0` instead of causing
-undefined behavior. Non-finite static values are accepted only for `float32`; integer and on/off
-static values must be finite.
+`float32` and `float64` can represent `NaN`, `+inf.0`, and `-inf.0` (useful as invalid-sensor
+sentinels). Finite `float32` values outside the representable float range become `+inf.0`/`-inf.0`
+instead of causing undefined behavior. Non-finite static values are accepted only for the float
+types; integer and on/off static values must be finite.
 
-A 32-bit point occupies two addresses: `(input 4 (type u32) ...)` uses addresses 4 and 5.
+A multi-register point occupies consecutive addresses: `(input 4 (type u32) ...)` uses addresses 4
+and 5, `(input 4 (type u64) ...)` uses 4 to 7.
+
+**64-bit precision.** Values are doubles inside mogbus (ramps, models, machines, `get_value`), so
+`u64` and `s64` integers above 2^53 (about 9.007e15) lose precision there. Raw register reads and
+writes by clients are exact, and so is a `(static N)` integer: s7 reads integers as 64-bit, so
+`(static 9223372036854775807)` and `(static -9223372036854775808)` encode exactly. A `u64` static
+above 2^63-1 must be written in hex, `(static #xFFFFFFFFFFFFFFFF)` (s7 has no decimal literal for it);
+for `u64` an integer literal is taken as 64-bit two's complement, so a negative one wraps instead
+of clamping. A static with `(noise ...)` or `(degradation ...)` is a model and goes through doubles.
 
 ### `(word-order ...)`
 
-For 32-bit types: which of the two registers holds the high half.
+For 32- and 64-bit types: which register holds the most significant part.
 
-- `high-first` (default): the first register is the high word. This is the usual "big-endian" layout.
-- `low-first`: the first register is the low word. Some devices do this ("word swapped").
+- `high-first` (default): the first register is the most significant. This is the usual "big-endian" layout.
+- `low-first`: the registers come in reverse order, the first one is the least significant. Some
+  devices do this ("word swapped").
+
+### `(byte-order ...)`
+
+For every register type (16, 32 and 64-bit, and strings): `big` (default) puts the high byte of
+every register first on the wire, as Modbus does. `little` swaps the two bytes inside every
+register of the point. It is applied after the word order, so the two options combine into the four
+layouts real 32-bit meters use (bytes A B C D from most to least significant):
+
+| Layout | `word-order` | `byte-order` | Registers (float32 1.5 = `3F C0 00 00`) |
+|---|---|---|---|
+| ABCD | `high-first` | `big` | `3FC0 0000` |
+| CDAB | `low-first` | `big` | `0000 3FC0` |
+| BADC | `high-first` | `little` | `C03F 0000` |
+| DCBA | `low-first` | `little` | `0000 C03F` |
+
+For 64-bit types the same two options apply to eight bytes A..H: `high-first`/`big` is ABCDEFGH,
+`low-first`/`big` is GHEFCDAB (registers reversed), `high-first`/`little` is BADCFEHG (every
+register swapped) and `low-first`/`little` is HGFEDCBA (the whole byte string reversed). For
+16-bit types only `byte-order` has an effect (`little` turns `0x1234` into `0x3412`).
+
+### Strings
+
+`(type string) (length N)` is text stored in N registers (1-123) of two ASCII bytes each; the first
+character is the high byte of the first register, so a client sees it in reading order. The
+`byte-order little` option swaps the two characters inside every register. `(static "TEXT")` sets the
+text, at most `2*N` bytes of printable ASCII (0x20-0x7E) in the config; a shorter text is padded
+with NUL bytes, or with spaces when you add `(padding space)`.
+
+```scheme
+(input 20 (type string) (length 8) (static "SN-000417"))              ; 16 bytes, NUL padded
+(input 28 (type string) (length 8) (padding space) (static "EM-100")) ; space padded
+(holding 40 (type string) (length 4))                                 ; empty, writable
+```
+
+Strings can only be `holding` or `input` points and only static: no `ramp`, `sine`, `lag`,
+`noise` or `degradation`, no `word-order`. A client may write them (holding table) with raw
+register writes, which changes the text until the device restarts; `restart` restores the configured
+text. `(count N)` repeats the whole string point. Machines cannot read, drive or watch strings
+(config load fails). The C API and the Python package read and set the text with
+`mogbus_device_get_string()`/`set_string()` (see [library.md](library.md)); `get_value` fails on a
+string point. Text read back stops at the first NUL byte; a client may write any byte value.
 
 ### `(static VALUE)`
 
@@ -503,7 +561,7 @@ reject client writes with exception 02 (see `(machine ...)` below).
 ### `(count N)`
 
 Repeats the point `N` times at consecutive addresses (the step is the point's width: 1 for
-16-bit types, 2 for 32-bit types). All copies get the same value, ramp or model (a lag target is not shifted). A device can have at
+16-bit types, 2 for 32-bit types, 4 for 64-bit types, `length` for strings). All copies get the same value, ramp or model (a lag target is not shifted). A device can have at
 most 8192 points total (`DEVICE_MAX_POINTS`); a count that would exceed this is rejected.
 
 ```scheme
@@ -958,9 +1016,20 @@ is wrong and show the entry. Common ones:
 | `syntax error: missing close paren` | A `(` has no matching `)`. Check the end of the file and the entry before the reported text |
 | `unknown option 'statik'. Allowed: ...` | Typo. The message lists the valid names |
 | `address must be between 0 and 65535` | The address is out of range |
-| `address is already used by another point` | Two points overlap. Remember 32-bit points use two addresses |
+| `address is already used by another point` | Two points overlap. Remember 32-bit points use two addresses, 64-bit points four and strings `length` |
 | `expected a number` / `expected a whole number` | A value has the wrong form, for example text in quotes |
 | `missing required option (to ...)` | A ramp needs `from` and `to` |
+| `string points can only be (static "TEXT")` | Strings are static; remove the ramp, sine or lag |
+| `string points cannot have (noise ...) or (degradation ...)` | Strings are static text, there is no value to disturb |
+| `missing required option (length ...)` | A `(type string)` point needs `(length N)`, N registers |
+| `(length ...): must be between 1 and 123` | A string is 1-123 registers (two characters each) |
+| `text is longer than N bytes (2 per register, length M)` | The `(static "TEXT")` does not fit its registers; raise `length` |
+| `string text can only use printable ASCII (0x20-0x7E)` | Use plain ASCII characters in a string's static text |
+| `(length ...) and (padding ...) only apply to (type string)` | Remove them from numeric points |
+| `strings have no word order: remove (word-order ...)` | Only `byte-order` applies to strings |
+| `(byte-order ...)`: `expected one of: big, little` | The only byte orders are `big` and `little` |
+| `coils and discrete inputs are single bits: remove (byte-order ...)` | Byte order is for register points |
+| `machine cannot drive a string point` / `a string point has no number to read` / `state register cannot name a string point` / `on-write cannot watch a string point` | Machines work on numbers; use a numeric point |
 | `coils and discrete inputs can only be (static on/off)` | No ramps and no `type` for bit tables |
 | `a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)` | Choose one |
 | `(noise ...) needs a (static ...), (ramp ...), (sine ...) or (lag ...) to disturb` | Noise modifies a behaviour; add one |

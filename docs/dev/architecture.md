@@ -77,8 +77,17 @@ Headers sit next to their `.c` files.
 - A `device_t` has four tables (`coil`, `discrete`, `input`, `holding`), each 65536 values.
 - Each address stores which *point* defines it (`owner`). `owner == 0` means "not defined",
   which is how unknown addresses become exception 02.
-- A `point_t` says where it lives, how it is encoded (`type`, `word-order`) and its behaviour
-  (`POINT_STATIC`, `POINT_RAMP`, `POINT_MODEL` or `POINT_MACHINE`).
+- A `point_t` says where it lives, how it is encoded (`type`, `word-order`, `byte-order`) and its
+  behaviour (`POINT_STATIC`, `POINT_RAMP`, `POINT_MODEL` or `POINT_MACHINE`). `encode_bits()` lays
+  a raw 64-bit pattern out in 1-4 registers (word order, then a byte swap in every register);
+  `encode_value()` goes through it, so every type shares one layout code. Values are `f64` in
+  ramps, models and machines, so `u64`/`s64` above 2^53 round there; a config `(static N)`
+  integer on a `u64`/`s64` point is kept exactly in `static_raw` (`static_exact`) and used while
+  the point is a plain static. `VT_STRING` points own `length` registers and a padded copy of
+  their text in the device arena (`point_t.text`, 2*length bytes): `point_apply` rewrites the
+  registers from it, so restart restores the configured text, client writes only change the
+  table, and `device_get_point`/`device_set_point` (machines) refuse strings, which config
+  rejects as machine targets, inputs, state registers and on-write watches.
 - `ramp_value()` is a pure function of `(params, start, now)`. No state, so results are
   reproducible and tests need no clock.
 - `POINT_MODEL` points (sine, lag, or a static value with noise) and ramps with noise are
@@ -368,9 +377,6 @@ only outstanding work is listed here.
 
 ### Adoption (gaps compared with pymodbus as a server/simulator)
 
-- Data types: 64-bit integers and float64, strings packed into registers, and byte-swapped word
-  layouts (BADC/CDAB) besides word order. Why: energy counters, names and serial numbers in real
-  register maps need them.
 - Importers for vendor register maps (CSV) and pymodbus simulator JSON. Why: users start from a
   map they already have, and the config syntax is new to them.
 - Windows: a native build, or documented Docker/WSL use including serial ports. Why: many PLC and

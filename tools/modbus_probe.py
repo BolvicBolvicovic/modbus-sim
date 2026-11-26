@@ -4,6 +4,9 @@
 Examples (server on localhost:1502):
   ./tools/modbus_probe.py holding 0 2            read 2 holding registers from address 0
   ./tools/modbus_probe.py input 0 2 --as float32 read input registers 0-1 as one float32
+  ./tools/modbus_probe.py holding 100 4 --as u64 read 4 registers as one u64 (also s64, float64)
+  ./tools/modbus_probe.py input 8 2 --as float32 --byte-order little   byte-swapped float32 (BADC)
+  ./tools/modbus_probe.py input 20 8 --as string read 8 registers as text
   ./tools/modbus_probe.py input 0 1 --watch 1    read every second until Ctrl-C
   ./tools/modbus_probe.py coil 0 8               read 8 coils
   ./tools/modbus_probe.py write-reg 0 1234       write holding register 0
@@ -56,19 +59,27 @@ def read_bits(sock, unit, function, address, qty):
     return [(body[2 + i // 8] >> (i % 8)) & 1 for i in range(qty)]
 
 
-def decode(words, kind, low_first):
-    """Groups registers into 32-bit values when --as asks for it."""
+def decode(words, kind, low_first, little=False):
+    """Groups registers into 16, 32 or 64-bit values (or one string) when --as asks for it.
+
+    low_first: the least significant register comes first. little: the two bytes inside every
+    register are swapped (--byte-order little).
+    """
+    if little:
+        words = [((w & 0xFF) << 8) | (w >> 8) for w in words]
+    if kind == "string":
+        text = b"".join(struct.pack(">H", w) for w in words).split(b"\0")[0]
+        return [text.decode("latin-1")]
     if kind == "u16":
         return words
     if kind == "s16":
         return [w - 65536 if w >= 32768 else w for w in words]
-    pairs = [words[i:i + 2] for i in range(0, len(words) - 1, 2)]
-    raw = [(p[1] << 16 | p[0]) if low_first else (p[0] << 16 | p[1]) for p in pairs]
-    fmt = {"u32": ">I", "s32": ">i", "float32": ">f"}[kind]
+    width = 4 if kind in ("u64", "s64", "float64") else 2
+    fmt = {"u32": ">I", "s32": ">i", "float32": ">f", "u64": ">Q", "s64": ">q", "float64": ">d"}[kind]
     out = []
-    for r in raw:
-        value = struct.unpack(fmt, struct.pack(">I", r))[0]
-        out.append(value)
+    for i in range(0, len(words) - width + 1, width):
+        group = words[i:i + width][::-1] if low_first else words[i:i + width]
+        out.append(struct.unpack(fmt, struct.pack(">%dH" % width, *group))[0])
     return out
 
 
@@ -80,7 +91,7 @@ def run(args, sock):
     elif args.command in ("holding", "input"):
         function = 3 if args.command == "holding" else 4
         words = read_registers(sock, unit, function, args.address, args.count)
-        print(decode(words, args.as_type, args.low_first))
+        print(decode(words, args.as_type, args.low_first, args.byte_order == "little"))
     elif args.command == "write-reg":
         request(sock, unit, struct.pack(">BHH", 6, args.address, args.value & 0xFFFF))
         print("ok")
@@ -104,8 +115,12 @@ def main():
         p.add_argument("count", type=int, nargs="?", default=1)
         if name in ("holding", "input"):
             p.add_argument("--as", dest="as_type", default="u16",
-                           choices=["u16", "s16", "u32", "s32", "float32"])
-            p.add_argument("--low-first", action="store_true", help="low word is the first register")
+                           choices=["u16", "s16", "u32", "s32", "float32", "u64", "s64", "float64",
+                                    "string"])
+            p.add_argument("--low-first", action="store_true",
+                           help="least significant register first (32/64-bit types)")
+            p.add_argument("--byte-order", choices=["big", "little"], default="big",
+                           help="little: the two bytes inside every register are swapped")
     p = sub.add_parser("write-reg")
     p.add_argument("address", type=int)
     p.add_argument("value", type=int)

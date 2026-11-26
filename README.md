@@ -106,7 +106,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | Feature | Details |
 |---|---|
 | Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. User-defined function codes (`(function-code ...)`: fixed reply, echo, exception, live registers or no response). |
-| Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
+| Data | Coils, discrete inputs, input registers, holding registers. 16, 32 and 64-bit integers, float32/float64, ASCII strings, word and byte order (ABCD, CDAB, BADC, DCBA). |
 | Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), **sine**, **lag** (first-order lag towards a number or another point, e.g. a heater following its setpoint), an optional **noise** modifier (uniform or gaussian, reproducible), an optional **degradation** modifier (drift, growing noise, stuck value and read failure with exception 04 over time, healed by a restart), and **machine** (bounded scripted state machine, see [config reference](docs/user/config-reference.md#machine-)). |
 | Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
@@ -124,6 +124,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | [`profiles/ascii-udp.scm`](profiles/ascii-udp.scm) | Two registers, ASCII over UDP | `(mode ascii-udp)` transport |
 | [`profiles/rtu-udp.scm`](profiles/rtu-udp.scm) | Two registers over RTU-over-UDP | `(mode rtu-udp)` transport |
 | [`profiles/power-meter.scm`](profiles/power-meter.scm) | Three-phase power meter | float32 values, ramps, energy counter |
+| [`profiles/energy-meter.scm`](profiles/energy-meter.scm) | Energy meter | u64 energy counter, float64, byte-swapped float32, string registers |
 | [`profiles/temperature-controller.scm`](profiles/temperature-controller.scm) | Temperature controller | signed values, setpoint, alarms |
 | [`profiles/heater.scm`](profiles/heater.scm) | Heater with a thermostat | setpoint-following lag, gaussian noise, sine ambient |
 | [`profiles/aging-sensor.scm`](profiles/aging-sensor.scm) | Pressure transmitter that wears out | drift, growing noise, stuck value, then exception 04 |
