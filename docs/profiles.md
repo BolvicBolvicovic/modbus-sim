@@ -32,6 +32,10 @@ instead of a manual.
 | `unreliable-meter.scm` | 1 | energy counter; 20% of answers never arrive |
 | `two-devices.scm` | 1, 2 | two devices on one port |
 
+Every profile except the three UDP ones uses Modbus TCP, so `tools/modbus_probe.py` (a Modbus TCP
+client) can read it. To serve any profile over another transport, change its `(server ...)` line,
+for example `(server (mode rtu-pty))` or `(server (mode udp))`; the devices stay the same.
+
 ## Try things
 
 ```bash

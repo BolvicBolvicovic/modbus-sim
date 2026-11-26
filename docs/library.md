@@ -13,7 +13,10 @@ make -j$(nproc) lib          # libmogbus.a + libmogbus.so
 make -j$(nproc) lib-check    # also builds and runs examples/embed_tcp.c against both
 ```
 
-`make` alone still builds only the `mogbus` binary, which is itself `src/main.c` linked against the static library of the current build variant (it is the reference client of this API: `main.c` includes only `mogbus.h`; `tools/check_deps.sh` enforces it). `make tests` runs `lib-check`. The `.a` contains
+`make` alone builds only the `mogbus` binary, which is itself `src/main.c` linked against the static
+library of the current build variant (it is the reference client of this API: `main.c` includes only
+`mogbus.h`; `tools/check_deps.sh` enforces it). `make WITH_CONFIG=0` builds the libraries instead,
+since there is no binary then. `make tests` runs `lib-check`. The `.a` contains
 every project object plus the vendored s7 parser and the arena implementation
 (`src/util/arena_impl.c`), so it is self-contained. The `.so` exports only `mogbus_*` symbols
 (`lib-check` fails otherwise); everything else is `-fvisibility=hidden`.
@@ -24,8 +27,6 @@ cc -Iinclude app.c -L. -lmogbus -Wl,-rpath,'$ORIGIN' -o app
 # static: also link what the library needs (-lm, plus -lssl -lcrypto in a TLS build)
 cc -Iinclude app.c libmogbus.a -lm -lssl -lcrypto -o app
 ```
-
-`make` alone still builds only the `mogbus` binary in a default build, but `make WITH_CONFIG=0` builds the libraries (there is no binary then).
 
 A `WITH_TLS=0` build has no OpenSSL dependency; creating a server with `tls_enabled` then fails
 with an error. Objects are compiled with `-fPIC` (valid inside the PIE binary too), so one object
@@ -69,9 +70,18 @@ also logged at WARN, like the transports log their own start-up errors.
 A context holds up to `MOGBUS_MAX_DEVICES` (16) devices and `MOGBUS_MAX_SERVERS` (8) servers. A
 server serves every device the context has when it is created. Points support static values and
 ramps; machines and faults come only from config files (`mogbus_load_config`), and code-built and
-loaded devices can be mixed. All transports of the binary are available through
-`mogbus_server_options_t`, including `MOGBUS_MODE_UDP` (Modbus UDP, appended so existing values keep their numbers; uses `bind_address` and `port`), `MOGBUS_MODE_ASCII_UDP` (one ASCII frame per datagram, same options), `MOGBUS_MODE_RTU_UDP` (RTU frames, one per datagram; also `broadcast_execute`), plus `MOGBUS_MODE_RTU_FD` / `MOGBUS_MODE_ASCII_FD`, which serve a byte
-stream you already own (a socketpair or PTY master) and never close it. Start from
+loaded devices can be mixed. Every transport of the binary is a `mogbus_mode_t` in
+`mogbus_server_options_t`:
+
+| Modes | Options used |
+|---|---|
+| `MOGBUS_MODE_TCP` | `bind_address`, `port`, `idle_timeout_ms`, the `tls_*` fields |
+| `MOGBUS_MODE_RTU_TCP`, `MOGBUS_MODE_ASCII_TCP` | `bind_address`, `port`, `idle_timeout_ms`; RTU also `baud`, `frame_gap_ms`, `broadcast_execute` |
+| `MOGBUS_MODE_UDP`, `MOGBUS_MODE_RTU_UDP`, `MOGBUS_MODE_ASCII_UDP` | `bind_address`, `port`; RTU also `broadcast_execute` |
+| `MOGBUS_MODE_RTU_PTY`, `MOGBUS_MODE_RTU_DEVICE`, `MOGBUS_MODE_ASCII_PTY`, `MOGBUS_MODE_ASCII_DEVICE` | `path` (device modes), the serial line fields, RTU timing |
+| `MOGBUS_MODE_RTU_FD`, `MOGBUS_MODE_ASCII_FD` | `fd`: a byte stream you already own (a socketpair or PTY master), never closed by the library |
+
+New modes are appended to the enum, so existing values keep their numbers. All modes use `seed`. Start from
 `mogbus_server_options_defaults()`, which matches the config defaults (TCP on `127.0.0.1:1502`, 8N1).
 
 `mogbus_device_write()` is what a client write does: it works on every space (the host plays the
@@ -112,7 +122,7 @@ mogbus_device_add_point(dev, &point, err, sizeof(err));
 
 mogbus_server_options_t options = mogbus_server_options_defaults();
 options.port = 1502;
-mogbus_server_t* server = mogbus_server_create(ctx, &options, err, sizeof(err));
+mogbus_server_t* server = mogbus_server_create(ctx, &options, err, sizeof(err), NULL);
 while (mogbus_server_step(server, 10) == MOGBUS_STEP_CONTINUE)
     /* host work here */;
 mogbus_server_close(server);

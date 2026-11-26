@@ -54,8 +54,8 @@ that is present but not allowed is rejected at load time, even if its value woul
 
 `bind` must be a plain IPv4 or IPv6 literal: no hostnames and no zone/scoped link-local suffix such
 as `"fe80::1%eth0"` (the validator uses `inet_pton()`, which does not accept `%iface`). IPv6 listen
-sockets set `IPV6_V6ONLY`, so `"::"` serves IPv6 clients only. TCP-family listeners default to
-`"127.0.0.1"` (loopback); remote connections require an explicit `(bind "0.0.0.0")` for all IPv4
+sockets set `IPV6_V6ONLY`, so `"::"` serves IPv6 clients only. TCP listeners and UDP sockets default
+to `"127.0.0.1"` (loopback); remote connections require an explicit `(bind "0.0.0.0")` for all IPv4
 interfaces or `(bind "::")` for all IPv6 interfaces. A config file may contain at most one
 `(server ...)` block; if it is omitted, the defaults in the table apply. There is no way to listen
 on both families at once; there is no dual-stack option.
@@ -125,6 +125,8 @@ RTU/ASCII rule (1-247; 0 is broadcast and never answered). A datagram must hold 
 frame; anything else (no CR LF, extra bytes, two frames, bad LRC) is ignored and counted as an FC08
 `0x000C` communication error on every device, and empty or longer than 515 byte datagrams are
 dropped without counting.
+
+```scheme
 ; Modbus RTU frames, one per UDP datagram; replies go to the sender's address
 (server (mode rtu-udp) (port 1502) (bind "127.0.0.1") (broadcast-execute off))
 ```

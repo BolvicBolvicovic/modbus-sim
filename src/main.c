@@ -32,7 +32,7 @@ struct cli_t
 static inline void
 print_usage(void)
 {
-	puts("mogbus - Modbus TCP/RTU/ASCII device simulator\n"
+	puts("mogbus - Modbus TCP/UDP/RTU/ASCII device simulator\n"
 	     "\n"
 	     "Usage: mogbus [options] CONFIG.scm\n"
 	     "\n"
@@ -44,7 +44,8 @@ print_usage(void)
 	     "Transport/server settings (mode, path, port, bind, serial options) are\n"
 	     "defined in (server ...) in the config file; there are no server CLI options.\n"
 	     "\n"
-	     "Exit status: 0 success, 1 config-load/runtime error, 2 invalid CLI arguments.\n"
+	     "Exit status: 0 success, 1 config/serial/runtime error, 2 invalid CLI arguments\n"
+	     "or listener/TLS start-up failure.\n"
 	     "\n"
 	     "RTU byte streams use a PTY or an existing serial-like device selected by\n"
 	     "(server (mode rtu-pty|rtu-device) ...). ASCII uses a byte stream (PTY or\n"

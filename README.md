@@ -1,7 +1,7 @@
 # mogbus
 
-A Modbus TCP/RTU/ASCII device simulator. You describe a device in a small text file; `mogbus`
-pretends to be that device on the network or on a serial byte stream. Point your SCADA, PLC,
+A Modbus TCP/UDP/RTU/ASCII device simulator. You describe a device in a small text file; `mogbus`
+pretends to be that device on the network (TCP or UDP) or on a serial byte stream. Point your SCADA, PLC,
 gateway or test script at it.
 
 You do **not** need to know Scheme. The config file is a list of `(name value)` entries, and
@@ -27,6 +27,9 @@ make                                   # builds ./mogbus (TLS enabled when OpenS
 ./tools/modbus_probe.py holding 0 2    # -> [42, <a value that moves>]
 ```
 
+`tools/modbus_probe.py` is a small Modbus TCP (MBAP) client; the RTU, ASCII and UDP modes need a
+client that speaks their framing.
+
 Use `make -j$(nproc)` for a faster clean build; compilation is safe to parallelize.
 
 Check a config without starting the server:
@@ -34,6 +37,9 @@ Check a config without starting the server:
 ```bash
 ./mogbus --check profiles/power-meter.scm
 ```
+
+`--check` prints the same summary as a normal start (transport, devices, point counts, faults) and
+validates the server settings, including TLS files, without opening any socket or device.
 
 Run the tests: `make tests`. Independent suites run in parallel (3 workers by default; set
 `RUN_TESTS_JOBS=N` to change, capped by the number of suites); tests inside a suite stay sequential.
@@ -74,10 +80,10 @@ make -j$(nproc) dev tests    # BUILD=dev, plus the test suite
 |---|---|
 | `make` / `make WITH_TLS=auto` | TLS enabled only when `pkg-config --exists openssl` succeeds; behavior is unchanged on systems with OpenSSL development files |
 | `make WITH_TLS=1` | Require TLS; fail immediately with a clear error if `pkg-config` or OpenSSL development files are missing |
-| `make WITH_TLS=0` | No OpenSSL cflags or libraries: builds plaintext TCP, RTU and ASCII transports only; TLS tests are skipped |
+| `make WITH_TLS=0` | No OpenSSL cflags or libraries: builds every transport except TLS (plaintext TCP, UDP, RTU and ASCII); TLS tests are skipped |
 
 A no-TLS build rejects `(tls ...)` at config load time with `built without TLS support`, including
-in `--check` mode. Serial, RTU, ASCII and plaintext TCP configs behave identically in both builds.
+in `--check` mode. Serial, RTU, ASCII, UDP and plaintext TCP configs behave identically in both builds.
 `make WITH_TLS=0 tests` runs the no-TLS test set; `make WITH_TLS=0 asan` and `make WITH_TLS=0 CC=clang`
 work as expected. Documentation examples containing `(tls ...)` are skipped by `check_doc_examples.sh`
 when checking a no-TLS binary.
@@ -92,13 +98,14 @@ support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or t
 
 | Feature | Details |
 |---|---|
-| Protocol | Modbus TCP (optionally TLS-wrapped), Modbus RTU (PTY/device or TCP byte stream), and Modbus ASCII (PTY/device or TCP byte stream). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. |
+| Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
 | Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), and **machine** (bounded scripted state machine, see [config reference](docs/config-reference.md#machine-)). |
-| Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and TCP-only **disconnect**, each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
-| Devices | Several devices on one port, told apart by unit id. |
-| Clients | Up to 32 at the same time. A delayed response never blocks other clients. |
+| Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
+| Devices | Up to 16 devices on one port or line, told apart by unit id. |
+| Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
 | Writes | Clients can write coils and holding registers. Writing a ramp freezes it at the written value. |
+| Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`); the `mogbus` binary is itself a client of it. |
 
 ## Ready-made profiles
 
@@ -132,7 +139,9 @@ mogbus [options] CONFIG.scm
 ```
 
 There are no server CLI options: the transport mode, path and all server settings are selected in
-`(server ...)` in the config file. Port 502 is the Modbus standard but needs root on Linux; the
+`(server ...)` in the config file. Exit status: 0 on success (or a clean stop on SIGINT/SIGTERM), 1 for
+a config error, a serial/PTY open failure or a runtime poll error, 2 for invalid CLI arguments or a
+listener (TCP/UDP bind) or TLS start-up failure. Port 502 is the Modbus standard but needs root on Linux; the
 plaintext TCP default here is **1502**, or **802** when `(tls ...)` is enabled.
 
 ## Transports
@@ -211,21 +220,19 @@ role-based authorization based on certificate fields. See
 ```
 
 ```scheme
-; Modbus UDP (one MBAP ADU per datagram, replies to the sender)
-(server (mode udp) (port 1502))
-
-; Modbus ASCII over UDP (exactly one :...CR LF frame per datagram)
-(server (mode ascii-udp) (port 1502))
+; UDP: one frame per datagram, replies go to the sender; no connections, no idle timeout, no TLS
+(server (mode udp) (port 1502))        ; Modbus UDP (MBAP ADU)
+(server (mode rtu-udp) (port 1502))    ; RTU frames, also accepts broadcast-execute
+(server (mode ascii-udp) (port 1502))  ; ASCII :...CR LF frames
 ```
 
-```scheme
-; Modbus RTU frames, one per UDP datagram (replies to the sender)
-(server (mode rtu-udp) (port 1502))
-```
+In the UDP modes a datagram must hold exactly one complete frame: there is no reassembly across
+datagrams, and anything else (two frames, trailing bytes, a length or checksum mismatch) is ignored.
+`disconnect` faults are rejected because there is no connection to close.
 
 RTU frames are `[addr][PDU][CRC lo hi]`; bad CRC and unknown unit produce no response. Broadcast
-(unit 0) requests are ignored by default. `broadcast-execute` (allowed in `rtu-pty`, `rtu-device`
-and `rtu-tcp`) makes them execute on every configured device and never send a response. ASCII modes
+(unit 0) requests are ignored by default. `broadcast-execute` (allowed in `rtu-pty`, `rtu-device`,
+`rtu-tcp` and `rtu-udp`) makes them execute on every configured device and never send a response. ASCII modes
 never execute broadcasts and reject `broadcast-execute` at load time. Unit ids 0 and 248-255 are
 rejected in all RTU/ASCII modes because 0 is broadcast and 248-255 are reserved. MBAP/TCP unit 0 is
 only a unit id and never broadcast.
@@ -241,7 +248,8 @@ RTU frame boundaries use t3.5 when baud is known (explicit `(baud N)` or the tty
 `(frame-gap-ms N)` is an explicit inter-frame silence override and takes precedence when set. For
 PTY/pipe streams with no known baud and no override, the default 20 ms fallback is used. In
 baud-derived auto mode, `(strict-t15 on)` enables a best-effort t1.5 discard heuristic for RTU byte
-streams only; it is never applied to RTU-over-TCP.
+streams only; it is never applied to RTU-over-TCP, and `rtu-udp` has no timing at all (the datagram
+is the frame).
 
 ASCII frames are `:` + uppercase hex for `[addr][PDU][LRC]` + `CR LF`; received hex may be upper- or
 lowercase. Frames are delimited by `CR LF`, so RTU timing options do not apply; complete frames are
@@ -250,14 +258,18 @@ count, bad LRC, or wrong terminator produces no response and never reaches the P
 RTU, broadcast (unit 0), unknown units, and fault-suppressed answers are silent. `ascii-tcp` carries
 the same frames on TCP byte streams (up to 32 clients, with `idle-timeout-ms`); it is not Modbus TCP
 (MBAP). `(baud N)` may set the serial line speed but never changes ASCII framing or timing, and is
-rejected in `ascii-tcp`. FC 08 subfunction `0x0003` (Change ASCII Delimiter) is rejected with
+rejected in `ascii-tcp`. `ascii-udp` carries one frame per datagram with no resynchronization or
+partial-frame timeout. FC 08 subfunction `0x0003` (Change ASCII Delimiter) is rejected with
 exception 03; `CR LF` framing is fixed.
 
 ## Use as a library
 
 mogbus also builds as `libmogbus.a` / `libmogbus.so` (`make lib`) with a small C API in
 `include/mogbus.h`: create devices in code or from a config file, start any transport and step it
-from your own loop. See [docs/library.md](docs/library.md) and `examples/embed_tcp.c`.
+from your own loop. The `mogbus` binary is built the same way: `src/main.c` includes only
+`mogbus.h` and links against the static library. `make WITH_CONFIG=0` builds a library without the
+Scheme config loader for hosts that build devices in code. See [docs/library.md](docs/library.md)
+and `examples/embed_tcp.c`.
 
 ## Documentation
 
@@ -283,7 +295,7 @@ src/            the program, one folder per module (headers next to their .c fil
   util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest)
-tools/          modbus_probe.py, check_doc_examples.sh, check_toolchain.sh, run_tests.sh
+tools/          modbus_probe.py, check_deps.sh, check_doc_examples.sh, check_toolchain.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           the vlib toolchain (arena allocator, test framework), unmodified
 ```

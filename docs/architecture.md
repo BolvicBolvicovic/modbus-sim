@@ -3,16 +3,16 @@
 ## Data flow
 
 ```
- TCP   client ──[TLS] MBAP+PDU─► net/tcp_server  ───────┐
-                                                        ├─► modbus/pdu ──► device/device ──► data tables
- RTU   client ──addr+PDU+CRC───► net/rtu_server  ───────┤                        ▲
- ASCII client ──:hex+LRC+CRLF──► net/ascii_server       ├          device_tick() │ ramps → registers
- ASCII/TCP client ──same frames──► net/ascii_tcp_server ┤
- UDP   client ──MBAP+PDU datagram► net/udp_server ──────┤
- ASCII/UDP client ──:hex+LRC+CRLF datagram► net/ascii_udp_server ┘
- RTU/UDP client ──RTU frame datagram► net/rtu_udp_server ┘
-                      │                                       fault_decide_at()
-                      ▼
+ TCP       client ──[TLS] MBAP+PDU──────► net/tcp_server ─────────┐
+ RTU       client ──addr+PDU+CRC────────► net/rtu_server ─────────┤
+ RTU/TCP   client ──addr+PDU+CRC────────► net/rtu_tcp_server ─────┤
+ ASCII     client ──:hex+LRC+CRLF───────► net/ascii_server ───────┼─► modbus/pdu ──► device/device ──► data tables
+ ASCII/TCP client ──:hex+LRC+CRLF───────► net/ascii_tcp_server ───┤                        ▲
+ UDP       client ──MBAP+PDU datagram───► net/udp_server ─────────┤          device_tick() │ ramps → registers
+ RTU/UDP   client ──RTU frame datagram──► net/rtu_udp_server ─────┤
+ ASCII/UDP client ──ASCII frame datagram► net/ascii_udp_server ───┘
+                                                  │                              fault_decide_at()
+                                                  ▼
      device/fault (delay / drop / exception / corrupt / disconnect /
                    restart / sensor-disconnect)
 
@@ -113,8 +113,8 @@ no user config form is evaluated, and request handling never touches s7.
 Every transport is a self-contained object with no process-global state, so one process can host
 several servers and drive them from its own loop:
 
-- `X_server_init(&s, &options)` sets up the listener/TLS (0 on success, 2 if a TCP listener or TLS
-  context could not be created) and `X_server_close(&s)` releases it (idempotent; devices and the
+- `X_server_init(&s, &options)` sets up the listener/socket/TLS (0 on success, 2 if a TCP listener,
+  a UDP socket or a TLS context could not be created) and `X_server_close(&s)` releases it (idempotent; devices and the
   RTU/ASCII fd stay the caller's).
 - `X_server_step(&s, max_wait_ms)` runs one poll iteration (`-1` = until the server's next deadline,
   at most 1 s; `0` = nonblocking) and returns `NET_STEP_CONTINUE`, `NET_STEP_DONE` (stopped, or the
@@ -124,7 +124,7 @@ several servers and drive them from its own loop:
   the flag at once.
 - `X_server_run(&s, &options)` is init + step loop + close for the binary.
 
-`server/server` wraps all five behind one `server_t` selected by `server_mode_t`: `server_init`
+`server/server` wraps all eight transport servers behind one `server_t` selected by `server_mode_t`: `server_init`
 opens the PTY/serial fd for the `*_pty`/`*_device` modes (and auto-detects a real tty's baud),
 `server_pty_name` exposes the PTY slave path, `server_close` also closes fds it opened, and
 `server_serve`/`server_run` are the step loop (exit 1 only on a poll error). The `*_fd` modes serve an
@@ -206,7 +206,7 @@ datagrams and datagrams longer than the caller's buffer are consumed and dropped
 the peer, `ip:port` peer text for logs, and a fixed 16-slot table of delayed responses (peer address,
 bytes, deadline) with `net_udp_flush_due` and `net_udp_poll_timeout`, so the `delay` fault never blocks
 and nothing is allocated; a full table drops the new response with a WARN. It carries no framing, so
-RTU and ASCII servers over UDP can reuse it unchanged (`NET_UDP_MAX_DATAGRAM` is the largest ASCII frame).
+the RTU and ASCII servers over UDP reuse it unchanged (`NET_UDP_MAX_DATAGRAM` is the largest ASCII frame).
 
 `net/udp_server` is a single-threaded `poll()` loop on that one socket (timeout = earliest delayed
 response, at most 1 s) that reads up to 32 datagrams per step. One datagram is one complete MBAP ADU:
@@ -224,6 +224,7 @@ non-empty datagram up to `NET_UDP_MAX_DATAGRAM` counts one FC08 `0x000C` error o
 `ascii_tcp_server`); empty and longer datagrams are dropped by `net_udp` before it sees them. Broadcast
 and unknown units are silent, the response is encoded uppercase, a `checksum` corrupt fault damages
 only the LRC, and the encoded frame goes through `net_udp_send_at`. Selected by `(server (mode ascii-udp))`.
+
 `net/rtu_udp_server` is the same loop over `net_udp` with RTU framing (selected by
 `(server (mode rtu-udp))`). Each datagram (at most `MODBUS_RTU_MAX_FRAME` bytes; longer ones are
 dropped by `net_udp_recv`) must satisfy `modbus_rtu_next_frame` with a frame length equal to the
@@ -239,9 +240,11 @@ no per-peer state, no disconnect fault.
 - Plain C (gnu11), vlib types (`u8`, `u16`, `f64` ...), vlib macros (`ARRAY_COUNT`, `MIN`, `MAX`,
   `ARENA_*`, `KB`/`MB`).
 - No inheritance-style tricks. Polymorphism is a table of `{name, function}` (see
-  `DEVICE_ITEMS` in `config_device.c`) or a `switch`.
+  `DEVICE_ITEMS` in `config_device.c` and `EXPR_FORMS` in `config_machine.c`) or a `switch`.
 - Guard clauses and early returns instead of nested `if`.
-- Imperative, top-to-bottom functions, short, one job each.
+- Imperative, top-to-bottom functions that do the job they need to do; a helper used once is
+  usually inlined. The full style rules are in `AGENTS.md`.
+- No `malloc`/`free` in project code: vlib arenas only, and no allocation per request.
 - Compiled with `-Wall -Wextra -Werror`.
 
 ## Build and tests
@@ -252,9 +255,9 @@ objects (compiled `-fPIC -fvisibility=hidden`, so only `MOGBUS_API` symbols are 
 `make tests` builds both `mogbus` (used by integration tests)
 and `mogbus-tests`, and `lib-check`, and runs the tests through `tools/run_tests.sh`: vtest always exits 0
 for whole suites, so the script runs each test by
-name and fails if any one fails. `tests/tcp_server.c` starts the real binary on a private loopback
-port and exercises the documented protocol behaviour (routing, exceptions, faults, connection
-limit); override the binary with `MOGBUS_BIN`. Independent suites run in parallel with
+name and fails if any one fails. `tests/tcp_server.c` and the other `*_server.c` integration files start the real binary on a private
+loopback port and exercise the documented protocol behaviour of each transport (routing, exceptions,
+faults, connection limit, malformed frames and datagrams); override the binary with `MOGBUS_BIN`. Independent suites run in parallel with
 `RUN_TESTS_JOBS` workers (default 3, capped by suite count); tests inside a suite stay sequential.
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
@@ -266,7 +269,7 @@ via `pkg-config`; `WITH_TLS=1` requires it and fails early otherwise, while `WIT
 only the no-TLS stub and omits OpenSSL flags/libraries. `WITH_CONFIG=1` (default) or `0`: with `0` the
 Makefile skips `src/config/*`, `src/server/server_config.c`, `main.c` and s7, so there is no `mogbus`
 binary, `make` builds the libraries, and `make tests` builds the test binary without the tests that need
-the config loader or the binary (`config`, the `*_cli`, `tcp_server`, `*_tcp_server` and `machine_e2e` test files).
+the config loader or the binary (`config`, the `*_cli`, `tcp_server`, `*_tcp_server`, `udp_server`, `*_udp_server` and `machine_e2e` test files).
 The `mogbus` binary is `main.o` linked with a static library of the same build variant (`libmogbus.a` in a prod build, else `libmogbus.dev.a`, `libmogbus.notls.asan.a`, ...; `make clean` removes them all), never with the `.so`. Object files are tagged per TLS (`.notls`) and config (`.nocfg`) setting, and `.build-mode` records
 both, so switching configurations without a clean rebuild is safe. s7 is compiled with its own relaxed flags
 (`-DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0`, so even s7's file and OS functions are off).
@@ -290,8 +293,8 @@ only outstanding work is listed here.
 ### RTU timing
 
 - Model true UART character-level timing. Why: t3.5/t1.5 are derived from baud and read
-  boundaries, which cannot reproduce byte-time-sensitive serial framing. RTU-over-TCP needs no
-  change because it is an explicit separate transport.
+  boundaries, which cannot reproduce byte-time-sensitive serial framing. RTU-over-TCP and
+  RTU-over-UDP need no change because they are explicit separate transports.
 
 ### Operational observability
 
