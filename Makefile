@@ -139,8 +139,15 @@ OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG).o
 SAN_FLAGS   =
 endif
 
+# OS layer: src/os/os_*_<PLATFORM>.c are the only per-platform sources; only posix exists so far.
+PLATFORM    ?= posix
+ifneq ($(PLATFORM),posix)
+$(error PLATFORM=$(PLATFORM) not supported yet)
+endif
+OTHER_PLATFORM_SRCS = $(SRC_DIR)/os/%_win32.c
+
 SRC_DIR     = src
-TREE_SRCS   = $(shell find $(SRC_DIR) -name '*.c' ! -name main.c | LC_ALL=C sort)
+TREE_SRCS   = $(filter-out $(OTHER_PLATFORM_SRCS),$(shell find $(SRC_DIR) -name '*.c' ! -name main.c | LC_ALL=C sort))
 MAIN        = $(SRC_DIR)/main.c
 ifeq ($(WITH_TLS),1)
 SRCS        = $(filter-out $(SRC_DIR)/net/net_tls_stub.c,$(TREE_SRCS))
@@ -352,7 +359,7 @@ FUZZ_CC      ?= clang
 FUZZ_DIR      = build/fuzz
 FUZZ_NAMES    = $(patsubst tests/fuzz/fuzz_%.c,%,$(sort $(wildcard tests/fuzz/fuzz_*.c)))
 FUZZ_BINS     = $(addprefix $(FUZZ_DIR)/fuzz_,$(FUZZ_NAMES))
-FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/device/*.c src/util/*.c)) \
+FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/device/*.c src/util/*.c src/os/*_$(PLATFORM).c)) \
 		src/net/net_common.c src/net/net_control.c src/net/net_obs.c src/net/rtu_framer.c
 FUZZ_FLAGS    = -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
 		-DWITH_TLS=0 -DWITH_CONFIG=0 $(INC) -Itests/fuzz

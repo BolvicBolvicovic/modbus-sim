@@ -3,23 +3,19 @@
  * @brief mogbus_probe(): one FC 08 Return Query Data round trip against a network server, used
  *        by `mogbus --health`.
  *
- * Nonblocking sockets with poll() deadlines; no allocation.
+ * Nonblocking sockets with os_wait() deadlines; no allocation.
  */
 #include "mogbus.h"
 #include "modbus/ascii.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "os/os_socket.h"
+#include "os/os_wait.h"
 #include "util/clock.h"
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
-#include <poll.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #define PROBE_TID	0x4D42
 
@@ -101,13 +97,7 @@ bool
 mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t timeout_ms,
 	     char* err, size_t err_size)
 {
-	union
-	{
-		struct sockaddr		sa;
-		struct sockaddr_in	v4;
-		struct sockaddr_in6	v6;
-	}		addr;
-	socklen_t	addr_len;
+	os_addr_t	addr;
 	const char*	host;
 	mogbus_mode_t	mode;
 	bool		datagram;
@@ -119,7 +109,7 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 	u32		rx_len  = 0;
 	u32		pdu_len = 0;
 	u64		deadline;
-	int		fd;
+	os_socket_t	fd;
 	bool		ok = false;
 
 	if (!options)
@@ -148,20 +138,7 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 		host = "127.0.0.1";
 	else if (strcmp(host, "::") == 0)
 		host = "::1";
-	memset(&addr, 0, sizeof(addr));
-	if (inet_pton(AF_INET, host, &addr.v4.sin_addr) == 1)
-	{
-		addr.v4.sin_family = AF_INET;
-		addr.v4.sin_port   = htons(options->port);
-		addr_len           = sizeof(addr.v4);
-	}
-	else if (inet_pton(AF_INET6, host, &addr.v6.sin6_addr) == 1)
-	{
-		addr.v6.sin6_family = AF_INET6;
-		addr.v6.sin6_port   = htons(options->port);
-		addr_len            = sizeof(addr.v6);
-	}
-	else
+	if (!os_addr_parse(&addr, host, options->port))
 	{
 		probe_err(err, err_size, "bind address '%s' is not an IP address", host);
 		return false;
@@ -192,31 +169,30 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 	}
 
 	deadline = clock_now_ms() + timeout_ms;
-	fd = socket(addr.sa.sa_family, (datagram ? SOCK_DGRAM : SOCK_STREAM) | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-	if (fd < 0)
+	fd = os_socket_open(&addr, datagram);
+	if (fd == OS_SOCKET_INVALID)
 	{
-		probe_err(err, err_size, "socket: %s", strerror(errno));
+		probe_err(err, err_size, "socket: %s", os_last_error_text());
 		return false;
 	}
-	if (connect(fd, &addr.sa, addr_len) < 0)
 	{
-		struct pollfd	pfd      = { .fd = fd, .events = POLLOUT };
-		int		so_error = errno;
-		socklen_t	so_len   = sizeof(so_error);
+		int	rc       = os_connect(fd, &addr);
+		int	so_error = rc < 0 ? os_last_error() : 0;
 
-		if (so_error == EINPROGRESS)
+		if (rc > 0)
 		{
-			if (poll(&pfd, 1, remaining_ms(deadline)) <= 0)
+			os_wait_entry_t pfd = { .fd = fd, .events = OS_WAIT_OUT };
+
+			if (os_wait(&pfd, 1, remaining_ms(deadline)) <= 0)
 			{
 				probe_err(err, err_size, "connect %s:%u: timed out", host, options->port);
 				goto done;
 			}
-			if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) < 0)
-				so_error = errno;
+			so_error = os_connect_status(fd);
 		}
 		if (so_error != 0)
 		{
-			probe_err(err, err_size, "connect %s:%u: %s", host, options->port, strerror(so_error));
+			probe_err(err, err_size, "connect %s:%u: %s", host, options->port, os_error_text(so_error));
 			goto done;
 		}
 	}
@@ -227,29 +203,29 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 		ok = true;
 		goto done;
 	}
-	if (send(fd, frame, frame_len, MSG_NOSIGNAL) != (ssize_t)frame_len)
+	if (os_socket_send(fd, frame, frame_len) != (s64)frame_len)
 	{
-		probe_err(err, err_size, "send: %s", strerror(errno));
+		probe_err(err, err_size, "send: %s", os_last_error_text());
 		goto done;
 	}
 
 	for (;;)
 	{
-		struct pollfd	pfd = { .fd = fd, .events = POLLIN };
-		ssize_t		n;
+		os_wait_entry_t	pfd = { .fd = fd, .events = OS_WAIT_IN };
+		s64		n;
 		int		parsed;
 
-		if (poll(&pfd, 1, remaining_ms(deadline)) <= 0)
+		if (os_wait(&pfd, 1, remaining_ms(deadline)) <= 0)
 		{
 			probe_err(err, err_size, "no reply from unit %u within %u ms", unit_id, timeout_ms);
 			goto done;
 		}
-		n = recv(fd, rx + rx_len, sizeof(rx) - rx_len, 0);
-		if (n < 0 && (errno == EAGAIN || errno == EINTR))
+		n = os_socket_recv(fd, rx + rx_len, sizeof(rx) - rx_len);
+		if (n < 0 && os_retry())
 			continue;
 		if (n < 0)
 		{
-			probe_err(err, err_size, "recv: %s", strerror(errno));
+			probe_err(err, err_size, "recv: %s", os_last_error_text());
 			goto done;
 		}
 		if (n == 0 && !datagram)
@@ -279,6 +255,6 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 		probe_err(err, err_size, "unexpected reply to the diagnostic request");
 
 done:
-	close(fd);
+	os_socket_close(fd);
 	return ok;
 }

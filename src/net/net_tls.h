@@ -12,7 +12,7 @@
 
 #include "build_config.h"
 #include "vlib/c_types.h"
-#include <poll.h>
+#include "os/os_wait.h"
 #include <stdbool.h>
 
 /** @brief OpenSSL TLS context, forward-declared so callers need no OpenSSL headers. */
@@ -109,8 +109,8 @@ void		net_tls_conn_close(net_tls_conn_t* conn);
 
 bool		net_tls_conn_handshake_done(const net_tls_conn_t* conn);
 u64		net_tls_conn_handshake_deadline(const net_tls_conn_t* conn);
-/** @brief POLLIN/POLLOUT bits requested by OpenSSL; 0 when none. */
-short		net_tls_conn_poll_events(const net_tls_conn_t* conn);
+/** @brief OS_WAIT_IN/OS_WAIT_OUT bits requested by OpenSSL; 0 when none. */
+u32		net_tls_conn_poll_events(const net_tls_conn_t* conn);
 int		net_tls_conn_pending(const net_tls_conn_t* conn);
 /** @brief Copies the peer certificate subject in RFC2253 form; false when unavailable. */
 bool		net_tls_conn_peer_subject(const net_tls_conn_t* conn, char* buf, u32 size);

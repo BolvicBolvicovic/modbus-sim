@@ -1,18 +1,18 @@
 /**
  * @file
- * @brief Shared TCP listener, accept backoff, idle sweep and poll table.
+ * @brief Shared TCP listener, accept backoff, idle sweep and wait table.
  */
 #ifndef NET_TCP_POOL_H
 #define NET_TCP_POOL_H
 
+#include "os/os_socket.h"
+#include "os/os_wait.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
 typedef struct net_obs_t net_obs_t;
 typedef struct net_tcp_conn_t net_tcp_conn_t;
 typedef struct net_tcp_pool_t net_tcp_pool_t;
-
-struct pollfd;
 
 /** @brief Size of the peer text buffer. */
 enum
@@ -27,7 +27,7 @@ enum
  */
 struct net_tcp_conn_t
 {
-	int		fd;		/**< -1 when the slot is free */
+	os_socket_t	fd;		/**< OS_SOCKET_INVALID (-1) when the slot is free */
 	u64		last_activity_ms;
 	char		peer[NET_TCP_PEER_SIZE];
 };
@@ -44,7 +44,7 @@ struct net_tcp_pool_t
 	u32		conn_count;
 	u32		conn_size;
 	u32		idle_timeout_ms;
-	int		listen_fd;
+	os_socket_t	listen_fd;
 	u64		accept_backoff_until_ms;
 	bool		accept_backoff_logged;
 	net_obs_t*	obs;	/**< connection metrics; NULL records nothing */
@@ -57,7 +57,7 @@ struct net_tcp_pool_t
 /** @brief Opens the shared nonblocking listener (backlog 64) and stores its fd. */
 int	net_tcp_pool_listen(net_tcp_pool_t* pool, const char* bind_address, u16 port);
 
-/** @brief Accepts until EAGAIN, applying the shared backoff and connection setup. */
+/** @brief Accepts until it would block, applying the shared backoff and connection setup. */
 void	net_tcp_pool_accept(net_tcp_pool_t* pool);
 
 void	net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn);
@@ -75,7 +75,7 @@ void	net_tcp_pool_close_all(net_tcp_pool_t* pool);
  *
  * Callers refine events and add their own deadlines afterwards.
  */
-u32	net_tcp_pool_build_poll(net_tcp_pool_t* pool, struct pollfd* fds,
+u32	net_tcp_pool_build_poll(net_tcp_pool_t* pool, os_wait_entry_t* fds,
 				net_tcp_conn_t** owners, u64 now_ms, int* timeout);
 
 #endif

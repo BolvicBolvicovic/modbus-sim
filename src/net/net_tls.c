@@ -3,13 +3,12 @@
  * @brief OpenSSL implementation of the TLS layer for Modbus TCP.
  */
 #include "net/net_tls.h"
-#include <errno.h>
+#include "os/os_error.h"
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
-#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -21,7 +20,7 @@ copy_last_error(char* out, u32 size)
 	if (code)
 		ERR_error_string_n(code, out, size);
 	else
-		snprintf(out, size, "%s", errno ? strerror(errno) : "unknown error");
+		snprintf(out, size, "%s", os_last_error() ? os_last_error_text() : "unknown error");
 	if (!out[0])
 		snprintf(out, size, "unknown error");
 	ERR_clear_error();
@@ -206,15 +205,15 @@ net_tls_conn_handshake_deadline(const net_tls_conn_t* conn)
 	return conn ? conn->handshake_deadline_ms : 0;
 }
 
-short
+u32
 net_tls_conn_poll_events(const net_tls_conn_t* conn)
 {
-	short events = 0;
+	u32 events = 0;
 
 	if (conn && conn->want_read)
-		events |= POLLIN;
+		events |= OS_WAIT_IN;
 	if (conn && conn->want_write)
-		events |= POLLOUT;
+		events |= OS_WAIT_OUT;
 	return events;
 }
 

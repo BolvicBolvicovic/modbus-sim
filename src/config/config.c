@@ -8,7 +8,7 @@
 #include "device/machine.h"
 #include "util/baud.h"
 #include "util/clock.h"
-#include "util/ip.h"
+#include "os/os_socket.h"
 #include "vlib/macros.h"
 #include "vlib/readfile.h"
 #include <string.h>
@@ -203,7 +203,7 @@ parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
 		return false;
 	if (bind && strlen(bind) >= SERVER_BIND_MAX)
 		return form_fail(ctx, "http: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
-	if (bind && !ip_is_literal(bind))
+	if (bind && !os_ip_is_literal(bind))
 		return form_fail(ctx, "http: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
 	strcpy(config->http_bind_address, bind ? bind : "127.0.0.1");
 	config->http_port    = (u16)port;
@@ -385,7 +385,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (bind && strlen(bind) >= SERVER_BIND_MAX)
 		return form_fail(ctx, "server: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
 
-	if (bind && !ip_is_literal(bind))
+	if (bind && !os_ip_is_literal(bind))
 		return form_fail(ctx, "server: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
 
 	if ((mode == SERVER_MODE_RTU_DEVICE || mode == SERVER_MODE_ASCII_DEVICE) &&

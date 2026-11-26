@@ -8,13 +8,8 @@
 #include "modbus/pdu.h"
 #include "net/net_obs.h"
 #include "util/log.h"
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
 #include <stddef.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 device_t*
 net_find_device(device_t** devices, u32 count, u8 unit)
@@ -65,66 +60,27 @@ net_handle_hangup(pending_response_t* pending)
 	return false;
 }
 
-int
-net_bind_addr(const char* bind_address, u16 port, struct sockaddr_storage* addr, socklen_t* addr_len)
+bool
+net_bind_addr(const char* bind_address, u16 port, os_addr_t* addr)
 {
-	struct in_addr	addr4;
-	struct in6_addr	addr6;
-
-	memset(addr, 0, sizeof(*addr));
-	if (inet_pton(AF_INET, bind_address, &addr4) == 1)
-	{
-		struct sockaddr_in* a = (struct sockaddr_in*)addr;
-
-		a->sin_family = AF_INET;
-		a->sin_port = htons(port);
-		a->sin_addr = addr4;
-		*addr_len = sizeof(*a);
-		return AF_INET;
-	}
-	if (inet_pton(AF_INET6, bind_address, &addr6) == 1)
-	{
-		struct sockaddr_in6* a = (struct sockaddr_in6*)addr;
-
-		a->sin6_family = AF_INET6;
-		a->sin6_port = htons(port);
-		a->sin6_addr = addr6;
-		*addr_len = sizeof(*a);
-		return AF_INET6;
-	}
+	if (os_addr_parse(addr, bind_address, port))
+		return true;
 	LOG_WARN("bind address '%s' is not a valid IPv4 or IPv6 address", bind_address);
-	return AF_UNSPEC;
+	return false;
 }
 
-int
+os_socket_t
 net_tcp_listen(const char* bind_address, u16 port, int backlog)
 {
-	struct sockaddr_storage	addr = { 0 };
-	socklen_t		addr_len = 0;
-	int			family = net_bind_addr(bind_address, port, &addr, &addr_len);
-	int			yes = 1;
-	int			fd;
+	os_addr_t	addr;
+	os_socket_t	s;
 
-	if (family == AF_UNSPEC)
-		return -1;
-
-	fd = socket(family, SOCK_STREAM | SOCK_NONBLOCK, 0);
-	if (fd < 0)
-	{
-		LOG_WARN("cannot create socket for %s:%u: %s", bind_address, port, strerror(errno));
-		return -1;
-	}
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-	if (family == AF_INET6)
-		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &yes, sizeof(yes));
-
-	if (bind(fd, (struct sockaddr*)&addr, addr_len) < 0 || listen(fd, backlog) < 0)
-	{
-		LOG_WARN("cannot listen on %s:%u: %s", bind_address, port, strerror(errno));
-		close(fd);
-		return -1;
-	}
-	return fd;
+	if (!net_bind_addr(bind_address, port, &addr))
+		return OS_SOCKET_INVALID;
+	s = os_tcp_listen(&addr, backlog);
+	if (s == OS_SOCKET_INVALID)
+		LOG_WARN("cannot listen on %s:%u: %s", bind_address, port, os_last_error_text());
+	return s;
 }
 
 u32

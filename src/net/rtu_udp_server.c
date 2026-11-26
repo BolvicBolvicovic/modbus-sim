@@ -9,10 +9,10 @@
 #include "net/net_obs.h"
 #include "net/net_udp.h"
 #include "net/rtu_framer.h"
+#include "os/os_wait.h"
 #include "util/clock.h"
 #include "util/log.h"
 #include "vlib/macros.h"
-#include <poll.h>
 #include <string.h>
 
 /**
@@ -57,7 +57,7 @@ handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, const u8* 
 s32
 rtu_udp_server_step(rtu_udp_server_t* server, s32 max_wait_ms)
 {
-	struct pollfd	pfd     = { .fd = server->udp.fd, .events = POLLIN };
+	os_wait_entry_t	pfd     = { .fd = server->udp.fd, .events = OS_WAIT_IN };
 	int		timeout = 1000;
 	u64		now_ms  = clock_now_ms();
 
@@ -72,7 +72,7 @@ rtu_udp_server_step(rtu_udp_server_t* server, s32 max_wait_ms)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
 	net_udp_flush_due(&server->udp, clock_now_ms());
-	if (!(pfd.revents & POLLIN))
+	if (!(pfd.revents & OS_WAIT_IN))
 		return NET_STEP_CONTINUE;
 	for (u32 i = 0; i < NET_UDP_MAX_BURST; i++)
 	{

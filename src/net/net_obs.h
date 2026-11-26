@@ -10,13 +10,13 @@
 #define NET_OBS_H
 
 #include "modbus/pdu.h"
+#include "os/os_socket.h"
+#include "os/os_wait.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
 typedef enum net_result_t net_result_t;
 typedef struct net_obs_t net_obs_t;
-
-struct pollfd;
 
 /** @brief Limits of the metrics and HTTP endpoint. */
 enum
@@ -28,7 +28,7 @@ enum
 	NET_OBS_HTTP_BODY	= 1024,	/**< request body limit (runtime control) */
 	NET_OBS_HTTP_OUT	= 32768,	/**< response limit, enough for 16 fully used devices */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
-	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per poll */
+	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per wait */
 };
 
 /** @brief What happened to one request. */
@@ -90,11 +90,11 @@ struct net_obs_t
 	/** @brief HTTP endpoint listener and its connections. */
 	struct net_http_t
 	{
-		int	listen_fd;	/**< -1 when the endpoint is off */
+		os_socket_t	listen_fd;	/**< OS_SOCKET_INVALID when the endpoint is off */
 		/** @brief One HTTP client connection. */
 		struct net_http_conn_t
 		{
-			int	fd;	/**< -1 when the slot is free */
+			os_socket_t	fd;	/**< OS_SOCKET_INVALID when the slot is free */
 			u64	deadline_ms;
 			u32	in_len;
 			u32	out_len;
@@ -162,12 +162,12 @@ u32	net_obs_render_metrics(const net_obs_t* obs, char* out, u32 size);
 bool	net_obs_http_feed(net_obs_t* obs, struct net_http_conn_t* conn);
 
 /**
- * @brief poll() for a transport: adds the endpoint's fds, polls, then serves the endpoint.
+ * @brief os_wait() for a transport: adds the endpoint's fds, waits, then serves the endpoint.
  *
- * `fds` and its revents are exactly as with poll(); the endpoint only lowers the timeout to
+ * `fds` and its revents are exactly as with os_wait(); the endpoint only lowers the timeout to
  * its own deadlines. `count` plus the endpoint's fds must fit NET_OBS_POLL_MAX.
- * @return poll()'s result for the whole set (negative on error).
+ * @return os_wait()'s result for the whole set (negative on error).
  */
-int	net_poll(net_obs_t* obs, struct pollfd* fds, u32 count, int timeout_ms);
+int	net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms);
 
 #endif

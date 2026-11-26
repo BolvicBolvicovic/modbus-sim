@@ -13,7 +13,7 @@
 #include "server/server.h"
 #include "server/server_limits.h"
 #include "util/clock.h"
-#include "util/ip.h"
+#include "os/os_socket.h"
 #include "util/log.h"
 #include "vlib/arena.h"
 #if WITH_CONFIG
@@ -575,7 +575,7 @@ validate_options(const mogbus_t* ctx, server_options_t* o, struct strings_t* st,
 				      &ok, err, err_size);
 	o->http_bind_address = copy_string(st->http_bind, sizeof(st->http_bind), o->http_bind_address,
 					   "HTTP bind address", &ok, err, err_size);
-	if (ok && o->http_bind_address && !ip_is_literal(o->http_bind_address))
+	if (ok && o->http_bind_address && !os_ip_is_literal(o->http_bind_address))
 	{
 		set_err(err, err_size, "HTTP bind address '%s' is not a valid IPv4 or IPv6 address",
 			o->http_bind_address);

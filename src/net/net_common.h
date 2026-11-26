@@ -10,7 +10,7 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 #include "vlib/macros.h"
-#include <sys/socket.h>
+#include "os/os_socket.h"
 
 typedef struct device_t device_t;
 typedef struct rng_t rng_t;
@@ -43,7 +43,7 @@ enum
 {
 	NET_STEP_CONTINUE = 0,
 	NET_STEP_DONE     = 1,	/**< stopped, or the byte-stream peer went away */
-	NET_STEP_ERROR    = 2,	/**< poll failed */
+	NET_STEP_ERROR    = 2,	/**< wait failed */
 };
 
 /** @brief Returns the device with the given unit id, or NULL. */
@@ -70,7 +70,7 @@ void		net_record_comm_error(net_obs_t* obs, device_t** devices, u32 count);
 void		pending_response_clear(pending_response_t* pending);
 
 /**
- * @brief Drops a response that cannot be delivered after POLLHUP and stops the byte-stream
+ * @brief Drops a response that cannot be delivered after a hangup and stops the byte-stream
  *        server loop.
  */
 bool		net_handle_hangup(pending_response_t* pending);
@@ -78,10 +78,9 @@ bool		net_handle_hangup(pending_response_t* pending);
 /**
  * @brief Parses an IPv4 or IPv6 literal plus port into a socket address.
  *
- * Returns the address family, or AF_UNSPEC (after a WARN) when bind_address is not a literal.
+ * Returns false (after a WARN) when bind_address is not a literal.
  */
-int		net_bind_addr(const char* bind_address, u16 port,
-			      struct sockaddr_storage* addr, socklen_t* addr_len);
+bool		net_bind_addr(const char* bind_address, u16 port, os_addr_t* addr);
 
 /**
  * @brief Handles one validated MBAP request (`request` = the PDU after the header) and writes
@@ -99,8 +98,8 @@ u32		net_mbap_respond(net_obs_t* obs, device_t** devices, u32 count, rng_t* rng,
  * @brief Opens, binds, and listens on a nonblocking TCP socket. bind_address must be an IPv4
  *        or IPv6 literal.
  *
- * IPv6 sockets set IPV6_V6ONLY. Returns fd or -1.
+ * IPv6 sockets set IPV6_V6ONLY. Returns the socket or OS_SOCKET_INVALID.
  */
-int		net_tcp_listen(const char* bind_address, u16 port, int backlog);
+os_socket_t	net_tcp_listen(const char* bind_address, u16 port, int backlog);
 
 #endif

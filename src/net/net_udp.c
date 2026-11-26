@@ -7,62 +7,23 @@
 #include "net/net_common.h"
 #include "util/log.h"
 #include "vlib/macros.h"
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
-#include <stdio.h>
 #include <string.h>
-#include <unistd.h>
-
-static void
-format_peer(net_udp_peer_t* peer)
-{
-	char ip[INET6_ADDRSTRLEN];
-
-	if (peer->addr.ss_family == AF_INET6)
-	{
-		const struct sockaddr_in6* a = (const struct sockaddr_in6*)&peer->addr;
-
-		inet_ntop(AF_INET6, &a->sin6_addr, ip, sizeof(ip));
-		snprintf(peer->text, sizeof(peer->text), "[%s]:%u", ip, ntohs(a->sin6_port));
-	}
-	else
-	{
-		const struct sockaddr_in* a = (const struct sockaddr_in*)&peer->addr;
-
-		inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
-		snprintf(peer->text, sizeof(peer->text), "%s:%u", ip, ntohs(a->sin_port));
-	}
-}
 
 int
 net_udp_open(net_udp_t* udp, const char* bind_address, u16 port)
 {
-	struct sockaddr_storage	addr;
-	socklen_t		addr_len = 0;
-	int			family = net_bind_addr(bind_address, port, &addr, &addr_len);
-	int			fd;
+	os_addr_t addr;
 
 	memset(udp, 0, sizeof(*udp));
-	udp->fd = -1;
-	if (family == AF_UNSPEC)
+	udp->fd = OS_SOCKET_INVALID;
+	if (!net_bind_addr(bind_address, port, &addr))
 		return -1;
-
-	fd = socket(family, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-	if (fd < 0)
+	udp->fd = os_udp_bind(&addr);
+	if (udp->fd == OS_SOCKET_INVALID)
 	{
-		LOG_WARN("cannot create UDP socket for %s:%u: %s", bind_address, port, strerror(errno));
+		LOG_WARN("cannot bind UDP %s:%u: %s", bind_address, port, os_last_error_text());
 		return -1;
 	}
-	if (family == AF_INET6)
-		setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &(int){ 1 }, sizeof(int));
-	if (bind(fd, (struct sockaddr*)&addr, addr_len) < 0)
-	{
-		LOG_WARN("cannot bind UDP %s:%u: %s", bind_address, port, strerror(errno));
-		close(fd);
-		return -1;
-	}
-	udp->fd = fd;
 	return 0;
 }
 
@@ -70,8 +31,8 @@ void
 net_udp_close(net_udp_t* udp)
 {
 	if (udp->fd >= 0)
-		close(udp->fd);
-	udp->fd = -1;
+		os_socket_close(udp->fd);
+	udp->fd = OS_SOCKET_INVALID;
 	for (u32 i = 0; i < ARRAY_COUNT(udp->pending); i++)
 		udp->pending[i].active = false;
 }
@@ -79,14 +40,12 @@ net_udp_close(net_udp_t* udp)
 s32
 net_udp_recv(net_udp_t* udp, u8* buf, u32 cap, net_udp_peer_t* peer)
 {
-	ssize_t got;
+	/* The return value is the real datagram size even when it did not fit. */
+	s64 got = os_udp_recv(udp->fd, buf, cap, &peer->addr);
 
-	peer->addr_len = sizeof(peer->addr);
-	/* MSG_TRUNC makes the return value the real datagram size even when it did not fit. */
-	got = recvfrom(udp->fd, buf, cap, MSG_TRUNC, (struct sockaddr*)&peer->addr, &peer->addr_len);
 	if (got < 0)
-		return errno == EINTR || errno == ECONNREFUSED ? -1 : 0;
-	format_peer(peer);
+		return os_interrupted() || os_conn_refused() ? -1 : 0;
+	os_addr_text(&peer->addr, peer->text, sizeof(peer->text));
 	if (got == 0)
 	{
 		LOG_DEBUG("UDP %s sent an empty datagram, dropped", peer->text);
@@ -94,7 +53,7 @@ net_udp_recv(net_udp_t* udp, u8* buf, u32 cap, net_udp_peer_t* peer)
 	}
 	if ((u32)got > cap)
 	{
-		LOG_DEBUG("UDP %s sent a %zd byte datagram (max %u), dropped", peer->text, got, cap);
+		LOG_DEBUG("UDP %s sent a %lld byte datagram (max %u), dropped", peer->text, (long long)got, cap);
 		return -1;
 	}
 	return (s32)got;
@@ -103,9 +62,8 @@ net_udp_recv(net_udp_t* udp, u8* buf, u32 cap, net_udp_peer_t* peer)
 void
 net_udp_send(net_udp_t* udp, const net_udp_peer_t* peer, const u8* buf, u32 len)
 {
-	if (sendto(udp->fd, buf, len, MSG_NOSIGNAL, (const struct sockaddr*)&peer->addr,
-		   peer->addr_len) < 0)
-		LOG_DEBUG("UDP send to %s failed: %s", peer->text, strerror(errno));
+	if (os_udp_send(udp->fd, buf, len, &peer->addr) < 0)
+		LOG_DEBUG("UDP send to %s failed: %s", peer->text, os_last_error_text());
 }
 
 bool

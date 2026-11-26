@@ -3,7 +3,6 @@
  * @brief Request metrics, structured request logs and the HTTP health, readiness and
  *        Prometheus endpoint of one server.
  */
-#define _GNU_SOURCE
 #include "net/net_obs.h"
 #include "mogbus.h"
 #include "net/net_common.h"
@@ -11,16 +10,12 @@
 #include "util/clock.h"
 #include "util/log.h"
 #include "vlib/macros.h"
-#include <errno.h>
-#include <poll.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <strings.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
 
 const u32 NET_OBS_LATENCY_MS[NET_OBS_LATENCY_BUCKETS] = {
 	1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
@@ -42,13 +37,13 @@ net_obs_init(net_obs_t* obs, const char* transport, device_t** devices, u32 devi
 	obs->devices      = devices;
 	obs->device_count = MIN(device_count, (u32)NET_OBS_MAX_DEVICES);
 	obs->start_unix_s = (u64)time(NULL);
-	obs->http.listen_fd = -1;
+	obs->http.listen_fd = OS_SOCKET_INVALID;
 	for (u32 i = 0; i < NET_OBS_HTTP_CONNS; i++)
-		obs->http.conns[i].fd = -1;
+		obs->http.conns[i].fd = OS_SOCKET_INVALID;
 	if (!http_bind)
 		return 0;
 	obs->http.listen_fd = net_tcp_listen(http_bind, http_port, 16);
-	if (obs->http.listen_fd < 0)
+	if (obs->http.listen_fd == OS_SOCKET_INVALID)
 	{
 		LOG_WARN("cannot listen for HTTP on %s:%u", http_bind, http_port);
 		return -1;
@@ -65,12 +60,12 @@ net_obs_close(net_obs_t* obs)
 	for (u32 i = 0; i < NET_OBS_HTTP_CONNS; i++)
 	{
 		if (obs->http.conns[i].fd >= 0)
-			close(obs->http.conns[i].fd);
-		obs->http.conns[i].fd = -1;
+			os_socket_close(obs->http.conns[i].fd);
+		obs->http.conns[i].fd = OS_SOCKET_INVALID;
 	}
 	if (obs->http.listen_fd >= 0)
-		close(obs->http.listen_fd);
-	obs->http.listen_fd = -1;
+		os_socket_close(obs->http.listen_fd);
+	obs->http.listen_fd = OS_SOCKET_INVALID;
 	obs->ready = false;
 }
 
@@ -367,8 +362,8 @@ static void
 http_close(struct net_http_conn_t* conn)
 {
 	if (conn->fd >= 0)
-		close(conn->fd);
-	conn->fd = -1;
+		os_socket_close(conn->fd);
+	conn->fd = OS_SOCKET_INVALID;
 }
 
 /* Builds the whole response into conn->out: the body is rendered behind room for the head,
@@ -523,9 +518,9 @@ net_obs_http_feed(net_obs_t* obs, struct net_http_conn_t* conn)
 static void
 http_read(net_obs_t* obs, struct net_http_conn_t* conn)
 {
-	ssize_t got = recv(conn->fd, conn->in + conn->in_len, sizeof(conn->in) - 1 - conn->in_len, 0);
+	s64 got = os_socket_recv(conn->fd, conn->in + conn->in_len, sizeof(conn->in) - 1 - conn->in_len);
 
-	if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+	if (got < 0 && os_retry())
 		return;
 	if (got <= 0)
 	{
@@ -540,10 +535,9 @@ http_read(net_obs_t* obs, struct net_http_conn_t* conn)
 static void
 http_write(struct net_http_conn_t* conn)
 {
-	ssize_t sent = send(conn->fd, conn->out + conn->out_sent, conn->out_len - conn->out_sent,
-			    MSG_NOSIGNAL);
+	s64 sent = os_socket_send(conn->fd, conn->out + conn->out_sent, conn->out_len - conn->out_sent);
 
-	if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+	if (sent < 0 && os_retry())
 		return;
 	if (sent <= 0)
 	{
@@ -556,9 +550,9 @@ http_write(struct net_http_conn_t* conn)
 }
 
 int
-net_poll(net_obs_t* obs, struct pollfd* fds, u32 count, int timeout_ms)
+net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 {
-	struct pollfd			all[NET_OBS_POLL_MAX];
+	os_wait_entry_t			all[NET_OBS_POLL_MAX];
 	struct net_http_conn_t*		owner[NET_OBS_POLL_MAX];
 	struct net_http_t*		http = obs ? &obs->http : NULL;
 	u64				now_ms = clock_now_ms();
@@ -567,7 +561,7 @@ net_poll(net_obs_t* obs, struct pollfd* fds, u32 count, int timeout_ms)
 	int				rc;
 
 	if (!http || http->listen_fd < 0)
-		return poll(fds, count, timeout_ms);
+		return os_wait(fds, count, timeout_ms);
 	if (count)
 		memcpy(all, fds, count * sizeof(*fds));
 	for (u32 i = 0; i < NET_OBS_HTTP_CONNS && n < NET_OBS_POLL_MAX; i++)
@@ -586,17 +580,17 @@ net_poll(net_obs_t* obs, struct pollfd* fds, u32 count, int timeout_ms)
 			continue;
 		}
 		owner[n] = conn;
-		all[n++] = (struct pollfd){ .fd = conn->fd, .events = conn->writing ? POLLOUT : POLLIN };
+		all[n++] = (os_wait_entry_t){ .fd = conn->fd, .events = conn->writing ? OS_WAIT_OUT : OS_WAIT_IN };
 		if (timeout_ms < 0 || (u64)timeout_ms > conn->deadline_ms - now_ms)
 			timeout_ms = (int)(conn->deadline_ms - now_ms);
 	}
 	if (slot_free && n < NET_OBS_POLL_MAX)
 	{
 		owner[n] = NULL;
-		all[n++] = (struct pollfd){ .fd = http->listen_fd, .events = POLLIN };
+		all[n++] = (os_wait_entry_t){ .fd = http->listen_fd, .events = OS_WAIT_IN };
 	}
 
-	rc = poll(all, n, timeout_ms);
+	rc = os_wait(all, n, timeout_ms);
 	for (u32 i = 0; i < count; i++)
 		fds[i].revents = rc > 0 ? all[i].revents : 0;
 	if (rc <= 0)
@@ -612,12 +606,13 @@ net_poll(net_obs_t* obs, struct pollfd* fds, u32 count, int timeout_ms)
 		{
 			for (u32 s = 0; s < NET_OBS_HTTP_CONNS; s++)
 			{
-				int fd;
+				os_addr_t	peer;
+				os_socket_t	fd;
 
 				if (http->conns[s].fd >= 0)
 					continue;
-				fd = accept4(http->listen_fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
-				if (fd < 0)
+				fd = os_tcp_accept(http->listen_fd, &peer);
+				if (fd == OS_SOCKET_INVALID)
 					break;
 				memset(&http->conns[s], 0, offsetof(struct net_http_conn_t, in));
 				http->conns[s].fd          = fd;
@@ -626,7 +621,7 @@ net_poll(net_obs_t* obs, struct pollfd* fds, u32 count, int timeout_ms)
 			}
 			continue;
 		}
-		if (all[i].revents & (POLLERR | POLLNVAL))
+		if (all[i].revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 			http_close(conn);
 		else if (conn->writing)
 			http_write(conn);

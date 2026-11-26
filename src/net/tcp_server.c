@@ -13,12 +13,8 @@
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
-#include <errno.h>
-#include <poll.h>
 #include <signal.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 static void
 conn_close(tcp_server_t* server, tcp_conn_t* conn)
@@ -175,7 +171,7 @@ conn_tx_advance(tcp_server_t* server, tcp_conn_t* conn, u32 sent)
 static void
 conn_read(tcp_server_t* server, tcp_conn_t* conn)
 {
-	ssize_t	got;
+	s64	got;
 
 	if (conn->tls)
 	{
@@ -208,8 +204,8 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 		return;
 	}
 
-	got = recv(conn->base.fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len, 0);
-	if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR))
+	got = os_socket_recv(conn->base.fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len);
+	if (got == 0 || (got < 0 && !os_retry()))
 	{
 		conn_close(server, conn);
 		return;
@@ -225,7 +221,7 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 static void
 conn_write(tcp_server_t* server, tcp_conn_t* conn)
 {
-	ssize_t	sent;
+	s64	sent;
 
 	if (conn->tls)
 	{
@@ -249,11 +245,9 @@ conn_write(tcp_server_t* server, tcp_conn_t* conn)
 		return;
 	}
 
-	sent = send(conn->base.fd, conn->tx + conn->tx_sent, conn->tx_len - conn->tx_sent,
-		    MSG_NOSIGNAL);
+	sent = os_socket_send(conn->base.fd, conn->tx + conn->tx_sent, conn->tx_len - conn->tx_sent);
 	if (sent < 0 &&
-	    errno != EAGAIN &&
-	    errno != EINTR)
+	    !os_retry())
 	{
 		conn_close(server, conn);
 		return;
@@ -312,7 +306,7 @@ conn_tls_has_buffered_input(const tcp_conn_t* conn)
  * Returns the number of entries; entry 0 is the listening socket.
  */
 static u32
-build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owners,
+build_poll_table(tcp_server_t* server, os_wait_entry_t* fds, net_tcp_conn_t** owners,
 		 u64 now_ms, int* timeout)
 {
 	u32 count = net_tcp_pool_build_poll(&server->pool, fds, owners, now_ms, timeout);
@@ -320,9 +314,9 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owne
 	for (u32 i = 1; i < count; i++)
 	{
 		tcp_conn_t*	conn         = (tcp_conn_t*)owners[i];
-		short	tls_events   = conn->tls ? net_tls_conn_poll_events(conn->tls) : 0;
+		u32	tls_events   = conn->tls ? net_tls_conn_poll_events(conn->tls) : 0;
 		u64	handshake_deadline;
-		short	events = POLLIN;
+		u32	events = OS_WAIT_IN;
 
 		if (conn->tls && !net_tls_conn_handshake_done(conn->tls))
 		{
@@ -336,13 +330,13 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owne
 					*timeout = MIN(*timeout, (int)(handshake_deadline - now_ms));
 			}
 		}
-		else if (conn->tls && conn->tx_len == 0 && (tls_events & POLLOUT))
-			events = POLLOUT;
+		else if (conn->tls && conn->tx_len == 0 && (tls_events & OS_WAIT_OUT))
+			events = OS_WAIT_OUT;
 
 		/* Decrypted bytes may already be buffered inside OpenSSL. */
 		if (conn_tls_has_buffered_input(conn))
 		{
-			events |= POLLIN;
+			events |= OS_WAIT_IN;
 			*timeout = 0;
 		}
 
@@ -359,21 +353,21 @@ build_poll_table(tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owne
 		{
 			events = tls_events;
 			if (events == 0 && conn->tx_due_ms <= now_ms)
-				events = POLLOUT;
+				events = OS_WAIT_OUT;
 		}
 		else
-			events = (conn->tx_due_ms <= now_ms) ? POLLOUT : 0;
+			events = (conn->tx_due_ms <= now_ms) ? OS_WAIT_OUT : 0;
 		fds[i].events = events;
 	}
 	return count;
 }
 
 static void
-serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner, u64 now_ms)
+serve_ready(tcp_server_t* server, const os_wait_entry_t* fd, net_tcp_conn_t* owner, u64 now_ms)
 {
 	tcp_conn_t*	conn          = (tcp_conn_t*)owner;
 	bool	buffered_input = owner && conn_tls_has_buffered_input(conn);
-	short	tls_events;
+	u32	tls_events;
 
 	if (fd->revents == 0 && !buffered_input)
 		return;
@@ -387,7 +381,7 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner
 	if (conn->base.fd < 0 || fd->fd != conn->base.fd)
 		return;
 
-	if (fd->revents & (POLLERR | POLLNVAL))
+	if (fd->revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
 		conn_close(server, conn);
 		return;
@@ -397,7 +391,7 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner
 	{
 		if (!conn_tls_handshake(server, conn) || !net_tls_conn_handshake_done(conn->tls))
 			return;
-		if ((fd->revents & (POLLIN | POLLHUP)) != 0 ||
+		if ((fd->revents & (OS_WAIT_IN | OS_WAIT_HUP)) != 0 ||
 		    conn_tls_has_buffered_input(conn))
 			conn_read(server, conn);
 		return;
@@ -420,9 +414,9 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner
 	 */
 	if (conn->tls && conn->tx_len > 0)
 	{
-		/* poll reports POLLHUP even when events is 0: a disconnect must free
+		/* poll reports OS_WAIT_HUP even when events is 0: a disconnect must free
 		 * the slot without waiting for the delayed response to become due. */
-		if (fd->revents & POLLHUP)
+		if (fd->revents & OS_WAIT_HUP)
 		{
 			conn_close(server, conn);
 			return;
@@ -432,19 +426,19 @@ serve_ready(tcp_server_t* server, const struct pollfd* fd, net_tcp_conn_t* owner
 		return;
 	}
 
-	if (fd->revents & POLLOUT)
+	if (fd->revents & OS_WAIT_OUT)
 	{
 		conn_write(server, conn);
 		return;
 	}
-	if ((fd->revents & (POLLIN | POLLHUP)) != 0 || buffered_input)
+	if ((fd->revents & (OS_WAIT_IN | OS_WAIT_HUP)) != 0 || buffered_input)
 		conn_read(server, conn);
 }
 
 s32
 tcp_server_step(tcp_server_t* server, s32 max_wait_ms)
 {
-	struct pollfd		fds[TCP_SERVER_MAX_CONNECTIONS + 1];
+	os_wait_entry_t		fds[TCP_SERVER_MAX_CONNECTIONS + 1];
 	net_tcp_conn_t*		owners[TCP_SERVER_MAX_CONNECTIONS + 1];
 	u32		count   = 0;
 	int		timeout = 0;

@@ -7,9 +7,9 @@
 
 #include "modbus/ascii.h"
 #include "vlib/c_types.h"
+#include "os/os_socket.h"
 #include <stdbool.h>
 #include "vlib/macros.h"
-#include <sys/socket.h>
 
 typedef struct net_udp_peer_t net_udp_peer_t;
 typedef struct net_udp_t net_udp_t;
@@ -32,15 +32,14 @@ enum
 /** @brief The source address of a datagram and its text form. */
 struct net_udp_peer_t
 {
-	struct sockaddr_storage	addr;
-	socklen_t		addr_len;
+	os_addr_t		addr;
 	char			text[NET_UDP_PEER_TEXT_SIZE];	/**< "ip:port" or "[ip]:port" for logs */
 };
 
 /** @brief A bound UDP socket and its table of delayed responses. */
 struct net_udp_t
 {
-	int	fd;	/**< -1 when closed */
+	os_socket_t	fd;	/**< OS_SOCKET_INVALID when closed */
 	/** @brief A response delayed by the `delay` fault, waiting for its due time. */
 	struct net_udp_pending_t
 	{
@@ -89,7 +88,7 @@ bool	net_udp_send_at(net_udp_t* udp, const net_udp_peer_t* peer, const u8* buf, 
 /** @brief Sends every pending response whose deadline has passed. */
 void	net_udp_flush_due(net_udp_t* udp, u64 now_ms);
 
-/** @brief Lowers *timeout_ms (a poll timeout) to the earliest pending deadline. */
+/** @brief Lowers *timeout_ms (a wait timeout) to the earliest pending deadline. */
 void	net_udp_poll_timeout(const net_udp_t* udp, u64 now_ms, int* timeout_ms);
 
 #endif

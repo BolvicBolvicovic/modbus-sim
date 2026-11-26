@@ -9,11 +9,7 @@
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
-#include <errno.h>
-#include <poll.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 /**
  * @file
@@ -188,14 +184,14 @@ conn_process(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms)
 static void
 conn_read(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms)
 {
-	ssize_t got;
+	s64 got;
 
 	if (conn->read_closed)
 		return;
 	if (conn->rx_len == sizeof(conn->rx))
 		conn->rx_len = 0; /* cannot resync a full buffer without a colon */
 
-	got = recv(conn->base.fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len, 0);
+	got = os_socket_recv(conn->base.fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len);
 	if (got == 0)
 	{
 		conn->read_closed = true;
@@ -204,9 +200,7 @@ conn_read(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms)
 	}
 	if (got < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return;
 		conn_close(server, conn);
 		return;
@@ -220,16 +214,14 @@ static void
 conn_write(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
 {
 	pending_response_t*	p = &conn->pending;
-	ssize_t			sent;
+	s64			sent;
 
 	if (!p->active || p->due_ms > clock_now_ms())
 		return;
-	sent = send(conn->base.fd, p->buf + p->sent, p->len - p->sent, MSG_NOSIGNAL);
+	sent = os_socket_send(conn->base.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return;
 		conn_close(server, conn);
 		return;
@@ -245,7 +237,7 @@ conn_write(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
 }
 
 static u32
-build_poll_table(ascii_tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owners,
+build_poll_table(ascii_tcp_server_t* server, os_wait_entry_t* fds, net_tcp_conn_t** owners,
 		 u64 now_ms, int* timeout)
 {
 	u32 count = net_tcp_pool_build_poll(&server->pool, fds, owners, now_ms, timeout);
@@ -260,7 +252,7 @@ build_poll_table(ascii_tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t*
 
 			if (p->due_ms <= now_ms)
 			{
-				fds[i].events = POLLOUT;
+				fds[i].events = OS_WAIT_OUT;
 				*timeout = 0;
 			}
 			else
@@ -314,11 +306,11 @@ conn_handle_hangup(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_m
 }
 
 static void
-conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, short revents, u64 now_ms)
+conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u32 revents, u64 now_ms)
 {
 	if (conn->base.fd < 0)
 		return;
-	if (revents & (POLLERR | POLLNVAL))
+	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
 		conn_close(server, conn);
 		return;
@@ -326,14 +318,14 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, short re
 	conn_process(server, conn, now_ms); /* expire stale bytes before adding new ones */
 	if (conn->base.fd < 0)
 		return;
-	if (revents & POLLIN)
+	if (revents & OS_WAIT_IN)
 		conn_read(server, conn, now_ms);
 	if (conn->base.fd < 0)
 		return;
 	conn_process(server, conn, now_ms);
-	if (conn->base.fd >= 0 && (revents & POLLOUT))
+	if (conn->base.fd >= 0 && (revents & OS_WAIT_OUT))
 		conn_write(server, conn);
-	if (conn->base.fd >= 0 && (revents & POLLHUP))
+	if (conn->base.fd >= 0 && (revents & OS_WAIT_HUP))
 	{
 		conn_handle_hangup(server, conn, now_ms);
 		return;
@@ -347,7 +339,7 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, short re
 s32
 ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 {
-	struct pollfd	fds[ASCII_TCP_MAX_CONNECTIONS + 1];
+	os_wait_entry_t	fds[ASCII_TCP_MAX_CONNECTIONS + 1];
 	net_tcp_conn_t*	owners[ASCII_TCP_MAX_CONNECTIONS + 1];
 	u32		count;
 	int		timeout;
@@ -368,9 +360,9 @@ ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 		timeout = MIN(timeout, max_wait_ms);
 	if (net_poll(server->options.obs, fds, count, timeout) < 0)
 	{
-		if (errno == EINTR)
+		if (os_interrupted())
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
-		LOG_WARN("ASCII-over-TCP poll failed: %s", strerror(errno));
+		LOG_WARN("ASCII-over-TCP poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;
 	}
 	now_ms = clock_now_ms();
@@ -378,7 +370,7 @@ ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 	for (u32 i = 0; i < count; i++)
 	{
 		ascii_tcp_conn_t* conn = (ascii_tcp_conn_t*)owners[i];
-		short revents = fds[i].revents;
+		u32 revents = fds[i].revents;
 
 		if (revents == 0)
 			continue;

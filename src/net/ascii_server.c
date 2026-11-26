@@ -8,8 +8,6 @@
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
-#include <errno.h>
-#include <poll.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -165,7 +163,7 @@ ascii_process(ascii_server_t* server, u64 now_ms)
 static bool
 ascii_read_available(ascii_server_t* server, u64 now_ms)
 {
-	ssize_t got;
+	s64 got;
 
 	if (server->read_closed)
 		return false;
@@ -183,9 +181,7 @@ ascii_read_available(ascii_server_t* server, u64 now_ms)
 	}
 	if (got < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return true;
 		server->read_closed = true;
 		return false;
@@ -207,9 +203,7 @@ ascii_write_pending(ascii_server_t* server)
 	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return true;
 		return false;
 	}
@@ -220,16 +214,16 @@ ascii_write_pending(ascii_server_t* server)
 }
 
 static void
-ascii_build_poll(const ascii_server_t* server, struct pollfd* pfd, int* timeout, u64 now_ms)
+ascii_build_poll(const ascii_server_t* server, os_wait_entry_t* pfd, int* timeout, u64 now_ms)
 {
 	*timeout = 1000;
-	*pfd = (struct pollfd){ .fd = server->options.fd, .events = 0 };
+	*pfd = (os_wait_entry_t){ .fd = server->options.fd, .events = 0 };
 
 	if (server->pending.active)
 	{
 		if (server->pending.due_ms <= now_ms)
 		{
-			pfd->events |= POLLOUT;
+			pfd->events |= OS_WAIT_OUT;
 			*timeout = 0;
 		}
 		else
@@ -241,21 +235,21 @@ ascii_build_poll(const ascii_server_t* server, struct pollfd* pfd, int* timeout,
 		*timeout = 0;
 		return;
 	}
-	pfd->events |= POLLIN;
+	pfd->events |= OS_WAIT_IN;
 }
 
 static bool
-ascii_handle_revents(ascii_server_t* server, short revents, u64 now_ms)
+ascii_handle_revents(ascii_server_t* server, u32 revents, u64 now_ms)
 {
-	if (revents & (POLLERR | POLLNVAL))
+	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 		return false;
 	ascii_process(server, now_ms); /* expire stale bytes before adding new ones */
-	if ((revents & POLLOUT) && !ascii_write_pending(server))
+	if ((revents & OS_WAIT_OUT) && !ascii_write_pending(server))
 		return false;
-	if (revents & POLLIN)
+	if (revents & OS_WAIT_IN)
 		(void)ascii_read_available(server, now_ms);
 	ascii_process(server, now_ms);
-	if (revents & POLLHUP)
+	if (revents & OS_WAIT_HUP)
 		return net_handle_hangup(&server->pending);
 	if (server->read_closed && !server->pending.active)
 		return false;
@@ -272,7 +266,7 @@ ascii_log_startup(const ascii_server_options_t* options)
 s32
 ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 {
-	struct pollfd	pfd = { 0 };
+	os_wait_entry_t	pfd = { 0 };
 	int		timeout = 0;
 	u64		now_ms = clock_now_ms();
 
@@ -284,9 +278,9 @@ ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 		timeout = MIN(timeout, max_wait_ms);
 	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 	{
-		if (errno == EINTR)
+		if (os_interrupted())
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
-		LOG_WARN("ASCII poll failed: %s", strerror(errno));
+		LOG_WARN("ASCII poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;
 	}
 	now_ms = clock_now_ms();

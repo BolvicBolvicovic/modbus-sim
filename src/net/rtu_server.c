@@ -9,8 +9,6 @@
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
-#include <errno.h>
-#include <poll.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -44,7 +42,7 @@ rtu_server_init_ctx(rtu_server_t* server)
 static bool
 read_available(rtu_server_t* server, u64 now_ms)
 {
-	ssize_t	got;
+	s64	got;
 	u64	now_us;
 	rtu_framer_t*	f = &server->framer;
 
@@ -64,9 +62,7 @@ read_available(rtu_server_t* server, u64 now_ms)
 	}
 	if (got < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return true;
 		server->read_closed = true;
 		return false;
@@ -94,9 +90,7 @@ write_pending(rtu_server_t* server)
 	sent = write(server->options.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return true;
 		return false;
 	}
@@ -108,19 +102,19 @@ write_pending(rtu_server_t* server)
 }
 
 static void
-rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
+rtu_build_poll(const rtu_server_t* server, os_wait_entry_t* pfd, int* timeout,
 	       u64 now_ms, u32 gap_ms)
 {
 	u64	due = 0;
 	const rtu_framer_t* f = &server->framer;
 
 	*timeout = 1000;
-	*pfd = (struct pollfd){ .fd = server->options.fd, .events = 0 };
+	*pfd = (os_wait_entry_t){ .fd = server->options.fd, .events = 0 };
 	if (f->pending.active)
 	{
 		if (f->pending.due_ms <= now_ms)
 		{
-			pfd->events |= POLLOUT;
+			pfd->events |= OS_WAIT_OUT;
 			*timeout = 0;
 		}
 		else
@@ -134,7 +128,7 @@ rtu_build_poll(const rtu_server_t* server, struct pollfd* pfd, int* timeout,
 		return;
 	}
 
-	pfd->events |= POLLIN;
+	pfd->events |= OS_WAIT_IN;
 	if (!f->have_rx || f->rx_len == 0)
 		return;
 
@@ -182,15 +176,15 @@ rtu_handle_read_closed(rtu_server_t* server, u64 now_ms)
 }
 
 static bool
-rtu_handle_revents(rtu_server_t* server, short revents, u64 now_ms)
+rtu_handle_revents(rtu_server_t* server, u32 revents, u64 now_ms)
 {
-	if (revents & (POLLERR | POLLNVAL))
+	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 		return false;
-	if ((revents & POLLOUT) && !write_pending(server))
+	if ((revents & OS_WAIT_OUT) && !write_pending(server))
 		return false;
-	if (revents & POLLIN)
+	if (revents & OS_WAIT_IN)
 		(void)read_available(server, now_ms);
-	if (revents & POLLHUP)
+	if (revents & OS_WAIT_HUP)
 		return rtu_handle_hangup(server, now_ms);
 	if (server->read_closed)
 		return rtu_handle_read_closed(server, now_ms);
@@ -224,7 +218,7 @@ rtu_process_gap_due(rtu_server_t* server, u64 now_ms)
 s32
 rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 {
-	struct pollfd	pfd = { 0 };
+	os_wait_entry_t	pfd = { 0 };
 	int		timeout = 0;
 	u32		gap_ms = rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud);
 	u64		now_ms = clock_now_ms();
@@ -238,9 +232,9 @@ rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 		timeout = MIN(timeout, max_wait_ms);
 	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 	{
-		if (errno == EINTR)
+		if (os_interrupted())
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
-		LOG_WARN("RTU poll failed: %s", strerror(errno));
+		LOG_WARN("RTU poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;
 	}
 

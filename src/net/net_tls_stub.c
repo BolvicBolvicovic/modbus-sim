@@ -64,7 +64,7 @@ net_tls_conn_handshake_deadline(const net_tls_conn_t* conn)
 	return 0;
 }
 
-short
+u32
 net_tls_conn_poll_events(const net_tls_conn_t* conn)
 {
 	(void)conn;

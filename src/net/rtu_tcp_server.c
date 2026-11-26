@@ -14,11 +14,7 @@
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
-#include <errno.h>
-#include <poll.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 static void
 rtu_tcp_init_ctx(rtu_tcp_server_t* server)
@@ -101,7 +97,7 @@ conn_process(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u64 now_ms)
 static void
 conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
-	ssize_t got;
+	s64 got;
 	u64 now_ms = clock_now_ms();
 	u64 now_us = clock_now_us();
 	rtu_framer_t* f = &conn->framer;
@@ -116,7 +112,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	if (conn_check_fault_disconnect(server, conn))
 		return;
 
-	got = recv(conn->base.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len, 0);
+	got = os_socket_recv(conn->base.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
 	if (got == 0)
 	{
 		conn->read_closed = true;
@@ -132,9 +128,7 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		return;
 	}
 	if (got < 0 &&
-	    errno != EAGAIN &&
-	    errno != EINTR &&
-	    errno != EWOULDBLOCK)
+	    !os_retry())
 	{
 		conn_close(server, conn);
 		return;
@@ -153,19 +147,17 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 static void
 conn_write(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
-	ssize_t sent;
+	s64 sent;
 	pending_response_t* p = &conn->framer.pending;
 
 	if (!p->active)
 		return;
 	if (p->due_ms > clock_now_ms())
 		return;
-	sent = send(conn->base.fd, p->buf + p->sent, p->len - p->sent, MSG_NOSIGNAL);
+	sent = os_socket_send(conn->base.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
 	{
-		if (errno == EAGAIN ||
-		    errno == EINTR ||
-		    errno == EWOULDBLOCK)
+		if (os_retry())
 			return;
 		conn_close(server, conn);
 		return;
@@ -181,7 +173,7 @@ conn_write(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 }
 
 static u32
-build_poll_table(rtu_tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** owners,
+build_poll_table(rtu_tcp_server_t* server, os_wait_entry_t* fds, net_tcp_conn_t** owners,
 		 u64 now_ms, int* timeout)
 {
 	u32 count = net_tcp_pool_build_poll(&server->pool, fds, owners, now_ms, timeout);
@@ -196,7 +188,7 @@ build_poll_table(rtu_tcp_server_t* server, struct pollfd* fds, net_tcp_conn_t** 
 
 			if (p->due_ms <= now_ms)
 			{
-				fds[i].events = POLLOUT;
+				fds[i].events = OS_WAIT_OUT;
 				*timeout = 0;
 			}
 			else
@@ -257,20 +249,20 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 }
 
 static void
-conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, short revents)
+conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u32 revents)
 {
 	if (conn->base.fd < 0)
 		return;
-	if (revents & (POLLERR | POLLNVAL))
+	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
 		conn_close(server, conn);
 		return;
 	}
-	if (revents & POLLIN)
+	if (revents & OS_WAIT_IN)
 		conn_read(server, conn);
-	if (conn->base.fd >= 0 && (revents & POLLOUT))
+	if (conn->base.fd >= 0 && (revents & OS_WAIT_OUT))
 		conn_write(server, conn);
-	if (conn->base.fd >= 0 && (revents & POLLHUP))
+	if (conn->base.fd >= 0 && (revents & OS_WAIT_HUP))
 	{
 		conn_handle_hangup(server, conn);
 		return;
@@ -300,7 +292,7 @@ rtu_tcp_log_startup(const rtu_tcp_server_options_t* options, u32 gap_ms)
 s32
 rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 {
-	struct pollfd	fds[RTU_TCP_MAX_CONNECTIONS + 1];
+	os_wait_entry_t	fds[RTU_TCP_MAX_CONNECTIONS + 1];
 	net_tcp_conn_t*	owners[RTU_TCP_MAX_CONNECTIONS + 1];
 	u32		count;
 	int		timeout;
@@ -329,7 +321,7 @@ rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 	for (u32 i = 0; i < count; i++)
 	{
 		rtu_tcp_conn_t* conn = (rtu_tcp_conn_t*)owners[i];
-		short revents = fds[i].revents;
+		u32 revents = fds[i].revents;
 
 		if (revents == 0)
 			continue;
