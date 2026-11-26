@@ -33,7 +33,7 @@ produce an error message.
 
 ## `(server ...)`
 
-`(mode NAME)` selects the transport. There are eight modes; device modes require `(path "PATH")`:
+`(mode NAME)` selects the transport. There are ten modes; device modes require `(path "PATH")`:
 
 | Mode | Transport | `(path ...)` |
 |---|---|---|
@@ -46,6 +46,7 @@ produce an error message.
 | `ascii-tcp` | Modbus ASCII frames on a TCP listen socket (not MBAP) | forbidden |
 | `udp` | Modbus UDP: one MBAP ADU per datagram on a UDP socket | forbidden |
 | `ascii-udp` | Modbus ASCII: one `:`...CR LF frame per datagram on a UDP socket | forbidden |
+| `rtu-udp` | Modbus RTU frames, one per datagram, on a UDP socket (not MBAP) | forbidden |
 
 Only the entries listed for the selected mode are accepted. `mode` is allowed in every mode; an entry
 that is present but not allowed is rejected at load time, even if its value would be the default
@@ -61,14 +62,14 @@ on both families at once; there is no dual-stack option.
 
 | Entry | Meaning | Default | Allowed in |
 |---|---|---|---|
-| `(port N)` | TCP or UDP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp`, `udp`, `ascii-udp` |
-| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces (explicit opt-in for remote clients), `"127.0.0.1"` = this machine over IPv4 only (default), `"::"` = all IPv6 interfaces (explicit opt-in), `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"127.0.0.1"` | `tcp`, `rtu-tcp`, `ascii-tcp` |
+| `(port N)` | TCP or UDP port, 1-65535 | `1502`, or `802` when `(tls ...)` is present | `tcp`, `rtu-tcp`, `ascii-tcp`, `udp`, `ascii-udp`, `rtu-udp` |
+| `(bind "ADDRESS")` | IPv4 or IPv6 literal address to listen on. `"0.0.0.0"` = all IPv4 interfaces (explicit opt-in for remote clients), `"127.0.0.1"` = this machine over IPv4 only (default), `"::"` = all IPv6 interfaces (explicit opt-in), `"::1"` = this machine over IPv6 only. IPv6 sockets are IPv6-only (no dual-stack), and scoped link-local literals such as `"fe80::1%eth0"` are rejected | `"127.0.0.1"` | `tcp`, `rtu-tcp`, `ascii-tcp`, `udp`, `ascii-udp`, `rtu-udp` |
 | `(seed N)` | Seed for the random dice used by `percent`-based faults and by `(after-ms (random MIN MAX))` machine deadlines, 0-4294967295. Same seed gives the same sequences | `0` (a fixed built-in seed) | all modes |
 | `(idle-timeout-ms N)` | Close a client connection after `N` milliseconds with no I/O progress, 0-86400000. `0` disables the timeout. A connection with a delayed response pending is not considered idle | `0` (disabled) | `tcp`, `rtu-tcp`, `ascii-tcp` |
 | `(baud N)` | Standard termios serial baud rate (e.g. 9600, 19200, 38400, 115200). RTU derives t3.5 timing from it; in ASCII mode it only sets the serial line/PTY speed | `0` (unknown) | `rtu-pty`, `rtu-device`, `rtu-tcp`, `ascii-pty`, `ascii-device` |
 | `(frame-gap-ms N)` | Explicit inter-frame silence override in milliseconds, 1-60000. Takes precedence over baud-derived t3.5 timing. If omitted and baud is unknown, RTU falls back to 20 ms | `0` (auto) | `rtu-pty`, `rtu-device`, `rtu-tcp` |
 | `(strict-t15 on\|off)` | Opt-in best-effort t1.5 discard heuristic in baud-derived auto mode. Never applied to RTU-over-TCP | `off` | `rtu-pty`, `rtu-device` |
-| `(broadcast-execute on\|off)` | When on, unit-0 (broadcast) requests execute on every configured device and produce no response. Never applies to MBAP/TCP or ASCII; supplying it in an ASCII mode is a load-time error | `off` | `rtu-pty`, `rtu-device`, `rtu-tcp` |
+| `(broadcast-execute on\|off)` | When on, unit-0 (broadcast) requests execute on every configured device and produce no response. Never applies to MBAP/TCP or ASCII; supplying it in an ASCII mode is a load-time error | `off` | `rtu-pty`, `rtu-device`, `rtu-tcp`, `rtu-udp` |
 | `(data-bits 7\|8)` | Number of tty data bits. ASCII defaults to 8; `(data-bits 7)` with `(parity even)` selects traditional 7E1 Modbus ASCII | `8` | `ascii-pty`, `ascii-device` |
 | `(parity none\|even\|odd\|mark\|space)` | tty parity. `mark` and `space` require `CMSPAR` support | `none` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
 | `(stop-bits 1\|2)` | Number of tty stop bits | `1` | `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device` |
@@ -124,6 +125,15 @@ RTU/ASCII rule (1-247; 0 is broadcast and never answered). A datagram must hold 
 frame; anything else (no CR LF, extra bytes, two frames, bad LRC) is ignored and counted as an FC08
 `0x000C` communication error on every device, and empty or longer than 515 byte datagrams are
 dropped without counting.
+; Modbus RTU frames, one per UDP datagram; replies go to the sender's address
+(server (mode rtu-udp) (port 1502) (bind "127.0.0.1") (broadcast-execute off))
+```
+
+`rtu-udp` accepts only `mode`, `port`, `bind`, `seed` and `broadcast-execute`; `tls`,
+`idle-timeout-ms` (no connections), `baud`, `frame-gap-ms` and `strict-t15` (datagram boundaries
+delimit frames, so there is no t3.5/t1.5 timing) and the serial line options are rejected at load
+time. Unit ids follow the `rtu-tcp` rule (1-247). A datagram must hold exactly one valid RTU frame
+(CRC checked); otherwise it is ignored.
 
 ```scheme
 (server (mode tcp) (bind "127.0.0.1")
@@ -594,7 +604,7 @@ function code for a one-byte response) with XOR `0xFF`, so the response length d
 value of FC 06; it leaves other response shapes unchanged. `checksum` deliberately corrupts the
 RTU CRC or ASCII LRC after the frame is built, so the receiver rejects the frame. MBAP/TCP has
 no checksum, so `checksum` is rejected in `tcp` mode and allowed in `rtu-pty`, `rtu-device`,
-`rtu-tcp`, `ascii-pty`, `ascii-device`, `ascii-tcp` and `ascii-udp`; it is rejected in `udp` for the same reason.
+`rtu-tcp`, `ascii-pty`, `ascii-device`, `ascii-tcp`, `ascii-udp` and `rtu-udp`; it is rejected in `udp` for the same reason.
 
 ```scheme
 (fault (kind delay) (delay-ms 1500) (percent 30))   ; 3 in 10 answers arrive 1.5 s late
@@ -613,9 +623,9 @@ See the `(machine ...)` section above for the full overlay rules; an overlay cha
 fault definition and therefore restarts that kind's schedule progress.
 
 `(kind disconnect)` is valid only for TCP-like transports (`tcp`, `rtu-tcp`, `ascii-tcp`).
-It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device`, `udp` and `ascii-udp`
+It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-device`, `udp`, `ascii-udp` and `rtu-udp`
 (serial server fds are never closed by a fault, and UDP has no connection). `(kind corrupt)
-(mode checksum)` is rejected in `tcp` and `udp` and accepted in the other seven modes. In `udp` and `ascii-udp`, a
+(mode checksum)` is rejected in `tcp` and `udp` and accepted in the other eight modes. In every UDP mode, a
 `delay` fault holds the reply in a 16-slot table; when it is full the response is dropped. `mode` is accepted only for `corrupt`; `delay`, `drop`,
 `exception`, `restart` and `sensor-disconnect` are valid in every mode.
 
@@ -800,7 +810,7 @@ is wrong and show the entry. Common ones:
 | `(after-ms ...): must be between 0 and 86400000` | Fix the step delay |
 | `(count ...): must be between 1 and 1000000` | Fix the number of requests per step |
 | `code 9 is reserved` | Use one of 1-8, 10 or 11 |
-| `(fault (kind disconnect)) is not valid in ... mode` | Use `tcp`, `rtu-tcp` or `ascii-tcp` (not `udp` or `ascii-udp`), or remove the fault; this also applies to state overlays |
+| `(fault (kind disconnect)) is not valid in ... mode` | Use `tcp`, `rtu-tcp` or `ascii-tcp` (not `udp`, `ascii-udp` or `rtu-udp`), or remove the fault; this also applies to state overlays |
 | `state-register must immediately follow` | Put the optional state register directly after `(initial STATE)` |
 | `state register cannot name a point driven by a machine` | Use an unused static holding or input point; state registers are machine-owned |
 | `on-write must follow states and precede transitions` | Keep on-write handlers after all states and before the first transition |

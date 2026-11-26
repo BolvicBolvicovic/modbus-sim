@@ -51,6 +51,12 @@ void	rtu_framer_consume(rtu_framer_t* framer, u32 n);
 bool	rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len,
 			 u64 due_ms, bool bad_checksum);
 
+/* Executes one complete frame (CRC-checked here): broadcast handling, unit
+ * lookup, fault decision, and the reply queued into framer->pending. Used by
+ * datagram transports, where the datagram is the frame. */
+void	rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
+				const u8* frame, u32 len);
+
 /* Processes complete frames after a gap/EOF. Returns true when an incomplete
  * frame was kept for one extra gap window (baud-derived auto mode only). */
 bool	rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms);

@@ -1280,8 +1280,8 @@ TEST(ConfigServerModeDefaultsToTcp)
 
 TEST(ConfigServerModeRejectsUnknownNames)
 {
-	EXPECT_ERROR("(server (mode rtu)) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp, udp, ascii-udp");
-	EXPECT_ERROR("(server (mode \"tcp\")) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp, udp, ascii-udp");
+	EXPECT_ERROR("(server (mode rtu)) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp, udp, ascii-udp, rtu-udp");
+	EXPECT_ERROR("(server (mode \"tcp\")) (device (unit-id 1) (holding 0))", "expected one of: tcp, rtu-pty, rtu-device, rtu-tcp, ascii-pty, ascii-device, ascii-tcp, udp, ascii-udp, rtu-udp");
 }
 
 TEST(ConfigServerPathIsParsedForDeviceModes)
@@ -2500,6 +2500,66 @@ TEST(ConfigAsciiUdpModeUnitIdAndFaultRules)
 		&config, err, sizeof(err)));
 	ASSERT_SUCCESS(load_text(
 		"(server (mode ascii-udp)) (device (unit-id 1) (holding 0)"
+		" (fault (kind corrupt) (mode register)))",
+		&config, err, sizeof(err)));
+}
+
+TEST(ConfigRtuUdpModeLoadsWithDefaults)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (mode rtu-udp)) (device (unit-id 1) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(config.mode == SERVER_MODE_RTU_UDP);
+	ASSERT_EQ(config.port == 1502);
+	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+	ASSERT_EQ(config.broadcast_execute == false);
+
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-udp) (port 1503) (bind \"::1\") (seed 9) (broadcast-execute on))"
+		" (device (unit-id 1) (holding 0)) (device (unit-id 247) (holding 0))",
+		&config, err, sizeof(err)));
+	ASSERT_EQ(config.port == 1503 && config.seed == 9 && config.broadcast_execute == true);
+	ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
+}
+
+TEST(ConfigRtuUdpModeRejectsConnectionTimingAndSerialOptions)
+{
+	static const char* const options[] = {
+		"(idle-timeout-ms 100)", "(baud 9600)", "(frame-gap-ms 20)", "(strict-t15 on)",
+		"(strict-t15 off)", "(parity none)", "(stop-bits 1)", "(data-bits 8)", "(tls)",
+	};
+	char	text[256];
+
+	for (u32 i = 0; i < ARRAY_COUNT(options); i++)
+	{
+		snprintf(text, sizeof(text), "(server (mode rtu-udp) %s) (device (unit-id 1) (holding 0))",
+			 options[i]);
+		EXPECT_ERROR(text, WITH_TLS || strcmp(options[i], "(tls)") != 0 ?
+			     "is not valid in rtu-udp mode" : "built without TLS support");
+	}
+	EXPECT_ERROR("(server (mode rtu-udp) (path \"/dev/ttyS0\")) (device (unit-id 1) (holding 0))",
+		     "(path ...) is only valid");
+}
+
+TEST(ConfigRtuUdpModeUnitAndFaultRules)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	EXPECT_ERROR("(server (mode rtu-udp)) (device (unit-id 0) (holding 0))", "not valid for RTU/ASCII");
+	EXPECT_ERROR("(server (mode rtu-udp)) (device (unit-id 248) (holding 0))", "not valid for RTU/ASCII");
+	EXPECT_ERROR("(server (mode rtu-udp)) (device (unit-id 1) (fault (kind disconnect)) (holding 0))",
+		     "(fault (kind disconnect)) is not valid in rtu-udp mode");
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-udp)) (device (unit-id 1) (holding 0)"
+		" (fault (kind drop) (percent 5)) (fault (kind delay) (delay-ms 10))"
+		" (fault (kind exception) (code 6) (percent 5)) (fault (kind corrupt) (mode checksum))"
+		" (fault (kind restart) (percent 1)) (fault (kind sensor-disconnect) (percent 1)))",
+		&config, err, sizeof(err)));
+	ASSERT_SUCCESS(load_text(
+		"(server (mode rtu-udp)) (device (unit-id 1) (holding 0)"
 		" (fault (kind corrupt) (mode register)))",
 		&config, err, sizeof(err)));
 }

@@ -14,7 +14,7 @@ clients requires an explicit `(bind "0.0.0.0")` or `(bind "::")`. IPv6 listen so
 used: a config may contain at most one `(server ...)` block (defaults apply if omitted), there is
 no dual-stack option, and scoped link-local literals such as `"fe80::1%eth0"` are rejected by the
 config validator. This default
-applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`; `udp` and `ascii-udp` bind the same way). MBAP has no checksum field, so
+applies to all TCP-family modes (`tcp`, `rtu-tcp`, `ascii-tcp`; `udp`, `ascii-udp` and `rtu-udp` bind the same way). MBAP has no checksum field, so
 `(fault (kind corrupt) (mode checksum))` is rejected in `tcp` and `udp` modes; the RTU and ASCII transports
 carry checksums and accept it.
 
@@ -220,6 +220,20 @@ never execute; FC08 `0x0003` is rejected with exception 03. Faults behave as in 
 `disconnect`, which is rejected at load time. `port` (default 1502) and `bind` (default `"127.0.0.1"`)
 select the socket; only `mode`, `port`, `bind` and `seed` are accepted. There is no TLS, idle timeout,
 serial line configuration or `broadcast-execute`.
+### RTU over UDP
+
+`(server (mode rtu-udp))` carries Modbus RTU frames (`[addr][PDU][CRC lo hi]`, CRC-16/Modbus) one
+per UDP datagram. The datagram boundary delimits the frame, so there is no t3.5/t1.5 timing, no
+`baud`, `frame-gap-ms` or `strict-t15`. Request semantics match `rtu-tcp`: a bad CRC, a frame
+shorter than 4 bytes and an unknown unit get no response; unit 0 is broadcast with no response
+and, with `(broadcast-execute on)`, executes on every device. The datagram must be exactly one
+frame: two concatenated frames, trailing bytes, an empty datagram or one longer than 256 bytes are
+rejected whole (nothing executes). Each rejected datagram of 4-256 bytes counts as one FC 08
+`0x000C` communication error on every device, as a bad frame does on `rtu-tcp`. The reply (a
+single RTU frame) goes to the request's source address; `delay` faults wait in the shared 16-slot
+table (dropped with a WARN when full). `disconnect` is rejected at load time; `corrupt` modes
+`pdu`, `register` and `checksum` all work (checksum flips the last CRC byte). Accepted options:
+`mode`, `port` (default 1502), `bind` (default `"127.0.0.1"`), `seed`, `broadcast-execute`.
 
 ## Function codes
 
@@ -362,7 +376,7 @@ communication-error counters. `checksum` instead corrupts the emitted RTU CRC or
 framing, so the receiver sees a bad frame; MBAP/TCP has no checksum and rejects this mode at load.
 
 A drop fault suppresses the response, and a disconnect fault implies a drop and closes the
-connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes, `udp` and `ascii-udp` reject disconnect). A fired `restart`
+connection on `tcp`, `rtu-tcp` and `ascii-tcp` (serial modes, `udp`, `ascii-udp` and `rtu-udp` reject disconnect). A fired `restart`
 leaves the current response intact, even when it is dropped or delayed, but resets configured
 points, ramp timelines and machines after the response is built and re-arms fault schedules from
 the restart time (the restart kind keeps its own schedule progress); it does not clear protocol
@@ -444,7 +458,7 @@ baud-derived-auto-mode approximation).
 ## Not supported (yet)
 
 - True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))` enables a best-effort t1.5 discard heuristic at read() boundary granularity for RTU byte streams in baud-derived auto mode; it is never applied to RTU-over-TCP.
-- TLS for RTU-over-TCP, ASCII-over-TCP, UDP and ASCII-over-UDP (no DTLS); `(server (tls ...))` is rejected outside `mode tcp`
+- TLS for RTU-over-TCP, ASCII-over-TCP, UDP, ASCII-over-UDP and RTU-over-UDP (no DTLS); `(server (tls ...))` is rejected outside `mode tcp`
 - Certificate revocation checking (CRL/OCSP); a client certificate signed by the configured CA is accepted for the lifetime configured in the certificate
 - Modbus Security role authorization from x.509 role OIDs; a valid client certificate is either required or optional, with no per-role access control
 - Dual-stack IPv6 listening: IPv6 sockets are `IPV6_V6ONLY` and a config may contain at most one `(server ...)` block, so `"::"` and `"0.0.0.0"` cannot be served together; scoped link-local literals such as `fe80::1%eth0` are rejected

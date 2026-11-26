@@ -240,6 +240,7 @@ typedef enum mogbus_mode_t
 	MOGBUS_MODE_ASCII_FD,		/* ASCII on an open byte-stream fd you own */
 	MOGBUS_MODE_UDP,		/* Modbus UDP: one MBAP ADU per datagram */
 	MOGBUS_MODE_ASCII_UDP,		/* Modbus ASCII: one CRLF-terminated frame per datagram */
+	MOGBUS_MODE_RTU_UDP,		/* RTU frames, one per UDP datagram */
 } mogbus_mode_t;
 
 typedef enum mogbus_parity_t

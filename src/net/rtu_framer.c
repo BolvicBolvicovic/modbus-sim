@@ -84,9 +84,9 @@ rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len,
 	return true;
 }
 
-static void
-handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
-	     const u8* frame, u32 len)
+void
+rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
+			 const u8* frame, u32 len)
 {
 	u8			addr = 0;
 	const u8*		pdu = NULL;
@@ -159,7 +159,7 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 		if (modbus_rtu_next_frame(framer->rx, framer->rx_len, &frame_len) ==
 		    MODBUS_RTU_FRAME_FOUND)
 		{
-			handle_frame(framer, ctx, now_ms, framer->rx, frame_len);
+			rtu_framer_handle_frame(framer, ctx, now_ms, framer->rx, frame_len);
 			rtu_framer_consume(framer, frame_len);
 			clear_deferral(framer);
 			if (framer->pending.active)

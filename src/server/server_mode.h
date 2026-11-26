@@ -21,6 +21,7 @@ enum server_mode_t
 	SERVER_MODE_ASCII_FD,
 	SERVER_MODE_UDP,
 	SERVER_MODE_ASCII_UDP,
+	SERVER_MODE_RTU_UDP,
 };
 
 #endif

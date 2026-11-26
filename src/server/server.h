@@ -7,6 +7,7 @@
 #include "net/net_tls.h"
 #include "net/rtu_server.h"
 #include "net/rtu_tcp_server.h"
+#include "net/rtu_udp_server.h"
 #include "net/tcp_server.h"
 #include "net/udp_server.h"
 #include "server/server_mode.h"
@@ -62,6 +63,7 @@ struct server_t
 		ascii_server_t		ascii;
 		udp_server_t		udp;
 		ascii_udp_server_t	ascii_udp;
+		rtu_udp_server_t	rtu_udp;
 	};
 	int		fd;		/* opened by init in PTY/device modes, else -1 */
 	int		slave_fd;	/* PTY slave kept open, else -1 */

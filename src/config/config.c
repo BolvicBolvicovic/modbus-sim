@@ -39,16 +39,18 @@ static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_ASCII_FD]     = "ascii-fd",
 	[SERVER_MODE_UDP]          = "udp",
 	[SERVER_MODE_ASCII_UDP]    = "ascii-udp",
+	[SERVER_MODE_RTU_UDP]      = "rtu-udp",
 };
 /* What (mode ...) accepts, in selection order; the _FD modes are host-only. */
 static const char* const CONFIG_MODE_NAMES[] = {
 	"tcp", "rtu-pty", "rtu-device", "rtu-tcp", "ascii-pty", "ascii-device", "ascii-tcp", "udp",
-	"ascii-udp",
+	"ascii-udp", "rtu-udp",
 };
 static const server_mode_t CONFIG_MODE_VALUES[] = {
 	SERVER_MODE_TCP, SERVER_MODE_RTU_PTY, SERVER_MODE_RTU_DEVICE, SERVER_MODE_RTU_TCP,
 	SERVER_MODE_ASCII_PTY, SERVER_MODE_ASCII_DEVICE, SERVER_MODE_ASCII_TCP, SERVER_MODE_UDP,
 	SERVER_MODE_ASCII_UDP,
+	SERVER_MODE_RTU_UDP,
 };
 #if WITH_TLS
 static const char* const TLS_VERSION_NAMES[] = { "tls1.2", "tls1.3" };
@@ -185,6 +187,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls" };
 	static const char* const udp_keys[] = { "mode", "port", "bind", "seed" };
 	static const char* const ascii_udp_keys[] = { "mode", "port", "bind", "seed" };
+	static const char* const rtu_udp_keys[] = { "mode", "port", "bind", "seed", "broadcast-execute" };
 	static const char* const ascii_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
 	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
 	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
@@ -241,6 +244,10 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		case SERVER_MODE_ASCII_UDP:
 			allowed = ascii_udp_keys;
 			allowed_count = ARRAY_COUNT(ascii_udp_keys);
+			break;
+		case SERVER_MODE_RTU_UDP:
+			allowed = rtu_udp_keys;
+			allowed_count = ARRAY_COUNT(rtu_udp_keys);
 			break;
 		case SERVER_MODE_ASCII_TCP:
 			allowed = ascii_tcp_keys;

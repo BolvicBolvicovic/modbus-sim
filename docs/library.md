@@ -70,7 +70,7 @@ A context holds up to `MOGBUS_MAX_DEVICES` (16) devices and `MOGBUS_MAX_SERVERS`
 server serves every device the context has when it is created. Points support static values and
 ramps; machines and faults come only from config files (`mogbus_load_config`), and code-built and
 loaded devices can be mixed. All transports of the binary are available through
-`mogbus_server_options_t`, including `MOGBUS_MODE_UDP` (Modbus UDP, appended so existing values keep their numbers; uses `bind_address` and `port`), `MOGBUS_MODE_ASCII_UDP` (one ASCII frame per datagram, same options), plus `MOGBUS_MODE_RTU_FD` / `MOGBUS_MODE_ASCII_FD`, which serve a byte
+`mogbus_server_options_t`, including `MOGBUS_MODE_UDP` (Modbus UDP, appended so existing values keep their numbers; uses `bind_address` and `port`), `MOGBUS_MODE_ASCII_UDP` (one ASCII frame per datagram, same options), `MOGBUS_MODE_RTU_UDP` (RTU frames, one per datagram; also `broadcast_execute`), plus `MOGBUS_MODE_RTU_FD` / `MOGBUS_MODE_ASCII_FD`, which serve a byte
 stream you already own (a socketpair or PTY master) and never close it. Start from
 `mogbus_server_options_defaults()`, which matches the config defaults (TCP on `127.0.0.1:1502`, 8N1).
 
