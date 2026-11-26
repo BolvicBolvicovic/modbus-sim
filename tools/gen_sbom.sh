@@ -26,6 +26,10 @@ s7_version=$(sed -n 's/^#define S7_VERSION "\(.*\)"/\1/p' "$root/third_party/s7/
 head -1 "$root/third_party/s7/LICENSE" | grep -q '^0-clause BSD' ||
 	{ echo "gen_sbom.sh: third_party/s7/LICENSE is no longer 0-clause BSD" >&2; exit 1; }
 
+copyright=$(sed -n '1,/^Copyright/s/^\(Copyright .*\)/\1/p' "$root/LICENSE")
+holder=$(printf '%s' "$copyright" | sed 's/^Copyright ([cC]) [0-9, -]* //')
+[ -n "$holder" ] || { echo "gen_sbom.sh: no Copyright line in LICENSE" >&2; exit 1; }
+
 glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null | sed 's/^glibc //' || true)
 ssl=
 if [ "$with_tls" = 1 ]; then
@@ -57,8 +61,8 @@ cat <<JSON
       "checksums": [{"algorithm": "SHA256", "checksumValue": "$tar_sha256"}],
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "copyrightText": "Copyright (c) 2026 Victor Cornille",
-      "supplier": "Person: Victor Cornille"
+      "copyrightText": "$copyright",
+      "supplier": "Person: $holder"
     },
     {
       "SPDXID": "SPDXRef-Package-s7",
