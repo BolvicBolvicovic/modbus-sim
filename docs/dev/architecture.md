@@ -302,9 +302,9 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
   after them (or `/** ... */` above); related declarations share a `@name ... @{ ... @}` group.
   Public functions in `include/mogbus.h` document every `@param` and `@return`; internal ones add
   them only when the brief does not already say it. Comments inside function bodies stay `/* */`.
-  `make api-docs` (CI job `api-docs`) builds the HTML reference with warnings as errors and then
-  runs `tools/check_doc_briefs.sh`, which fails for any file, struct, union, enum or opaque or
-  function-pointer typedef without a brief.
+  `make docs` (CI job `docs`) runs Doxygen with warnings as errors, then
+  `tools/check_doc_briefs.sh`, which fails for any file, struct, union, enum or opaque or
+  function-pointer typedef without a brief, then builds the site (see [docs.md](docs.md)).
 - Typedef layout: forward typedefs (`typedef struct x_t x_t;`, enums and unions alike) are grouped
   at the top of the file after the includes; the brief sits directly above the `struct x_t {` or
   `enum x_t {` definition (a brief above the typedef would be attached to the typedef, not the
