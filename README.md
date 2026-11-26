@@ -4,8 +4,9 @@ A Modbus TCP/UDP/RTU/ASCII device simulator. You describe a device in a small te
 pretends to be that device on the network (TCP or UDP) or on a serial byte stream. Point your SCADA, PLC,
 gateway or test script at it.
 
-You do **not** need to know Scheme. The config file is a list of `(name value)` entries, and
-there are ready-made profiles you can copy.
+A config file is a short list of `(name value)` entries, nested where it helps. The syntax is
+inspired by Scheme, but it is plain data: there is no code to write, only settings to fill in.
+Start from one of the ready-made profiles and change what you need.
 
 ```scheme
 (server (mode tcp) (port 1502))
@@ -89,7 +90,7 @@ in `--check` mode. Serial, RTU, ASCII, UDP and plaintext TCP configs behave iden
 work as expected. Documentation examples containing `(tls ...)` are skipped by `check_doc_examples.sh`
 when checking a no-TLS binary.
 
-`WITH_CONFIG=1|0` (default `1`) controls the Scheme config loader. `make WITH_CONFIG=0` compiles without
+`WITH_CONFIG=1|0` (default `1`) controls the config file loader. `make WITH_CONFIG=0` compiles without
 `src/config`, `src/server/server_config.c` and the vendored s7, and builds only `libmogbus.a`/`libmogbus.so`
 (there is no `mogbus` binary); the config functions of the C API then fail with `built without config
 support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or the binary. See
@@ -292,7 +293,7 @@ mogbus also builds as `libmogbus.a` / `libmogbus.so` (`make lib`) with a small C
 `include/mogbus.h`: create devices in code or from a config file, start any transport and step it
 from your own loop. The `mogbus` binary is built the same way: `src/main.c` includes only
 `mogbus.h` and links against the static library. `make WITH_CONFIG=0` builds a library without the
-Scheme config loader for hosts that build devices in code. See [docs/user/library.md](docs/user/library.md)
+config file loader for hosts that build devices in code. See [docs/user/library.md](docs/user/library.md)
 and `examples/embed_tcp.c`.
 
 ## Documentation
@@ -316,7 +317,7 @@ include/        mogbus.h, the public C API of the library
 examples/       embed_tcp.c, a host program using only mogbus.h
 src/            the program, one folder per module (headers next to their .c files)
   build_config.h  WITH_TLS and WITH_CONFIG compile-time fallbacks shared by sources and tests
-  config/       reads the Scheme file, checks it, builds devices
+  config/       reads the config file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
   net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, ASCII-over-TCP, UDP, ASCII-over-UDP and RTU-over-UDP network loops; OpenSSL TLS wrapper or no-TLS stub

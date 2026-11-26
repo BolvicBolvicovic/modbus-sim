@@ -3,15 +3,16 @@
 A config file describes the simulator: which transport and server options to use, and which devices
 exist. Save it with any name, for example `my-device.scm`, and run `./mogbus my-device.scm`.
 
-## Scheme in one minute
+## The format in one minute
 
-The file format comes from Scheme, but you only need these rules:
+The syntax is inspired by Scheme, but a config file is plain data: settings, not a program. These
+rules cover all of it:
 
 - Everything is in parentheses: `(name value)`. Every `(` needs a matching `)`.
 - `;` starts a comment that runs to the end of the line.
 - Text is in double quotes: `"Power meter"`.
 - Numbers are written normally: `42`, `-5`, `0.5`, `230.4`.
-- Scheme hex literals such as `#x1234` are also accepted where examples use them.
+- Hex numbers are written `#x1234` where examples use them.
 - On/off can be written `on`, `off`, `yes`, `no`, `true`, `false`, `#t`, `#f`, `1` or `0`.
 - Spaces, tabs and new lines are all the same. Indent however you like.
 - Top-level forms and most entries can appear in any order. Exceptions: at most one `(server ...)`
@@ -265,7 +266,7 @@ CANopen SDO uploads and downloads use objects configured with this repeatable fo
 ```
 
 - `NODE` is the CANopen node id, 1-127.
-- `INDEX` is 0-65535 and `SUBINDEX` is 0-255; both accept decimal or Scheme hex such as `#x6041`.
+- `INDEX` is 0-65535 and `SUBINDEX` is 0-255; both accept decimal or hex such as `#x6041`.
 - `HEXBYTES` is 2-476 hex digits (1-238 bytes), with upper- or lowercase digits.
 
 Each `(NODE, INDEX, SUBINDEX)` must be unique on a device, with at most 64 objects per device.

@@ -32,7 +32,7 @@ set serves the binary and both libraries.
 ### Build options
 
 - `WITH_TLS=auto|0|1` (default `auto`): OpenSSL support, see the README.
-- `WITH_CONFIG=1|0` (default `1`): `0` leaves out the Scheme config loader (`src/config`,
+- `WITH_CONFIG=1|0` (default `1`): `0` leaves out the config file loader (`src/config`,
   `src/server/server_config.c`) and the vendored s7, so the libraries hold no s7 code and serve only
   devices built in code. The header and the exported symbols are identical, so the ABI does not
   change: `mogbus_load_config()` returns false and `mogbus_server_create_from_config()` returns NULL,
