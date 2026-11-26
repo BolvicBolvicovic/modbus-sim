@@ -38,7 +38,7 @@ strip_c() {
 
 for f in $(git diff --name-only "$base" "$head"); do
 	case $f in
-	src/*.c|src/*.h|include/*.h|examples/*.c|tests/*.c|tests/*.h|fuzz/*.c|fuzz/*.h)
+	src/*.c|src/*.h|include/*.h|examples/*.c|tests/*.c|tests/*.h)
 		docs=true
 		old=$(git show "$base:$f" 2>/dev/null | strip_c || true)
 		new=$(git show "$head:$f" 2>/dev/null | strip_c || true)
@@ -48,7 +48,7 @@ for f in $(git diff --name-only "$base" "$head"); do
 		docs=true ;;
 	Dockerfile|.dockerignore|deploy/*)
 		docker=true ;;
-	src/*|include/*|examples/*|tests/*|tools/*|fuzz/*|vlib/*|third_party/*|profiles/*|Makefile|.github/workflows/ci.yml)
+	src/*|include/*|examples/*|tests/*|tools/*|vlib/*|third_party/*|profiles/*|Makefile|.github/workflows/ci.yml)
 		code=true ;;
 	esac
 done

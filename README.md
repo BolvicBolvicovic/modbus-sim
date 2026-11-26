@@ -330,8 +330,7 @@ src/            the program, one folder per module (headers next to their .c fil
   server/       transport-independent server facade and the config adapter
   util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
-tests/          unit tests and integration tests (vtest)
-fuzz/           libFuzzer harnesses for the frame parsers (make fuzz-run)
+tests/          unit tests and integration tests (vtest); tests/fuzz/ has the libFuzzer harnesses (make fuzz-run)
 tools/          modbus_probe.py, loadtest.py, run_fuzz.sh, fuzz_seeds.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           the vlib toolchain (arena allocator, test framework), unmodified

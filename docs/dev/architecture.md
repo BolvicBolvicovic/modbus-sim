@@ -264,7 +264,7 @@ same poll set, so the endpoint runs on the server thread with no locking and no 
 
 Robustness evidence beyond the unit tests:
 
-- **Fuzzing:** `fuzz/fuzz_{pdu,mbap,rtu,ascii}.c` are libFuzzer harnesses (ASan + UBSan) for the PDU
+- **Fuzzing:** `tests/fuzz/fuzz_{pdu,mbap,rtu,ascii}.c` are libFuzzer harnesses (ASan + UBSan) for the PDU
   handler with a device that has every feature, the MBAP request/response path, RTU codec and stream
   framer (fed in fuzzer-chosen chunks with simulated gaps), and ASCII scanning/decoding. Each checks
   invariants (response sizes, echoed function codes, encode/decode round trips). `make fuzz` builds

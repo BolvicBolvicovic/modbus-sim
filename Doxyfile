@@ -2,7 +2,7 @@
 # build/api/html; warnings are errors so the comment style stays valid.
 PROJECT_NAME           = mogbus
 OUTPUT_DIRECTORY       = build/api
-INPUT                  = include src examples fuzz
+INPUT                  = include src examples tests/fuzz
 FILE_PATTERNS          = *.c *.h
 RECURSIVE              = YES
 OPTIMIZE_OUTPUT_FOR_C  = YES
