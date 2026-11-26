@@ -417,8 +417,15 @@ only outstanding work is listed here.
 
 ### Adoption (gaps compared with pymodbus as a server/simulator)
 
-- Importers for vendor register maps (CSV) and pymodbus simulator JSON. Why: users start from a
-  map they already have, and the config syntax is new to them.
+- pymodbus importer coverage: the `timestamp`, `reset` and custom actions, several devices per file,
+  and answering any unit id (a pymodbus server does, a mogbus device answers its own only). Why:
+  each unsupported item turns into a warning and a manual edit after importing (see
+  `docs/user/import/import-pymodbus-servers.md`).
+- Access hooks for the file record (FC 14/15), FIFO (FC 18) and CANopen (FC 2B/0D) paths, which
+  the per-device access hook does not cover yet. Why: a host that computes values on demand can't
+  do it for these yet.
+- A browser UI over the HTTP control API (tables, values, faults). Why: the pymodbus simulator has
+  one, and some users want to change a running device without curl.
 - Windows: Docker Desktop and WSL2 (including serial adapters through usbipd-win) are documented in
   `docs/user/windows/windows-route.md`, together with the experimental native build of the network modes. Why: many
   PLC and SCADA engineers work on Windows. Plan:
