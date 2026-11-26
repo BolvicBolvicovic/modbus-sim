@@ -9,6 +9,8 @@
 #include "modbus/mbap.h"
 #include <stdbool.h>
 
+typedef enum modbus_rtu_frame_result_t modbus_rtu_frame_result_t;
+
 /** @brief Modbus RTU frame = 1-byte address + PDU + 2-byte CRC (low byte first). */
 #define MODBUS_RTU_MAX_FRAME	(1 + MODBUS_MAX_PDU + 2)
 
@@ -46,7 +48,7 @@ bool	modbus_rtu_decode(const u8* buf, u32 len, u8* addr, const u8** pdu, u32* pd
  */
 bool	modbus_rtu_request_len(const u8* buf, u32 buf_len, u32* frame_len);
 
-typedef enum modbus_rtu_frame_result_t modbus_rtu_frame_result_t;
+/** @brief Outcome of looking for an RTU frame at the start of a receive buffer. */
 enum modbus_rtu_frame_result_t
 {
 	MODBUS_RTU_FRAME_NONE,    /**< No frame at offset 0; discard buffered bytes. */

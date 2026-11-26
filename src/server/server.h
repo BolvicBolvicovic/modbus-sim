@@ -21,6 +21,8 @@
 #include <stdbool.h>
 
 typedef struct device_t device_t;
+typedef struct server_options_t server_options_t;
+typedef struct server_t server_t;
 
 /**
  * @brief What to run, independent of any config file.
@@ -28,7 +30,6 @@ typedef struct device_t device_t;
  * Strings and devices are borrowed and must outlive the server. Fields a mode does not use are
  * ignored (see the per-transport option structs in net).
  */
-typedef struct server_options_t server_options_t;
 struct server_options_t
 {
 	server_mode_t	mode;
@@ -60,10 +61,10 @@ struct server_options_t
  *
  * Caller-owned, stable address between server_init and server_close.
  */
-typedef struct server_t server_t;
 struct server_t
 {
 	server_mode_t	mode;
+	/** @brief The transport selected by `mode`; only that member is in use. */
 	union
 	{
 		tcp_server_t		tcp;

@@ -9,6 +9,11 @@
 #include "device/value.h"
 
 typedef enum expr_kind_t expr_kind_t;
+typedef struct expr_node_t expr_node_t;
+typedef enum expr_failure_t expr_failure_t;
+typedef struct expr_ctx_t expr_ctx_t;
+
+/** @brief Operation of one expression node. */
 enum expr_kind_t
 {
 	EXPR_BOOL, EXPR_NUM, EXPR_VAR, EXPR_POINT,
@@ -20,7 +25,7 @@ enum expr_kind_t
 
 #define EXPR_NO_CHILD UINT16_MAX
 
-typedef struct expr_node_t expr_node_t;
+/** @brief One node of a compiled expression tree; children are node indices. */
 struct expr_node_t
 {
 	expr_kind_t	kind;
@@ -30,7 +35,7 @@ struct expr_node_t
 	val_t		literal;	/**< EXPR_BOOL / EXPR_NUM */
 };
 
-typedef enum expr_failure_t expr_failure_t;
+/** @brief Why an expression evaluation failed. */
 enum expr_failure_t
 {
 	EXPR_FAIL_NONE,
@@ -40,7 +45,7 @@ enum expr_failure_t
 	EXPR_FAIL_TYPE,
 };
 
-typedef struct expr_ctx_t expr_ctx_t;
+/** @brief Inputs and limits of one expression evaluation. */
 struct expr_ctx_t
 {
 	device_t*	dev;

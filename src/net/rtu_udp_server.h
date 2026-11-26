@@ -14,6 +14,9 @@
 #include <stdbool.h>
 
 typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct rtu_udp_server_options_t rtu_udp_server_options_t;
+typedef struct rtu_udp_server_t rtu_udp_server_t;
 
 /**
  * @brief What the server needs to run.
@@ -22,8 +25,6 @@ typedef struct device_t device_t;
  * no t3.5/t1.5 timing. broadcast_execute runs unit-0 requests on every device without a
  * response.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct rtu_udp_server_options_t rtu_udp_server_options_t;
 struct rtu_udp_server_options_t
 {
 	const char*	bind_address;
@@ -39,7 +40,6 @@ struct rtu_udp_server_options_t
  * @brief All state of one RTU-over-UDP server; the caller owns the storage and keeps it at a
  *        stable address between init and close.
  */
-typedef struct rtu_udp_server_t rtu_udp_server_t;
 struct rtu_udp_server_t
 {
 	rtu_udp_server_options_t	options;

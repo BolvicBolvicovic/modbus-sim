@@ -13,12 +13,17 @@
 #include <signal.h>
 #include <stdbool.h>
 
+typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct rtu_tcp_server_options_t rtu_tcp_server_options_t;
+typedef struct rtu_tcp_conn_t rtu_tcp_conn_t;
+typedef struct rtu_tcp_server_t rtu_tcp_server_t;
+
+/** @brief Limits of the RTU-over-TCP server. */
 enum
 {
 	RTU_TCP_MAX_CONNECTIONS = 32,
 };
-
-typedef struct device_t device_t;
 
 /**
  * @brief Modbus RTU-over-TCP server options.
@@ -29,8 +34,6 @@ typedef struct device_t device_t;
  * not reflect UART character timing. broadcast_execute runs unit-0 requests on every device
  * without a response.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct rtu_tcp_server_options_t rtu_tcp_server_options_t;
 struct rtu_tcp_server_options_t
 {
 	const char*	bind_address;
@@ -45,7 +48,7 @@ struct rtu_tcp_server_options_t
 	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
-typedef struct rtu_tcp_conn_t rtu_tcp_conn_t;
+/** @brief One RTU-over-TCP client: its connection and framer. */
 struct rtu_tcp_conn_t
 {
 	net_tcp_conn_t	base;
@@ -57,7 +60,6 @@ struct rtu_tcp_conn_t
  * @brief All state of one RTU-over-TCP server; the caller owns the storage and keeps it at a
  *        stable address between init and close.
  */
-typedef struct rtu_tcp_server_t rtu_tcp_server_t;
 struct rtu_tcp_server_t
 {
 	rtu_tcp_server_options_t	options;

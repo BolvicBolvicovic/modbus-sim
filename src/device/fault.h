@@ -9,6 +9,15 @@
 #include "util/rng.h"
 #include <stdbool.h>
 
+typedef enum fault_kind_t fault_kind_t;
+typedef enum fault_corrupt_mode_t fault_corrupt_mode_t;
+typedef struct fault_schedule_step_t fault_schedule_step_t;
+typedef struct fault_t fault_t;
+typedef struct fault_decision_t fault_decision_t;
+typedef struct fault_set_t fault_set_t;
+typedef struct fault_schedule_state_t fault_schedule_state_t;
+typedef struct fault_runtime_t fault_runtime_t;
+
 #define FAULT_MAX_SCHEDULE_STEPS 8
 
 /**
@@ -24,7 +33,7 @@
  * Keep the existing order: kinds are appended so fault bits and the RNG draw
  * order of already configured faults stay stable.
  */
-typedef enum fault_kind_t {
+enum fault_kind_t {
 	FAULT_DELAY,
 	FAULT_DROP,
 	FAULT_EXCEPTION,
@@ -33,7 +42,7 @@ typedef enum fault_kind_t {
 	FAULT_RESTART,
 	FAULT_SENSOR_DISCONNECT,
 	FAULT_KIND_COUNT,
-} fault_kind_t;
+};
 
 /** @brief Accepted ranges of fault parameters, shared by the config loader and runtime control. */
 enum
@@ -55,26 +64,25 @@ _Static_assert(FAULT_KIND_COUNT <= 8, "fault mask no longer fits in u8");
  * - FAULT_CORRUPT_REGISTER : flip one register value before it is encoded
  * - FAULT_CORRUPT_CHECKSUM : damage the transport checksum
  */
-typedef enum fault_corrupt_mode_t {
+enum fault_corrupt_mode_t {
 	FAULT_CORRUPT_NONE = 0,
 	FAULT_CORRUPT_PDU,
 	FAULT_CORRUPT_REGISTER,
 	FAULT_CORRUPT_CHECKSUM,
-} fault_corrupt_mode_t;
+};
 
 /**
  * @brief One step of a deterministic request schedule.
  *
  * A step fires for exactly `count` consecutive requests after waiting `after_ms`.
  */
-typedef struct fault_schedule_step_t fault_schedule_step_t;
 struct fault_schedule_step_t
 {
 	u32	after_ms;
 	u32	count;
 };
 
-typedef struct fault_t fault_t;
+/** @brief Configuration of one fault kind: parameters, percent or schedule. */
 struct fault_t
 {
 	u32			delay_ms;
@@ -94,7 +102,6 @@ struct fault_t
  * A nonzero exception_code replaces the response; corrupt selects the damage. restart and
  * sensor_disconnect are actions and do not drop the response.
  */
-typedef struct fault_decision_t fault_decision_t;
 struct fault_decision_t
 {
 	bool			drop;
@@ -106,7 +113,7 @@ struct fault_decision_t
 	fault_corrupt_mode_t	corrupt;
 };
 
-typedef struct fault_set_t fault_set_t;
+/** @brief The faults configured on a device, at most one per kind. */
 struct fault_set_t
 {
 	u8		present;
@@ -118,7 +125,6 @@ struct fault_set_t
  *
  * `step` is the next step to start and equals schedule_count when the schedule has finished.
  */
-typedef struct fault_schedule_state_t fault_schedule_state_t;
 struct fault_schedule_state_t
 {
 	u64	schedule_id;	/**< schedule the progress below belongs to */
@@ -129,7 +135,7 @@ struct fault_schedule_state_t
 	u64	next_at_ms;	/**< earliest start time for `step` */
 };
 
-typedef struct fault_runtime_t fault_runtime_t;
+/** @brief Schedule progress of every fault kind of a device. */
 struct fault_runtime_t
 {
 	fault_schedule_state_t	by_kind[FAULT_KIND_COUNT];

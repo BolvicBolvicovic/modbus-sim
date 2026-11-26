@@ -10,6 +10,8 @@
 #include "vlib/macros.h"
 #include <string.h>
 
+typedef struct pdu_entry_t pdu_entry_t;
+
 _Static_assert(MODBUS_MAX_PDU / 2 == DEVICE_MAX_RECORD_VALUES,
 	       "file record value limit must match Modbus PDU capacity");
 _Static_assert(4 + DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX == MODBUS_MAX_PDU,
@@ -688,12 +690,14 @@ report_server_id(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return 4 + additional_len;
 }
 
+/** @brief Node and index values that address the CANopen command object. */
 enum canopen_command_address
 {
 	CANOPEN_COMMAND_NODE  = 0x7F,
 	CANOPEN_COMMAND_INDEX = 0xFFFF,
 };
 
+/** @brief Read Device Identification access codes. */
 enum read_device_id_code
 {
 	READ_DEVICE_ID_BASIC    = 0x01,
@@ -1002,9 +1006,10 @@ read_input_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	return read_registers(dev, SPACE_INPUT, req, req_len, resp);
 }
 
+/** @brief Handles one request PDU and returns the response length. */
 typedef u32 (*pdu_handler_t)(device_t*, const u8*, u32, u8*);
 
-typedef struct pdu_entry_t pdu_entry_t;
+/** @brief Maps a function code to its handler. */
 struct pdu_entry_t
 {
 	u8		fc;

@@ -9,6 +9,8 @@
 #include "modbus/mbap.h"
 #include <stdbool.h>
 
+typedef enum modbus_ascii_scan_t modbus_ascii_scan_t;
+
 /**
  * @brief Modbus ASCII frame on the wire: ':' + 2 hex digits per binary byte + CRLF.
  *
@@ -52,7 +54,7 @@ void	modbus_ascii_corrupt_lrc(u8* frame, u32 len);
 bool	modbus_ascii_decode(const u8* frame, u32 len, u8* out, u8* addr,
 			    const u8** pdu, u32* pdu_len);
 
-typedef enum modbus_ascii_scan_t modbus_ascii_scan_t;
+/** @brief Outcome of scanning a receive buffer for an ASCII frame. */
 enum modbus_ascii_scan_t
 {
 	MODBUS_ASCII_SCAN_NONE,    /**< No complete frame at rx[0]; keep buffered bytes. */

@@ -14,6 +14,18 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef enum space_kind_t space_kind_t;
+typedef enum point_kind_t point_kind_t;
+typedef struct point_t point_t;
+typedef struct space_t space_t;
+typedef struct file_segment_t file_segment_t;
+typedef struct device_file_t device_file_t;
+typedef struct device_fifo_t device_fifo_t;
+typedef struct device_canopen_object_t device_canopen_object_t;
+typedef enum custom_action_t custom_action_t;
+typedef struct device_custom_fc_t device_custom_fc_t;
+typedef struct device_t device_t;
+
 #define DEVICE_NAME_MAX		64
 #define DEVICE_ID_OBJECT_MAX	244	/**< 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
 /** @brief 253-byte Modbus PDU minus FC, byte count, server ID and run indicator. */
@@ -24,7 +36,6 @@
 #define ADDRESS_SPACE_SIZE	65536
 
 /** @brief The four Modbus data tables. */
-typedef enum space_kind_t space_kind_t;
 enum space_kind_t
 {
 	SPACE_COIL,	/**< read/write bit    (FC 01, 05, 15) */
@@ -34,7 +45,7 @@ enum space_kind_t
 	SPACE_COUNT,
 };
 
-typedef enum point_kind_t point_kind_t;
+/** @brief How the value of a point is produced. */
 enum point_kind_t
 {
 	POINT_STATIC,	/**< value never changes by itself */
@@ -49,7 +60,6 @@ enum point_kind_t
  *
  * A point occupies point_width() addresses.
  */
-typedef struct point_t point_t;
 struct point_t
 {
 	space_kind_t	space;
@@ -79,7 +89,6 @@ struct point_t
  * `owner` is the 1-based index of the point that defines each address (0 = address not
  * defined). Bit spaces store 0 or 1.
  */
-typedef struct space_t space_t;
 struct space_t
 {
 	u16	value[ADDRESS_SPACE_SIZE];
@@ -103,7 +112,6 @@ struct space_t
  * @brief One contiguous block of 16-bit register values in a file, starting at Modbus record
  *        number `record`.
  */
-typedef struct file_segment_t file_segment_t;
 struct file_segment_t
 {
 	u16	record;
@@ -112,7 +120,6 @@ struct file_segment_t
 };
 
 /** @brief Configured FC 20 (Read File Record) storage for one file number. */
-typedef struct device_file_t device_file_t;
 struct device_file_t
 {
 	u16		file_no;
@@ -125,7 +132,6 @@ struct device_file_t
  *
  * Values are returned in configured order, non-destructively.
  */
-typedef struct device_fifo_t device_fifo_t;
 struct device_fifo_t
 {
 	u16	address;	/**< FIFO pointer address */
@@ -134,7 +140,6 @@ struct device_fifo_t
 };
 
 /** @brief One CANopen object served by FC 43 MEI 0x0D SDO transfers. */
-typedef struct device_canopen_object_t device_canopen_object_t;
 struct device_canopen_object_t
 {
 	u8	node_id;
@@ -169,7 +174,6 @@ enum device_id_object
 };
 
 /** @brief What a user-defined function code answers for one matching request. */
-typedef enum custom_action_t custom_action_t;
 enum custom_action_t
 {
 	CUSTOM_REPLY,		/**< fixed reply data after the function code */
@@ -186,12 +190,12 @@ enum custom_action_t
  * A case matches when the request data starts with its prefix; an empty prefix matches every
  * request. A request no case matches gets exception 03 (illegal data value).
  */
-typedef struct device_custom_fc_t device_custom_fc_t;
 struct device_custom_fc_t
 {
 	u8		code;			/**< 1-127, not a function code mogbus implements */
 	char		name[DEVICE_NAME_MAX];	/**< for logs and summaries; may be empty */
 	u32		case_count;
+	/** @brief One `(on ...)` case of a user-defined function code. */
 	struct device_custom_case_t
 	{
 		u8		prefix[DEVICE_CUSTOM_PREFIX_MAX];
@@ -207,9 +211,9 @@ struct device_custom_fc_t
 };
 
 /** @brief One simulated Modbus device (one unit id). */
-typedef struct device_t device_t;
 struct machine_system_t; /* defined in device/machine.h */
 
+/** @brief One simulated device: its tables, points, faults, machines and counters. */
 struct device_t
 {
 	char		name[DEVICE_NAME_MAX];
@@ -248,6 +252,7 @@ struct device_t
 	u32		custom_fc_count;
 	device_custom_fc_t* custom_fcs;	/**< DEVICE_MAX_CUSTOM_FCS entries, allocated on first use */
 	char		device_id[DEVICE_ID_STANDARD_COUNT][DEVICE_ID_OBJECT_MAX + 1];
+	/** @brief One extended Read Device Identification object. */
 	struct
 	{
 		u8	id;

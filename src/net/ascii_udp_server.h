@@ -13,14 +13,15 @@
 #include <signal.h>
 
 typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct ascii_udp_server_options_t ascii_udp_server_options_t;
+typedef struct ascii_udp_server_t ascii_udp_server_t;
 
 /**
  * @brief What the server needs to run.
  *
  * Devices are borrowed, not copied.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct ascii_udp_server_options_t ascii_udp_server_options_t;
 struct ascii_udp_server_options_t
 {
 	const char*	bind_address;
@@ -38,7 +39,6 @@ struct ascii_udp_server_options_t
  *
  * No process-global state.
  */
-typedef struct ascii_udp_server_t ascii_udp_server_t;
 struct ascii_udp_server_t
 {
 	ascii_udp_server_options_t	options;

@@ -8,6 +8,11 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+typedef enum ramp_mode_t ramp_mode_t;
+typedef struct ramp_params_t ramp_params_t;
+typedef enum model_shape_t model_shape_t;
+typedef struct model_t model_t;
+
 /**
  * @brief What a ramp does when it reaches its end.
  *
@@ -16,7 +21,6 @@
  * - RAMP_HOLD  : stay on the last value
  * Keep the order: the config parser maps names to these values by index.
  */
-typedef enum ramp_mode_t ramp_mode_t;
 enum ramp_mode_t
 {
 	RAMP_WRAP,
@@ -30,7 +34,6 @@ enum ramp_mode_t
  * `step` is always positive; the direction comes from `from` and `to`. The last value is never
  * beyond `to`.
  */
-typedef struct ramp_params_t ramp_params_t;
 struct ramp_params_t
 {
 	f64		from;
@@ -48,7 +51,6 @@ struct ramp_params_t
 f64	ramp_value(const ramp_params_t* ramp, u64 start_ms, u64 now_ms);
 
 /** @brief What a model computes before the noise modifier is added. */
-typedef enum model_shape_t model_shape_t;
 enum model_shape_t
 {
 	MODEL_BASE,	/**< the base value passed to model_value(): a static value or a ramp */
@@ -63,7 +65,6 @@ enum model_shape_t
  * Fields are grouped by the shape that uses them. Add a modifier by adding a struct here and
  * one step to model_value().
  */
-typedef struct model_t model_t;
 struct model_t
 {
 	model_shape_t	shape;
@@ -82,6 +83,7 @@ struct model_t
 	f64		lag_y;		/**< lag state: value without noise at lag_ms */
 	u64		lag_ms;		/**< lag state: time of the last evaluation */
 	bool		lag_started;	/**< lag state: false until the first evaluation */
+	/** @brief Noise added on top of the model value. */
 	struct model_noise_t
 	{
 		f64	amplitude;	/**< 0 = no noise; uniform +-A or gaussian sigma A (max 4A) */
@@ -89,6 +91,7 @@ struct model_t
 		bool	gaussian;
 	} noise;
 	/** Gradual sensor aging; times are ms since device start, so a restart heals it. */
+	/** @brief Sensor degradation parameters. */
 	struct model_degradation_t
 	{
 		u32	after_ms;		/**< drift and noise growth start here */

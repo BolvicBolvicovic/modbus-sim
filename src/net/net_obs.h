@@ -13,8 +13,12 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+typedef enum net_result_t net_result_t;
+typedef struct net_obs_t net_obs_t;
+
 struct pollfd;
 
+/** @brief Limits of the metrics and HTTP endpoint. */
 enum
 {
 	NET_OBS_MAX_DEVICES	= 16,	/**< same as SERVER_MAX_DEVICES (checked in server.c) */
@@ -28,7 +32,6 @@ enum
 };
 
 /** @brief What happened to one request. */
-typedef enum net_result_t net_result_t;
 enum net_result_t
 {
 	NET_RESULT_OK,		/**< normal response */
@@ -46,7 +49,6 @@ extern const u32 NET_OBS_LATENCY_MS[NET_OBS_LATENCY_BUCKETS];
  *
  * Zero-initialized means "record nothing, serve nothing" until net_obs_init().
  */
-typedef struct net_obs_t net_obs_t;
 struct net_obs_t
 {
 	const char*	transport;	/**< mode name for logs and metrics, e.g. "tcp" */
@@ -55,6 +57,7 @@ struct net_obs_t
 	u64		start_unix_s;	/**< wall-clock start, for mogbus_start_time_seconds */
 	bool		ready;		/**< serving; false before start and once stopping */
 
+	/** @brief Counters exposed on `/metrics`. */
 	struct net_metrics_t
 	{
 		u64	requests_by_fc[256];
@@ -66,6 +69,7 @@ struct net_obs_t
 		u64	connections_total;
 		u32	connections_active;
 		u64	control_requests[2];	/**< runtime control requests: [0] ok, [1] error */
+		/** @brief Counters of one device. */
 		struct net_device_metrics_t
 		{
 			u64	requests;
@@ -75,6 +79,7 @@ struct net_obs_t
 		} device[NET_OBS_MAX_DEVICES];
 	} metrics;
 
+	/** @brief Runtime control endpoint state. */
 	struct net_control_t
 	{
 		bool	enabled;	/**< `/api/` answers; set by the server after net_obs_init() */
@@ -82,9 +87,11 @@ struct net_obs_t
 		bool	mbap;		/**< transport frames have no checksum: corrupt checksum is invalid */
 	} control;
 
+	/** @brief HTTP endpoint listener and its connections. */
 	struct net_http_t
 	{
 		int	listen_fd;	/**< -1 when the endpoint is off */
+		/** @brief One HTTP client connection. */
 		struct net_http_conn_t
 		{
 			int	fd;	/**< -1 when the slot is free */

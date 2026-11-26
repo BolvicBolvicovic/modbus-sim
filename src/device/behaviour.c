@@ -52,6 +52,7 @@ ramp_value(const ramp_params_t* ramp, u64 start_ms, u64 now_ms)
 	return ramp->from + direction * ramp->step * (f64)index;
 }
 
+/** @brief Bound of the approximated Gaussian noise, in standard deviations. */
 enum { NOISE_GAUSS_LIMIT = 4 };
 
 bool

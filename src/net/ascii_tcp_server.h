@@ -13,13 +13,18 @@
 #include <signal.h>
 #include <stdbool.h>
 
+typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct ascii_tcp_server_options_t ascii_tcp_server_options_t;
+typedef struct ascii_tcp_conn_t ascii_tcp_conn_t;
+typedef struct ascii_tcp_server_t ascii_tcp_server_t;
+
+/** @brief Limits of the ASCII-over-TCP server. */
 enum
 {
 	ASCII_TCP_MAX_CONNECTIONS      = 32,
 	ASCII_TCP_INTERCHAR_TIMEOUT_MS = 1000,
 };
-
-typedef struct device_t device_t;
 
 /**
  * @brief Modbus ASCII-over-TCP server options.
@@ -27,8 +32,6 @@ typedef struct device_t device_t;
  * Devices are borrowed, not copied. Raw ASCII frames (':' + hex [addr][PDU][LRC] + CR LF) are
  * carried over TCP byte streams; this is not MBAP framing. No serial line options apply.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct ascii_tcp_server_options_t ascii_tcp_server_options_t;
 struct ascii_tcp_server_options_t
 {
 	const char*	bind_address;
@@ -40,7 +43,7 @@ struct ascii_tcp_server_options_t
 	net_obs_t*	obs;		/**< metrics, request logs, HTTP endpoint; NULL = none */
 };
 
-typedef struct ascii_tcp_conn_t ascii_tcp_conn_t;
+/** @brief One ASCII-over-TCP client: its connection and receive buffer. */
 struct ascii_tcp_conn_t
 {
 	net_tcp_conn_t	base;
@@ -55,7 +58,6 @@ struct ascii_tcp_conn_t
  * @brief All state of one ASCII-over-TCP server; the caller owns the storage and keeps it at a
  *        stable address between init and close.
  */
-typedef struct ascii_tcp_server_t ascii_tcp_server_t;
 struct ascii_tcp_server_t
 {
 	ascii_tcp_server_options_t	options;

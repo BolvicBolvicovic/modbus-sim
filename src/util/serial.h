@@ -10,8 +10,9 @@
 #include <stddef.h>
 #include <termios.h>
 
-/** @brief Serial parity for byte streams; mark/space need CMSPAR on the host. */
 typedef enum parity_t parity_t;
+
+/** @brief Serial parity for byte streams; mark/space need CMSPAR on the host. */
 enum parity_t
 {
 	PARITY_NONE,

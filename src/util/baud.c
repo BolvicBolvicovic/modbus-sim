@@ -5,6 +5,8 @@
 #include "util/baud.h"
 
 typedef struct baud_entry_t baud_entry_t;
+
+/** @brief A baud rate and its termios speed constant. */
 struct baud_entry_t
 {
 	u32	baud;

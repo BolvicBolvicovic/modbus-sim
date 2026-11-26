@@ -1,11 +1,3 @@
-#ifndef NET_TLS_H
-#define NET_TLS_H
-
-#include "build_config.h"
-#include "vlib/c_types.h"
-#include <poll.h>
-#include <stdbool.h>
-
 /**
  * @file
  * @brief TLS API for TLS-wrapped Modbus TCP.
@@ -15,16 +7,31 @@
  * in tcp_server.c; this layer keeps OpenSSL headers out of modules that include vlib/macros.h
  * (both headers define __counted_by).
  */
+#ifndef NET_TLS_H
+#define NET_TLS_H
 
+#include "build_config.h"
+#include "vlib/c_types.h"
+#include <poll.h>
+#include <stdbool.h>
+
+/** @brief OpenSSL TLS context, forward-declared so callers need no OpenSSL headers. */
 typedef struct ssl_ctx_st SSL_CTX;
+/** @brief OpenSSL connection, forward-declared so callers need no OpenSSL headers. */
 typedef struct ssl_st SSL;
+typedef enum net_tls_version_t net_tls_version_t;
+typedef enum net_tls_status_t net_tls_status_t;
+typedef struct net_tls_config_t net_tls_config_t;
+typedef struct net_tls_conn_t net_tls_conn_t;
+typedef struct net_tls_ctx_t net_tls_ctx_t;
 
+/** @brief Maximum number of TLS sessions. */
 enum
 {
 	NET_TLS_MAX_SESSIONS = 32,	/**< matches the TCP servers' connection slots */
 };
 
-typedef enum net_tls_version_t net_tls_version_t;
+/** @brief Minimum TLS protocol version. */
 enum net_tls_version_t
 {
 	NET_TLS_VERSION_1_2,
@@ -32,7 +39,6 @@ enum net_tls_version_t
 };
 
 /** @brief I/O outcome for a nonblocking TLS session. */
-typedef enum net_tls_status_t net_tls_status_t;
 enum net_tls_status_t
 {
 	NET_TLS_OK,
@@ -43,7 +49,6 @@ enum net_tls_status_t
 };
 
 /** @brief TLS settings of a server; strings are borrowed and must outlive the context. */
-typedef struct net_tls_config_t net_tls_config_t;
 struct net_tls_config_t
 {
 	const char*	certificate;
@@ -61,7 +66,6 @@ struct net_tls_config_t
  * Only net_tls touches the members; the struct is public so the context can embed its session
  * pool without allocation.
  */
-typedef struct net_tls_conn_t net_tls_conn_t;
 struct net_tls_conn_t
 {
 	SSL*	ssl;
@@ -77,7 +81,6 @@ struct net_tls_conn_t
  *
  * Must stay at a stable address while sessions exist. Zero-initialize before init.
  */
-typedef struct net_tls_ctx_t net_tls_ctx_t;
 struct net_tls_ctx_t
 {
 	SSL_CTX*	ssl_ctx;

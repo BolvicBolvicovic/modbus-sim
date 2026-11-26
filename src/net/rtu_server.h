@@ -13,6 +13,9 @@
 #include <stdbool.h>
 
 typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct rtu_server_options_t rtu_server_options_t;
+typedef struct rtu_server_t rtu_server_t;
 
 /**
  * @brief Options for serving Modbus RTU over a serial-like file descriptor.
@@ -25,8 +28,6 @@ typedef struct device_t device_t;
  * reflect UART timing. broadcast_execute runs unit-0 requests on every device without a
  * response.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct rtu_server_options_t rtu_server_options_t;
 struct rtu_server_options_t
 {
 	int		fd;
@@ -46,7 +47,6 @@ struct rtu_server_options_t
  *
  * No global state.
  */
-typedef struct rtu_server_t rtu_server_t;
 struct rtu_server_t
 {
 	rtu_server_options_t	options;

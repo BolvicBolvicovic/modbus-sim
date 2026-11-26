@@ -294,6 +294,12 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
   Public functions in `include/mogbus.h` document every `@param` and `@return`; internal ones add
   them only when the brief does not already say it. Comments inside function bodies stay `/* */`.
   `make api-docs` (CI job `api-docs`) builds the HTML reference with warnings as errors.
+- Typedef layout: forward typedefs (`typedef struct x_t x_t;`, enums and unions alike) are grouped
+  at the top of the file after the includes; the brief sits directly above the `struct x_t {` or
+  `enum x_t {` definition (a brief above the typedef would be attached to the typedef, not the
+  type). Never use the combined `typedef struct x_t { ... } x_t;` form, also not in
+  `include/mogbus.h`. Anonymous enums keep their brief directly above them; function-pointer
+  typedefs and opaque typedefs keep their own brief above the typedef.
 
 ## Build and tests
 

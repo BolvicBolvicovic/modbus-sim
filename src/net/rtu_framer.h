@@ -10,15 +10,18 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+typedef struct device_t device_t;
+typedef struct rng_t rng_t;
+typedef struct rtu_framer_t rtu_framer_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct rtu_framer_ctx_t rtu_framer_ctx_t;
+
 #define RTU_DEFAULT_FRAME_GAP_MS	20
 #define RTU_BAUD_FIXED_THRESHOLD	19200U
 #define RTU_INTERCHAR_GAP_US_HIGH	750U	/**< t1.5 at >19200 baud */
 #define RTU_INTERFRAME_GAP_US_HIGH	1750U	/**< t3.5 at >19200 baud */
 
-typedef struct device_t device_t;
-typedef struct rng_t rng_t;
-
-typedef struct rtu_framer_t rtu_framer_t;
+/** @brief Receive buffer and timing state that split a byte stream into RTU frames. */
 struct rtu_framer_t
 {
 	u8		rx[MODBUS_RTU_MAX_FRAME * 4];
@@ -39,8 +42,6 @@ struct rtu_framer_t
  * baud-derived/auto timing. strict_t15 is best-effort and only meaningful for RTU byte
  * streams. broadcast_execute runs unit-0 requests on all devices without a response.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct rtu_framer_ctx_t rtu_framer_ctx_t;
 struct rtu_framer_ctx_t
 {
 	device_t**	devices;

@@ -11,6 +11,8 @@
 #include <string.h>
 #include <unistd.h>
 
+typedef struct cli_t cli_t;
+
 /** @brief The binary owns signal handling; the handler stops the running server. */
 static mogbus_server_t* volatile	g_server;
 
@@ -24,7 +26,7 @@ on_stop_signal(int signo)
 		mogbus_server_stop(server);
 }
 
-typedef struct cli_t cli_t;
+/** @brief Parsed command line. */
 struct cli_t
 {
 	const char*	config_path;
@@ -276,7 +278,6 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 			       info.custom_fcs[f].name[0] ? " " : "", info.custom_fcs[f].name);
 	}
 }
-
 
 int
 main(int argc, char** argv)

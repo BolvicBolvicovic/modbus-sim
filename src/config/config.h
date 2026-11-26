@@ -14,11 +14,13 @@
 #include "util/serial.h"
 #include <stdbool.h>
 
+typedef enum config_tls_version_t config_tls_version_t;
+typedef struct config_t config_t;
+
 #define CONFIG_DEFAULT_FRAME_GAP_MS	20	/**< fallback when baud is unknown and no explicit gap is set */
 #define CONFIG_DEFAULT_TLS_PORT		802	/**< IANA mbap-s; plaintext TCP stays on 1502 */
 
 /** @brief Minimum TLS version accepted by a TLS-enabled TCP server. */
-typedef enum config_tls_version_t config_tls_version_t;
 enum config_tls_version_t
 {
 	CONFIG_TLS_VERSION_1_2,
@@ -30,7 +32,6 @@ enum config_tls_version_t
  *
  * Devices live in the arena given to config_load.
  */
-typedef struct config_t config_t;
 struct config_t
 {
 	server_mode_t	mode;

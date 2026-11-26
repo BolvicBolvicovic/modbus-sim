@@ -7,6 +7,7 @@
 #include "modbus/pdu.h"
 #include <string.h>
 
+/** @brief Extended exception codes of the CANopen General Reference MEI. */
 enum canopen_extended_exception
 {
 	CANOPEN_EXT_UNSUPPORTED_OPTION = 0xAE,

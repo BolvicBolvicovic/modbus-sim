@@ -17,6 +17,8 @@
 #include <stdbool.h>
 
 typedef struct form_ctx_t form_ctx_t;
+
+/** @brief Context shared by the config parsers: s7 scheme, error buffer and scratch arena. */
 struct form_ctx_t
 {
 	s7_scheme*	sc;

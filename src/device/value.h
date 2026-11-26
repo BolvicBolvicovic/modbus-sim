@@ -8,15 +8,17 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
-/** @brief The only two value types used by scripted device machines. */
 typedef enum val_type_t val_type_t;
+typedef struct val_t val_t;
+
+/** @brief The only two value types used by scripted device machines. */
 enum val_type_t
 {
 	VAL_BOOL,
 	VAL_NUM,
 };
 
-typedef struct val_t val_t;
+/** @brief A machine value: a number or a boolean. */
 struct val_t
 {
 	val_type_t	type;

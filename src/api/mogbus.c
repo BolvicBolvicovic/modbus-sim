@@ -102,6 +102,7 @@ struct mogbus_server_t
 	server_t	server;
 	mogbus_t*	ctx;
 	bool		in_use;
+	/** @brief Copies of the option strings, so they outlive the caller's buffers. */
 	struct strings_t
 	{
 		char	bind[SERVER_BIND_MAX];
@@ -115,6 +116,7 @@ struct mogbus_server_t
 	} strings;
 };
 
+/** @brief State of one context: its arena, the loaded config, devices and server slots. */
 struct mogbus_t
 {
 	arena_t*	arena;

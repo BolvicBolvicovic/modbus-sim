@@ -11,6 +11,9 @@
 #include "vlib/macros.h"
 #include <sys/socket.h>
 
+typedef struct net_udp_peer_t net_udp_peer_t;
+typedef struct net_udp_t net_udp_t;
+
 /**
  * @brief Shared datagram socket for the UDP transports (Modbus UDP, and the RTU/ASCII framings
  *        carried in datagrams).
@@ -26,7 +29,7 @@ enum
 	NET_UDP_MAX_BURST	= 32,	/**< datagrams a server should read per step */
 };
 
-typedef struct net_udp_peer_t net_udp_peer_t;
+/** @brief The source address of a datagram and its text form. */
 struct net_udp_peer_t
 {
 	struct sockaddr_storage	addr;
@@ -34,10 +37,11 @@ struct net_udp_peer_t
 	char			text[NET_UDP_PEER_TEXT_SIZE];	/**< "ip:port" or "[ip]:port" for logs */
 };
 
-typedef struct net_udp_t net_udp_t;
+/** @brief A bound UDP socket and its table of delayed responses. */
 struct net_udp_t
 {
 	int	fd;	/**< -1 when closed */
+	/** @brief A response delayed by the `delay` fault, waiting for its due time. */
 	struct net_udp_pending_t
 	{
 		bool		active;

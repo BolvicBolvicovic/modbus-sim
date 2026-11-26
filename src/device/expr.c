@@ -5,6 +5,7 @@
 #include "device/expr.h"
 #include <math.h>
 
+/** @brief Maximum nesting depth of an expression tree. */
 enum { EXPR_MAX_DEPTH = 512 };
 
 static bool

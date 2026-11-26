@@ -13,6 +13,9 @@
 #include <stdbool.h>
 
 typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct ascii_server_options_t ascii_server_options_t;
+typedef struct ascii_server_t ascii_server_t;
 
 /**
  * @brief Options for serving Modbus ASCII over a serial-like file descriptor.
@@ -21,8 +24,6 @@ typedef struct device_t device_t;
  * socketpair, or similar bidirectional byte stream. ASCII framing is delimiter-based (CRLF),
  * so there is no baud, frame-gap, or t1.5 setting here.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct ascii_server_options_t ascii_server_options_t;
 struct ascii_server_options_t
 {
 	int		fd;
@@ -38,7 +39,6 @@ struct ascii_server_options_t
  *
  * No global state.
  */
-typedef struct ascii_server_t ascii_server_t;
 struct ascii_server_t
 {
 	ascii_server_options_t	options;

@@ -10,6 +10,20 @@
 #include "util/rng.h"
 #include <stdbool.h>
 
+typedef enum machine_role_t machine_role_t;
+typedef enum machine_stmt_kind_t machine_stmt_kind_t;
+typedef enum machine_target_kind_t machine_target_kind_t;
+typedef enum machine_target_status_t machine_target_status_t;
+typedef struct machine_target_result_t machine_target_result_t;
+typedef enum machine_after_kind_t machine_after_kind_t;
+typedef struct machine_var_def_t machine_var_def_t;
+typedef struct machine_stmt_t machine_stmt_t;
+typedef struct machine_write_handler_t machine_write_handler_t;
+typedef struct machine_state_def_t machine_state_def_t;
+typedef struct machine_transition_def_t machine_transition_def_t;
+typedef struct machine_def_t machine_def_t;
+typedef struct machine_system_t machine_system_t;
+
 #define MACHINE_MAX_MACHINES      8
 #define MACHINE_MAX_STATES        16
 #define MACHINE_MAX_TRANSITIONS   32
@@ -21,7 +35,7 @@
 #define MACHINE_EVAL_BUDGET       1000
 #define MACHINE_NAME_MAX          64
 
-typedef enum machine_role_t machine_role_t;
+/** @brief Kinds of statement lists a machine owns. */
 enum machine_role_t
 {
 	MACHINE_ROLE_ENTER, MACHINE_ROLE_TICK, MACHINE_ROLE_EXIT,
@@ -34,19 +48,18 @@ enum machine_role_t
  * T4 fills these while reading the config; the runtime deep-copies them into the device arena
  * and never touches s7.
  */
-typedef enum machine_stmt_kind_t machine_stmt_kind_t;
 enum machine_stmt_kind_t
 {
 	STMT_SET, STMT_WHEN, STMT_UNLESS,
 };
 
-typedef enum machine_target_kind_t machine_target_kind_t;
+/** @brief What a machine statement assigns to. */
 enum machine_target_kind_t
 {
 	TARGET_VAR, TARGET_POINT,
 };
 
-typedef enum machine_target_status_t machine_target_status_t;
+/** @brief Outcome of resolving the target of a machine statement. */
 enum machine_target_status_t
 {
 	MACHINE_TARGET_OK,
@@ -56,27 +69,27 @@ enum machine_target_status_t
 	MACHINE_TARGET_STRING,
 };
 
-typedef struct machine_target_result_t machine_target_result_t;
+/** @brief A resolved statement target with the status of the lookup. */
 struct machine_target_result_t
 {
 	u32			index;
 	machine_target_status_t	status;
 };
 
-typedef enum machine_after_kind_t machine_after_kind_t;
+/** @brief How the delay of a timed transition is given. */
 enum machine_after_kind_t
 {
 	AFTER_NONE, AFTER_LITERAL, AFTER_RANDOM,
 };
 
-typedef struct machine_var_def_t machine_var_def_t;
+/** @brief A machine variable with its name and initial value. */
 struct machine_var_def_t
 {
 	char	name[MACHINE_NAME_MAX];
 	val_t	initial;
 };
 
-typedef struct machine_stmt_t machine_stmt_t;
+/** @brief One compiled machine statement. */
 struct machine_stmt_t
 {
 	machine_stmt_kind_t kind;
@@ -89,7 +102,7 @@ struct machine_stmt_t
 	u16	child_count;		/**< number of child statements */
 };
 
-typedef struct machine_write_handler_t machine_write_handler_t;
+/** @brief Statements a machine runs when a client writes a watched point. */
 struct machine_write_handler_t
 {
 	u16	first, count;	/**< statements run on a successful client write */
@@ -97,7 +110,7 @@ struct machine_write_handler_t
 	u32	address;
 };
 
-typedef struct machine_state_def_t machine_state_def_t;
+/** @brief A machine state: its name and the statements of its handlers. */
 struct machine_state_def_t
 {
 	char	name[MACHINE_NAME_MAX];
@@ -107,7 +120,7 @@ struct machine_state_def_t
 	fault_set_t faults;	/**< active-state overlay on the device faults */
 };
 
-typedef struct machine_transition_def_t machine_transition_def_t;
+/** @brief A transition between two machine states with its optional condition. */
 struct machine_transition_def_t
 {
 	u16	from, to;
@@ -118,7 +131,7 @@ struct machine_transition_def_t
 	u64	after_min_ms, after_max_ms;
 };
 
-typedef struct machine_def_t machine_def_t;
+/** @brief A state machine definition: states, transitions, variables and statements. */
 struct machine_def_t
 {
 	char	name[MACHINE_NAME_MAX];
@@ -141,7 +154,6 @@ struct machine_def_t
 };
 
 /** @brief Machine runtime of one device (declared in device.h; fields private to the runtime). */
-typedef struct machine_system_t machine_system_t;
 struct machine_system_t
 {
 	machine_def_t	defs[MACHINE_MAX_MACHINES];

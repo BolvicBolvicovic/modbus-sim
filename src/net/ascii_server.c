@@ -23,6 +23,7 @@
  * it cannot corrupt a later request.
  */
 
+/** @brief Time without a byte after which a partial frame is dropped. */
 enum
 {
 	ASCII_INTERCHAR_TIMEOUT_MS = 1000,

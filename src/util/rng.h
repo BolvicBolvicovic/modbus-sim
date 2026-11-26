@@ -8,12 +8,13 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+typedef struct rng_t rng_t;
+
 /**
  * @brief Deterministic xoshiro256** generator seeded via splitmix64.
  *
  * Same seed, same sequence: fault injection is reproducible.
  */
-typedef struct rng_t rng_t;
 struct rng_t
 {
 	u64	s[4];

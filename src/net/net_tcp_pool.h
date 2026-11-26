@@ -8,9 +8,13 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
-struct pollfd;
 typedef struct net_obs_t net_obs_t;
+typedef struct net_tcp_conn_t net_tcp_conn_t;
+typedef struct net_tcp_pool_t net_tcp_pool_t;
 
+struct pollfd;
+
+/** @brief Size of the peer text buffer. */
 enum
 {
 	NET_TCP_PEER_SIZE = 64,
@@ -21,7 +25,6 @@ enum
  *
  * The pool owns only the socket, activity stamp, peer string and accept bookkeeping.
  */
-typedef struct net_tcp_conn_t net_tcp_conn_t;
 struct net_tcp_conn_t
 {
 	int		fd;		/**< -1 when the slot is free */
@@ -35,7 +38,6 @@ struct net_tcp_conn_t
  *
  * Callbacks keep framing/TLS concerns in the servers.
  */
-typedef struct net_tcp_pool_t net_tcp_pool_t;
 struct net_tcp_pool_t
 {
 	net_tcp_conn_t*	conns;

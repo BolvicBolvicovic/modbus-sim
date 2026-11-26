@@ -68,9 +68,9 @@ class VersionTest(unittest.TestCase):
 
 
 def header_fields(text, tag):
-    """Field names of `typedef struct TAG { ... } TAG;` in mogbus.h; nested anonymous structs
+    """Field names of `struct TAG { ... };` in mogbus.h; nested anonymous structs
     give "outer.inner" names next to "outer"."""
-    body = re.search(r"typedef struct %s\s*\{(.*?)\n\}\s*%s;" % (tag, tag), text, re.S).group(1)
+    body = re.search(r"\nstruct %s\s*\{(.*?)\n\};" % tag, text, re.S).group(1)
     body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
     stack = [[]]
     for line in body.split("\n"):

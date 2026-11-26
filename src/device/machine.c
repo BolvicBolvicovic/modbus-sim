@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 
+typedef struct validation_t validation_t;
+
 #define MACHINE_AFTER_MAX_MS	86400000ULL
 #define MACHINE_SEED_FACTOR	0x9E3779B97F4A7C15ULL
 #define MACHINE_FAULT_MASK	((1u << FAULT_KIND_COUNT) - 1)
@@ -76,7 +78,7 @@ machine_check_target_point(const device_t* dev, space_kind_t space, u32 address,
 	return result;
 }
 
-typedef struct validation_t validation_t;
+/** @brief Working state while validating the machines of a device. */
 struct validation_t
 {
 	device_t*		dev;

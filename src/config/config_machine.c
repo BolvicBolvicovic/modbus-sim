@@ -10,6 +10,16 @@
 #include <stdio.h>
 #include <string.h>
 
+typedef struct point_ref_t point_ref_t;
+typedef struct machine_state_t machine_state_t;
+typedef struct staged_stmt_t staged_stmt_t;
+typedef struct top_list_t top_list_t;
+typedef struct compile_t compile_t;
+typedef enum operand_rule_t operand_rule_t;
+typedef enum result_rule_t result_rule_t;
+typedef struct expr_form_t expr_form_t;
+
+/** @brief Kinds of statement handlers a machine state can have. */
 enum
 {
 	HANDLER_ENTER,
@@ -29,7 +39,7 @@ static const char* const HANDLER_NAMES[HANDLER_COUNT] = {
 #define EMITTED_NONE UINT16_MAX
 #define NO_CHILD_SLOT UINT16_MAX
 
-typedef struct point_ref_t point_ref_t;
+/** @brief A point referenced by a machine statement or expression, resolved after parsing. */
 struct point_ref_t
 {
 	u16		machine_index;
@@ -41,7 +51,6 @@ struct point_ref_t
 };
 
 /** @brief Parser state lives in the scratch arena, never in a device or machine_def_t. */
-typedef struct machine_state_t machine_state_t;
 struct machine_state_t
 {
 	point_ref_t	point_refs[MACHINE_POINT_REF_MAX];
@@ -51,7 +60,7 @@ struct machine_state_t
 	u16		write_ref[MACHINE_MAX_MACHINES][MACHINE_MAX_WRITE_HANDLERS];
 };
 
-typedef struct staged_stmt_t staged_stmt_t;
+/** @brief A parsed statement waiting for its children before it is emitted in order. */
 struct staged_stmt_t
 {
 	machine_stmt_t	stmt;
@@ -64,14 +73,14 @@ struct staged_stmt_t
 	u16		ref_index;	/**< point_refs index + 1, for set! on a point */
 };
 
-typedef struct top_list_t top_list_t;
+/** @brief Indices of the top-level statements of one handler. */
 struct top_list_t
 {
 	u16	indices[MACHINE_MAX_STATEMENTS];
 	u16	count;
 };
 
-typedef struct compile_t compile_t;
+/** @brief Working state while compiling the statements of one machine state. */
 struct compile_t
 {
 	form_ctx_t*	ctx;
@@ -91,7 +100,7 @@ struct compile_t
 
 #define EXPR_ARITY_ANY UINT8_MAX
 
-typedef enum operand_rule_t operand_rule_t;
+/** @brief Which operand types an expression form accepts. */
 enum operand_rule_t
 {
 	OPERAND_NONE,
@@ -100,7 +109,7 @@ enum operand_rule_t
 	OPERAND_BOOLEANS,
 };
 
-typedef enum result_rule_t result_rule_t;
+/** @brief How the result type of an expression form is derived. */
 enum result_rule_t
 {
 	RESULT_NUM,
@@ -108,9 +117,10 @@ enum result_rule_t
 	RESULT_BRANCHES,	/**< IF: type of the compiled branches */
 };
 
-typedef struct expr_form_t expr_form_t;
+/** @brief Compiles one expression form into expression nodes. */
 typedef bool (*expr_compile_fn)(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 
+/** @brief One expression form of the machine language: name, arity and typing rules. */
 struct expr_form_t
 {
 	const char*	name;

@@ -5,6 +5,8 @@
 #ifndef SERVER_MODE_H
 #define SERVER_MODE_H
 
+typedef enum server_mode_t server_mode_t;
+
 /**
  * @brief Transport selected by (server (mode NAME)) or by a host program.
  *
@@ -12,7 +14,6 @@
  * serve an already-open byte-stream fd (socketpair, PTY master, ...) borrowed from the host;
  * the config file cannot select them.
  */
-typedef enum server_mode_t server_mode_t;
 enum server_mode_t
 {
 	SERVER_MODE_TCP,

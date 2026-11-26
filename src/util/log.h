@@ -9,6 +9,9 @@
 #include <stdbool.h>
 
 typedef enum log_level_t log_level_t;
+typedef enum log_format_t log_format_t;
+
+/** @brief Severity of a log line; LOG_LEVEL_OFF disables logging. */
 enum log_level_t
 {
 	LOG_LEVEL_DEBUG,
@@ -18,7 +21,6 @@ enum log_level_t
 };
 
 /** @brief Line format: plain text, or one JSON object per line. */
-typedef enum log_format_t log_format_t;
 enum log_format_t
 {
 	LOG_FORMAT_TEXT,

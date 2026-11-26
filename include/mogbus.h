@@ -41,6 +41,29 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef enum mogbus_space_t mogbus_space_t;
+typedef enum mogbus_value_type_t mogbus_value_type_t;
+typedef enum mogbus_word_order_t mogbus_word_order_t;
+typedef enum mogbus_byte_order_t mogbus_byte_order_t;
+typedef enum mogbus_point_kind_t mogbus_point_kind_t;
+typedef enum mogbus_ramp_mode_t mogbus_ramp_mode_t;
+typedef struct mogbus_point_t mogbus_point_t;
+typedef enum mogbus_fault_kind_t mogbus_fault_kind_t;
+typedef struct mogbus_device_info_t mogbus_device_info_t;
+typedef enum mogbus_mode_t mogbus_mode_t;
+typedef enum mogbus_parity_t mogbus_parity_t;
+typedef enum mogbus_tls_version_t mogbus_tls_version_t;
+typedef struct mogbus_server_options_t mogbus_server_options_t;
+typedef enum mogbus_error_t mogbus_error_t;
+typedef enum mogbus_log_level_t mogbus_log_level_t;
+typedef enum mogbus_log_format_t mogbus_log_format_t;
+/** @brief A context: owns devices, servers and their memory. */
+typedef struct mogbus_t		mogbus_t;
+/** @brief A simulated device (one unit id), owned by its context. */
+typedef struct mogbus_device_t	mogbus_device_t;
+/** @brief A running server: one transport serving the devices of a context. */
+typedef struct mogbus_server_t	mogbus_server_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -62,13 +85,6 @@ MOGBUS_API const char*	mogbus_version(void);
  */
 #define MOGBUS_MAX_DEVICES	16
 #define MOGBUS_MAX_SERVERS	8	/**< Maximum number of servers in one context. */
-
-/** @brief A context: owns devices, servers and their memory. */
-typedef struct mogbus_t		mogbus_t;
-/** @brief A simulated device (one unit id), owned by its context. */
-typedef struct mogbus_device_t	mogbus_device_t;
-/** @brief A running server: one transport serving the devices of a context. */
-typedef struct mogbus_server_t	mogbus_server_t;
 
 /* ---- Context ---- */
 
@@ -103,14 +119,14 @@ MOGBUS_API bool		mogbus_load_config(mogbus_t* ctx, const char* path, char* err, 
 /* ---- Devices ---- */
 
 /** @brief The four Modbus data tables. */
-typedef enum mogbus_space_t
+enum mogbus_space_t
 {
 	MOGBUS_COIL,		/**< read/write bit     (FC 01, 05, 15) */
 	MOGBUS_DISCRETE,	/**< read-only bit      (FC 02)         */
 	MOGBUS_INPUT,		/**< read-only 16 bits  (FC 04)         */
 	MOGBUS_HOLDING,		/**< read/write 16 bits (FC 03, 06, 16) */
 	MOGBUS_SPACE_COUNT,	/**< number of tables */
-} mogbus_space_t;
+};
 
 /**
  * @brief How a number is stored in 16-bit registers.
@@ -121,7 +137,7 @@ typedef enum mogbus_space_t
  * library, so 64-bit integers above 2^53 lose precision through mogbus_device_get_value() and
  * ramps; raw register access is exact. New types are appended, so values stay stable.
  */
-typedef enum mogbus_value_type_t
+enum mogbus_value_type_t
 {
 	MOGBUS_TYPE_U16,
 	MOGBUS_TYPE_S16,
@@ -133,36 +149,36 @@ typedef enum mogbus_value_type_t
 	MOGBUS_TYPE_S64,
 	MOGBUS_TYPE_F64,
 	MOGBUS_TYPE_STRING,
-} mogbus_value_type_t;
+};
 
 /** @brief For 32- and 64-bit values: which register holds the most significant part. */
-typedef enum mogbus_word_order_t
+enum mogbus_word_order_t
 {
 	MOGBUS_WORDS_HIGH_FIRST,
 	MOGBUS_WORDS_LOW_FIRST,
-} mogbus_word_order_t;
+};
 
 /** @brief Whether the two bytes inside every register of a point are swapped. */
-typedef enum mogbus_byte_order_t
+enum mogbus_byte_order_t
 {
 	MOGBUS_BYTES_BIG,	/**< high byte first, as on the wire */
 	MOGBUS_BYTES_LITTLE,	/**< bytes swapped inside every register */
-} mogbus_byte_order_t;
+};
 
 /** @brief How a point's value behaves over time. */
-typedef enum mogbus_point_kind_t
+enum mogbus_point_kind_t
 {
 	MOGBUS_POINT_STATIC,	/**< `value` until a client writes another one */
 	MOGBUS_POINT_RAMP,	/**< follows `ramp` over time (registers only) */
-} mogbus_point_kind_t;
+};
 
 /** @brief What a ramp does when it reaches its end. */
-typedef enum mogbus_ramp_mode_t
+enum mogbus_ramp_mode_t
 {
 	MOGBUS_RAMP_WRAP,	/**< jump back to `from` */
 	MOGBUS_RAMP_BOUNCE,	/**< turn around and walk back */
 	MOGBUS_RAMP_HOLD,	/**< stay on the last value */
-} mogbus_ramp_mode_t;
+};
 
 /**
  * @brief One data point.
@@ -172,7 +188,7 @@ typedef enum mogbus_ramp_mode_t
  * address, 2 for 32-bit types, 4 for 64-bit types and `length` for strings. Addresses may not
  * overlap and must fit below 65536.
  */
-typedef struct mogbus_point_t
+struct mogbus_point_t
 {
 	mogbus_space_t		space;		/**< table the point lives in */
 	uint32_t		address;	/**< first address, below 65536 */
@@ -180,6 +196,7 @@ typedef struct mogbus_point_t
 	mogbus_word_order_t	word_order;	/**< 32- and 64-bit types only */
 	mogbus_point_kind_t	kind;		/**< static or ramp */
 	double			value;		/**< MOGBUS_POINT_STATIC; bits: nonzero = on */
+	/** @brief Ramp parameters, used when `kind` is MOGBUS_POINT_RAMP. */
 	struct
 	{
 		double			from, to;	/**< start and end values */
@@ -191,7 +208,7 @@ typedef struct mogbus_point_t
 	uint32_t		length;		/**< MOGBUS_TYPE_STRING: registers, 1 to 123 */
 	const char*		text;		/**< MOGBUS_TYPE_STRING: initial text, at most 2*length bytes,
 						     NUL padded; copied; NULL means empty */
-} mogbus_point_t;
+};
 
 /**
  * @brief Adds an empty device to the context.
@@ -234,7 +251,7 @@ MOGBUS_API size_t		mogbus_device_count(const mogbus_t* ctx);
 MOGBUS_API mogbus_device_t*	mogbus_device_at(mogbus_t* ctx, size_t index);
 
 /** @brief Fault kinds a config file can attach to a device (see docs/user/config-reference.md). */
-typedef enum mogbus_fault_kind_t
+enum mogbus_fault_kind_t
 {
 	MOGBUS_FAULT_DELAY,
 	MOGBUS_FAULT_DROP,
@@ -244,7 +261,7 @@ typedef enum mogbus_fault_kind_t
 	MOGBUS_FAULT_RESTART,
 	MOGBUS_FAULT_SENSOR_DISCONNECT,
 	MOGBUS_FAULT_KIND_COUNT,
-} mogbus_fault_kind_t;
+};
 
 /**
  * @brief A snapshot of what a device is made of.
@@ -255,11 +272,12 @@ typedef enum mogbus_fault_kind_t
  * then meaningless). delay_ms is set for MOGBUS_FAULT_DELAY and exception_code for
  * MOGBUS_FAULT_EXCEPTION.
  */
-typedef struct mogbus_device_info_t
+struct mogbus_device_info_t
 {
 	const char*	name;			/**< borrowed from the device */
 	uint8_t		unit_id;		/**< Modbus unit id */
 	uint32_t	point_count[MOGBUS_SPACE_COUNT];	/**< points per mogbus_space_t */
+	/** @brief One fault slot of the device. */
 	struct
 	{
 		bool		present;	/**< the fault is configured */
@@ -269,12 +287,13 @@ typedef struct mogbus_device_info_t
 		uint8_t		exception_code;	/**< MOGBUS_FAULT_EXCEPTION only */
 	} faults[MOGBUS_FAULT_KIND_COUNT];	/**< indexed by mogbus_fault_kind_t */
 	uint32_t	custom_fc_count;	/**< user-defined function codes, from (function-code ...) */
+	/** @brief One user-defined function code of the device. */
 	struct
 	{
 		uint8_t		code;		/**< 1-127 */
 		const char*	name;		/**< borrowed; "" when unnamed */
 	} custom_fcs[8];
-} mogbus_device_info_t;
+};
 
 /**
  * @brief Fills a snapshot of a device's points and faults.
@@ -393,7 +412,7 @@ MOGBUS_API bool		mogbus_device_set_string(mogbus_device_t* dev, mogbus_space_t s
 /* ---- Server ---- */
 
 /** @brief Transport a server uses. New modes are appended, so values stay stable. */
-typedef enum mogbus_mode_t
+enum mogbus_mode_t
 {
 	MOGBUS_MODE_TCP,		/**< Modbus TCP (MBAP), optionally TLS */
 	MOGBUS_MODE_RTU_PTY,		/**< RTU on a new PTY; see mogbus_server_pty_name() */
@@ -407,30 +426,30 @@ typedef enum mogbus_mode_t
 	MOGBUS_MODE_UDP,		/**< Modbus UDP: one MBAP ADU per datagram */
 	MOGBUS_MODE_ASCII_UDP,		/**< Modbus ASCII: one CRLF-terminated frame per datagram */
 	MOGBUS_MODE_RTU_UDP,		/**< RTU frames, one per UDP datagram */
-} mogbus_mode_t;
+};
 
 /** @brief Serial line parity; mark and space need CMSPAR support. */
-typedef enum mogbus_parity_t
+enum mogbus_parity_t
 {
 	MOGBUS_PARITY_NONE,
 	MOGBUS_PARITY_EVEN,
 	MOGBUS_PARITY_ODD,
 	MOGBUS_PARITY_MARK,
 	MOGBUS_PARITY_SPACE,
-} mogbus_parity_t;
+};
 
 /** @brief Minimum TLS version of a TLS server. */
-typedef enum mogbus_tls_version_t
+enum mogbus_tls_version_t
 {
 	MOGBUS_TLS_1_2,
 	MOGBUS_TLS_1_3,
-} mogbus_tls_version_t;
+};
 
 /**
  * @brief Server settings. Start from mogbus_server_options_defaults(); fields a mode does not use
  *        are ignored.
  */
-typedef struct mogbus_server_options_t
+struct mogbus_server_options_t
 {
 	mogbus_mode_t	mode;			/**< transport */
 	const char*	bind_address;		/**< TCP-family and UDP modes; "0.0.0.0" opts in to remote access */
@@ -458,7 +477,7 @@ typedef struct mogbus_server_options_t
 	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint; NULL = off */
 	uint16_t	http_port;		/**< endpoint port, used when http_bind_address is set */
 	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
-} mogbus_server_options_t;
+};
 
 /**
  * @brief Returns the defaults of a config file.
@@ -470,13 +489,13 @@ typedef struct mogbus_server_options_t
 MOGBUS_API mogbus_server_options_t	mogbus_server_options_defaults(void);
 
 /** @brief Why a server could not be created (see mogbus_server_create()). */
-typedef enum mogbus_error_t
+enum mogbus_error_t
 {
 	MOGBUS_OK,		/**< no error */
 	MOGBUS_ERR_INVALID,	/**< bad options, no devices, or a limit reached */
 	MOGBUS_ERR_SERIAL,	/**< the serial device or PTY could not be opened */
 	MOGBUS_ERR_LISTEN,	/**< the listener could not start (port in use) or TLS setup failed */
-} mogbus_error_t;
+};
 
 /**
  * @brief Starts a server for every device the context has now.
@@ -627,13 +646,13 @@ MOGBUS_API const char*	mogbus_server_pty_name(const mogbus_server_t* server);
 /* ---- Logging (process-wide) ---- */
 
 /** @brief Log levels; a level drops every line below it. */
-typedef enum mogbus_log_level_t
+enum mogbus_log_level_t
 {
 	MOGBUS_LOG_DEBUG,
 	MOGBUS_LOG_INFO,
 	MOGBUS_LOG_WARN,
 	MOGBUS_LOG_OFF,		/**< no logging */
-} mogbus_log_level_t;
+};
 
 /**
  * @brief Log sink, see mogbus_set_log_sink().
@@ -642,12 +661,13 @@ typedef enum mogbus_log_level_t
  * @param message The line, without a trailing newline; valid only during the call.
  */
 /** @brief Log line format. */
-typedef enum mogbus_log_format_t
+enum mogbus_log_format_t
 {
 	MOGBUS_LOG_TEXT,	/**< timestamp, level and message (default) */
 	MOGBUS_LOG_JSON,	/**< one JSON object per line, with event fields for requests */
-} mogbus_log_format_t;
+};
 
+/** @brief Receives one log line; `user` is the pointer given at registration. */
 typedef void (*mogbus_log_fn)(void* user, mogbus_log_level_t level, const char* message);
 
 /**

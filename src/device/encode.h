@@ -7,6 +7,10 @@
 
 #include "vlib/c_types.h"
 
+typedef enum value_type_t value_type_t;
+typedef enum word_order_t word_order_t;
+typedef enum byte_order_t byte_order_t;
+
 /**
  * @brief How a number is stored in 16-bit Modbus registers.
  *
@@ -14,7 +18,6 @@
  * (see point_t) holding two ASCII bytes each; it has no numeric value. The values are part of
  * the library ABI (mogbus_value_type_t): append, never reorder.
  */
-typedef enum value_type_t value_type_t;
 enum value_type_t
 {
 	VT_U16,
@@ -30,7 +33,6 @@ enum value_type_t
 };
 
 /** @brief For 32- and 64-bit values, whether the most significant register comes first. */
-typedef enum word_order_t word_order_t;
 enum word_order_t
 {
 	WORDS_HIGH_FIRST,
@@ -38,7 +40,6 @@ enum word_order_t
 };
 
 /** @brief Whether the two bytes inside every register of a point are swapped. */
-typedef enum byte_order_t byte_order_t;
 enum byte_order_t
 {
 	BYTES_BIG,

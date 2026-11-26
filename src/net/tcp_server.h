@@ -13,20 +13,23 @@
 #include "vlib/c_types.h"
 #include <signal.h>
 
+typedef struct device_t device_t;
+typedef struct net_obs_t net_obs_t;
+typedef struct tcp_server_options_t tcp_server_options_t;
+typedef struct tcp_conn_t tcp_conn_t;
+typedef struct tcp_server_t tcp_server_t;
+
+/** @brief Limits of the Modbus TCP server. */
 enum
 {
 	TCP_SERVER_MAX_CONNECTIONS = 32,
 };
-
-typedef struct device_t device_t;
 
 /**
  * @brief What the server needs to run.
  *
  * Devices are borrowed, not copied.
  */
-typedef struct net_obs_t net_obs_t;
-typedef struct tcp_server_options_t tcp_server_options_t;
 struct tcp_server_options_t
 {
 	const char*	bind_address;
@@ -47,7 +50,6 @@ struct tcp_server_options_t
  * A connection handles one request at a time: while a response is waiting to be sent (tx_len >
  * 0) no new request is read.
  */
-typedef struct tcp_conn_t tcp_conn_t;
 struct tcp_conn_t
 {
 	net_tcp_conn_t	base;
@@ -66,7 +68,6 @@ struct tcp_conn_t
  *
  * No process-global state.
  */
-typedef struct tcp_server_t tcp_server_t;
 struct tcp_server_t
 {
 	tcp_server_options_t	options;

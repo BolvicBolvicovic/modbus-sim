@@ -16,6 +16,7 @@ typedef struct device_t device_t;
 typedef struct rng_t rng_t;
 typedef struct fault_decision_t fault_decision_t;
 typedef struct net_obs_t net_obs_t;
+typedef struct pending_response_t pending_response_t;
 
 /**
  * @brief Shared delayed-response slot for byte-stream servers.
@@ -23,7 +24,6 @@ typedef struct net_obs_t net_obs_t;
  * ASCII frames are the larger wire format (hex-encoded PDU plus LRC and CRLF), so size for
  * ASCII; RTU frames fit as well.
  */
-typedef struct pending_response_t pending_response_t;
 struct pending_response_t
 {
 	bool	active;

@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/** @brief Timing and backlog constants of the TCP pool. */
 enum
 {
 	NET_TCP_POLL_TIMEOUT_MS	     = 1000,

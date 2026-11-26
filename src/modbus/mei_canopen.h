@@ -8,6 +8,8 @@
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+typedef struct canopen_request_t canopen_request_t;
+
 #define MEI_TYPE_CANOPEN	0x0D
 
 /** @brief CiA 309-2 numbers protocol control bits MSB-first; these are the byte masks. */
@@ -34,7 +36,7 @@ enum canopen_error_code
 	CANOPEN_ERR_SERVICE_NOT_SUPPORTED = 0xFFFF1003u,
 };
 
-typedef struct canopen_request_t canopen_request_t;
+/** @brief A decoded CANopen General Reference request. */
 struct canopen_request_t
 {
 	u8	control;

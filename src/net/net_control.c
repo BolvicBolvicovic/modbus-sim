@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct body_t body_t;
+
+/** @brief Limits of the runtime control request bodies. */
 enum
 {
 	MAX_VALUES   = 512,	/**< a 1024-byte body holds at most this many numbers */
@@ -31,7 +34,7 @@ static const char* const SPACE_NAMES[SPACE_COUNT] = {
 /** @brief The JSON fields a request body may carry; a body with any other key is rejected. */
 enum { F_VALUES, F_VALUE, F_PERCENT, F_DELAY_MS, F_EXCEPTION_CODE, F_MODE, F_COUNT };
 
-typedef struct body_t body_t;
+/** @brief A parsed control request body. */
 struct body_t
 {
 	bool	has[F_COUNT];

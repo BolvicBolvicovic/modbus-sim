@@ -9,6 +9,8 @@
 #include <math.h>
 #include <string.h>
 
+typedef struct item_entry_t item_entry_t;
+
 /** @brief Names the user writes, in the same order as the matching enums. */
 static const char* const TYPE_NAMES[]  = { "u16", "s16", "u32", "s32", "float32", "u64", "s64", "float64",
 	"string" };
@@ -1153,9 +1155,10 @@ parse_machine(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 
 /* --- device --- */
 
+/** @brief Parses one item form of a `(device ...)` section into the device. */
 typedef bool (*item_parser_t)(form_ctx_t*, s7_pointer, device_t*);
 
-typedef struct item_entry_t item_entry_t;
+/** @brief Maps the head symbol of a device item form to its parser. */
 struct item_entry_t
 {
 	const char*	head;
