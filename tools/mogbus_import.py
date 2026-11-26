@@ -8,7 +8,7 @@ Python 3.9+, standard library only. Subcommands:
 
 The config goes to stdout, or to -o FILE. Warnings (unsupported or ambiguous input) go to stderr
 and into the output as ';' comments; --strict turns them into errors. --check runs
-$MOGBUS_BIN (default ./mogbus) --check on the result. See docs/user/importing.md.
+$MOGBUS_BIN (default ./mogbus) --check on the result. See docs/user/import/import-overview.md.
 """
 import argparse
 import csv
@@ -546,7 +546,7 @@ def convert_csv(args, rep):
     found = detect(text, overrides)
     if not found:
         rep.error("no header row found: need a column named like address, register or offset "
-                  "plus at least one more known column (see docs/user/importing.md; use --map)")
+                  "plus at least one more known column (see docs/user/import/import-overview.md; use --map)")
         return None
     rows, hdr, cols = found
     header = rows[hdr][1]

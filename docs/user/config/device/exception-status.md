@@ -28,4 +28,4 @@ Sets the byte returned by Read Exception Status (FC 07).
 
 ## See also
 
-- [Modbus support](../../modbus-support.md)
+- [Modbus support](../../modbus/modbus-overview.md)

@@ -6,7 +6,7 @@ endif
 # source tree has sub-folders (one per module), so sources are found recursively.
 
 # OS layer: src/os/os_*_<PLATFORM>.c are the only per-platform sources. PLATFORM=win32 cross-compiles
-# a native Windows build with MinGW-w64 (CROSS is the toolchain prefix); see docs/user/windows.md.
+# a native Windows build with MinGW-w64 (CROSS is the toolchain prefix); see docs/user/windows/windows-route.md.
 PLATFORM    ?= posix
 ifeq ($(PLATFORM),posix)
 EXE         =
@@ -410,7 +410,7 @@ endif
 	cp $(BIN) $$stage/bin/ && cp $(LIB_STATIC) $(LIB_SHARED) $$stage/lib/ && \
 	cp include/mogbus.h $$stage/include/ && \
 	cp README.md LICENSE NOTICE.md $$stage/share/doc/mogbus/ && \
-	cp docs/user/*.md $$stage/share/doc/mogbus/docs/ && cp profiles/*.scm $$stage/share/mogbus/profiles/ && \
+	cp -r docs/user/. $$stage/share/doc/mogbus/docs/ && cp profiles/*.scm $$stage/share/mogbus/profiles/ && \
 	find $$stage -type d -exec chmod 755 {} + && find $$stage -type f -exec chmod 644 {} + && \
 	chmod 755 $$stage/bin/$(BIN) $$stage/lib/$(LIB_SHARED) && \
 	tar -C $(DIST_DIR) --sort=name --mtime=@$$epoch --owner=0 --group=0 --numeric-owner \

@@ -41,7 +41,7 @@ address), like undefined table addresses. Multiple sub-requests in one FC 20/21 
 and answered in order (FC 21 echoes the request on success); the request is rejected as a whole if any
 sub-request is invalid or unavailable/unwritable, or (for FC 20) if the response would not fit in a
 Modbus PDU. FC 21 is all-or-nothing: no records are modified if any sub-request fails validation. See
-[Modbus support](../../modbus-support.md) for the exact request/response format, semantics, and
+[Modbus support](../../modbus/modbus-overview.md) for the exact request/response format, semantics, and
 exception conditions.
 
 ## Examples
@@ -59,4 +59,4 @@ exception conditions.
 ## See also
 
 - [fifo](fifo.md)
-- [Modbus support](../../modbus-support.md)
+- [Modbus support](../../modbus/modbus-overview.md)

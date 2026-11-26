@@ -30,7 +30,7 @@ exception 02. If no FIFO queues are configured, FC 24 is unavailable (exception 
 FC 24 reads are **non-destructive**: reading a FIFO does not change its contents or count, so
 repeated reads return the same values. FIFO contents are config data (fixed for the run; not writable
 via Modbus and not modified by the simulator). The response `FIFO Count` is the number of configured
-values and is always at most 31. See [Modbus support](../../modbus-support.md) for the exact
+values and is always at most 31. See [Modbus support](../../modbus/modbus-overview.md) for the exact
 request/response format and exception conditions.
 
 ## Examples

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Build:  docker build --build-arg VERSION=0.0.1 -t mogbus:0.0.1 .
 # Run:    docker run --rm -p 127.0.0.1:1502:1502 mogbus:0.0.1
-# See docs/deployment.md.
+# See docs/user/deployment/docker.md.
 
 # Debian 13 (trixie), pinned by tag and by the digest of the multi-arch index. The runtime stage
 # uses the same release, so the libssl it loads matches the one the binary was linked against.
@@ -42,7 +42,7 @@ USER 10001:10001
 WORKDIR /
 EXPOSE 1502/tcp 1502/udp 9102/tcp
 
-# Sends one Modbus request to the first device of the config; see docs/deployment.md.
+# Sends one Modbus request to the first device of the config; see docs/user/deployment/docker.md.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
     CMD ["/usr/local/bin/mogbus", "--health", "/etc/mogbus/mogbus.scm"]
 

@@ -39,10 +39,10 @@ mogbus does not implement is allowed, because real products use others too.
 The actions are listed in [function code actions](function-code-actions.md).
 
 User-defined codes go through the same processing as the built-in ones: the device tick, the
-diagnostic counters of FC 08/11/12, [metrics](../../observability.md), listen-only mode and
+diagnostic counters of FC 08/11/12, [metrics](../../observability/http-endpoint.md), listen-only mode and
 [faults](../faults/fault.md) (a `delay`, `drop`, `exception`, `corrupt` or `restart` fault applies to
 a user-defined request like any other). A `sensor-disconnect` fault changes only FC 02 and 04 reads,
-not user-defined codes. See [Modbus support](../../modbus-support.md#function-codes).
+not user-defined codes. See [Modbus support](../../modbus/function-codes.md).
 
 Codes are config-only: the C API cannot add them yet, but `mogbus_device_info()` lists them.
 
@@ -76,4 +76,4 @@ Codes are config-only: the C API cannot add them yet, but `mogbus_device_info()`
 ## See also
 
 - [function code actions](function-code-actions.md)
-- [Modbus support](../../modbus-support.md#function-codes)
+- [Modbus support](../../modbus/function-codes.md)

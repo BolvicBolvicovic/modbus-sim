@@ -24,7 +24,7 @@ unknown reference section or a reference entry out of order fail the build.
   "home": "README.md",
   "home_nav": "Overview",
   "sections": [
-    {"title": "Guide", "items": ["docs/user/profiles.md"]},
+    {"title": "Guide", "items": ["docs/user/get-started.md"]},
     {"title": "Reference", "items": [
       "docs/user/config/format.md",
       {"index": "docs/user/config/server/index.md", "title": "Server",
@@ -133,4 +133,4 @@ example `tools/docs/shoot.sh /tmp/shots build/docs index.html:1440x900:full`.
 The XML of Doxygen 1.9.8 (the CI version) and newer must both be warning-free. Markdown titles keep
 backticks as `<tt>` text and heading ids are renumbered across pages (`behaviour-2`), which is why the
 generator derives its own anchors and only uses Doxygen's ids to resolve links. See
-[architecture.md](architecture.md) for the comment rules.
+[Architecture](architecture.md) for the comment rules.

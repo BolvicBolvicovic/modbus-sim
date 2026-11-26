@@ -2,7 +2,7 @@
 
 A config file describes the simulator: which transport and server options to use, and which devices
 exist. Save it with any name, for example `my-device.scm`, and run `./mogbus my-device.scm`. To start
-from a register map you already have (CSV or pymodbus), see [importing a register map](../importing.md).
+from a register map you already have (CSV or pymodbus), see [importing a register map](../import/import-overview.md).
 
 ## The format in one minute
 

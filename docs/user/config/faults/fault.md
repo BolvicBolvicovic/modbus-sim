@@ -86,4 +86,4 @@ Use [`(seed N)`](../server/seed.md) in `(server ...)` to repeat the exact same p
 
 - [percent](percent.md)
 - [schedule](schedule.md)
-- [Modbus support](../../modbus-support.md)
+- [Modbus support](../../modbus/modbus-overview.md)

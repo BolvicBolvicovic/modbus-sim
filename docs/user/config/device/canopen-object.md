@@ -39,4 +39,4 @@ its configured data. Undefined objects and out-of-range transfers are rejected.
 ## See also
 
 - [device-id-object](device-id-object.md)
-- [Modbus support](../../modbus-support.md)
+- [Modbus support](../../modbus/modbus-overview.md)

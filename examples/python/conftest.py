@@ -22,7 +22,7 @@ def free_port():
 
 @pytest.fixture
 def meter():
-    # http_control lets a test inject faults over loopback HTTP (docs/user/observability.md).
+    # http_control lets a test inject faults over loopback HTTP (docs/user/observability/api/control-api.md).
     http_port = free_port()
     with mogbus.serve(config_text=CONFIG, port=0, http_bind_address="127.0.0.1",
                       http_port=http_port, http_control=True) as srv:

@@ -59,4 +59,4 @@ Read both back as float32, the second with the byte swap undone:
 ## See also
 
 - [word-order](word-order.md)
-- [importing a register map](../../importing.md)
+- [importing a register map](../../import/import-overview.md)

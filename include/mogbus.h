@@ -4,7 +4,7 @@
  *
  * This is the only header a library user needs. It uses only <stdint.h>,
  * <stdbool.h> and <stddef.h> types and every symbol starts with mogbus_ or
- * MOGBUS_. Link with libmogbus.so or libmogbus.a (see docs/user/library.md).
+ * MOGBUS_. Link with libmogbus.so or libmogbus.a (see docs/user/library/library-start.md).
  *
  * Model: a mogbus_t context owns the devices and servers you create. Devices
  * come from a config file (mogbus_load_config) or are built in code

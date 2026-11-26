@@ -4,15 +4,242 @@
   "home_nav": "Overview",
   "sections": [
     {
-      "title": "Guide",
+      "title": "Get started",
       "items": [
-        "docs/user/profiles.md",
-        "docs/user/importing.md",
-        "docs/user/deployment.md",
-        "docs/user/windows.md",
-        "docs/user/observability.md",
-        "docs/user/library.md",
-        "docs/user/python.md"
+        "docs/user/get-started.md",
+        "docs/user/features.md",
+        "docs/user/building.md"
+      ]
+    },
+    {
+      "title": "Profiles and import",
+      "items": [
+        "docs/user/profiles/using-profiles.md",
+        "docs/user/profiles/profile-catalog.md",
+        "docs/user/profiles/write-your-own-profile.md",
+        "docs/user/import/import-overview.md",
+        "docs/user/import/import-csv.md",
+        "docs/user/import/import-csv-addresses.md",
+        "docs/user/import/import-csv-types.md",
+        "docs/user/import/import-pymodbus.md",
+        "docs/user/import/import-pymodbus-servers.md"
+      ]
+    },
+    {
+      "title": "Deployment",
+      "items": [
+        "docs/user/deployment/docker.md",
+        "docs/user/deployment/health-check.md",
+        "docs/user/deployment/container-hardening.md",
+        "docs/user/deployment/docker-compose.md",
+        "docs/user/deployment/kubernetes.md"
+      ]
+    },
+    {
+      "title": "Observability",
+      "items": [
+        "docs/user/observability/http-endpoint.md",
+        "docs/user/observability/logs.md",
+        {
+          "index": "docs/user/observability/metrics/metrics.md",
+          "title": "Metrics",
+          "groups": [
+            {
+              "title": "Server",
+              "entries": [
+                "docs/user/observability/metrics/mogbus-info.md",
+                "docs/user/observability/metrics/mogbus-ready.md",
+                "docs/user/observability/metrics/mogbus-start-time-seconds.md"
+              ]
+            },
+            {
+              "title": "Requests",
+              "entries": [
+                "docs/user/observability/metrics/mogbus-requests-total.md",
+                "docs/user/observability/metrics/mogbus-responses-total.md",
+                "docs/user/observability/metrics/mogbus-frames-rejected-total.md",
+                "docs/user/observability/metrics/mogbus-response-latency-seconds.md"
+              ]
+            },
+            {
+              "title": "Connections",
+              "entries": [
+                "docs/user/observability/metrics/mogbus-connections-active.md",
+                "docs/user/observability/metrics/mogbus-connections-total.md"
+              ]
+            },
+            {
+              "title": "Control API",
+              "entries": [
+                "docs/user/observability/metrics/mogbus-control-requests-total.md"
+              ]
+            },
+            {
+              "title": "Devices",
+              "entries": [
+                "docs/user/observability/metrics/mogbus-device-info.md",
+                "docs/user/observability/metrics/mogbus-device-requests-total.md",
+                "docs/user/observability/metrics/mogbus-device-responses-total.md",
+                "docs/user/observability/metrics/mogbus-device-exceptions-total.md",
+                "docs/user/observability/metrics/mogbus-device-faults-total.md",
+                "docs/user/observability/metrics/mogbus-device-comm-errors-total.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/observability/api/control-api.md",
+          "title": "Runtime control API",
+          "groups": [
+            {
+              "title": "Values",
+              "entries": [
+                "docs/user/observability/api/api-list-devices.md",
+                "docs/user/observability/api/api-read-values.md",
+                "docs/user/observability/api/api-write-values.md",
+                "docs/user/observability/api/api-get-value.md",
+                "docs/user/observability/api/api-set-value.md"
+              ]
+            },
+            {
+              "title": "Faults",
+              "entries": [
+                "docs/user/observability/api/api-list-faults.md",
+                "docs/user/observability/api/api-set-fault.md",
+                "docs/user/observability/api/api-clear-fault.md"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Embedding in C and Python",
+      "items": [
+        "docs/user/library/library-start.md",
+        "docs/user/library/library-api.md",
+        "docs/user/library/library-data.md",
+        "docs/user/library/library-lifetimes.md",
+        "docs/user/python/python-start.md",
+        "docs/user/python/python-api.md",
+        "docs/user/python/python-threading.md",
+        "docs/user/python/python-testing.md"
+      ]
+    },
+    {
+      "title": "Windows",
+      "items": [
+        "docs/user/windows/windows-route.md",
+        "docs/user/windows/windows-docker.md",
+        "docs/user/windows/windows-wsl2.md",
+        "docs/user/windows/windows-networking.md",
+        "docs/user/windows/windows-serial.md",
+        "docs/user/windows/windows-native.md",
+        "docs/user/windows/windows-troubleshooting.md"
+      ]
+    },
+    {
+      "title": "Modbus",
+      "items": [
+        "docs/user/modbus/modbus-overview.md",
+        {
+          "index": "docs/user/modbus/function-codes.md",
+          "title": "Function codes",
+          "groups": [
+            {
+              "title": "Reading",
+              "entries": [
+                "docs/user/modbus/fc01-read-coils.md",
+                "docs/user/modbus/fc02-read-discrete-inputs.md",
+                "docs/user/modbus/fc03-read-holding-registers.md",
+                "docs/user/modbus/fc04-read-input-registers.md"
+              ]
+            },
+            {
+              "title": "Writing",
+              "entries": [
+                "docs/user/modbus/fc05-write-single-coil.md",
+                "docs/user/modbus/fc06-write-single-register.md",
+                "docs/user/modbus/fc0f-write-multiple-coils.md",
+                "docs/user/modbus/fc10-write-multiple-registers.md",
+                "docs/user/modbus/fc16-mask-write-register.md",
+                "docs/user/modbus/fc17-read-write-multiple-registers.md"
+              ]
+            },
+            {
+              "title": "Status, diagnostics and identification",
+              "entries": [
+                "docs/user/modbus/fc07-read-exception-status.md",
+                "docs/user/modbus/fc08-diagnostics.md",
+                "docs/user/modbus/fc0b-get-com-event-counter.md",
+                "docs/user/modbus/fc0c-get-com-event-log.md",
+                "docs/user/modbus/fc11-report-server-id.md",
+                "docs/user/modbus/fc2b-0e-read-device-identification.md"
+              ]
+            },
+            {
+              "title": "Files, queues and CANopen",
+              "entries": [
+                "docs/user/modbus/fc14-read-file-record.md",
+                "docs/user/modbus/fc15-write-file-record.md",
+                "docs/user/modbus/fc18-read-fifo-queue.md",
+                "docs/user/modbus/fc2b-0d-canopen-general-reference.md"
+              ]
+            },
+            {
+              "title": "Custom",
+              "entries": [
+                "docs/user/modbus/user-defined-function-codes.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/modbus/diagnostics-subfunctions.md",
+          "title": "Diagnostics sub-functions",
+          "entries": [
+            "docs/user/modbus/diagnostics/sub-0000-return-query-data.md",
+            "docs/user/modbus/diagnostics/sub-0001-restart-communications.md",
+            "docs/user/modbus/diagnostics/sub-0002-read-diagnostic-register.md",
+            "docs/user/modbus/diagnostics/sub-0003-change-ascii-delimiter.md",
+            "docs/user/modbus/diagnostics/sub-0004-listen-only-mode.md",
+            "docs/user/modbus/diagnostics/sub-000a-clear-counters.md",
+            "docs/user/modbus/diagnostics/sub-000b-bus-message-count.md",
+            "docs/user/modbus/diagnostics/sub-000c-bus-communication-error-count.md",
+            "docs/user/modbus/diagnostics/sub-000d-bus-exception-error-count.md",
+            "docs/user/modbus/diagnostics/sub-000e-slave-message-count.md",
+            "docs/user/modbus/diagnostics/sub-000f-slave-no-response-count.md",
+            "docs/user/modbus/diagnostics/sub-0010-slave-nak-count.md",
+            "docs/user/modbus/diagnostics/sub-0011-slave-busy-count.md",
+            "docs/user/modbus/diagnostics/sub-0012-bus-character-overrun-count.md",
+            "docs/user/modbus/diagnostics/sub-0014-clear-overrun.md"
+          ]
+        },
+        "docs/user/modbus/exceptions.md",
+        "docs/user/modbus/writes.md",
+        "docs/user/modbus/unit-ids.md",
+        "docs/user/modbus/timing.md",
+        "docs/user/modbus/fault-effects.md"
+      ]
+    },
+    {
+      "title": "Transports",
+      "items": [
+        {
+          "index": "docs/user/transports/transports.md",
+          "title": "Transports",
+          "entries": [
+            "docs/user/transports/transport-tcp.md",
+            "docs/user/transports/transport-tls.md",
+            "docs/user/transports/transport-rtu.md",
+            "docs/user/transports/transport-ascii.md",
+            "docs/user/transports/transport-rtu-tcp.md",
+            "docs/user/transports/transport-ascii-tcp.md",
+            "docs/user/transports/transport-udp.md",
+            "docs/user/transports/transport-ascii-udp.md",
+            "docs/user/transports/transport-rtu-udp.md"
+          ]
+        }
       ]
     },
     {
@@ -207,7 +434,7 @@
           ]
         },
         "docs/user/config/errors.md",
-        "docs/user/modbus-support.md",
+        "docs/user/command-line.md",
         {
           "api": "include/mogbus.h",
           "title": "C API"

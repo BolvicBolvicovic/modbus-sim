@@ -114,4 +114,4 @@ serial line options and RTU timing options are rejected at load time.
 - [server](server.md)
 - [serial framing](framing.md)
 - [path](path.md)
-- [Modbus support](../../modbus-support.md)
+- [Modbus support](../../modbus/modbus-overview.md)

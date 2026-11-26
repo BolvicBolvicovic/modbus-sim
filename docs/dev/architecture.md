@@ -38,7 +38,28 @@
    machines' active states; the earliest declared machine wins for each kind. A fired
    `sensor-disconnect` replaces successful FC 02/04 reads with exception 04 before sending, and a
    fired `restart` resets the device after the response is built. Schedule timing and limits are in
-   [the fault reference](../user/config/faults/schedule.md).
+   [config reference](../user/config/faults/index.md).
+
+## Project layout
+
+```
+include/        mogbus.h, the public C API of the library
+examples/       embed_tcp.c (a host program using only mogbus.h), python/ (embed.py and a pytest example), interop/ (pymodbus interoperability check)
+src/            the program, one folder per module (headers next to their .c files)
+  build_config.h  WITH_TLS and WITH_CONFIG compile-time fallbacks shared by sources and tests
+  config/       reads the config file, checks it, builds devices
+  device/       data tables, points, ramps, value encoding, faults
+  modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
+  net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, ASCII-over-TCP, UDP, ASCII-over-UDP and RTU-over-UDP network loops; OpenSSL TLS wrapper or no-TLS stub
+  api/          the public C API implementation (top layer)
+  server/       transport-independent server facade and the config adapter
+  util/         arena implementation, clock, random numbers, logging
+profiles/       ready-made device profiles
+tests/          unit tests and integration tests (vtest); tests/fuzz/ has the libFuzzer harnesses (make fuzz-run)
+tools/          modbus_probe.py, loadtest.py, run_fuzz.sh, fuzz_seeds.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
+third_party/s7  the s7 Scheme interpreter (used only to read the config)
+vlib/           git submodule: the vlib toolchain (arena allocator, test framework), unmodified
+```
 
 ## Modules
 
@@ -51,7 +72,7 @@
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `rtu_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/wait-table connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
-| `src/api` | `mogbus.c`, `probe.c` | the public C API behind `include/mogbus.h` (see [library.md](../user/library.md)): context, devices and points, server handles, logging, and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
+| `src/api` | `mogbus.c`, `probe.c` | the public C API behind `include/mogbus.h` (see [Embedding mogbus in C](../user/library/library-start.md)): context, devices and points, server handles, logging, and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
 | `src/main.c` | | command line, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
 Dependencies point one way: `server → net → modbus → device → util → os`, `config → device → util`, every layer may also use `os`, and `os` includes no other module (only vlib),
@@ -304,7 +325,7 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
   them only when the brief does not already say it. Comments inside function bodies stay `/* */`.
   `make docs` (CI job `docs`) runs Doxygen with warnings as errors, then
   `tools/check_doc_briefs.sh`, which fails for any file, struct, union, enum or opaque or
-  function-pointer typedef without a brief, then builds the site (see [docs.md](docs.md)).
+  function-pointer typedef without a brief, then builds the site (see [Documentation site](docs.md)).
 - Typedef layout: forward typedefs (`typedef struct x_t x_t;`, enums and unions alike) are grouped
   at the top of the file after the includes; the brief sits directly above the `struct x_t {` or
   `enum x_t {` definition (a brief above the typedef would be attached to the typedef, not the
@@ -368,10 +389,10 @@ Release builds are reproducible: `REPRO_FLAGS` (`-ffile-prefix-map`), sorted sou
 build directories (`tools/check_reproducible.sh`, CI job `reproducible`). `make dist` packs the prod
 build into a deterministic tarball and `tools/gen_sbom.sh` writes the SPDX SBOM; `release.yml` runs
 both on tags and attests the results. `mogbus --version` prints the `mogbus_version()` string plus the
-`git describe` revision, which only `main.o` receives. See [release.md](release.md).
+`git describe` revision, which only `main.o` receives. See [Releases](release.md).
 The `Dockerfile` (digest-pinned Debian base, non-root UID 10001, `mogbus --health` check),
 `deploy/docker-compose.yml` and `deploy/kubernetes/mogbus.yaml` are verified by the `docker` CI job;
-see [deployment.md](../user/deployment.md).
+see [Run mogbus in Docker](../user/deployment/docker.md).
 
 The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s7.h`.
 
@@ -397,7 +418,7 @@ only outstanding work is listed here.
 - Importers for vendor register maps (CSV) and pymodbus simulator JSON. Why: users start from a
   map they already have, and the config syntax is new to them.
 - Windows: Docker Desktop and WSL2 (including serial adapters through usbipd-win) are documented in
-  `docs/user/windows.md`, together with the experimental native build of the network modes. Why: many
+  `docs/user/windows/windows-route.md`, together with the experimental native build of the network modes. Why: many
   PLC and SCADA engineers work on Windows. Plan:
   - Done: the `src/os/` layer (see Modules) is the only code that includes OS headers (enforced by
     `tools/check_deps.sh`), with `os_*_posix.c` and `os_*_win32.c` picked by `PLATFORM`.

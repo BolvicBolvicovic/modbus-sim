@@ -26,7 +26,7 @@ off (no endpoint). When present: port `9102`, bind `"127.0.0.1"`, control `off`.
 
 In TCP modes the HTTP port must differ from the Modbus port. `(control on)` (default `off`) also
 serves the unauthenticated `/api/` control API that reads and writes registers and sets or clears
-faults at runtime, and logs a WARN at start; see [observability](../../observability.md).
+faults at runtime, and logs a WARN at start; see the [runtime control API](../../observability/api/control-api.md).
 
 > **Warning:** the control API has no authentication; keep it on loopback.
 
@@ -39,5 +39,5 @@ faults at runtime, and logs a WARN at start; see [observability](../../observabi
 
 ## See also
 
-- [observability](../../observability.md)
+- [observability](../../observability/http-endpoint.md)
 - [port](port.md)

@@ -38,7 +38,7 @@ Each key sets one object, text of 0-244 bytes.
 
 Setting any regular object (0x03-0x06) reports regular conformity (`0x82`). `ReadDevId` code
 `01` is basic, `02` regular, `03` extended and `04` specific; see
-[Modbus support](../../modbus-support.md) for the response semantics.
+[Modbus support](../../modbus/modbus-overview.md) for the response semantics.
 
 ## Examples
 

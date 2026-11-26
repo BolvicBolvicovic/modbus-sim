@@ -23,7 +23,7 @@ Replaces the response with a Modbus exception.
 `[FC|0x80][code]`. The request is still processed normally. A fired exception wins over a
 [`sensor-disconnect`](sensor-disconnect.md) read. It is how a client sees the codes `04`, `05`, `06`,
 `07`, `08` and `0A` that the simulator never produces by itself; see
-[Modbus support](../../modbus-support.md).
+[Modbus support](../../modbus/modbus-overview.md).
 
 ## Errors
 

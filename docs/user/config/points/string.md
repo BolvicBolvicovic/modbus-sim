@@ -29,7 +29,7 @@ Strings can only be `holding` or `input` points and only static: no `ramp`, `sin
 which changes the text until the device restarts; [`restart`](../faults/restart.md) restores the
 configured text. `(count N)` repeats the whole string point. Machines cannot read, drive or watch
 strings (config load fails). The C API and the Python package read and set the text with
-`mogbus_device_get_string()`/`set_string()` (see [the C library](../../library.md)); `get_value` fails
+`mogbus_device_get_string()`/`set_string()` (see [the C library](../../library/library-start.md)); `get_value` fails
 on a string point. Text read back stops at the first NUL byte; a client may write any byte value.
 
 ## Errors

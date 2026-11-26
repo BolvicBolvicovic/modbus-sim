@@ -64,4 +64,4 @@ treated as EOF and is not logged as a TLS failure.
 
 - [certificate](tls-certificate.md)
 - [require-client-certificate](tls-require-client-certificate.md)
-- [Modbus support](../../modbus-support.md)
+- [Modbus support](../../modbus/modbus-overview.md)

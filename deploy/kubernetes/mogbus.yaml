@@ -1,6 +1,6 @@
 # Apply:  kubectl apply -f deploy/kubernetes/mogbus.yaml
 # The image must be built and pushed to a registry the cluster can pull from, then the `image`
-# below changed to match (see docs/user/deployment.md).
+# below changed to match (see docs/user/deployment/docker.md).
 apiVersion: v1
 kind: ConfigMap
 metadata:

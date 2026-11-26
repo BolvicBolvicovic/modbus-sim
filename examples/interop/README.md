@@ -65,7 +65,7 @@ The same method applies to products you cannot script directly:
 3. **Point the product at it** and configure the tags/points it should poll and write.
 4. **Watch both sides.** `mogbus -v --log-format json` logs every request (unit, function code,
    result, exception, fault) and `/metrics` counts them (see
-   [observability](../../docs/user/observability.md)), so a checklist per function code can be
+   [metrics](../../docs/user/observability/metrics/metrics.md)), so a checklist per function code can be
    ticked from the logs: the product polled FC 03 on unit 1 and got `ok`, a write of tag X arrived
    as FC 06 at address N with value V, an alarm appeared when a `sensor-disconnect` fault fired.
 5. **Inject faults** (`delay`, `drop`, `exception`, `corrupt`, `disconnect`) and check the

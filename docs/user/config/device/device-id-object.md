@@ -23,7 +23,7 @@ non-empty and at most 244 bytes. IDs must be unique and at most 32 extended obje
 per device; entries are served in ascending ID order. Configuring any extended object raises FC 43
 Conformity Level to `0x83`. MEI `0x0E` is the Read Device Identification type; FC 43 with MEI `0x0D`
 performs CANopen SDO transfers against [`(canopen-object ...)`](canopen-object.md) data. See
-[Modbus support](../../modbus-support.md) for response semantics.
+[Modbus support](../../modbus/modbus-overview.md) for response semantics.
 
 ## Examples
 
