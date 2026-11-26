@@ -60,10 +60,20 @@ model_needs_target(const model_t* model)
 	return model->shape == MODEL_LAG && model->target_is_point;
 }
 
+bool
+model_has_degradation(const model_t* model)
+{
+	return model->degradation.drift_per_hour != 0 ||
+	       model->degradation.noise_growth_per_hour > 0 ||
+	       model->degradation.has_stuck ||
+	       model->degradation.has_fail;
+}
+
 void
 model_reset(model_t* model)
 {
 	model->lag_started = false;
+	model->degradation.stuck_started = false;
 }
 
 /** @brief Uniform number in [0, 1) from the top 53 bits of a random word. */
@@ -98,6 +108,8 @@ model_value(model_t* model, f64 base, f64 target, u64 start_ms, u64 now_ms, u64 
 {
 	u64	elapsed = now_ms > start_ms ? now_ms - start_ms : 0;
 	f64	value   = base;
+	struct model_noise_t	noise = model->noise;
+	struct model_degradation_t*	deg = &model->degradation;
 
 	switch (model->shape)
 	{
@@ -132,7 +144,34 @@ model_value(model_t* model, f64 base, f64 target, u64 start_ms, u64 now_ms, u64 
 	}
 	}
 
-	if (model->noise.amplitude > 0)
-		value += noise_value(&model->noise, noise_key, elapsed / model->noise.every_ms);
+	if (elapsed > deg->after_ms)
+	{
+		f64	hours = (f64)(elapsed - deg->after_ms) / 3600000.0;
+
+		value += deg->drift_per_hour * hours;
+		if (deg->noise_growth_per_hour > 0)
+		{
+			if (noise.amplitude <= 0)
+			{
+				noise.every_ms = 1000;
+				noise.gaussian = false;
+			}
+			noise.amplitude += deg->noise_growth_per_hour * hours;
+		}
+	}
+
+	if (noise.amplitude > 0)
+		value += noise_value(&noise, noise_key, elapsed / noise.every_ms);
+
+	if (deg->has_stuck &&
+	    elapsed >= deg->stuck_after_ms)
+	{
+		if (!deg->stuck_started)
+		{
+			deg->stuck_value   = value;
+			deg->stuck_started = true;
+		}
+		value = deg->stuck_value;
+	}
 	return value;
 }

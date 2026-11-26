@@ -57,8 +57,8 @@ enum model_shape_t
 };
 
 /**
- * @brief A modeled value: one shape plus the optional noise modifier, evaluated by
- *        model_value().
+ * @brief A modeled value: one shape plus the optional noise and degradation modifiers,
+ *        evaluated by model_value().
  *
  * Fields are grouped by the shape that uses them. Add a modifier by adding a struct here and
  * one step to model_value().
@@ -88,12 +88,28 @@ struct model_t
 		u32	every_ms;	/**< a new sample every this many ms, 1..86400000 */
 		bool	gaussian;
 	} noise;
+	/** Gradual sensor aging; times are ms since device start, so a restart heals it. */
+	struct model_degradation_t
+	{
+		u32	after_ms;		/**< drift and noise growth start here */
+		f64	drift_per_hour;		/**< added to the value per hour after after_ms */
+		f64	noise_growth_per_hour;	/**< extra noise amplitude per hour after after_ms, 0 or more */
+		bool	has_stuck;
+		u32	stuck_after_ms;		/**< the value freezes at its first evaluation from here on */
+		bool	has_fail;
+		u32	fail_after_ms;		/**< reads covering the point answer exception 04 from here on */
+		bool	stuck_started;		/**< state: false until the frozen value is captured */
+		f64	stuck_value;		/**< state: the frozen value, after noise */
+	} degradation;
 };
+
+/** @brief True if the degradation has at least one effect (drift, noise growth, stuck, fail). */
+bool	model_has_degradation(const model_t* model);
 
 /** @brief True if the model adds a lag target read from a point. */
 bool	model_needs_target(const model_t* model);
 
-/** @brief Forgets the lag state: the next evaluation starts at `initial` (or the goal). */
+/** @brief Forgets the lag and stuck state: the next evaluation starts at `initial` (or the goal). */
 void	model_reset(model_t* model);
 
 /**
@@ -105,6 +121,9 @@ void	model_reset(model_t* model);
  * evaluation, so polling rate does not matter while the goal is constant between polls; a
  * goal that changes between polls is sampled at poll times. Noise is sample-and-hold, a pure
  * function of (`noise_key`, floor((now - start) / every_ms)), and is added to the output only.
+ * Degradation then adds drift and extra noise amplitude (uniform every 1000 ms when the point
+ * has no noise of its own), and finally a stuck point returns the output captured at its first
+ * evaluation from `stuck_after_ms` on.
  */
 f64	model_value(model_t* model, f64 base, f64 target, u64 start_ms, u64 now_ms,
 		    u64 noise_key);

@@ -137,12 +137,24 @@ validate_point(const device_t* dev, const point_t* point)
 			return "address is already used by another point";
 	}
 
-	if (point->kind == POINT_MODEL || point->model.noise.amplitude != 0)
+	if (point->kind == POINT_MODEL ||
+	    point->model.noise.amplitude != 0 ||
+	    model_has_degradation(&point->model))
 	{
 		const model_t*	m = &point->model;
 
-		if (space_is_bit(point->space))
+		if (space_is_bit(point->space) &&
+		    (m->shape != MODEL_BASE || m->noise.amplitude != 0))
 			return "coils and discrete inputs cannot have a model or noise";
+
+		if (space_is_bit(point->space) &&
+		    (m->degradation.drift_per_hour != 0 || m->degradation.noise_growth_per_hour != 0))
+			return "coils and discrete inputs cannot have degradation drift or noise growth";
+
+		if (!isfinite(m->degradation.drift_per_hour) ||
+		    !isfinite(m->degradation.noise_growth_per_hour) ||
+		    m->degradation.noise_growth_per_hour < 0)
+			return "degradation drift must be finite and noise growth finite and 0 or more";
 
 		if (!isfinite(m->noise.amplitude) ||
 		    m->noise.amplitude < 0)
@@ -225,17 +237,37 @@ device_reset_models(device_t* dev, u64 now_ms)
 {
 	for (u32 i = 0; i < dev->point_count; i++)
 	{
-		if (dev->points[i].kind != POINT_MODEL ||
-		    dev->points[i].model.shape != MODEL_LAG)
-			continue;
-		model_reset(&dev->points[i].model);
+		if (point_is_timed(&dev->points[i]))
+			model_reset(&dev->points[i].model);
 	}
 	for (u32 i = 0; i < dev->point_count; i++)
 	{
-		if (dev->points[i].kind == POINT_MODEL &&
-		    dev->points[i].model.shape == MODEL_LAG)
+		if (point_is_timed(&dev->points[i]))
 			point_apply(dev, i, now_ms);
 	}
+}
+
+bool
+device_range_failed(const device_t* dev, space_kind_t space, u32 address, u32 count)
+{
+	const space_t*	table = &dev->spaces[space];
+	u64		elapsed = dev->now_ms > dev->start_ms ? dev->now_ms - dev->start_ms : 0;
+
+	for (u32 i = 0; i < count && address + i < ADDRESS_SPACE_SIZE; i++)
+	{
+		u16			owner = table->owner[address + i];
+		const struct model_degradation_t*	deg = NULL;
+
+		if (owner == 0 ||
+		    (u32)owner > dev->point_count)
+			continue;
+
+		deg = &dev->points[owner - 1].model.degradation;
+		if (deg->has_fail &&
+		    elapsed >= deg->fail_after_ms)
+			return true;
+	}
+	return false;
 }
 
 void

@@ -521,8 +521,56 @@ parse_noise(form_ctx_t* ctx, s7_pointer item, point_t* point)
 	return true;
 }
 
+static bool
+parse_degradation(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
+{
+	static const char* const keys[] = { "after-ms", "drift-per-hour", "noise-growth-per-hour",
+		"stuck-after-ms", "fail-after-ms" };
+	s7_pointer	options = s7_cdr(item);
+	struct model_degradation_t*	deg = &point->model.degradation;
+	s64		after = 0;
+	s64		stuck = 0;
+	s64		fail  = 0;
+
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "degradation"))
+		return false;
+
+	if (!form_opt_int(ctx, options, "after-ms", 0, 4294967295LL, &after) ||
+	    !form_opt_int(ctx, options, "stuck-after-ms", 0, 4294967295LL, &stuck) ||
+	    !form_opt_int(ctx, options, "fail-after-ms", 0, 4294967295LL, &fail) ||
+	    !form_opt_number(ctx, options, "drift-per-hour", &deg->drift_per_hour) ||
+	    !form_opt_number(ctx, options, "noise-growth-per-hour", &deg->noise_growth_per_hour))
+		return false;
+
+	if (!isfinite(deg->drift_per_hour) ||
+	    !isfinite(deg->noise_growth_per_hour))
+		return form_fail(ctx, "%s: degradation numbers must be finite", form_text(ctx, item));
+
+	if (deg->noise_growth_per_hour < 0)
+		return form_fail(ctx, "%s: noise-growth-per-hour must be 0 or more", form_text(ctx, item));
+
+	deg->after_ms        = (u32)after;
+	deg->has_stuck       = !form_is_absent(ctx, form_find(ctx, options, "stuck-after-ms"));
+	deg->stuck_after_ms  = (u32)stuck;
+	deg->has_fail        = !form_is_absent(ctx, form_find(ctx, options, "fail-after-ms"));
+	deg->fail_after_ms   = (u32)fail;
+
+	if (!model_has_degradation(&point->model))
+		return form_fail(ctx, "%s: degradation needs at least one of drift-per-hour, "
+				      "noise-growth-per-hour, stuck-after-ms and fail-after-ms",
+				 form_text(ctx, item));
+
+	if (is_bit &&
+	    (deg->drift_per_hour != 0 ||
+	     deg->noise_growth_per_hour != 0))
+		return form_fail(ctx, "%s: coils and discrete inputs only support stuck-after-ms and "
+				      "fail-after-ms", form_text(ctx, item));
+	return true;
+}
+
 /**
- * @brief Reads (static ...), (ramp ...), (sine ...) or (lag ...), then an optional (noise ...).
+ * @brief Reads (static ...), (ramp ...), (sine ...) or (lag ...), then an optional (noise ...)
+ *        and (degradation ...).
  *
  * With none of the four, the point is a static 0.
  */
@@ -532,6 +580,7 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	static const char* const names[] = { "static", "ramp", "sine", "lag" };
 	s7_pointer	found[ARRAY_COUNT(names)];
 	s7_pointer	noise = form_find(ctx, options, "noise");
+	s7_pointer	degradation = form_find(ctx, options, "degradation");
 	u32		present = 0;
 
 	for (u32 i = 0; i < ARRAY_COUNT(names); i++)
@@ -561,6 +610,10 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 		return form_fail(ctx, "%s: (noise ...) needs a (static ...), (ramp ...), (sine ...) or (lag ...) to disturb",
 				 form_text(ctx, noise));
 
+	if (!form_is_absent(ctx, degradation) && present == 0)
+		return form_fail(ctx, "%s: (degradation ...) needs a (static ...), (ramp ...), (sine ...) or (lag ...) to age",
+				 form_text(ctx, degradation));
+
 	point->kind = POINT_STATIC;
 	if (!form_is_absent(ctx, found[1]) && !parse_ramp(ctx, found[1], point))
 		return false;
@@ -571,15 +624,16 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	if (!form_is_absent(ctx, found[0]) && !parse_static(ctx, found[0], is_bit, point))
 		return false;
 
-	if (form_is_absent(ctx, noise))
-		return true;
-
-	if (!parse_noise(ctx, noise, point))
+	if (!form_is_absent(ctx, noise) && !parse_noise(ctx, noise, point))
 		return false;
 
-	/* A static value with noise is evaluated like a model; a ramp keeps its own kind. */
+	if (!form_is_absent(ctx, degradation) && !parse_degradation(ctx, degradation, is_bit, point))
+		return false;
+
+	/* A static value with noise or degradation is evaluated like a model; a ramp keeps its own kind. */
 	if (point->kind == POINT_STATIC &&
-	    point->model.noise.amplitude > 0)
+	    (point->model.noise.amplitude > 0 ||
+	     model_has_degradation(&point->model)))
 		point->kind = POINT_MODEL;
 	return true;
 }
@@ -609,7 +663,7 @@ parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 static bool
 parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 {
-	static const char* const keys[] = { "type", "word-order", "static", "ramp", "sine", "lag", "noise", "count",
+	static const char* const keys[] = { "type", "word-order", "static", "ramp", "sine", "lag", "noise", "degradation", "count",
 		"note" };
 	const char*	head    = form_head_name(item);
 	bool		is_bit  = space_is_bit(space);

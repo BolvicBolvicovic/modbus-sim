@@ -69,6 +69,22 @@ fuzz_device(void)
 			       .target_space = SPACE_HOLDING, .target_address = 3,
 			       .noise = { .amplitude = 1, .every_ms = 10, .gaussian = true } };
 	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.type    = VT_U16;
+	p.address = 20;
+	p.static_value = 500;
+	p.model   = (model_t){ .degradation = { .after_ms = 5, .drift_per_hour = 3.6e6,
+						.noise_growth_per_hour = 3.6e6, .has_stuck = true,
+						.stuck_after_ms = 50, .has_fail = true, .fail_after_ms = 200 } };
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.space   = SPACE_HOLDING;
+	p.address = 200;
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.space        = SPACE_COIL;
+	p.type         = VT_BOOL;
+	p.address      = 30;
+	p.static_value = 0;
+	p.model        = (model_t){ .degradation = { .has_fail = true, .fail_after_ms = 100 } };
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
 	device_reset_models(dev, 0);
 	p.kind  = POINT_STATIC;
 	p.type  = VT_BOOL;

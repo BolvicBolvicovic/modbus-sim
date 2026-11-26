@@ -1230,3 +1230,167 @@ TEST(ModelsAreRejectedOnBitTablesAndWithBadNumbers)
 	ASSERT_EQ(device_add_point(dev, &p) != NULL);
 	arena_release(arena);
 }
+
+/* Input 0, holding 0, coil 0 and discrete 0 fail at 5000 ms; the neighbouring points do not. */
+static device_t*
+make_failing_device(arena_t* arena)
+{
+	device_t*	dev  = fresh_device(arena);
+	model_t		fail = { .degradation = { .has_fail = true, .fail_after_ms = 5000 } };
+	point_t		p    = model_point(SPACE_INPUT, 0, VT_U16, &fail);
+
+	p.static_value = 7;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = static_point(SPACE_INPUT, 1, VT_U16, 8);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = model_point(SPACE_HOLDING, 0, VT_U16, &fail);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = static_point(SPACE_HOLDING, 1, VT_U16, 9);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = model_point(SPACE_COIL, 0, VT_BOOL, &fail);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = static_point(SPACE_COIL, 1, VT_BOOL, 1);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	p = model_point(SPACE_DISCRETE, 0, VT_BOOL, &fail);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	device_reset_models(dev, 0);
+	return dev;
+}
+
+TEST(DegradationFailAnswersException04OnReadsCoveringThePoint)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_failing_device(arena);
+	u8		in0[5]   = { 0x04, 0, 0, 0, 1 };
+	u8		in01[5]  = { 0x04, 0, 0, 0, 2 };
+	u8		in1[5]   = { 0x04, 0, 1, 0, 1 };
+	u8		hold[5]  = { 0x03, 0, 0, 0, 2 };
+	u8		hold1[5] = { 0x03, 0, 1, 0, 1 };
+	u8		coil[5]  = { 0x01, 0, 0, 0, 2 };
+	u8		coil1[5] = { 0x01, 0, 1, 0, 1 };
+	u8		disc[5]  = { 0x02, 0, 0, 0, 1 };
+	u8		rw[12]   = { 0x17, 0, 0, 0, 1, 0, 1, 0, 1, 2, 0x00, 0x12 };
+	u8		rw_ok[12] = { 0x17, 0, 1, 0, 1, 0, 1, 0, 1, 2, 0x00, 0x12 };
+	u8		wr[5]    = { 0x06, 0, 0, 0x00, 0x42 };
+	u8		resp[260];
+
+	/* before the failure time everything reads normally */
+	ASSERT_EQ(modbus_handle_pdu(dev, 4999, in0, 5, resp) == 4);
+	ASSERT_EQ(resp[3] == 7);
+	ASSERT_EQ(modbus_handle_pdu(dev, 4999, coil, 5, resp) == 3);
+	ASSERT_EQ(dev->diag_exception_count == 0);
+
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, in0, 5, resp) == 2);
+	ASSERT_EQ(resp[0] == 0x84 && resp[1] == 0x04);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, in01, 5, resp) == 2 && resp[1] == 0x04);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, hold, 5, resp) == 2);
+	ASSERT_EQ(resp[0] == 0x83 && resp[1] == 0x04);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, coil, 5, resp) == 2);
+	ASSERT_EQ(resp[0] == 0x81 && resp[1] == 0x04);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, disc, 5, resp) == 2);
+	ASSERT_EQ(resp[0] == 0x82 && resp[1] == 0x04);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, rw, 12, resp) == 2);
+	ASSERT_EQ(resp[0] == 0x97 && resp[1] == 0x04);
+	ASSERT_EQ(dev->diag_exception_count == 6);
+	/* the read-write function does not write when its read fails */
+	ASSERT_EQ(read_word(dev, SPACE_HOLDING, 1) == 9);
+
+	/* other addresses still read; an undefined address stays exception 02 */
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, in1, 5, resp) == 4 && resp[3] == 8);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, hold1, 5, resp) == 4 && resp[3] == 9);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, coil1, 5, resp) == 3 && resp[2] == 1);
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, rw_ok, 12, resp) == 4);
+	in1[4] = 9;
+	ASSERT_EQ(modbus_handle_pdu(dev, 5000, in1, 5, resp) == 2 && resp[1] == 0x02);
+
+	/* writes are not affected, and the written value is still refused on read */
+	ASSERT_EQ(modbus_handle_pdu(dev, 6000, wr, 5, resp) == 5);
+	ASSERT_EQ(read_word(dev, SPACE_HOLDING, 0) == 0x42);
+	ASSERT_EQ(modbus_handle_pdu(dev, 6000, hold, 5, resp) == 2 && resp[1] == 0x04);
+
+	/* a restart heals the device and the timeline starts again */
+	device_restart(dev, 10000);
+	ASSERT_EQ(modbus_handle_pdu(dev, 14999, in0, 5, resp) == 4 && resp[3] == 7);
+	ASSERT_EQ(modbus_handle_pdu(dev, 15000, in0, 5, resp) == 2 && resp[1] == 0x04);
+	arena_release(arena);
+}
+
+TEST(DegradationFailAppliesToUserDefinedRegistersAndSurvivesAHostClaim)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_failing_device(arena);
+	device_custom_fc_t	fc = { .code = 0x41, .case_count = 2 };
+	val_t		v = { .type = VAL_NUM, .n = 5 };
+	u8		ok[2]  = { 0x41, 0x01 };
+	u8		bad[2] = { 0x41, 0x02 };
+	u8		in0[5] = { 0x04, 0, 0, 0, 1 };
+	u8		resp[260];
+
+	fc.cases[0] = (struct device_custom_case_t){ .prefix = { 0x01 }, .prefix_len = 1,
+		.action = CUSTOM_REGISTERS, .space = SPACE_HOLDING, .address = 1, .count = 1 };
+	fc.cases[1] = (struct device_custom_case_t){ .prefix = { 0x02 }, .prefix_len = 1,
+		.action = CUSTOM_REGISTERS, .space = SPACE_HOLDING, .address = 0, .count = 2 };
+	ASSERT_EQ(device_add_custom_fc(dev, &fc) == NULL);
+
+	ASSERT_EQ(modbus_handle_pdu(dev, 9000, ok, 2, resp) == 4);
+	ASSERT_EQ(modbus_handle_pdu(dev, 9000, bad, 2, resp) == 2);
+	ASSERT_EQ(resp[0] == 0xC1 && resp[1] == 0x04);
+	ASSERT_EQ(dev->diag_exception_count == 1);
+
+	/* the host claiming the point removes model effects but not the failure */
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_INPUT, 0, &v));
+	ASSERT_EQ(modbus_handle_pdu(dev, 9000, in0, 5, resp) == 2 && resp[1] == 0x04);
+	device_restart(dev, 20000);
+	ASSERT_EQ(modbus_handle_pdu(dev, 20000, in0, 5, resp) == 4 && resp[3] == 7);
+	arena_release(arena);
+}
+
+TEST(DegradationDriftAndStuckMoveAndFreezeAPoint)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	model_t		m     = { .shape = MODEL_SINE, .offset = 1000, .amplitude = 100,
+			      .period_ms = 4000,
+			      .degradation = { .after_ms = 1000, .drift_per_hour = 3600,
+					       .has_stuck = true, .stuck_after_ms = 6000 } };
+	point_t		p     = model_point(SPACE_INPUT, 0, VT_U16, &m);
+
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	device_reset_models(dev, 0);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 1000);
+	device_tick(dev, 3000);
+	/* sine at 3000 ms is 900; drift 3600/h over 2000 ms is +2 */
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 902);
+	device_tick(dev, 6000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 1005);
+	device_tick(dev, 7000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 1005);
+	device_restart(dev, 100000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 1000);
+	device_tick(dev, 103000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 902);
+	arena_release(arena);
+}
+
+TEST(DegradationIsRejectedForDriftOnBitsAndBadNumbers)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	model_t		m     = { .degradation = { .drift_per_hour = 1 } };
+	point_t		p     = model_point(SPACE_COIL, 0, VT_BOOL, &m);
+
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	m.degradation = (struct model_degradation_t){ .noise_growth_per_hour = 1 };
+	p = model_point(SPACE_DISCRETE, 0, VT_BOOL, &m);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	m.degradation = (struct model_degradation_t){ .noise_growth_per_hour = -1 };
+	p = model_point(SPACE_INPUT, 0, VT_U16, &m);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	m.degradation = (struct model_degradation_t){ .drift_per_hour = INFINITY };
+	p = model_point(SPACE_INPUT, 0, VT_U16, &m);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	m.degradation = (struct model_degradation_t){ .has_stuck = true, .stuck_after_ms = 10 };
+	p = model_point(SPACE_COIL, 0, VT_BOOL, &m);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	arena_release(arena);
+}

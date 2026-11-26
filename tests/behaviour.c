@@ -1,6 +1,7 @@
 #include "vtest.h"
 #include "device/behaviour.h"
 #include "device/encode.h"
+#include "vlib/macros.h"
 #include <float.h>
 #include <math.h>
 #include <string.h>
@@ -279,4 +280,95 @@ TEST(NoiseIsAddedToLagOutputOnly)
 		ASSERT_EQ(fabs(noisy - clean) <= 1.0);
 		ASSERT_EQ(fabs(m.lag_y - plain.lag_y) < 1e-12);
 	}
+}
+
+TEST(DegradationDriftAddsPerHourAfterTheStart)
+{
+	model_t	m = { .shape = MODEL_BASE,
+		      .degradation = { .after_ms = 3600000, .drift_per_hour = 2 } };
+
+	ASSERT_EQ(NEAR(model_value(&m, 10, 0, 0, 0, 0), 10));
+	ASSERT_EQ(NEAR(model_value(&m, 10, 0, 0, 3600000, 0), 10));
+	ASSERT_EQ(NEAR(model_value(&m, 10, 0, 0, 3600000 + 1800000, 0), 11));
+	ASSERT_EQ(NEAR(model_value(&m, 10, 0, 0, 3 * 3600000, 0), 14));
+	/* the timeline counts from the device start */
+	ASSERT_EQ(NEAR(model_value(&m, 10, 0, 1000, 1000 + 2 * 3600000, 0), 12));
+	m.degradation.drift_per_hour = -4;
+	ASSERT_EQ(NEAR(model_value(&m, 10, 0, 0, 2 * 3600000, 0), 6));
+}
+
+TEST(DegradationNoiseGrowthWidensTheNoiseOverTime)
+{
+	model_t	m = { .shape = MODEL_BASE,
+		      .degradation = { .after_ms = 1000000, .noise_growth_per_hour = 3.6 } };
+	f64	largest_early = 0;
+	f64	largest_late = 0;
+
+	for (u64 t = 0; t < 1000000; t += 1000)
+		ASSERT_EQ(NEAR(model_value(&m, 50, 0, 0, t, 5), 50));
+	/* one hour past `after`: amplitude 3.6 (4.2 ten minutes later), uniform, one new sample per second */
+	for (u64 t = 1000000 + 3600000; t < 1000000 + 3600000 + 600000; t += 1000)
+	{
+		f64	d = fabs(model_value(&m, 50, 0, 0, t, 5) - 50);
+
+		ASSERT_EQ(d <= 4.2 + 1e-9);
+		largest_late = MAX(largest_late, d);
+	}
+	ASSERT_EQ(largest_late > 2.0);
+	/* a point's own noise keeps its distribution and adds to the growth */
+	m.noise = (struct model_noise_t){ .amplitude = 1, .every_ms = 10 };
+	for (u64 t = 0; t < 1000000; t += 997)
+	{
+		f64	d = fabs(model_value(&m, 50, 0, 0, t, 5) - 50);
+
+		ASSERT_EQ(d <= 1.0 + 1e-9);
+		largest_early = MAX(largest_early, d);
+	}
+	ASSERT_EQ(largest_early > 0.5);
+	for (u64 t = 1000000 + 3600000; t < 1000000 + 3600000 + 100000; t += 10)
+		ASSERT_EQ(fabs(model_value(&m, 50, 0, 0, t, 5) - 50) <= 4.8 + 1e-9);
+}
+
+TEST(DegradationStuckHoldsTheFirstValueFromItsTimeAndResets)
+{
+	model_t	m = { .shape = MODEL_SINE, .amplitude = 10, .period_ms = 4000,
+		      .degradation = { .has_stuck = true, .stuck_after_ms = 1500 } };
+	f64	held = 0;
+
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 1000, 0), 10));
+	/* the first evaluation at or after 1500 ms is the one that sticks */
+	held = model_value(&m, 0, 0, 0, 2000, 0);
+	ASSERT_EQ(NEAR(held, 0));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 3000, 0), held));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 9999, 0), held));
+	model_reset(&m);
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 3000, 0), -10));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 3500, 0), -10));
+}
+
+TEST(DegradationStuckKeepsDriftAndNoiseAtTheFreezeInstant)
+{
+	model_t	m = { .shape = MODEL_BASE,
+		      .noise = { .amplitude = 1, .every_ms = 10 },
+		      .degradation = { .drift_per_hour = 3600, .has_stuck = true,
+				       .stuck_after_ms = 2000 } };
+	f64	held = model_value(&m, 0, 0, 0, 2000, 9);
+
+	ASSERT_EQ(fabs(held - 2) <= 1.0);
+	for (u64 t = 2010; t < 20000; t += 10)
+		ASSERT_EQ(model_value(&m, 0, 0, 0, t, 9) == held);
+}
+
+TEST(DegradationFlagsDescribeTheEffects)
+{
+	model_t	m = { 0 };
+
+	ASSERT_EQ(!model_has_degradation(&m));
+	m.degradation.after_ms = 5;
+	ASSERT_EQ(!model_has_degradation(&m));
+	m.degradation.drift_per_hour = -1;
+	ASSERT_EQ(model_has_degradation(&m));
+	m = (model_t){ 0 };
+	m.degradation.has_fail = true;
+	ASSERT_EQ(model_has_degradation(&m));
 }

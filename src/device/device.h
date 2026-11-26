@@ -272,12 +272,23 @@ u32		device_find_point(const device_t* dev, space_kind_t space, u32 address);
 void		device_tick(device_t* dev, u64 now_ms);
 
 /**
- * @brief Starts every lag model from its initial value (or its goal) at `now_ms`.
+ * @brief Starts every model from scratch at `now_ms`: lag from its initial value (or goal), stuck
+ *        values released.
  *
  * Call once the whole device is built, because a lag may follow a point declared after it.
  * device_restart() calls it too.
  */
 void		device_reset_models(device_t* dev, u64 now_ms);
+
+/**
+ * @brief True when a read of [address, address+count) covers a point whose degradation has
+ *        failed it, at the device time of the last device_tick().
+ *
+ * Read handlers answer exception 04 for it. The point's configured `fail-after-ms` applies
+ * whatever its current kind: a client write or a host claim removes the model effects but not
+ * the failure; restart heals it. Writes are not checked.
+ */
+bool		device_range_failed(const device_t* dev, space_kind_t space, u32 address, u32 count);
 
 /** @brief True for points whose value changes with time: ramps and models. */
 bool		point_is_timed(const point_t* point);

@@ -2802,3 +2802,62 @@ TEST(ConfigMachinesCannotDriveModeledPoints)
 		     "  (state idle (on-enter (set! (holding 0) 3)))))",
 		     "machine cannot drive a ramp or modeled point");
 }
+
+TEST(ConfigParsesDegradation)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev = NULL;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)"
+		" (input 0 (static 10) (degradation (drift-per-hour -0.5)))"
+		" (input 1 (sine (offset 0) (amplitude 1) (period-ms 100)) (noise (amplitude 1))"
+		"  (degradation (after-ms 60000) (noise-growth-per-hour 2) (stuck-after-ms 0) (fail-after-ms 4294967295)))"
+		" (holding 2 (ramp (from 0) (to 10)) (degradation (after-ms 5) (drift-per-hour 1)))"
+		" (coil 0 (static on) (degradation (stuck-after-ms 100) (fail-after-ms 0)))"
+		" (discrete 0 (static off) (degradation (fail-after-ms 5))))",
+		&config, err, sizeof(err)));
+	dev = config.devices[0];
+	ASSERT_EQ(dev->points[0].kind == POINT_MODEL &&
+		  dev->points[0].model.degradation.drift_per_hour == -0.5 &&
+		  !dev->points[0].model.degradation.has_stuck &&
+		  !dev->points[0].model.degradation.has_fail);
+	ASSERT_EQ(dev->points[1].model.degradation.after_ms == 60000 &&
+		  dev->points[1].model.degradation.noise_growth_per_hour == 2 &&
+		  dev->points[1].model.degradation.has_stuck &&
+		  dev->points[1].model.degradation.stuck_after_ms == 0 &&
+		  dev->points[1].model.degradation.has_fail &&
+		  dev->points[1].model.degradation.fail_after_ms == 4294967295u);
+	ASSERT_EQ(dev->points[2].kind == POINT_RAMP &&
+		  dev->points[2].model.degradation.drift_per_hour == 1);
+	ASSERT_EQ(dev->points[3].kind == POINT_MODEL &&
+		  dev->points[3].model.degradation.has_fail &&
+		  dev->points[3].model.degradation.fail_after_ms == 0);
+	/* fail-after-ms 0 fails from the first request */
+	ASSERT_EQ(device_range_failed(dev, SPACE_COIL, 0, 1));
+	ASSERT_EQ(!device_range_failed(dev, SPACE_INPUT, 0, 2));
+	ASSERT_EQ(!device_range_failed(dev, SPACE_DISCRETE, 0, 1));
+	device_tick(dev, dev->start_ms + 5);
+	ASSERT_EQ(device_range_failed(dev, SPACE_DISCRETE, 0, 1));
+}
+
+TEST(ConfigDegradationErrorsAreReadable)
+{
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation)))", "needs at least one of");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (after-ms 100))))", "needs at least one of");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (drift-per-hour 0))))", "needs at least one of");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (noise-growth-per-hour -1))))", "noise-growth-per-hour must be 0 or more");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (fail-after-ms -1))))", "fail-after-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (fail-after-ms 4294967296))))", "fail-after-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (stuck-after-ms -5))))", "stuck-after-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (after-ms 4294967296) (drift-per-hour 1))))", "after-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (fail-after-ms 5) (speed 2))))", "unknown option 'speed'");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (degradation (fail-after-ms 5))))", "needs a (static");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (static on) (degradation (drift-per-hour 1))))", "only support stuck-after-ms and fail-after-ms");
+	EXPECT_ERROR("(device (unit-id 1) (discrete 0 (static on) (degradation (noise-growth-per-hour 1))))", "only support stuck-after-ms and fail-after-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (degradation (drift-per-hour \"x\"))))", "drift-per-hour");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (static 1) (degradation (fail-after-ms 5)))"
+		     " (machine m (initial idle) (state idle (on-enter (set! (holding 0) 3)))))",
+		     "machine cannot drive a ramp or modeled point");
+}
