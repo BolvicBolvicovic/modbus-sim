@@ -352,7 +352,7 @@ a user-defined code changes no device state, and `(registers ...)` only reads.
 | 01 | Illegal Function | the function code is not in the table above |
 | 02 | Illegal Data Address | any address of the request is not defined in the config (or is above 65535), or a write targets a machine-owned point such as a state register |
 | 03 | Illegal Data Value | quantity is 0 or above the limit, the request has the wrong length or byte count, or a single-coil value is not `FF00` / `0000` |
-| 04 | Slave Device Failure | successful FC 02/04 reads via `(fault (kind sensor-disconnect))`, or any response via `(fault (kind exception) (code 4))` |
+| 04 | Slave Device Failure | FC 01/02/03/04/23 and user-defined `(registers ...)` reads covering a point whose `(degradation (fail-after-ms ...))` has passed; successful FC 02/04 reads via `(fault (kind sensor-disconnect))`; any response via `(fault (kind exception) (code 4))` |
 | 05 | Acknowledge | only via `(fault (kind exception) (code 5))` |
 | 06 | Slave Device Busy | only via `(fault (kind exception) (code 6))` |
 | 07 | Negative Acknowledge | only via `(fault (kind exception) (code 7))` |
@@ -458,10 +458,10 @@ both standardized MEI types: 0x0E (Read Device Identification) and 0x0D (CANopen
 limited to object-dictionary SDO upload/download). All other MEI types return exception 01, as do
 reserved and vendor-defined FCs.
 
-Normal validation emits exception codes 01, 02, 03, and 0B, plus FC 43 / MEI 0x0D extended
+Normal validation emits exception codes 01, 02, 03, and 0B (and 04 for reads of failed degraded points), plus FC 43 / MEI 0x0D extended
 exceptions (`AB FF ... 0D AE/CE ...`). Codes 05-08 and 0A are available only through the
 simulator's repeatable `(fault (kind exception) (code N))` injection; 04 is also emitted by a
-`sensor-disconnect` fault; 09 is reserved. The remaining fault kinds (delay, drop, corrupt,
+`sensor-disconnect` fault and by reads of a failed `(degradation ...)` point; 09 is reserved. The remaining fault kinds (delay, drop, corrupt,
 disconnect, restart) are simulator-side behavior, not Modbus exceptions, and disconnect is allowed
 only on TCP-like transports.
 

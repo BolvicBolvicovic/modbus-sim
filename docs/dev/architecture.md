@@ -87,8 +87,17 @@ Headers sit next to their `.c` files.
   through `rng_t`). A lag keeps `lag_y`/`lag_ms` in its `model_t` and advances by the exact
   discrete solution each `device_tick`; its target point is read from the tables at that
   moment. `device_reset_models()` restarts lags once the device is complete (a target may be
-  declared later) and on `device_restart`. `point_is_timed()` is what machines use to refuse
+  declared later) and on `device_restart`; it also releases stuck values. `point_is_timed()` is what machines use to refuse
   ramp and model points.
+- The degradation modifier is a struct in `model_t` (times in ms since `dev->start_ms`): drift
+  and noise growth are added inside `model_value()` before the noise step, and stuck captures the
+  final value at its first evaluation from `stuck_after_ms` (state reset by `model_reset()`).
+  `fail-after-ms` is not a value: `device_range_failed()` scans the owners of a read range and
+  the read handlers in `pdu.c` (`read_bits`, `read_registers`, FC 23 before it writes, the
+  user-defined `(registers ...)` action) answer exception 04 after the address check. It uses the
+  configured degradation whatever the point's current kind, so client writes and host claims do
+  not clear it; only restart does. Because the exception goes through the normal response path it
+  is counted like any other exception.
 - A client write turns the owning point static (`device_write`) only when it is not machine-owned;
   a write touching a machine-owned point fails all-or-nothing with exception 02. A successful write
   runs matching machine `on-write` handlers in the same request, after the raw values are applied.
@@ -337,11 +346,6 @@ The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s
 
 Implemented behaviour is documented in the transport, device-model and config sections above;
 only outstanding work is listed here.
-
-### Dynamic behaviour models
-
-- Add gradual sensor degradation as a model variant. Why: drift and progressive failure should be
-  configurable models, not bespoke per-test logic.
 
 ### RTU timing
 
