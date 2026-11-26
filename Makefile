@@ -65,6 +65,14 @@ LDFLAGS     ?= $(MOLD_LDFLAGS)
 endif
 LINK_FLAGS   = $(LDFLAGS) $(filter-out $(LDFLAGS),$(HARDEN_LDFLAGS))
 DEPFLAGS    = -MMD -MP
+# Reproducible output: strip the build directory from debug info and __FILE__
+# (compile commands run from $(CURDIR) with relative paths). Nothing may embed
+# __DATE__/__TIME__ or the clock; archives are written deterministically (rcsD).
+REPRO_FLAGS = -ffile-prefix-map=$(CURDIR)=.
+# Source revision shown by `mogbus --version`; only main.c sees it, only when
+# building from a git checkout. GIT_REVISION= (empty) disables it.
+GIT_REVISION ?= $(shell git describe --always --dirty 2>/dev/null)
+REV_STAMP   = .revision
 INC         = -I. -Isrc -Iinclude
 PKG_CONFIG  ?= pkg-config
 
@@ -128,7 +136,7 @@ SAN_FLAGS   =
 endif
 
 SRC_DIR     = src
-TREE_SRCS   = $(shell find $(SRC_DIR) -name '*.c' ! -name main.c)
+TREE_SRCS   = $(shell find $(SRC_DIR) -name '*.c' ! -name main.c | LC_ALL=C sort)
 MAIN        = $(SRC_DIR)/main.c
 ifeq ($(WITH_TLS),1)
 SRCS        = $(filter-out $(SRC_DIR)/net/net_tls_stub.c,$(TREE_SRCS))
@@ -142,7 +150,7 @@ OBJS        = $(SRCS:.c=$(OBJEXT)) $(MAIN_OBJ)
 # UBSan reports a misaligned load in its local_strncmp (third_party/s7/s7.c:4028).
 # It only parses config at startup, so -O0 avoids paying most of the build cost.
 S7_OBJ      = third_party/s7/s7$(OBJEXT)
-S7_FLAGS    = -std=gnu11 -O0 -w -fstack-protector-strong -fPIC -fvisibility=hidden -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0
+S7_FLAGS    = -std=gnu11 -O0 -w -fstack-protector-strong -fPIC -fvisibility=hidden -DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0 $(REPRO_FLAGS)
 
 # Without config there is no binary, no s7 and nothing that loads a config file.
 ifeq ($(WITH_CONFIG),0)
@@ -153,7 +161,7 @@ CFG_S7_OBJ  = $(S7_OBJ)
 endif
 
 TEST_MAIN   = vlib/vtest.c
-ALL_TEST_SRCS = $(wildcard tests/*.c tests/tests_utils/*.c)
+ALL_TEST_SRCS = $(sort $(wildcard tests/*.c tests/tests_utils/*.c))
 TEST_SRCS   = $(ALL_TEST_SRCS)
 ifneq ($(WITH_TLS),1)
 TEST_SRCS   := $(filter-out tests/tests_utils/tls_client.c,$(TEST_SRCS))
@@ -223,7 +231,7 @@ endif
 # ar only adds members, so start from scratch to drop objects of another build mode.
 $(LIB_VARIANT): $(BUILD_STAMP) $(LIB_OBJS)
 	$(RM) $@
-	$(AR) rcs $@ $(filter-out $(BUILD_STAMP),$^)
+	$(AR) rcsD $@ $(filter-out $(BUILD_STAMP),$^)
 
 # The user-facing archive is the current variant (the same file in a prod build).
 ifneq ($(LIB_VARIANT),$(LIB_STATIC))
@@ -233,7 +241,7 @@ endif
 
 # -pie is for executables only; relro/now stay.
 $(LIB_SHARED): $(BUILD_STAMP) $(LIB_OBJS)
-	$(CC) $(CFLAGS) -shared -Wl,-soname,$@ $(filter-out -pie,$(LDFLAGS)) -Wl,-z,relro,-z,now $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $(REPRO_FLAGS) -shared -Wl,-soname,$@ $(filter-out -pie,$(LDFLAGS)) -Wl,-z,relro,-z,now $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
 # The example sees only include/mogbus.h, which proves the public header and the
 # exported symbols are enough. The .so is found through an $ORIGIN rpath.
@@ -263,6 +271,12 @@ $(BUILD_STAMP): FORCE
 	@printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG)' | cmp -s - $@ 2>/dev/null || \
 		printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG)' > $@
 
+$(MAIN_OBJ): $(REV_STAMP)
+$(MAIN_OBJ): REV_FLAGS = $(if $(GIT_REVISION),-DMOGBUS_GIT_REVISION='"$(GIT_REVISION)"')
+
+$(REV_STAMP): FORCE
+	@printf '%s\n' '$(GIT_REVISION)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GIT_REVISION)' > $@
+
 tests/%$(OBJEXT): tests/%.c
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) -Ivlib -c $< -o $@
 
@@ -271,7 +285,7 @@ vlib/vtest$(OBJEXT): vlib/vtest.c
 	$(CC) -std=gnu11 $(OPT_FLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) -include stdbool.h -Wno-unused-function $(DEPFLAGS) -Ivlib -c $< -o $@
 
 %$(OBJEXT): %.c
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
+	$(CC) $(CFLAGS) $(REPRO_FLAGS) $(REV_FLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
 
 # Leak detection is off: the config tests intentionally keep arenas alive because
 # the parsed config points into them. UBSan failures abort (-fno-sanitize-recover).
@@ -279,7 +293,40 @@ asan:
 	$(MAKE) SAN=1 $(if $(PROGRAMS),$(ASAN_BIN)) $(ASAN_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MOGBUS_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
 
+# Release tarball: the prod build plus headers, docs and profiles, packed with sorted
+# names, owner 0, a fixed mtime and gzip -n so the same commit gives the same bytes.
+# SOURCE_DATE_EPOCH (default: the commit time) fixes mtimes and the SBOM timestamp.
+VERSION     = $(shell awk '/^\#define MOGBUS_VERSION_(MAJOR|MINOR|PATCH)/ { v = v (v ? "." : "") $$3 } END { print v }' include/mogbus.h)
+ARCH        = $(shell uname -m)
+DIST_NAME   = mogbus-$(VERSION)-linux-$(ARCH)
+DIST_DIR    = dist
+dist:
+ifneq ($(BUILD)$(SAN)$(WITH_CONFIG),prod01)
+	$(error make dist needs BUILD=prod, SAN=0 and WITH_CONFIG=1)
+endif
+	@$(MAKE) $(BIN) lib
+	@epoch=$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct 2>/dev/null)}; \
+	[ -n "$$epoch" ] || { echo "make dist: set SOURCE_DATE_EPOCH (no git history)" >&2; exit 1; }; \
+	stage=$(DIST_DIR)/$(DIST_NAME); \
+	$(RM) -r $(DIST_DIR) && mkdir -p $$stage/bin $$stage/lib $$stage/include \
+		$$stage/share/doc/mogbus/docs $$stage/share/mogbus/profiles && \
+	cp $(BIN) $$stage/bin/ && cp $(LIB_STATIC) $(LIB_SHARED) $$stage/lib/ && \
+	cp include/mogbus.h $$stage/include/ && \
+	cp README.md LICENSE NOTICE.md $$stage/share/doc/mogbus/ && \
+	cp docs/*.md $$stage/share/doc/mogbus/docs/ && cp profiles/*.scm $$stage/share/mogbus/profiles/ && \
+	find $$stage -type d -exec chmod 755 {} + && find $$stage -type f -exec chmod 644 {} + && \
+	chmod 755 $$stage/bin/$(BIN) $$stage/lib/$(LIB_SHARED) && \
+	tar -C $(DIST_DIR) --sort=name --mtime=@$$epoch --owner=0 --group=0 --numeric-owner \
+		--format=gnu -cf - $(DIST_NAME) | gzip -n -9 > $(DIST_DIR)/$(DIST_NAME).tar.gz && \
+	SOURCE_DATE_EPOCH=$$epoch ./tools/gen_sbom.sh $(DIST_DIR)/$(DIST_NAME).tar.gz $$stage/bin/$(BIN) \
+		$(VERSION) $(WITH_TLS) $(DIST_DIR)/$(DIST_NAME).spdx.json && \
+	$(RM) -r $$stage && \
+	(cd $(DIST_DIR) && sha256sum $(DIST_NAME).tar.gz $(DIST_NAME).spdx.json > SHA256SUMS) && \
+	cat $(DIST_DIR)/SHA256SUMS
+
 clean:
+	$(RM) -r $(DIST_DIR)
+	rm -f $(REV_STAMP)
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times
 
@@ -292,4 +339,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib lib-check tests asan clean distclean re commands FORCE
+.PHONY: all dev lib lib-check tests asan dist clean distclean re commands FORCE

@@ -27,6 +27,7 @@ struct cli_t
 	bool		check_only;
 	bool		verbose;
 	bool		show_help;
+	bool		show_version;
 };
 
 static inline void
@@ -39,6 +40,7 @@ print_usage(void)
 	     "Options:\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
 	     "  -v, --verbose        log every request\n"
+	     "  -V, --version        print the version and exit\n"
 	     "  -h, --help           show this help\n"
 	     "\n"
 	     "Transport/server settings (mode, path, port, bind, serial options) are\n"
@@ -76,6 +78,8 @@ parse_args(int argc, char** argv, cli_t* cli)
 
 		if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
 			cli->show_help = true;
+		else if (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0)
+			cli->show_version = true;
 		else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--check") == 0)
 			cli->check_only = true;
 		else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0)
@@ -243,6 +247,16 @@ main(int argc, char** argv)
 
 	if (!parse_args(argc, argv, &cli))
 		return 2;
+
+	if (cli.show_version)
+	{
+#ifdef MOGBUS_GIT_REVISION
+		printf("mogbus %s (%s)\n", mogbus_version(), MOGBUS_GIT_REVISION);
+#else
+		printf("mogbus %s\n", mogbus_version());
+#endif
+		return 0;
+	}
 
 	if (cli.show_help || !cli.config_path)
 	{

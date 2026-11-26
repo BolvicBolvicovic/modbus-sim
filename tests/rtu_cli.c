@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "vtest.h"
+#include "mogbus.h"
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
@@ -257,6 +258,21 @@ TEST(RtuCliCheckSkipsReservedUnitIdWarningWithoutSerialMode)
 	ASSERT_EQ(!rtu_cli_file_contains(g_rtu_cli.stderr_path, "warning:"));
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
+}
+
+TEST(CliVersionPrintsLibraryVersion)
+{
+	const char* bin = getenv("MOGBUS_BIN");
+	char cmd[256], line[128] = "", want[64];
+	FILE* f;
+
+	snprintf(cmd, sizeof(cmd), "%s --version", bin ? bin : "./mogbus");
+	snprintf(want, sizeof(want), "mogbus %s", mogbus_version());
+	f = popen(cmd, "r");
+	ASSERT_EQ(f != NULL);
+	ASSERT_EQ(fgets(line, sizeof(line), f) != NULL);
+	ASSERT_EQ(pclose(f) == 0);
+	ASSERT_EQ(strncmp(line, want, strlen(want)) == 0);
 }
 
 TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
