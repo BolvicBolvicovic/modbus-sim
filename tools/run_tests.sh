@@ -6,6 +6,8 @@
 # slowest tests of the previous run (durations cached in BIN.times, or
 # RUN_TESTS_TIMES), so long tests do not end up last; tests without a recorded
 # time go first. Results are collected by test index for stable output.
+# RUN_TESTS_WRAPPER runs the test binary through another program (e.g. "wine" for a Windows
+# binary); the CRs of its CRLF output are stripped from the test list.
 set -u
 
 usage() {
@@ -109,7 +111,7 @@ EOF_LINE
 	start=$(date +%s%N)
 	# shellcheck disable=SC2086
 	"$RUN_TESTS_TIMEOUT_CMD" $RUN_TESTS_KILL_FLAG "$RUN_TESTS_TIMEOUT" \
-		"$RUN_TESTS_BIN" -s "$suite" -t "$test" >"$out" 2>&1
+		${RUN_TESTS_WRAPPER:-} "$RUN_TESTS_BIN" -s "$suite" -t "$test" >"$out" 2>&1
 	rc=$?
 	printf '%s\t%s\t%s\n' "$(( ($(date +%s%N) - start) / 1000000 ))" "$suite" "$test" >"$tmp/time.$seq"
 	if [ "$rc" -ne 0 ]; then
@@ -186,7 +188,8 @@ if "$timeout_cmd" -k 1 1s true >/dev/null 2>&1; then
 fi
 
 list=$tmp/list
-if ! "$bin" --list >"$list"; then
+# shellcheck disable=SC2086
+if ! ${RUN_TESTS_WRAPPER:-} "$bin" --list >"$list.raw" || ! tr -d '\r' <"$list.raw" >"$list"; then
 	printf 'run_tests.sh: failed to list tests from %s\n' "$bin" >&2
 	exit 1
 fi

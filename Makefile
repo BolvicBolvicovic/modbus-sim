@@ -5,12 +5,35 @@ endif
 # mogbus build. Modeled on the Makefile vlib/gen_makefile.py generates, but the
 # source tree has sub-folders (one per module), so sources are found recursively.
 
-BIN         = mogbus
-TESTS       = $(BIN)-tests
+# OS layer: src/os/os_*_<PLATFORM>.c are the only per-platform sources. PLATFORM=win32 cross-compiles
+# a native Windows build with MinGW-w64 (CROSS is the toolchain prefix); see docs/user/windows.md.
+PLATFORM    ?= posix
+ifeq ($(PLATFORM),posix)
+EXE         =
+OTHER_PLATFORM_SRCS = $(SRC_DIR)/os/%_win32.c
+else ifeq ($(PLATFORM),win32)
+CROSS       ?= x86_64-w64-mingw32-
+EXE         = .exe
+OTHER_PLATFORM_SRCS = $(SRC_DIR)/os/%_posix.c
+ifeq ($(origin AR),default)
+AR          = $(CROSS)ar
+endif
+else
+$(error PLATFORM must be posix or win32 (got '$(PLATFORM)'))
+endif
+
+BIN         = mogbus$(EXE)
+TESTS       = mogbus-tests$(EXE)
 ASAN_BIN    = mogbus-asan
 ASAN_TESTS  = mogbus-asan-tests
+ifeq ($(PLATFORM),win32)
+LIB_STATIC  = libmogbus.win32.a
+LIB_SHARED  = mogbus.dll
+LIB_IMPORT  = libmogbus.dll.a
+else
 LIB_STATIC  = libmogbus.a
 LIB_SHARED  = libmogbus.so
+endif
 EXAMPLE_SRC = examples/embed_tcp.c
 EXAMPLE_SO  = examples/embed_tcp_shared
 EXAMPLE_A   = examples/embed_tcp_static
@@ -20,9 +43,13 @@ EXAMPLE_A   = examples/embed_tcp_static
 # GNU make predefines CC with origin 'default'. Replace only that built-in value:
 # an explicit CC from the environment or command line must still win.
 ifeq ($(origin CC),default)
+ifeq ($(PLATFORM),win32)
+DEFAULT_CC  := $(CROSS)gcc
+else
 DEFAULT_CC  := $(shell if command -v clang >/dev/null 2>&1; then echo clang; \
                        elif command -v gcc >/dev/null 2>&1; then echo gcc; \
                        else echo cc; fi)
+endif
 CCACHE      := $(shell command -v ccache >/dev/null 2>&1 && echo ccache)
 CC          := $(if $(CCACHE),$(CCACHE) $(DEFAULT_CC),$(DEFAULT_CC))
 endif
@@ -51,20 +78,35 @@ else
 $(error BUILD must be dev or prod (got '$(BUILD)'))
 endif
 
-CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow $(FORTIFY_FLAGS) -fstack-protector-strong -fPIC -fvisibility=hidden
+# Windows has no PIC (code is position independent by relocation) and exports through dllexport.
+# MinGW's printf format attribute means the old MSVCRT dialect (no %zu) even with the C99 stdio
+# switched on, so format checking stays with the Linux build (-Wno-format after -Wformat=2).
+ifeq ($(PLATFORM),win32)
+PIC_FLAGS   = -DMOGBUS_BUILD -D__USE_MINGW_ANSI_STDIO=1 -Wno-format -Wno-format-extra-args
+else
+PIC_FLAGS   = -fPIC
+endif
+CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow $(FORTIFY_FLAGS) -fstack-protector-strong $(PIC_FLAGS) -fvisibility=hidden
 # -fPIC (not -fPIE) so the same objects serve the executables, libmogbus.a and
 # libmogbus.so; PIC code is valid in a PIE and costs next to nothing on x86-64.
 # -fvisibility=hidden leaves only the MOGBUS_API symbols exported from the .so.
 # Hardening applies to every link, even when LDFLAGS is overridden; skip flags
 # the user already supplied so overrides stay free of duplicates.
+ifeq ($(PLATFORM),win32)
+# ASLR (dynamicbase, high-entropy-va) and DEP (nxcompat); static so the .exe needs no MinGW DLLs.
+HARDEN_LDFLAGS = -static -Wl,--dynamicbase,--nxcompat,--high-entropy-va
+else
 HARDEN_LDFLAGS = -pie -Wl,-z,relro,-z,now
+endif
 # Probe the chosen compiler (including a ccache prefix) before adding mold; old
 # gcc versions reject -fuse-ld=mold. An explicit LDFLAGS skips the probe entirely.
 ifeq ($(origin LDFLAGS),undefined)
+ifeq ($(PLATFORM),posix)
 MOLD_LDFLAGS := $(shell if command -v mold >/dev/null 2>&1 && \
                             printf 'int main(void){return 0;}\n' | $(CC) -x c - -fuse-ld=mold -o /dev/null >/dev/null 2>&1; then \
                         echo -fuse-ld=mold; \
                  fi)
+endif
 LDFLAGS     ?= $(MOLD_LDFLAGS)
 endif
 LINK_FLAGS   = $(LDFLAGS) $(filter-out $(LDFLAGS),$(HARDEN_LDFLAGS))
@@ -107,6 +149,9 @@ endif
 
 TLS_CFLAGS  = -DWITH_TLS=$(WITH_TLS) -DWITH_CONFIG=$(WITH_CONFIG)
 LIBS        = -lm
+ifeq ($(PLATFORM),win32)
+LIBS        += -lws2_32
+endif
 ifeq ($(WITH_TLS),1)
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl)
 OPENSSL_LIBS   := $(shell $(PKG_CONFIG) --libs openssl)
@@ -126,25 +171,23 @@ ifeq ($(WITH_CONFIG),0)
 CONFIG_OBJ_TAG = .nocfg
 endif
 
+PLAT_OBJ_TAG =
+ifeq ($(PLATFORM),win32)
+PLAT_OBJ_TAG = .win32
+endif
+
 # SAN=1 and BUILD=dev build separate objects and link their runtimes/flags.
 SAN ?= 0
 
 ifeq ($(SAN),1)
-OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG).asan.o
+OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG)$(PLAT_OBJ_TAG).asan.o
 BIN         = $(ASAN_BIN)
 TESTS       = $(ASAN_TESTS)
 SAN_FLAGS   = -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=undefined,float-cast-overflow -fno-omit-frame-pointer
 else
-OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG).o
+OBJEXT      = $(DEV_OBJ_TAG)$(TLS_OBJ_TAG)$(CONFIG_OBJ_TAG)$(PLAT_OBJ_TAG).o
 SAN_FLAGS   =
 endif
-
-# OS layer: src/os/os_*_<PLATFORM>.c are the only per-platform sources; only posix exists so far.
-PLATFORM    ?= posix
-ifneq ($(PLATFORM),posix)
-$(error PLATFORM=$(PLATFORM) not supported yet)
-endif
-OTHER_PLATFORM_SRCS = $(SRC_DIR)/os/%_win32.c
 
 SRC_DIR     = src
 TREE_SRCS   = $(filter-out $(OTHER_PLATFORM_SRCS),$(shell find $(SRC_DIR) -name '*.c' ! -name main.c | LC_ALL=C sort))
@@ -183,6 +226,16 @@ TEST_SRCS   := $(filter-out tests/config.c tests/ascii_cli.c tests/rtu_cli.c tes
                             tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
                             tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif
+# These fork, use PTYs, termios, poll() or POSIX sockets directly, or spawn the binary through
+# tests_utils/test_support.c; they stay out of the Windows test binary (docs/dev/architecture.md).
+TESTS_POSIX_ONLY = tests/api.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
+                   tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c \
+                   tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
+                   tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/udp_server.c \
+                   tests/tests_utils/test_support.c tests/tests_utils/tls_client.c
+ifeq ($(PLATFORM),win32)
+TEST_SRCS   := $(filter-out $(TESTS_POSIX_ONLY),$(TEST_SRCS))
+endif
 # vtest.c defines the arena implementation itself, so the project's is left out.
 TEST_OBJS   = $(filter-out $(SRC_DIR)/util/arena_impl$(OBJEXT),$(SRCS:.c=$(OBJEXT))) $(TEST_MAIN:.c=$(OBJEXT)) $(TEST_SRCS:.c=$(OBJEXT))
 
@@ -202,7 +255,7 @@ BUILD_STAMP = .build-mode
 DEPS        = $(foreach obj,$(OBJS) $(TEST_OBJS) $(S7_OBJ),$(basename $(obj)).d)
 # Include every object variant so clean always removes the other configurations.
 ALL_SRCS    = $(TREE_SRCS) $(MAIN) $(TEST_MAIN) $(ALL_TEST_SRCS) third_party/s7/s7.c
-ALL_OBJ_SUFFIXES = $(foreach d,.- .dev,$(foreach t,.- .notls,$(foreach c,.- .nocfg,$(foreach a,.o .asan.o,$(subst .-,,$d)$(subst .-,,$t)$(subst .-,,$c)$a))))
+ALL_OBJ_SUFFIXES = $(foreach d,.- .dev,$(foreach t,.- .notls,$(foreach c,.- .nocfg,$(foreach p,.- .win32,$(foreach a,.o .asan.o,$(subst .-,,$d)$(subst .-,,$t)$(subst .-,,$c)$(subst .-,,$p)$a)))))
 ALL_OBJS    = $(foreach suffix,$(ALL_OBJ_SUFFIXES),$(ALL_SRCS:.c=$(suffix)))
 ALL_DEPS    = $(ALL_OBJS:.o=.d)
 ALL_LIBS    = $(foreach suffix,$(ALL_OBJ_SUFFIXES),libmogbus$(suffix:.o=.a))
@@ -249,11 +302,20 @@ $(BIN): $(BUILD_STAMP) $(MAIN_OBJ) $(LIB_VARIANT)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 endif
 
+# Windows tests run under Wine; the toolchain shims and the nm export check are Linux-only.
+ifeq ($(PLATFORM),win32)
+WINE        ?= wine
+tests: $(TESTS) $(PROGRAMS)
+	WINEDEBUG=-all RUN_TESTS_WRAPPER='$(WINE)' MOGBUS_BIN=./$(BIN) ./tools/run_tests.sh ./$(TESTS)
+lib-check:
+	@echo "lib-check: skipped for PLATFORM=win32 (nm -D export check is Linux-only)"
+else
 tests: $(TESTS) $(PROGRAMS) lib-check
 ifeq ($(WITH_CONFIG),1)
 	./tools/check_toolchain.sh
 endif
 	./tools/run_tests.sh ./$(TESTS)
+endif
 
 # ar only adds members, so start from scratch to drop objects of another build mode.
 $(LIB_VARIANT): $(BUILD_STAMP) $(LIB_OBJS)
@@ -267,8 +329,14 @@ $(LIB_STATIC): $(BUILD_STAMP) $(LIB_VARIANT)
 endif
 
 # -pie is for executables only; relro/now stay.
+ifeq ($(PLATFORM),win32)
+# mogbus.dll plus its import library; libgcc is linked statically so the DLL needs nothing from MinGW.
+$(LIB_SHARED): $(BUILD_STAMP) $(LIB_OBJS)
+	$(CC) $(CFLAGS) $(REPRO_FLAGS) -shared -static-libgcc -Wl,--out-implib,$(LIB_IMPORT) $(LDFLAGS) -Wl,--dynamicbase,--nxcompat,--high-entropy-va $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+else
 $(LIB_SHARED): $(BUILD_STAMP) $(LIB_OBJS)
 	$(CC) $(CFLAGS) $(REPRO_FLAGS) -shared -Wl,-soname,$@ $(filter-out -pie,$(LDFLAGS)) -Wl,-z,relro,-z,now $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+endif
 
 # The example sees only include/mogbus.h, which proves the public header and the
 # exported symbols are enough. The .so is found through an $ORIGIN rpath.
@@ -280,6 +348,7 @@ $(EXAMPLE_A): $(EXAMPLE_SRC) include/mogbus.h $(LIB_STATIC)
 
 # Builds the libraries, requires the .so to export only mogbus_* symbols, and runs
 # the example against both.
+ifeq ($(PLATFORM),posix)
 lib-check: $(EXAMPLE_SO) $(EXAMPLE_A)
 	@bad=$$(nm -D --defined-only $(LIB_SHARED) | awk '{print $$3}' | \
 		grep -vE '^(mogbus_|_init$$|_fini$$|_edata$$|_end$$|__bss_start$$)' || true); \
@@ -287,6 +356,7 @@ lib-check: $(EXAMPLE_SO) $(EXAMPLE_A)
 	nm -D --defined-only $(LIB_SHARED) | grep -q ' mogbus_create$$' || { echo "$(LIB_SHARED) lacks mogbus_create" >&2; exit 1; }
 	./$(EXAMPLE_SO)
 	./$(EXAMPLE_A)
+endif
 
 $(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(CFG_S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
@@ -295,8 +365,8 @@ $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD_STAMP): FORCE
-	@printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG)' | cmp -s - $@ 2>/dev/null || \
-		printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG)' > $@
+	@printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG) platform=$(PLATFORM)' | cmp -s - $@ 2>/dev/null || \
+		printf '%s\n' '$(BUILD) tls=$(WITH_TLS) config=$(WITH_CONFIG) platform=$(PLATFORM)' > $@
 
 $(MAIN_OBJ): $(REV_STAMP)
 $(MAIN_OBJ): REV_FLAGS = $(if $(GIT_REVISION),-DMOGBUS_GIT_REVISION='"$(GIT_REVISION)"')
@@ -328,8 +398,8 @@ ARCH        = $(shell uname -m)
 DIST_NAME   = mogbus-$(VERSION)-linux-$(ARCH)
 DIST_DIR    = dist
 dist:
-ifneq ($(BUILD)$(SAN)$(WITH_CONFIG),prod01)
-	$(error make dist needs BUILD=prod, SAN=0 and WITH_CONFIG=1)
+ifneq ($(BUILD)$(SAN)$(WITH_CONFIG)$(PLATFORM),prod01posix)
+	$(error make dist needs BUILD=prod, SAN=0, WITH_CONFIG=1 and PLATFORM=posix)
 endif
 	@$(MAKE) $(BIN) lib
 	@epoch=$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct 2>/dev/null)}; \
@@ -385,7 +455,7 @@ clean:
 	rm -f $(REV_STAMP)
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times \
-		python/mogbus/libmogbus.so
+		python/mogbus/libmogbus.so mogbus mogbus.exe mogbus-tests mogbus-tests.exe mogbus-tests.exe.times mogbus.dll libmogbus.dll.a
 
 distclean: clean
 

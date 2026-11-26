@@ -22,3 +22,6 @@ python/mogbus/libmogbus.so
 __pycache__/
 *.egg-info/
 python/build/
+*.exe
+*.dll
+*.exe.times

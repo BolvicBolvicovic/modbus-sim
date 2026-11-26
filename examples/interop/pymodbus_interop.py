@@ -11,7 +11,8 @@ check-by-mode table and exits non-zero on any mismatch.
   .venv/bin/python examples/interop/pymodbus_interop.py            # all modes
   .venv/bin/python examples/interop/pymodbus_interop.py tcp rtu-tcp
 
-MOGBUS_BIN selects the binary (default ./mogbus). See examples/interop/README.md.
+MOGBUS_BIN selects the binary (default ./mogbus); MOGBUS_START_DELAY the seconds to wait after
+starting it (default 0.3; a slower launcher such as Wine needs more). See examples/interop/README.md.
 """
 import os
 import socket
@@ -185,7 +186,7 @@ def run_mode(mode, results, notes):
     proc = subprocess.Popen([os.environ.get("MOGBUS_BIN", "./mogbus"), cfg.name],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
-        time.sleep(0.3)
+        time.sleep(float(os.environ.get("MOGBUS_START_DELAY", "0.3")))
         if proc.poll() is not None:
             sys.exit("%s: mogbus did not start: %s" % (mode, proc.stderr.read().decode(errors="replace")))
         client = client_class("127.0.0.1", port=port, framer=framer, timeout=2, retries=0)
