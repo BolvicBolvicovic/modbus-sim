@@ -5,7 +5,7 @@
  */
 #include "net/net_control.h"
 #include "net/net_common.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "vlib/macros.h"
 #include <math.h>
@@ -348,7 +348,7 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 	u32		address;
 	u32		space = SPACE_COUNT;
 	u32		used = 0;
-	u64		now_ms = clock_now_ms();
+	u64		now_ms = os_now_ms();
 
 	/* Split "/api/a/b/c" into segments; more than 5 after "api" is simply unknown. */
 	for (const char* p = path + strlen("/api/"); *p && nseg < 6;)

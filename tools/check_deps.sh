@@ -2,7 +2,7 @@
 set -eu
 
 # Enforce documented dependency direction:
-#   net -> modbus -> device -> util
+#   net -> modbus -> device -> util -> os
 #   config -> device -> util
 #   server -> net, config -> server (server_mode.h, server_limits.h only)
 #   api -> config, device, modbus, net, server, util
@@ -10,6 +10,9 @@ set -eu
 # Only src/server/server_config.{c,h} may use config/, and config/ may use only
 # server_mode.h and server_limits.h from server/, so WITH_CONFIG=0 leaves out
 # config/ and server_config.c and nothing else changes.
+#
+# os/ is the bottom layer and the only place in src/ that may include OS headers (see
+# check_os_headers); every layer may include os/, and os/ includes no other module.
 #
 # Any internal module include not explicitly allowed is rejected.
 # net->util and modbus->util are allowed as existing practical edges;
@@ -23,7 +26,7 @@ check_layer() {
 	[ -d "$dir" ] || return 0
 
 	bad=$(grep -rnE \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|util)/[^">]+)[">]' \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|util|os)/[^">]+)[">]' \
 		"$dir" 2>/dev/null || true)
 	[ -n "$bad" ] || return 0
 
@@ -35,7 +38,7 @@ check_layer() {
 		IFS=$old_ifs
 		[ -n "$line" ] || continue
 		include=$(printf '%s\n' "$line" | sed -nE \
-			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|util)/[^">]+))[">].*!\1!p')
+			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|util|os)/[^">]+))[">].*!\1!p')
 		target=$(printf '%s\n' "$include" | sed -E 's!^(\.\./)*!!; s!/.*!!')
 		case " $allowed " in
 		*" $target "*) ;;
@@ -89,6 +92,22 @@ check_extra_rules() {
 		"config/ may include only server_mode.h and server_limits.h from server/"
 }
 
+# Headers that belong to the OS: only src/os/ may include them (ISO C headers such as stdio.h,
+# string.h, stdint.h, math.h and time.h stay allowed everywhere; errno.h is not, errors are
+# classified by os_error.h).
+OS_HEADERS='poll|errno|signal|fcntl|unistd|pty|termios|netdb|strings|sched|pthread|dirent|dlfcn|sys/[a-z_]+|netinet/[a-z_]+|arpa/[a-z_]+|net/[a-z_]+'
+
+check_os_headers() {
+	root=$1
+	[ -d "$root/src" ] || return 0
+	bad=$(grep -rnE --exclude-dir=os \
+		"^[[:space:]]*#[[:space:]]*include[[:space:]]*<($OS_HEADERS)\\.h>" "$root/src" 2>/dev/null || true)
+	[ -n "$bad" ] || return 0
+	printf 'Forbidden OS header include found (only src/os/ may include OS headers):\n' >&2
+	printf '%s\n' "$bad" >&2
+	exit 1
+}
+
 check_main() {
 	root=$1
 	file=$root/src/main.c
@@ -103,14 +122,16 @@ check_main() {
 
 check_tree() {
 	root=$1
-	check_layer "$root" net    "net modbus util"
-	check_layer "$root" modbus "modbus device util"
-	check_layer "$root" device "device util"
-	check_layer "$root" config "config device server util"
-	check_layer "$root" server "server net modbus device util config"
-	check_layer "$root" api    "api config device modbus net server util"
-	check_layer "$root" util   "util"
+	check_layer "$root" net    "net modbus util os"
+	check_layer "$root" modbus "modbus device util os"
+	check_layer "$root" device "device util os"
+	check_layer "$root" config "config device server util os"
+	check_layer "$root" server "server net modbus device util config os"
+	check_layer "$root" api    "api config device modbus net server util os"
+	check_layer "$root" util   "util os"
+	check_layer "$root" os     "os"
 	check_extra_rules "$root"
+	check_os_headers "$root"
 	check_main "$root"
 }
 
@@ -120,7 +141,7 @@ self_test() {
 
 	clean=$tmp/clean
 	mkdir -p "$clean/src/config" "$clean/src/device" "$clean/src/server" "$clean/src/api" \
-		 "$clean/src/modbus" "$clean/src/net" "$clean/src/util"
+		 "$clean/src/modbus" "$clean/src/net" "$clean/src/util" "$clean/src/os"
 	printf '#include "server/server_mode.h"\n' >"$clean/src/config/ok-server.c"
 	printf '#include "config/config.h"\n#include "net/net_common.h"\n' >"$clean/src/server/server_config.c"
 	printf '#include "net/net_common.h"\n' >"$clean/src/server/ok.c"
@@ -135,6 +156,7 @@ self_test() {
 	printf '#include "util/rng.h"\n'       >"$clean/src/util/ok.c"
 	printf '#include "net/rtu_framer.h"\n' >"$clean/src/api/ok-net.c"
 	printf '#include "mogbus.h"\n#include <stdio.h>\n' >"$clean/src/main.c"
+	printf '#include "os/os_socket.h"\n#include <poll.h>\n' >"$clean/src/os/ok.c" 2>/dev/null || true
 	check_tree "$clean"
 
 	expect_fail() {
@@ -171,6 +193,16 @@ self_test() {
 	expect_fail device-api      device "api/x.h"
 	expect_fail config-server   config "server/server.h"
 	expect_fail server-config   server "config/config.h"
+
+	for hdr in poll.h errno.h signal.h unistd.h sys/socket.h termios.h arpa/inet.h; do
+		mkdir -p "$tmp/oshdr/src/device"
+		printf '#include <%s>\n' "$hdr" >"$tmp/oshdr/src/device/bad.c"
+		if ( check_tree "$tmp/oshdr" ) >/dev/null 2>&1; then
+			printf 'check_deps.sh self-test: <%s> outside os/ did not fail\n' "$hdr" >&2
+			exit 1
+		fi
+	done
+	expect_fail os-util         os     "util/log.h"
 
 	mkdir -p "$tmp/main-internal/src"
 	printf '#include "mogbus.h"\n#include "util/log.h"\n' >"$tmp/main-internal/src/main.c"

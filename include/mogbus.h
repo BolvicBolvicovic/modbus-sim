@@ -610,6 +610,18 @@ MOGBUS_API int		mogbus_server_step(mogbus_server_t* server, int max_wait_ms);
 MOGBUS_API void		mogbus_server_stop(mogbus_server_t* server);
 
 /**
+ * @brief Makes SIGINT and SIGTERM (Ctrl-C on a console) stop the server held in *slot, and
+ *        ignores SIGPIPE.
+ *
+ * The handler calls mogbus_server_stop() on the server stored in *slot, and does nothing while
+ * *slot is NULL, so the host may install it before creating the server and store the server
+ * afterwards. Process-wide: the library installs no handlers unless this is called, and the
+ * slot must stay valid for the life of the process.
+ * @param slot Host variable that holds the server to stop.
+ */
+MOGBUS_API void		mogbus_stop_on_signals(mogbus_server_t* volatile* slot);
+
+/**
  * @brief Steps until stopped or the byte-stream peer goes away, then closes the transport.
  *
  * Still call mogbus_server_close() afterwards to release the handle.

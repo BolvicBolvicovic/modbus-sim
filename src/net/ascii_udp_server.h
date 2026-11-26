@@ -8,9 +8,9 @@
 #include "modbus/ascii.h"
 #include "net/net_common.h"
 #include "net/net_udp.h"
+#include "os/os_console.h"
 #include "util/rng.h"
 #include "vlib/c_types.h"
-#include <signal.h>
 
 typedef struct device_t device_t;
 typedef struct net_obs_t net_obs_t;
@@ -44,7 +44,7 @@ struct ascii_udp_server_t
 	ascii_udp_server_options_t	options;
 	net_udp_t		udp;
 	rng_t			rng;
-	volatile sig_atomic_t	stop;
+	os_stop_flag_t	stop;
 };
 
 /**

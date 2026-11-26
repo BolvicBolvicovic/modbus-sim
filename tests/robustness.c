@@ -8,8 +8,8 @@
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
@@ -95,9 +95,9 @@ client_open(const fixture_t* f)
 static void
 step_for(fixture_t* f, u32 ms)
 {
-	u64 until = clock_now_ms() + ms;
+	u64 until = os_now_ms() + ms;
 
-	while (clock_now_ms() < until)
+	while (os_now_ms() < until)
 		(void)mogbus_server_step(f->server, 1);
 }
 
@@ -121,9 +121,9 @@ expect_reply(fixture_t* f, int fd)
 {
 	u8	buf[MODBUS_ASCII_MAX_FRAME];
 	u32	len = 0;
-	u64	deadline = clock_now_ms() + 2000;
+	u64	deadline = os_now_ms() + 2000;
 
-	while (clock_now_ms() < deadline && len < sizeof(buf))
+	while (os_now_ms() < deadline && len < sizeof(buf))
 	{
 		struct pollfd	pfd = { .fd = fd, .events = POLLIN };
 		ssize_t		got;

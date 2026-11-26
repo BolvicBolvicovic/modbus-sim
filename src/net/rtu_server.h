@@ -7,9 +7,9 @@
 
 #include "net/net_common.h"
 #include "net/rtu_framer.h"
+#include "os/os_console.h"
 #include "util/rng.h"
 #include "vlib/c_types.h"
-#include <signal.h>
 #include <stdbool.h>
 
 typedef struct device_t device_t;
@@ -55,7 +55,7 @@ struct rtu_server_t
 	rtu_framer_t		framer;
 	bool			read_closed;
 	bool			open;
-	volatile sig_atomic_t	stop;
+	os_stop_flag_t	stop;
 };
 
 /**

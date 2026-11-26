@@ -6,7 +6,7 @@
 #include "net/net_obs.h"
 #include "net/rtu_framer.h"
 #include "os/os_serial.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
@@ -51,7 +51,7 @@ read_available(rtu_server_t* server, u64 now_ms)
 	if (f->rx_len >= sizeof(f->rx))
 		rtu_framer_consume(f, f->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
 
-	now_us = clock_now_us();
+	now_us = os_now_us();
 	rtu_framer_note_gap(f, &server->ctx, now_ms, now_us);
 
 	got = os_serial_read(server->options.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
@@ -84,7 +84,7 @@ write_pending(rtu_server_t* server)
 
 	if (!p->active)
 		return true;
-	if (p->due_ms > clock_now_ms())
+	if (p->due_ms > os_now_ms())
 		return true;
 
 	sent = os_serial_write(server->options.fd, p->buf + p->sent, p->len - p->sent);
@@ -212,7 +212,7 @@ rtu_process_gap_due(rtu_server_t* server, u64 now_ms)
 	if (!rtu_framer_gap_due(&server->framer, server->read_closed, now_ms,
 	    rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud)))
 		return;
-	rtu_framer_on_gap_due(&server->framer, &server->ctx, now_ms, clock_now_us());
+	rtu_framer_on_gap_due(&server->framer, &server->ctx, now_ms, os_now_us());
 }
 
 s32
@@ -221,7 +221,7 @@ rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 	os_wait_entry_t	pfd = { 0 };
 	int		timeout = 0;
 	u32		gap_ms = rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud);
-	u64		now_ms = clock_now_ms();
+	u64		now_ms = os_now_ms();
 
 	if (server->stop)
 		return NET_STEP_DONE;
@@ -238,7 +238,7 @@ rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 		return NET_STEP_ERROR;
 	}
 
-	now_ms = clock_now_ms();
+	now_ms = os_now_ms();
 	if (!rtu_handle_revents(server, pfd.revents, now_ms))
 		return NET_STEP_DONE;
 	rtu_process_gap_due(server, now_ms);

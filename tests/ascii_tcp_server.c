@@ -3,8 +3,8 @@
 #include "modbus/ascii.h"
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -260,14 +260,14 @@ TEST(AsciiTcpDelayedFaultDoesNotExpireQueuedFrame)
 	len1 = modbus_ascii_encode(frames, 1, req, sizeof(req));
 	len2 = modbus_ascii_encode(frames + len1, 1, req, sizeof(req));
 	ASSERT(len1 > 0 && len2 > 0);
-	start_ms = (u64)clock_now_ms();
+	start_ms = (u64)os_now_ms();
 	ASSERT_EQ(send_all_fd(fd, frames, len1 + len2));
 
 	ASSERT_EQ(recv_ascii_response(fd, &addr, pdu, &pdu_len, 3000));
-	first_resp_ms = (u64)clock_now_ms();
+	first_resp_ms = (u64)os_now_ms();
 	ASSERT_EQ(first_resp_ms - start_ms >= 1100 && get_be16(pdu + 2) == 42);
 	ASSERT_EQ(recv_ascii_response(fd, &addr, pdu, &pdu_len, 3000));
-	second_resp_ms = (u64)clock_now_ms();
+	second_resp_ms = (u64)os_now_ms();
 	ASSERT_EQ(addr == 1 && get_be16(pdu + 2) == 42);
 	ASSERT_EQ(second_resp_ms - first_resp_ms >= 1000 && second_resp_ms - first_resp_ms < 1600);
 	close(fd);

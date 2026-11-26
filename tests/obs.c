@@ -4,8 +4,8 @@
 #include "net/net_common.h"
 #include "net/net_obs.h"
 #include "modbus/pdu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include "vlib/arena.h"
 #include <poll.h>
 #include <stdio.h>
@@ -107,7 +107,7 @@ http_get(net_obs_t* obs, u16 port, const char* request, char* out, u32 cap)
 {
 	int	fd = ts_connect_loopback(port, AF_INET, 1000);
 	u32	len = 0;
-	u64	deadline = clock_now_ms() + 2000;
+	u64	deadline = os_now_ms() + 2000;
 
 	if (fd < 0)
 		return false;
@@ -116,7 +116,7 @@ http_get(net_obs_t* obs, u16 port, const char* request, char* out, u32 cap)
 		close(fd);
 		return false;
 	}
-	while (clock_now_ms() < deadline && len + 1 < cap)
+	while (os_now_ms() < deadline && len + 1 < cap)
 	{
 		struct pollfd	pfd = { .fd = fd, .events = POLLIN };
 		ssize_t		got;
@@ -183,8 +183,8 @@ TEST(ObsHttpClosesStalledAndOversizedClients)
 		stalled[i] = ts_connect_loopback(port, AF_INET, 1000);
 		ASSERT_EQ(stalled[i] >= 0);
 	}
-	deadline = clock_now_ms() + NET_OBS_HTTP_TIMEOUT_MS + 500;
-	while (clock_now_ms() < deadline)
+	deadline = os_now_ms() + NET_OBS_HTTP_TIMEOUT_MS + 500;
+	while (os_now_ms() < deadline)
 		(void)net_poll(&obs, NULL, 0, 20);
 	for (u32 i = 0; i < NET_OBS_HTTP_CONNS; i++)
 	{
@@ -199,8 +199,8 @@ TEST(ObsHttpClosesStalledAndOversizedClients)
 	memcpy(big, "GET /", 5);
 	fd = ts_connect_loopback(port, AF_INET, 1000);
 	ASSERT_EQ(fd >= 0 && send(fd, big, sizeof(big), MSG_NOSIGNAL) == (ssize_t)sizeof(big));
-	deadline = clock_now_ms() + 1000;
-	while (clock_now_ms() < deadline)
+	deadline = os_now_ms() + 1000;
+	while (os_now_ms() < deadline)
 		(void)net_poll(&obs, NULL, 0, 5);
 	ASSERT_EQ(closed_by_peer(fd, 500));
 	close(fd);
@@ -517,8 +517,8 @@ TEST(ObsControlLimitsAndCountsRequests)
 	for (u32 i = 0; i < 5; i++)
 		(void)net_poll(&obs, NULL, 0, 10);
 	ASSERT_EQ(send(fd, "{\"values\":[5]}", 14, MSG_NOSIGNAL) == 14);
-	deadline = clock_now_ms() + 2000;
-	while (clock_now_ms() < deadline && len == 0)
+	deadline = os_now_ms() + 2000;
+	while (os_now_ms() < deadline && len == 0)
 	{
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 

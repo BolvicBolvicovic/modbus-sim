@@ -2,7 +2,7 @@
 #include "tests/tests_utils/test_support.h"
 #include "modbus/ascii.h"
 #include "modbus/rtu.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -137,7 +137,7 @@ ts_process_done(pid_t pid)
 bool
 ts_wait_pid(pid_t pid, int* status, u32 timeout_ms)
 {
-	u64 deadline = clock_now_ms() + timeout_ms;
+	u64 deadline = os_now_ms() + timeout_ms;
 
 	for (;;)
 	{
@@ -147,7 +147,7 @@ ts_wait_pid(pid_t pid, int* status, u32 timeout_ms)
 			return true;
 		if (done < 0 && errno == ECHILD)
 			return false;
-		if (clock_now_ms() >= deadline)
+		if (os_now_ms() >= deadline)
 		{
 			kill(pid, SIGKILL);
 			return waitpid(pid, status, 0) == pid;
@@ -189,7 +189,7 @@ ts_wait_startup(ts_server_t* s, pid_t pid)
 	if (!s->stderr_path[0])
 		return server_wait_ready_verbose(s, pid);
 
-	deadline = clock_now_ms() + TS_START_TIMEOUT_MS;
+	deadline = os_now_ms() + TS_START_TIMEOUT_MS;
 	for (;;)
 	{
 		if (ts_file_contains(s->stderr_path, s->ready_needle))
@@ -202,7 +202,7 @@ ts_wait_startup(ts_server_t* s, pid_t pid)
 			ts_dump_stderr(s);
 			return false;
 		}
-		if (clock_now_ms() >= deadline)
+		if (os_now_ms() >= deadline)
 		{
 			fprintf(stderr, "%s: pid %d never became ready\n", s->label, (int)pid);
 			ts_dump_stderr(s);
@@ -445,12 +445,12 @@ ts_recv_exact(int fd, u8* buf, u32 len, u32 timeout_ms)
 bool
 ts_no_data(int fd, u32 timeout_ms)
 {
-	u64 deadline = clock_now_ms() + timeout_ms;
+	u64 deadline = os_now_ms() + timeout_ms;
 
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
-		u64   now     = clock_now_ms();
+		u64   now     = os_now_ms();
 		int   wait_ms = (int)(deadline - now);
 		int   rc      = poll(&pfd, 1, wait_ms);
 
@@ -503,7 +503,7 @@ ts_free_port(void)
 	static u32 state;
 
 	if (state == 0)
-		state = (u32)getpid() * 2654435761u ^ (u32)clock_now_ms();
+		state = (u32)getpid() * 2654435761u ^ (u32)os_now_ms();
 	for (u32 attempt = 0; attempt < 200; attempt++)
 	{
 		struct sockaddr_in addr = { 0 };
@@ -692,12 +692,12 @@ ts_rtu_recv(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms, bool on_soc
 
 	if (!on_socket)
 	{
-		u64 deadline = clock_now_ms() + timeout_ms;
+		u64 deadline = os_now_ms() + timeout_ms;
 
 		while (got < sizeof(frame))
 		{
 			struct pollfd pfd = { .fd = fd, .events = POLLIN };
-			u64   now = clock_now_ms();
+			u64   now = os_now_ms();
 			int   wait_ms;
 			ssize_t n;
 			const u8* out_pdu = NULL;
@@ -768,7 +768,7 @@ ts_ascii_recv_frame(int fd, u8* frame, u32* len, u32 timeout_ms, bool on_socket)
 
 	if (!on_socket)
 	{
-		u64 deadline = clock_now_ms() + timeout_ms;
+		u64 deadline = os_now_ms() + timeout_ms;
 
 		while (got < MODBUS_ASCII_MAX_FRAME)
 		{
@@ -776,7 +776,7 @@ ts_ascii_recv_frame(int fd, u8* frame, u32* len, u32 timeout_ms, bool on_socket)
 			u32 scan_len = 0;
 			ssize_t n;
 			struct pollfd pfd = { .fd = fd, .events = POLLIN };
-			u64 now = clock_now_ms();
+			u64 now = os_now_ms();
 			int wait_ms;
 
 			if (now >= deadline)
@@ -852,7 +852,7 @@ ts_ascii_recv_frames(int fd, u32 expected, u8* addrs, u8 (*pdus)[MODBUS_MAX_PDU]
 	u8  buf[MODBUS_ASCII_MAX_FRAME * 4];
 	u32 got = 0;
 	u32 frames = 0;
-	u64 deadline = clock_now_ms() + timeout_ms;
+	u64 deadline = os_now_ms() + timeout_ms;
 
 	while (frames < expected)
 	{
@@ -886,7 +886,7 @@ ts_ascii_recv_frames(int fd, u32 expected, u8* addrs, u8 (*pdus)[MODBUS_MAX_PDU]
 		if (got == sizeof(buf))
 			return false;
 		{
-			u64 now = clock_now_ms();
+			u64 now = os_now_ms();
 			struct pollfd pfd = { .fd = fd, .events = POLLIN };
 			int wait_ms;
 			int rc;

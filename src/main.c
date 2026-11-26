@@ -5,26 +5,14 @@
  * A pure client of the public library API (mogbus.h); nothing here touches an internal module.
  */
 #include "mogbus.h"
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 typedef struct cli_t cli_t;
 
-/** @brief The binary owns signal handling; the handler stops the running server. */
+/** @brief The server SIGINT/SIGTERM stop (see mogbus_stop_on_signals()). */
 static mogbus_server_t* volatile	g_server;
-
-static void
-on_stop_signal(int signo)
-{
-	mogbus_server_t* server = g_server;
-
-	(void)signo;
-	if (server)
-		mogbus_server_stop(server);
-}
 
 /** @brief Parsed command line. */
 struct cli_t
@@ -357,14 +345,7 @@ main(int argc, char** argv)
 		goto cleanup;
 	}
 
-	{
-		struct sigaction sa = { 0 };
-
-		sa.sa_handler = on_stop_signal;	/* no SA_RESTART: poll() must wake up */
-		sigaction(SIGINT, &sa, NULL);
-		sigaction(SIGTERM, &sa, NULL);
-		signal(SIGPIPE, SIG_IGN);
-	}
+	mogbus_stop_on_signals(&g_server);
 
 	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
 	server = mogbus_server_create_from_config(ctx, error, sizeof(error), &failure);

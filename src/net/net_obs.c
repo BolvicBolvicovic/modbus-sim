@@ -7,13 +7,13 @@
 #include "mogbus.h"
 #include "net/net_common.h"
 #include "net/net_control.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "vlib/macros.h"
+#include <ctype.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <strings.h>
 #include <string.h>
 #include <time.h>
 
@@ -487,8 +487,11 @@ net_obs_http_feed(net_obs_t* obs, struct net_http_conn_t* conn)
 		{
 			const char* v = line + 1;
 			u64	    len = 0;
+			u32	    k = 0;
 
-			if (strncasecmp(v, "content-length:", 15) != 0)
+			while (k < 15 && tolower((unsigned char)v[k]) == "content-length:"[k])
+				k++;
+			if (k != 15)
 				continue;
 			v += 15;
 			while (*v == ' ' || *v == '\t')
@@ -555,7 +558,7 @@ net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 	os_wait_entry_t			all[NET_OBS_POLL_MAX];
 	struct net_http_conn_t*		owner[NET_OBS_POLL_MAX];
 	struct net_http_t*		http = obs ? &obs->http : NULL;
-	u64				now_ms = clock_now_ms();
+	u64				now_ms = os_now_ms();
 	u32				n = count;
 	bool				slot_free = false;
 	int				rc;

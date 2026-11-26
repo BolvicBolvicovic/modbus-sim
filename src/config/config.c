@@ -6,9 +6,9 @@
 #include "config/config_device.h"
 #include "config/config_machine.h"
 #include "device/machine.h"
-#include "util/clock.h"
 #include "os/os_serial.h"
 #include "os/os_socket.h"
+#include "os/os_time.h"
 #include "vlib/macros.h"
 #include "vlib/readfile.h"
 #include <string.h>
@@ -521,7 +521,7 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 static bool
 parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 {
-	u64	now_ms      = clock_now_ms();
+	u64	now_ms      = os_now_ms();
 	bool	server_seen = false;
 
 	for (s7_pointer p = forms; s7_is_pair(p); p = s7_cdr(p))

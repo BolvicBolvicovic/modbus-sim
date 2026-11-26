@@ -4,8 +4,8 @@
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -231,10 +231,10 @@ TEST(RtuCliConfigFrameGapAffectsResponseTiming)
 	}
 	if (ok)
 	{
-		start = clock_now_ms();
+		start = os_now_ms();
 		ok = send_all_fd(g_rtu_cli.master_fd, frame + flen / 2, flen - (flen / 2));
 		ok = ok && recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 1000);
-		ok = ok && (clock_now_ms() - start) >= 200;
+		ok = ok && (os_now_ms() - start) >= 200;
 		ok = ok && addr == 1 && get_be16(resp + 2) == 7;
 	}
 
@@ -331,8 +331,8 @@ TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
 
 	{
 		u32 got = 0;
-		u64 deadline = clock_now_ms() + 2000;
-		while (clock_now_ms() < deadline && got < sizeof(line) - 1)
+		u64 deadline = os_now_ms() + 2000;
+		while (os_now_ms() < deadline && got < sizeof(line) - 1)
 		{
 			struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
 			int rc = poll(&pfd, 1, 50);

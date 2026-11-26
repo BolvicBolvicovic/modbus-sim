@@ -5,7 +5,7 @@
 #include "net/net_common.h"
 #include "net/net_obs.h"
 #include "net/net_tcp_pool.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
@@ -216,7 +216,7 @@ conn_write(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
 	pending_response_t*	p = &conn->pending;
 	s64			sent;
 
-	if (!p->active || p->due_ms > clock_now_ms())
+	if (!p->active || p->due_ms > os_now_ms())
 		return;
 	sent = os_socket_send(conn->base.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
@@ -227,7 +227,7 @@ conn_write(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
 		return;
 	}
 	p->sent += (u32)sent;
-	conn->base.last_activity_ms = clock_now_ms();
+	conn->base.last_activity_ms = os_now_ms();
 	if (p->sent >= p->len)
 	{
 		pending_response_clear(p);
@@ -343,7 +343,7 @@ ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 	net_tcp_conn_t*	owners[ASCII_TCP_MAX_CONNECTIONS + 1];
 	u32		count;
 	int		timeout;
-	u64		now_ms = clock_now_ms();
+	u64		now_ms = os_now_ms();
 
 	if (server->stop)
 		return NET_STEP_DONE;
@@ -365,7 +365,7 @@ ascii_tcp_server_step(ascii_tcp_server_t* server, s32 max_wait_ms)
 		LOG_WARN("ASCII-over-TCP poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;
 	}
-	now_ms = clock_now_ms();
+	now_ms = os_now_ms();
 	net_tcp_pool_close_idle(&server->pool, now_ms);
 	for (u32 i = 0; i < count; i++)
 	{

@@ -6,7 +6,7 @@
 #include "net/rtu_framer.h"
 #include "net/rtu_server.h"
 #include "device/device.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "vlib/arena.h"
 #include <errno.h>
 #include <poll.h>
@@ -206,12 +206,12 @@ send_rtu_req(int fd, u8 addr, const u8* pdu, u32 pdu_len)
 static bool
 recv_rtu_resp_buf(int fd, u8* buf, u32* got, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 {
-	u64	deadline = clock_now_ms() + timeout_ms;
+	u64	deadline = os_now_ms() + timeout_ms;
 
 	while (*got < MODBUS_RTU_MAX_FRAME)
 	{
 		struct pollfd	pfd = { .fd = fd, .events = POLLIN };
-		u64		now = clock_now_ms();
+		u64		now = os_now_ms();
 		int		wait_ms;
 		ssize_t		n;
 		const u8*	out_pdu = NULL;
@@ -1315,10 +1315,10 @@ TEST(RtuServerDelayAndDropFaultsOverRtu)
 	/* Delay: response arrives after configured delay. */
 	if (ok)
 	{
-		start = clock_now_ms();
+		start = os_now_ms();
 		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
 		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 1200);
-		ok = ok && (clock_now_ms() - start) >= 200;
+		ok = ok && (os_now_ms() - start) >= 200;
 		ok = ok && addr == 1 && get_be16(resp + 2) == 0x1111;
 	}
 
@@ -2062,11 +2062,11 @@ TEST(RtuServerEofAfterDelayedRequestSendsResponse)
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
 	}
 
-	start = clock_now_ms();
+	start = os_now_ms();
 	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
 	if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
 	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1500);
-	if (ok) ok = (clock_now_ms() - start) >= 180;
+	if (ok) ok = (os_now_ms() - start) >= 180;
 	if (ok)
 		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
 		     resp[1] == 2 && get_be16(resp + 2) == 0x5678;

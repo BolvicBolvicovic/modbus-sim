@@ -9,8 +9,8 @@
 #include "net/net_common.h"
 #include "net/net_obs.h"
 #include "net/net_udp.h"
+#include "os/os_time.h"
 #include "os/os_wait.h"
-#include "util/clock.h"
 #include "util/log.h"
 #include "vlib/macros.h"
 #include <string.h>
@@ -22,7 +22,7 @@ handle_datagram(udp_server_t* server, const net_udp_peer_t* peer, const u8* buf,
 	mbap_header_t		header   = { 0 };
 	u8			out[MBAP_MAX_FRAME];
 	fault_decision_t	decision = { 0 };
-	u64			now_ms   = clock_now_ms();
+	u64			now_ms   = os_now_ms();
 	u32			out_len;
 
 	if (len >= MBAP_HEADER_SIZE)
@@ -49,7 +49,7 @@ udp_server_step(udp_server_t* server, s32 max_wait_ms)
 {
 	os_wait_entry_t	pfd     = { .fd = server->udp.fd, .events = OS_WAIT_IN };
 	int		timeout = 1000;
-	u64		now_ms  = clock_now_ms();
+	u64		now_ms  = os_now_ms();
 
 	if (server->stop)
 		return NET_STEP_DONE;
@@ -61,7 +61,7 @@ udp_server_step(udp_server_t* server, s32 max_wait_ms)
 	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
-	net_udp_flush_due(&server->udp, clock_now_ms());
+	net_udp_flush_due(&server->udp, os_now_ms());
 	if (!(pfd.revents & OS_WAIT_IN))
 		return NET_STEP_CONTINUE;
 	for (u32 i = 0; i < NET_UDP_MAX_BURST; i++)

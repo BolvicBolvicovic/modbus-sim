@@ -5,7 +5,7 @@
 #include "net/net_common.h"
 #include "net/net_obs.h"
 #include "os/os_serial.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
@@ -197,7 +197,7 @@ ascii_write_pending(ascii_server_t* server)
 	pending_response_t*	p = &server->pending;
 	s64		sent;
 
-	if (!p->active || p->due_ms > clock_now_ms())
+	if (!p->active || p->due_ms > os_now_ms())
 		return true;
 
 	sent = os_serial_write(server->options.fd, p->buf + p->sent, p->len - p->sent);
@@ -268,7 +268,7 @@ ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 {
 	os_wait_entry_t	pfd = { 0 };
 	int		timeout = 0;
-	u64		now_ms = clock_now_ms();
+	u64		now_ms = os_now_ms();
 
 	if (server->stop)
 		return NET_STEP_DONE;
@@ -283,7 +283,7 @@ ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 		LOG_WARN("ASCII poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;
 	}
-	now_ms = clock_now_ms();
+	now_ms = os_now_ms();
 	return ascii_handle_revents(server, pfd.revents, now_ms) ?
 	       NET_STEP_CONTINUE : NET_STEP_DONE;
 }

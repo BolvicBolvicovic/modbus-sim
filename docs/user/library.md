@@ -49,7 +49,7 @@ set serves the binary and both libraries.
 | Context | `mogbus_create`, `mogbus_destroy`, `mogbus_load_config` |
 | Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point`, `mogbus_device_count`, `mogbus_device_at`, `mogbus_device_info` |
 | Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded), `mogbus_device_get_string/set_string` (string points) |
-| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_probe`, `mogbus_rtu_timing` |
+| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_stop_on_signals`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_probe`, `mogbus_rtu_timing` |
 | Logging | `mogbus_set_log_sink`, `mogbus_set_log_level`, `mogbus_set_log_format` |
 | Observability | `http_bind_address`/`http_port`/`http_control` in `mogbus_server_options_t` (NULL bind = no endpoint; `http_control` also serves the unauthenticated `/api/` runtime control API), `mogbus_server_metrics` |
 
@@ -114,8 +114,11 @@ time first.
   the optional `err`/`err_size` buffer.
 - Logging is process-wide: `mogbus_set_log_sink()` receives each line synchronously on the logging
   thread; the default writes INFO/WARN lines to stderr.
-- The library installs no signal handlers. TLS writes can raise SIGPIPE: ignore it in the host.
-  `mogbus_server_stop()` is signal-safe, so a host handler can call it, as `main.c` does.
+- The library installs no signal handlers unless asked. TLS writes can raise SIGPIPE: ignore it in
+  the host. `mogbus_server_stop()` is signal-safe, so a host handler can call it. For a console
+  program, `mogbus_stop_on_signals(&slot)` does it for you, as `main.c` does: SIGINT and SIGTERM
+  stop the server stored in `slot` (a `mogbus_server_t* volatile` of the host; nothing happens
+  while it is NULL), and SIGPIPE is ignored. It is process-wide, so call it once.
 
 ## Example
 

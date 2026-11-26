@@ -3,10 +3,10 @@
  * @brief Process-wide logging with a level, a format and a pluggable sink.
  */
 #include "util/log.h"
+#include "os/os_time.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 static log_level_t	g_level    = LOG_LEVEL_INFO;
 static log_format_t	g_format   = LOG_FORMAT_TEXT;
@@ -88,15 +88,12 @@ log_vwrite(log_level_t level, const char* fields, const char* fmt, va_list ap)
 	char		message[1024];
 	char		line[3072];
 	char		stamp[32] = "";
-	struct timespec	ts;
-	struct tm	tm;
+	os_utc_t	utc;
 
 	vsnprintf(message, sizeof(message), fmt, ap);
-	if (clock_gettime(CLOCK_REALTIME, &ts) == 0 &&
-	    gmtime_r(&ts.tv_sec, &tm))
-		snprintf(stamp, sizeof(stamp), "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ",
-			 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			 tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000L);
+	if (os_utc_now(&utc))
+		snprintf(stamp, sizeof(stamp), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+			 utc.year, utc.month, utc.day, utc.hour, utc.min, utc.sec, utc.msec);
 
 	if (g_format == LOG_FORMAT_JSON)
 	{

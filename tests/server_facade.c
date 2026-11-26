@@ -13,7 +13,7 @@
 #include "server/server_config.h"
 #endif
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "vlib/arena.h"
 #include <poll.h>
 #include <stdio.h>
@@ -42,9 +42,9 @@ make_device(arena_t* arena, u8 unit, u16 value)
 static bool
 pump(server_t* server, int fd)
 {
-	u64 deadline = clock_now_ms() + 2000;
+	u64 deadline = os_now_ms() + 2000;
 
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 

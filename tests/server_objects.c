@@ -18,8 +18,8 @@
 #if WITH_TLS
 #include "tests/tests_utils/tls_client.h"
 #endif
-#include "util/clock.h"
 #include "vlib/arena.h"
+#include "os/os_time.h"
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -55,9 +55,9 @@ make_device(arena_t* arena, u8 unit, u16 value)
 static bool
 pump_tcp(tcp_server_t* a, tcp_server_t* b, int fd)
 {
-	u64 deadline = clock_now_ms() + PUMP_TIMEOUT_MS;
+	u64 deadline = os_now_ms() + PUMP_TIMEOUT_MS;
 
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 
@@ -156,15 +156,15 @@ TEST(ServerObjectsStepZeroIsNonblockingAndWaitIsBounded)
 	ASSERT_EQ(dev != NULL && o.port != 0);
 	ASSERT_EQ(tcp_server_init(&s, &o) == 0);
 
-	t0 = clock_now_ms();
+	t0 = os_now_ms();
 	for (u32 i = 0; i < 20; i++)
 		ASSERT_EQ(tcp_server_step(&s, 0) == NET_STEP_CONTINUE);
-	elapsed = clock_now_ms() - t0;
+	elapsed = os_now_ms() - t0;
 	ASSERT_EQ(elapsed < 100);	/* idle servers would otherwise wait 1 s per step */
 
-	t0 = clock_now_ms();
+	t0 = os_now_ms();
 	ASSERT_EQ(tcp_server_step(&s, 60) == NET_STEP_CONTINUE);
-	elapsed = clock_now_ms() - t0;
+	elapsed = os_now_ms() - t0;
 	ASSERT_EQ(elapsed >= 40 && elapsed < 500);
 
 	tcp_server_close(&s);
@@ -184,9 +184,9 @@ TEST(ServerObjectsStopEndsSteppingAndCloseIsIdempotent)
 	ASSERT_EQ(tcp_server_init(&s, &o) == 0);
 	ASSERT_EQ(tcp_server_step(&s, 0) == NET_STEP_CONTINUE);
 	tcp_server_stop(&s);
-	t0 = clock_now_ms();
+	t0 = os_now_ms();
 	ASSERT_EQ(tcp_server_step(&s, -1) == NET_STEP_DONE);
-	ASSERT_EQ(clock_now_ms() - t0 < 200);	/* does not wait for the poll timeout */
+	ASSERT_EQ(os_now_ms() - t0 < 200);	/* does not wait for the poll timeout */
 	tcp_server_close(&s);
 	tcp_server_close(&s);
 
@@ -256,11 +256,11 @@ TEST(ServerObjectsRunReturnsPromptlyWhenHostStopsFromSignalHandler)
 		kill(pid, SIGKILL);
 	ASSERT_EQ(probe >= 0);
 	usleep(50000);	/* let the child accept and enter poll() */
-	t0 = clock_now_ms();
+	t0 = os_now_ms();
 	kill(pid, SIGTERM);
 	ASSERT_EQ(ts_wait_pid(pid, &status, 1000));
 	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-	ASSERT_EQ(clock_now_ms() - t0 < 500);
+	ASSERT_EQ(os_now_ms() - t0 < 500);
 	close(probe);
 	arena_release(arena);
 }
@@ -272,11 +272,11 @@ rtu_exchange(rtu_server_t** servers, u32 n, int fd, u8 unit, u16* value)
 	u8	resp[MODBUS_MAX_PDU];
 	u8	addr = 0;
 	u32	len = 0;
-	u64	deadline = clock_now_ms() + PUMP_TIMEOUT_MS;
+	u64	deadline = os_now_ms() + PUMP_TIMEOUT_MS;
 
 	if (!ts_rtu_send(fd, unit, req, sizeof(req), true))
 		return false;
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 
@@ -351,14 +351,14 @@ TEST(ServerObjectsAsciiServerSteppedFromHost)
 	u8			resp[MODBUS_MAX_PDU];
 	u8			addr = 0;
 	u32			len = 0;
-	u64			deadline = clock_now_ms() + PUMP_TIMEOUT_MS;
+	u64			deadline = os_now_ms() + PUMP_TIMEOUT_MS;
 
 	ASSERT_EQ(dev != NULL);
 	ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
 	o.fd = fds[1];
 	ASSERT_EQ(ascii_server_init(&s, &o) == 0);
 	ASSERT_EQ(ts_ascii_send(fds[0], 1, req, sizeof(req), true));
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		struct pollfd pfd = { .fd = fds[0], .events = POLLIN };
 
@@ -392,13 +392,13 @@ TEST(ServerObjectsRtuTcpAndAsciiTcpStopAndReopen)
 
 	ASSERT_EQ(rtu_tcp_server_init(&r, &ro) == 0);
 	ASSERT_EQ(ascii_tcp_server_init(&a, &ao) == 0);
-	t0 = clock_now_ms();
+	t0 = os_now_ms();
 	for (u32 i = 0; i < 10; i++)
 	{
 		ASSERT_EQ(rtu_tcp_server_step(&r, 0) == NET_STEP_CONTINUE);
 		ASSERT_EQ(ascii_tcp_server_step(&a, 0) == NET_STEP_CONTINUE);
 	}
-	ASSERT_EQ(clock_now_ms() - t0 < 100);
+	ASSERT_EQ(os_now_ms() - t0 < 100);
 	rtu_tcp_server_stop(&r);
 	ascii_tcp_server_stop(&a);
 	ASSERT_EQ(rtu_tcp_server_step(&r, -1) == NET_STEP_DONE);
@@ -455,7 +455,7 @@ TEST(ServerObjectsTwoTlsServersInOneProcessKeepSeparateSessionPools)
 	pid_t			pids[2];
 	bool			done[2] = { false, false };
 	bool			ok[2]   = { false, false };
-	u64			deadline = clock_now_ms() + 5000;
+	u64			deadline = os_now_ms() + 5000;
 
 	oa.tls_enabled = ob.tls_enabled = true;
 	oa.tls = (net_tls_config_t){ .certificate = TLS_CERT, .private_key = TLS_KEY,
@@ -475,7 +475,7 @@ TEST(ServerObjectsTwoTlsServersInOneProcessKeepSeparateSessionPools)
 	if (pids[1] == 0)
 		tls_child(ob.port, 0x5678);
 
-	while ((!done[0] || !done[1]) && clock_now_ms() < deadline)
+	while ((!done[0] || !done[1]) && os_now_ms() < deadline)
 	{
 		(void)tcp_server_step(&sa, 1);
 		(void)tcp_server_step(&sb, 1);

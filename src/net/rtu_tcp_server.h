@@ -8,9 +8,9 @@
 #include "net/net_common.h"
 #include "net/net_tcp_pool.h"
 #include "net/rtu_framer.h"
+#include "os/os_console.h"
 #include "util/rng.h"
 #include "vlib/c_types.h"
-#include <signal.h>
 #include <stdbool.h>
 
 typedef struct device_t device_t;
@@ -68,7 +68,7 @@ struct rtu_tcp_server_t
 	u32				gap_ms;
 	rng_t				rng;
 	rtu_tcp_conn_t			conns[RTU_TCP_MAX_CONNECTIONS];
-	volatile sig_atomic_t		stop;
+	os_stop_flag_t		stop;
 };
 
 /**

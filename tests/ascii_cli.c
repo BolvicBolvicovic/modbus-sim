@@ -3,8 +3,8 @@
 #include "modbus/ascii.h"
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <errno.h>
 #include <poll.h>
 #include <pty.h>

@@ -6,7 +6,7 @@
 #include "net/ascii_server.h"
 #include "net/net_common.h"
 #include "device/device.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "vlib/arena.h"
 #include <errno.h>
 #include <poll.h>
@@ -375,7 +375,7 @@ recv_ascii_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 {
 	u8		buf[MODBUS_ASCII_MAX_FRAME * 2];
 	u32		got = 0;
-	u64		deadline = clock_now_ms() + timeout_ms;
+	u64		deadline = os_now_ms() + timeout_ms;
 
 	while (got < sizeof(buf))
 	{
@@ -399,7 +399,7 @@ recv_ascii_resp(int fd, u8* addr, u8* pdu, u32* pdu_len, u32 timeout_ms)
 			continue;
 		}
 		{
-			u64		now = clock_now_ms();
+			u64		now = os_now_ms();
 			struct pollfd	pfd = { .fd = fd, .events = POLLIN };
 			ssize_t		n;
 
@@ -428,7 +428,7 @@ recv_ascii_resps(int fd, u32 expected, u8* addrs, u8 pdus[][MODBUS_MAX_PDU], u32
 	u8		buf[MODBUS_ASCII_MAX_FRAME * 4];
 	u32		got = 0;
 	u32		frames = 0;
-	u64		deadline = clock_now_ms() + timeout_ms;
+	u64		deadline = os_now_ms() + timeout_ms;
 
 	while (got < sizeof(buf))
 	{
@@ -457,7 +457,7 @@ recv_ascii_resps(int fd, u32 expected, u8* addrs, u8 pdus[][MODBUS_MAX_PDU], u32
 			continue;
 		}
 		{
-			u64		now = clock_now_ms();
+			u64		now = os_now_ms();
 			struct pollfd	pfd = { .fd = fd, .events = POLLIN };
 			ssize_t		n;
 
@@ -701,11 +701,11 @@ TEST(AsciiServerEofAfterDelayedRequestSendsResponse)
 	}
 
 	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
-	start = clock_now_ms();
+	start = os_now_ms();
 	ok = flen > 0 && send_all_fd(child.fd, frame, flen);
 	if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
 	if (ok) ok = recv_ascii_resp(child.fd, &addr, pdu, &pdu_len, 1500);
-	if (ok) ok = (clock_now_ms() - start) >= 180;
+	if (ok) ok = (os_now_ms() - start) >= 180;
 	if (ok)
 		ok = addr == 1 && pdu_len == 4 && pdu[0] == FC_READ_HOLDING_REGISTERS &&
 		     get_be16(pdu + 2) == 0x5678;
@@ -810,12 +810,12 @@ TEST(AsciiServerDelayedResponseKeepsQueuedRequest)
 	flen = modbus_ascii_encode(frame, 1, req, sizeof(req));
 	ok = flen > 0 && send_all_fd(child.fd, frame, flen);
 	usleep(100000); /* first response is queued with a 1200 ms delay */
-	queued_ms = clock_now_ms();
+	queued_ms = os_now_ms();
 	flen = modbus_ascii_encode(frame, 2, req, sizeof(req));
 	if (ok) ok = send_all_fd(child.fd, frame, flen);
 
 	if (ok) ok = recv_ascii_resps(child.fd, 2, addrs, pdus, lens, 2000);
-	if (ok) ok = clock_now_ms() - queued_ms >= 1000; /* crossed the idle timeout */
+	if (ok) ok = os_now_ms() - queued_ms >= 1000; /* crossed the idle timeout */
 	if (ok)
 		ok = addrs[0] == 1 && lens[0] == 4 && pdus[0][0] == FC_READ_HOLDING_REGISTERS &&
 		     get_be16(pdus[0] + 2) == 0x3344 &&

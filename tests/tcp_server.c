@@ -11,7 +11,7 @@
 #if WITH_TLS
 #include "tests/tests_utils/tls_client.h"
 #endif
-#include "util/clock.h"
+#include "os/os_time.h"
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -682,7 +682,7 @@ TEST(NetTlsDelayedFaultHonoredWithBufferedRequests)
 			tids[i] = ts_next_tid();
 		extra_tid = ts_next_tid();
 		tls_build_pipeline(frames, tids);
-		start = clock_now_ms();
+		start = os_now_ms();
 		ok = tls_client_write_record(&client, &frames[0][0], TLS_PIPELINE_BYTES);
 		/* Let the server queue the delayed reply first, then make the socket
 		 * readable again. That event must not send the reply before its due time. */
@@ -698,7 +698,7 @@ TEST(NetTlsDelayedFaultHonoredWithBufferedRequests)
 	{
 		ok = tls_recv_reply(&client, 1, tids[0], resp, &len) &&
 		     len == 4 && register_value(resp, len, 0) == 4660;
-		elapsed = clock_now_ms() - start;
+		elapsed = os_now_ms() - start;
 		ok = ok && elapsed >= 200;
 	}
 	if (!ok)
@@ -1419,7 +1419,7 @@ TEST(NetDelayFaultDoesNotBlockOtherClients)
 		delayed_tid = ts_next_tid();
 		fast_tid    = ts_next_tid();
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		start = clock_now_ms();
+		start = os_now_ms();
 		ok = send_request(&delayed, 1, delayed_tid, req, 5);
 		ok = ok && send_request(&fast, 2, fast_tid, req, 5);
 	}
@@ -1427,13 +1427,13 @@ TEST(NetDelayFaultDoesNotBlockOtherClients)
 	{
 		ok = recv_reply(&fast, 2, fast_tid, resp, &len) &&
 		     len == 4 && register_value(resp, len, 0) == 22;
-		fast_ms = clock_now_ms() - start;
+		fast_ms = os_now_ms() - start;
 	}
 	if (ok)
 	{
 		ok = recv_reply(&delayed, 1, delayed_tid, resp, &len) &&
 		     len == 4 && register_value(resp, len, 0) == 11;
-		delayed_ms = clock_now_ms() - start;
+		delayed_ms = os_now_ms() - start;
 	}
 	ok = ok && fast_ms < 300 && delayed_ms >= 500;
 
@@ -1545,9 +1545,9 @@ TEST(NetDelayAndCorruptFaultsCombine)
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		start = clock_now_ms();
+		start = os_now_ms();
 		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     clock_now_ms() - start >= 300 &&
+		     os_now_ms() - start >= 300 &&
 		     len == 4 &&
 		     resp[0] == FC_READ_HOLDING_REGISTERS &&
 		     resp[1] == (0x02 ^ 0xFF) &&
@@ -2919,7 +2919,7 @@ TEST(NetPipelinedRequestsAreAnsweredPromptly)
 		ok = send_request(&client, 1, first, req, 5);
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 1, 1);
 		ok = ok && send_request(&client, 1, second, req, 5);
-		start_ms = clock_now_ms();
+		start_ms = os_now_ms();
 	}
 	if (ok)
 		ok = recv_reply(&client, 1, first, resp, &len) &&
@@ -2928,7 +2928,7 @@ TEST(NetPipelinedRequestsAreAnsweredPromptly)
 		ok = recv_reply(&client, 1, second, resp, &len) &&
 		     len == 4 && register_value(resp, len, 0) == 22;
 	if (ok)
-		elapsed = clock_now_ms() - start_ms;
+		elapsed = os_now_ms() - start_ms;
 	ok = ok && elapsed < 250;
 
 	client_close(&client);
@@ -3040,9 +3040,9 @@ TEST(NetIdleTimeoutDoesNotCloseDelayedResponseClient)
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		start = clock_now_ms();
+		start = os_now_ms();
 		ok = exchange(&client, 1, req, 5, resp, &len);
-		elapsed = clock_now_ms() - start;
+		elapsed = os_now_ms() - start;
 	}
 	ok = ok && len == 4 && register_value(resp, len, 0) == 11;
 	ok = ok && elapsed >= 400;

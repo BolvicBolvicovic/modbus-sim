@@ -10,7 +10,7 @@
 #include "net/net_obs.h"
 #include "net/net_tcp_pool.h"
 #include "net/rtu_framer.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
@@ -98,8 +98,8 @@ static void
 conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
 	s64 got;
-	u64 now_ms = clock_now_ms();
-	u64 now_us = clock_now_us();
+	u64 now_ms = os_now_ms();
+	u64 now_us = os_now_us();
 	rtu_framer_t* f = &conn->framer;
 	rtu_framer_ctx_t ctx = server->ctx;
 
@@ -152,7 +152,7 @@ conn_write(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 
 	if (!p->active)
 		return;
-	if (p->due_ms > clock_now_ms())
+	if (p->due_ms > os_now_ms())
 		return;
 	sent = os_socket_send(conn->base.fd, p->buf + p->sent, p->len - p->sent);
 	if (sent < 0)
@@ -163,7 +163,7 @@ conn_write(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		return;
 	}
 	p->sent += (u32)sent;
-	conn->base.last_activity_ms = clock_now_ms();
+	conn->base.last_activity_ms = os_now_ms();
 	if (p->sent >= p->len)
 	{
 		pending_response_clear(p);
@@ -234,7 +234,7 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		conn->read_closed = true;
 		if (f->have_rx && f->rx_len > 0)
 		{
-			conn_process(server, conn, clock_now_ms());
+			conn_process(server, conn, os_now_ms());
 			if (conn->base.fd < 0)
 				return;
 			if (f->pending.active)
@@ -268,8 +268,8 @@ conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u32 revents)
 		return;
 	}
 	if (conn->base.fd >= 0 &&
-	    rtu_framer_gap_due(&conn->framer, conn->read_closed, clock_now_ms(), server->gap_ms))
-		conn_process_gap_due(server, conn, clock_now_ms(), clock_now_us());
+	    rtu_framer_gap_due(&conn->framer, conn->read_closed, os_now_ms(), server->gap_ms))
+		conn_process_gap_due(server, conn, os_now_ms(), os_now_us());
 }
 
 static void
@@ -296,7 +296,7 @@ rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 	net_tcp_conn_t*	owners[RTU_TCP_MAX_CONNECTIONS + 1];
 	u32		count;
 	int		timeout;
-	u64		now_ms = clock_now_ms();
+	u64		now_ms = os_now_ms();
 
 	if (server->stop)
 		return NET_STEP_DONE;
@@ -308,7 +308,7 @@ rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 
 		if (conn->base.fd >= 0 &&
 		    rtu_framer_gap_due(&conn->framer, conn->read_closed, now_ms, server->gap_ms))
-			conn_process_gap_due(server, conn, now_ms, clock_now_us());
+			conn_process_gap_due(server, conn, now_ms, os_now_us());
 	}
 
 	count = build_poll_table(server, fds, owners, now_ms, &timeout);
@@ -316,7 +316,7 @@ rtu_tcp_server_step(rtu_tcp_server_t* server, s32 max_wait_ms)
 		timeout = MIN(timeout, max_wait_ms);
 	if (net_poll(server->options.obs, fds, count, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
-	now_ms = clock_now_ms();
+	now_ms = os_now_ms();
 	net_tcp_pool_close_idle(&server->pool, now_ms);
 	for (u32 i = 0; i < count; i++)
 	{

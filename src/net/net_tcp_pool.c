@@ -6,7 +6,7 @@
 #include "net/net_tcp_pool.h"
 #include "net/net_obs.h"
 #include "net/net_common.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "vlib/macros.h"
 #include <stdio.h>
@@ -91,7 +91,7 @@ net_tcp_pool_accept(net_tcp_pool_t* pool)
 						 os_last_error_text(), NET_TCP_ACCEPT_BACKOFF_MS);
 					pool->accept_backoff_logged = true;
 				}
-				pool->accept_backoff_until_ms = clock_now_ms() + NET_TCP_ACCEPT_BACKOFF_MS;
+				pool->accept_backoff_until_ms = os_now_ms() + NET_TCP_ACCEPT_BACKOFF_MS;
 				return;
 			}
 			LOG_WARN("accept failed: %s", os_last_error_text());
@@ -108,7 +108,7 @@ net_tcp_pool_accept(net_tcp_pool_t* pool)
 		if (!os_tcp_nodelay(fd))
 			LOG_WARN("cannot set TCP_NODELAY on accepted socket: %s", os_last_error_text());
 
-		now_ms                 = clock_now_ms();
+		now_ms                 = os_now_ms();
 		memset(conn, 0, pool->conn_size);
 		conn->fd               = fd;
 		conn->last_activity_ms = now_ms;

@@ -3,8 +3,8 @@
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -317,11 +317,11 @@ TEST(RtuOverTcpHalfCloseAfterDelayedRequestSendsResponse)
 
 	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
 	ASSERT(flen > 0);
-	start = (u64)clock_now_ms();
+	start = (u64)os_now_ms();
 	ASSERT_EQ(send_all_fd(fd, frame, flen));
 	ASSERT_EQ(shutdown(fd, SHUT_WR) == 0);
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(clock_now_ms() - start >= 180);
+	ASSERT_EQ(os_now_ms() - start >= 180);
 	ASSERT_EQ(addr == 1);
 	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
 	ASSERT_EQ(plen == 4);
@@ -450,15 +450,15 @@ TEST(RtuOverTcpDelayFaultDoesNotBlockOtherClients)
 	ASSERT_EQ(send_all_fd(delayed, frame, flen));
 	flen = modbus_rtu_encode(frame, 2, req_pdu, sizeof(req_pdu));
 	ASSERT_EQ(send_all_fd(fast, frame, flen));
-	start = (u64)clock_now_ms();
+	start = (u64)os_now_ms();
 
 	ASSERT_EQ(recv_rtu_resp(fast, &addr, resp, &plen, 2000));
-	fast_ms = clock_now_ms() - start;
+	fast_ms = os_now_ms() - start;
 	ASSERT_EQ(addr == 2);
 	ASSERT_EQ(get_be16(resp + 2) == 22);
 
 	ASSERT_EQ(recv_rtu_resp(delayed, &addr, resp, &plen, 2000));
-	delayed_ms = clock_now_ms() - start;
+	delayed_ms = os_now_ms() - start;
 	ASSERT_EQ(addr == 1);
 	ASSERT_EQ(get_be16(resp + 2) == 11);
 	ASSERT_EQ(fast_ms < 300);

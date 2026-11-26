@@ -6,8 +6,8 @@
 #include "modbus/ascii.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -30,9 +30,9 @@ holding(uint32_t address, double value)
 static bool
 pump(mogbus_server_t* server, int fd)
 {
-	u64 deadline = clock_now_ms() + 2000;
+	u64 deadline = os_now_ms() + 2000;
 
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 
@@ -245,7 +245,7 @@ static bool
 probe_child(mogbus_server_t* server, const mogbus_server_options_t* o, uint8_t unit)
 {
 	char	err[128];
-	u64	deadline = clock_now_ms() + 5000;
+	u64	deadline = os_now_ms() + 5000;
 	int	status   = 0;
 	pid_t	pid      = fork();
 
@@ -255,7 +255,7 @@ probe_child(mogbus_server_t* server, const mogbus_server_options_t* o, uint8_t u
 		return false;
 	while (waitpid(pid, &status, WNOHANG) == 0)
 	{
-		if (clock_now_ms() > deadline)
+		if (os_now_ms() > deadline)
 		{
 			kill(pid, SIGKILL);
 			waitpid(pid, &status, 0);
@@ -335,7 +335,7 @@ http_get(mogbus_server_t* server, u16 port, const char* path, char* out, u32 cap
 	char	req[128];
 	int	fd = ts_connect_loopback(port, AF_INET, 1000);
 	u32	len = 0;
-	u64	deadline = clock_now_ms() + 2000;
+	u64	deadline = os_now_ms() + 2000;
 
 	if (fd < 0)
 		return false;
@@ -345,7 +345,7 @@ http_get(mogbus_server_t* server, u16 port, const char* path, char* out, u32 cap
 		close(fd);
 		return false;
 	}
-	while (clock_now_ms() < deadline && len + 1 < cap)
+	while (os_now_ms() < deadline && len + 1 < cap)
 	{
 		struct pollfd	pfd = { .fd = fd, .events = POLLIN };
 		ssize_t		got;

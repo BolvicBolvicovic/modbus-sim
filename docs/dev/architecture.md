@@ -44,17 +44,18 @@
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/util` | `clock`, `rng`, `log`, `arena_impl` | monotonic milliseconds, reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
+| `src/os` | `os_socket`, `os_wait`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
+| `src/util` | `rng`, `log`, `arena_impl` | reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
-| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `rtu_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/poll connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `rtu_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/wait-table connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
 | `src/api` | `mogbus.c`, `probe.c` | the public C API behind `include/mogbus.h` (see [library.md](../user/library.md)): context, devices and points, server handles, logging, and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
-| `src/main.c` | | command line, signal handlers, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
+| `src/main.c` | | command line, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
-Dependencies point one way: `server → net → modbus → device → util`, `config → device → util`,
-`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, modbus, device, util` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
+Dependencies point one way: `server → net → modbus → device → util → os`, `config → device → util`, every layer may also use `os`, and `os` includes no other module (only vlib),
+`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, modbus, device, util, os` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
 `server/server_mode.h` (the transport enum) and `server/server_limits.h` (array limits and option defaults shared with `api`),
 each in its own header so config does not pull in `net`, and `api` does not need config for them.
 A host that builds `server_options_t` itself can drop `config/` and `server_config.c`: `WITH_CONFIG=0`
@@ -147,7 +148,7 @@ several servers and drive them from its own loop:
 - `X_server_step(&s, max_wait_ms)` runs one poll iteration (`-1` = until the server's next deadline,
   at most 1 s; `0` = nonblocking) and returns `NET_STEP_CONTINUE`, `NET_STEP_DONE` (stopped, or the
   RTU/ASCII peer closed the fd) or `NET_STEP_ERROR` (RTU/ASCII poll failure).
-- `X_server_stop(&s)` only sets a `volatile sig_atomic_t`, so it is async-signal-safe; the next step
+- `X_server_stop(&s)` only sets an `os_stop_flag_t` (`volatile sig_atomic_t`), so it is async-signal-safe; the next step
   returns `NET_STEP_DONE`. A signal that interrupts `poll()` makes the step return, so a run loop sees
   the flag at once.
 - `X_server_run(&s, &options)` is init + step loop + close for the binary.
@@ -158,8 +159,9 @@ opens the PTY/serial fd for the `*_pty`/`*_device` modes (and auto-detects a rea
 `server_serve`/`server_run` are the step loop (exit 1 only on a poll error). The `*_fd` modes serve an
 fd the host already owns (socketpair, PTY master) and never close it; the config file cannot select them.
 
-The net layer installs no signal handlers. `main.c` owns SIGINT/SIGTERM (no `SA_RESTART`, calling
-`mogbus_server_stop`, which only sets a flag, on the running server) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
+The net layer installs no signal handlers. `main.c` calls `mogbus_stop_on_signals(&g_server)`, which
+(through `os_console_on_stop`) handles SIGINT/SIGTERM (no `SA_RESTART`, calling `mogbus_server_stop`,
+which only sets a flag, on the running server) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
 byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
 embedding a TLS server must ignore SIGPIPE itself.
 
@@ -286,6 +288,13 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
 - Guard clauses and early returns instead of nested `if`.
 - Imperative, top-to-bottom functions that do the job they need to do; a helper used once is
   usually inlined. The full style rules are in `AGENTS.md`.
+- OS calls live only in `src/os/`. Outside it no file may include `<poll.h>`, `<errno.h>`,
+  `<signal.h>`, `<unistd.h>`, `<fcntl.h>`, `<termios.h>`, `<pty.h>`, `<netdb.h>`, `<strings.h>` or any
+  `<sys/...>`, `<netinet/...>`, `<arpa/...>` header (`tools/check_deps.sh`); ISO C headers
+  (`stdio.h`, `string.h`, `stdint.h`, `math.h`, `time.h`, `ctype.h`, ...) are fine, and `net_tls.c`
+  may include OpenSSL. Errors are classified with `os_error.h`, not `errno`. One header per module
+  (`os_X.h`) with its implementation in `os_X_<platform>.c`; the Makefile builds `PLATFORM ?= posix`
+  (the only value so far; anything else fails, and `os/*_win32.c` is excluded from the build).
 - No `malloc`/`free` in project code: vlib arenas only, and no allocation per request.
 - Compiled with `-Wall -Wextra -Werror`.
 - Doc comments use Doxygen: every source file starts with `/** @file @brief ... */`; a type,
@@ -390,10 +399,10 @@ only outstanding work is listed here.
 - Windows: Docker Desktop and WSL2 (including serial adapters through usbipd-win) are documented in
   `docs/user/windows.md`; only the native port remains. Why: many PLC and SCADA engineers work on
   Windows. Plan:
-  - A `src/os/` layer is the only code that includes OS headers (enforced by `tools/check_deps.sh`):
+  - Done on Linux: the `src/os/` layer (see Modules) is the only code that includes OS headers (enforced by `tools/check_deps.sh`):
     `os_socket`, `os_wait` (event waiting replacing `poll`: `poll` on POSIX, `WSAEventSelect` plus
     overlapped COM I/O plus `WaitForMultipleObjects` on Windows; the transports already go through
-    `net_poll`), `os_serial` (termios versus DCB/COMMTIMEOUTS; no PTY on Windows), `os_clock` and
+    `net_poll`), `os_serial` (termios versus DCB/COMMTIMEOUTS; no PTY on Windows), `os_time` and
     `os_console` (signals versus `SetConsoleCtrlHandler`). The Makefile picks `os_*_posix.c` or
     `os_*_win32.c`, like `net_tls`/`net_tls_stub`.
   - vlib arenas need a `VirtualAlloc` backend upstream.

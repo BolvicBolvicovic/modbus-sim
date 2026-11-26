@@ -1,5 +1,5 @@
 #include "tests/tests_utils/tls_client.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -63,7 +63,7 @@ tls_client_open_timeout(u16 port, const char* cert, const char* key, const char*
 					   .tv_usec = (timeout_ms % 1000) * 1000 };
 	SSL_CTX*		ctx    = NULL;
 	X509*		peer   = NULL;
-	u64		deadline = clock_now_ms() + timeout_ms;
+	u64		deadline = os_now_ms() + timeout_ms;
 	bool		handshake_done = false;
 	bool		ok     = false;
 
@@ -161,7 +161,7 @@ tls_client_open_timeout(u16 port, const char* cert, const char* key, const char*
 			save_error();
 			goto done;
 		}
-		u64 now       = clock_now_ms();
+		u64 now       = os_now_ms();
 		u32 remaining = now < deadline ? (u32)(deadline - now) : 0;
 
 		if (!wait_fd(out->fd, err == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, remaining))
@@ -282,7 +282,7 @@ tls_client_write_record(tls_client_t* client, const u8* buf, u32 len)
 bool
 tls_client_wait_close_notify(tls_client_t* client, u32 timeout_ms)
 {
-	u64		deadline = clock_now_ms() + timeout_ms;
+	u64		deadline = os_now_ms() + timeout_ms;
 	u8		byte;
 
 	g_error[0] = '\0';
@@ -308,7 +308,7 @@ tls_client_wait_close_notify(tls_client_t* client, u32 timeout_ms)
 			save_error();
 			return false;
 		}
-		now = clock_now_ms();
+		now = os_now_ms();
 		if (now >= deadline)
 		{
 			set_error_text("TLS close_notify timed out");

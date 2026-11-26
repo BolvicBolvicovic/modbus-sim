@@ -9,9 +9,9 @@
 #include "net/net_common.h"
 #include "net/net_tcp_pool.h"
 #include "net/net_tls.h"
+#include "os/os_console.h"
 #include "util/rng.h"
 #include "vlib/c_types.h"
-#include <signal.h>
 
 typedef struct device_t device_t;
 typedef struct net_obs_t net_obs_t;
@@ -75,7 +75,7 @@ struct tcp_server_t
 	net_tcp_pool_t		pool;
 	rng_t			rng;
 	tcp_conn_t		conns[TCP_SERVER_MAX_CONNECTIONS];
-	volatile sig_atomic_t	stop;
+	os_stop_flag_t	stop;
 };
 
 /**

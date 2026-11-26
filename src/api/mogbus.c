@@ -10,10 +10,11 @@
 #include "build_config.h"
 #include "device/device.h"
 #include "net/rtu_framer.h"
+#include "os/os_console.h"
+#include "os/os_socket.h"
+#include "os/os_time.h"
 #include "server/server.h"
 #include "server/server_limits.h"
-#include "util/clock.h"
-#include "os/os_socket.h"
 #include "util/log.h"
 #include "vlib/arena.h"
 #if WITH_CONFIG
@@ -269,7 +270,7 @@ mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name, char* err, s
 		set_err(err, err_size, "device name is too long (max %d bytes)", DEVICE_NAME_MAX - 1);
 		return NULL;
 	}
-	dev = device_new(ctx->arena, clock_now_ms());
+	dev = device_new(ctx->arena, os_now_ms());
 	if (!dev)
 	{
 		set_err(err, err_size, "out of memory while creating a device");
@@ -418,7 +419,7 @@ mogbus_device_read(mogbus_device_t* handle, mogbus_space_t space, uint32_t addre
 
 	if ((unsigned)space >= SPACE_COUNT || count == 0 || !out)
 		return false;
-	device_tick(dev, clock_now_ms());
+	device_tick(dev, os_now_ms());
 	return device_read(dev, (space_kind_t)space, address, count, out);
 }
 
@@ -438,7 +439,7 @@ mogbus_device_write(mogbus_device_t* handle, mogbus_space_t space, uint32_t addr
 				return false;
 		}
 	}
-	device_tick(dev, clock_now_ms());
+	device_tick(dev, os_now_ms());
 	return device_write(dev, (space_kind_t)space, address, count, in);
 }
 
@@ -450,7 +451,7 @@ mogbus_device_get_value(mogbus_device_t* handle, mogbus_space_t space, uint32_t 
 
 	if ((unsigned)space >= SPACE_COUNT || !out)
 		return false;
-	device_tick(dev, clock_now_ms());
+	device_tick(dev, os_now_ms());
 	if (!device_get_point(dev, (space_kind_t)space, address, &val))
 		return false;
 	*out = val.type == VAL_BOOL ? (val.b ? 1.0 : 0.0) : val.n;
@@ -465,7 +466,7 @@ mogbus_device_set_value(mogbus_device_t* handle, mogbus_space_t space, uint32_t 
 
 	if ((unsigned)space >= SPACE_COUNT)
 		return false;
-	device_tick(dev, clock_now_ms());
+	device_tick(dev, os_now_ms());
 	if (space_is_bit((space_kind_t)space))
 	{
 		val.type = VAL_BOOL;
@@ -822,6 +823,24 @@ void
 mogbus_server_stop(mogbus_server_t* server)
 {
 	server_stop(&server->server);
+}
+
+static mogbus_server_t* volatile* g_stop_slot;
+
+static void
+stop_from_signal(void)
+{
+	mogbus_server_t* server = g_stop_slot ? *g_stop_slot : NULL;
+
+	if (server)
+		mogbus_server_stop(server);
+}
+
+void
+mogbus_stop_on_signals(mogbus_server_t* volatile* slot)
+{
+	g_stop_slot = slot;
+	os_console_on_stop(stop_from_signal);
 }
 
 int

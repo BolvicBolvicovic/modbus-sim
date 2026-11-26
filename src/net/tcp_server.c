@@ -9,11 +9,10 @@
 #include "net/net_common.h"
 #include "net/net_obs.h"
 #include "net/net_tcp_pool.h"
-#include "util/clock.h"
+#include "os/os_time.h"
 #include "util/log.h"
 #include "util/rng.h"
 #include "vlib/macros.h"
-#include <signal.h>
 #include <string.h>
 
 static void
@@ -32,7 +31,7 @@ conn_tls_handshake(tcp_server_t* server, tcp_conn_t* conn)
 	status = net_tls_conn_handshake(conn->tls, tls_err, sizeof(tls_err));
 	if (status == NET_TLS_OK)
 	{
-		conn->base.last_activity_ms = clock_now_ms();
+		conn->base.last_activity_ms = os_now_ms();
 		LOG_DEBUG("TLS handshake complete with %s", conn->base.peer);
 		if (net_tls_conn_peer_subject(conn->tls, subject, sizeof(subject)))
 			LOG_INFO("client %s authenticated TLS peer subject: %s", conn->base.peer, subject);
@@ -148,7 +147,7 @@ conn_process(tcp_server_t* server, tcp_conn_t* conn)
 		if (conn->rx_len < frame)
 			return;
 
-		handle_frame(server, conn, &header, clock_now_ms());
+		handle_frame(server, conn, &header, os_now_ms());
 		if (conn->base.fd < 0)
 			return; /* a fault closed the connection */
 		conn_consume(conn, frame);
@@ -159,7 +158,7 @@ static void
 conn_tx_advance(tcp_server_t* server, tcp_conn_t* conn, u32 sent)
 {
 	conn->tx_sent         += sent;
-	conn->base.last_activity_ms = clock_now_ms();
+	conn->base.last_activity_ms = os_now_ms();
 	if (conn->tx_sent < conn->tx_len)
 		return;
 
@@ -192,7 +191,7 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 		if (status == NET_TLS_OK && len > 0)
 		{
 			conn->rx_len          += (u32)len;
-			conn->base.last_activity_ms = clock_now_ms();
+			conn->base.last_activity_ms = os_now_ms();
 			conn_process(server, conn);
 			return;
 		}
@@ -214,7 +213,7 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 		return;
 
 	conn->rx_len          += (u32)got;
-	conn->base.last_activity_ms = clock_now_ms();
+	conn->base.last_activity_ms = os_now_ms();
 	conn_process(server, conn);
 }
 
@@ -442,7 +441,7 @@ tcp_server_step(tcp_server_t* server, s32 max_wait_ms)
 	net_tcp_conn_t*		owners[TCP_SERVER_MAX_CONNECTIONS + 1];
 	u32		count   = 0;
 	int		timeout = 0;
-	u64		now_ms  = clock_now_ms();
+	u64		now_ms  = os_now_ms();
 
 	if (server->stop)
 		return NET_STEP_DONE;
@@ -455,7 +454,7 @@ tcp_server_step(tcp_server_t* server, s32 max_wait_ms)
 	if (net_poll(server->options.obs, fds, count, timeout) < 0)
 		return NET_STEP_CONTINUE;	/* EINTR: the caller re-checks stop */
 
-	now_ms = clock_now_ms();
+	now_ms = os_now_ms();
 	net_tcp_pool_close_idle(&server->pool, now_ms);
 	close_stalled_handshakes(server, now_ms);
 	for (u32 i = 0; i < count; i++)

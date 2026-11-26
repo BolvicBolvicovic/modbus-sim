@@ -8,8 +8,8 @@
 #include "vtest.h"
 #include "modbus/bytes.h"
 #include "modbus/pdu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -242,7 +242,7 @@ rearm_start(client_t* client)
 static bool
 wait_starting(client_t* client, u16* speed_out)
 {
-	u64 deadline = clock_now_ms() + STATE_TIMEOUT_MS;
+	u64 deadline = os_now_ms() + STATE_TIMEOUT_MS;
 
 	for (;;)
 	{
@@ -259,7 +259,7 @@ wait_starting(client_t* client, u16* speed_out)
 			*speed_out = obs.speed;
 			return true;
 		}
-		if (clock_now_ms() >= deadline)
+		if (os_now_ms() >= deadline)
 			return false;
 		if (!rearm_start(client))
 			return false;
@@ -270,7 +270,7 @@ wait_starting(client_t* client, u16* speed_out)
 static bool
 wait_running(client_t* client)
 {
-	u64 deadline = clock_now_ms() + STATE_TIMEOUT_MS;
+	u64 deadline = os_now_ms() + STATE_TIMEOUT_MS;
 
 	for (;;)
 	{
@@ -283,7 +283,7 @@ wait_running(client_t* client)
 		    !obs.tripped &&
 		    obs.speed == SETPOINT)
 			return true;
-		if (clock_now_ms() >= deadline)
+		if (os_now_ms() >= deadline)
 			return false;
 		usleep(POLL_SLEEP_US);
 	}
@@ -292,7 +292,7 @@ wait_running(client_t* client)
 static bool
 wait_tripped(client_t* client)
 {
-	u64 deadline = clock_now_ms() + STATE_TIMEOUT_MS;
+	u64 deadline = os_now_ms() + STATE_TIMEOUT_MS;
 
 	for (;;)
 	{
@@ -304,7 +304,7 @@ wait_tripped(client_t* client)
 		    !obs.running &&
 		    obs.speed == 0)
 			return true;
-		if (clock_now_ms() >= deadline)
+		if (os_now_ms() >= deadline)
 			return false;
 		usleep(POLL_SLEEP_US);
 	}
@@ -315,9 +315,9 @@ wait_tripped(client_t* client)
 static bool
 remains_at(client_t* client, const observation_t* expected, u32 duration_ms)
 {
-	u64 deadline = clock_now_ms() + duration_ms;
+	u64 deadline = os_now_ms() + duration_ms;
 
-	while (clock_now_ms() < deadline)
+	while (os_now_ms() < deadline)
 	{
 		observation_t obs = { 0 };
 

@@ -11,8 +11,8 @@
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
 #include "os/os_socket.h"
+#include "os/os_time.h"
 #include "os/os_wait.h"
-#include "util/clock.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,7 +36,7 @@ probe_err(char* err, size_t err_size, const char* fmt, ...)
 static int
 remaining_ms(u64 deadline)
 {
-	u64 now = clock_now_ms();
+	u64 now = os_now_ms();
 
 	return deadline > now ? (int)(deadline - now) : 0;
 }
@@ -168,7 +168,7 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 		}
 	}
 
-	deadline = clock_now_ms() + timeout_ms;
+	deadline = os_now_ms() + timeout_ms;
 	fd = os_socket_open(&addr, datagram);
 	if (fd == OS_SOCKET_INVALID)
 	{

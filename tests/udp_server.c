@@ -3,8 +3,8 @@
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
+#include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
-#include "util/clock.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,14 +229,14 @@ TEST(UdpDelayFaultDoesNotBlockOtherPeers)
 	fast = client_open();
 	ASSERT(slow >= 0 && fast >= 0);
 
-	start = clock_now_ms();
+	start = os_now_ms();
 	ASSERT_EQ(ts_mbap_send(slow, 1, tid_slow, READ_HOLDING_0, sizeof(READ_HOLDING_0)));
 	ASSERT_EQ(exchange(fast, 2, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
-	fast_ms = clock_now_ms() - start;
+	fast_ms = os_now_ms() - start;
 	ASSERT_EQ(get_be16(resp + 2) == 22);
 
 	ASSERT_EQ(ts_udp_mbap_recv(slow, 1, tid_slow, resp, &len, 2000));
-	delayed_ms = clock_now_ms() - start;
+	delayed_ms = os_now_ms() - start;
 	ASSERT_EQ(get_be16(resp + 2) == 11);
 	ASSERT_EQ(fast_ms < 300);
 	ASSERT_EQ(delayed_ms >= 400);
