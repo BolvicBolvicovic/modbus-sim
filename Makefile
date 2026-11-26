@@ -363,9 +363,11 @@ fuzz: $(FUZZ_BINS)
 fuzz-run: fuzz
 	./tools/run_fuzz.sh $(FUZZ_SECONDS) $(FUZZ_NAMES)
 
-# HTML reference of the sources in build/api/html (needs doxygen; warnings are errors).
+# HTML reference of the sources and Markdown pages in build/api/html (needs doxygen; warnings are
+# errors), then a check that every file, struct, union, enum and opaque typedef has a brief.
 api-docs:
 	mkdir -p build/api && doxygen Doxyfile
+	./tools/check_doc_briefs.sh
 
 clean:
 	$(RM) -r $(DIST_DIR) build/api $(FUZZ_DIR)
