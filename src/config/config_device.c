@@ -643,6 +643,199 @@ parse_fifo(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return true;
 }
 
+/* Function codes the PDU handler implements; a device may define only the others. Kept equal to
+ * modbus_fc_is_builtin() by a test (config cannot include modbus/). */
+static const u8 BUILTIN_FCS[] = {
+	0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0B, 0x0C, 0x0F, 0x10, 0x11,
+	0x14, 0x15, 0x16, 0x17, 0x18, 0x2B,
+};
+
+bool
+config_fc_is_builtin(u8 fc)
+{
+	for (u32 i = 0; i < ARRAY_COUNT(BUILTIN_FCS); i++)
+	{
+		if (BUILTIN_FCS[i] == fc)
+			return true;
+	}
+	return false;
+}
+
+/* "01 0A ff" -> bytes: pairs of hex digits, spaces between pairs allowed. */
+static bool
+parse_hex_bytes(form_ctx_t* ctx, s7_pointer value, const char* what, u8* out, u32 cap, u32* len)
+{
+	const char*	text;
+	u32		n = 0;
+
+	if (!s7_is_string(value))
+		return form_fail(ctx, "%s: expected a string of hex bytes like \"01 0A FF\", got %s", what,
+				 form_text(ctx, value));
+	text = s7_string(value);
+	for (u32 i = 0; text[i];)
+	{
+		int hi;
+		int lo;
+
+		if (text[i] == ' ')
+		{
+			i++;
+			continue;
+		}
+		hi = hex_digit(text[i]);
+		lo = text[i + 1] ? hex_digit(text[i + 1]) : -1;
+		if (hi < 0 || lo < 0)
+			return form_fail(ctx, "%s: \"%s\" is not a list of hex bytes (two digits 0-9, a-f or A-F "
+					 "per byte, spaces between bytes)", what, text);
+		if (n >= cap)
+			return form_fail(ctx, "%s: too many bytes (max %u)", what, cap);
+		out[n++] = (u8)((hi << 4) | lo);
+		i += 2;
+	}
+	*len = n;
+	return true;
+}
+
+/* One action of a user-defined function code: (reply "HEX"), (echo), (exception N),
+ * (registers SPACE ADDRESS COUNT) or (no-response). */
+static bool
+parse_custom_action(form_ctx_t* ctx, s7_pointer action, struct device_custom_case_t* c)
+{
+	static const char* const SPACES[] = { "coil", "discrete", "input", "holding" };
+	const char*	head = form_head_name(action);
+	long		len  = s7_list_length(ctx->sc, action);
+	u32		n    = 0;
+
+	if (!head)
+		return form_fail(ctx, "%s: expected (reply \"HEX\"), (echo), (exception N), "
+				 "(registers SPACE ADDRESS COUNT) or (no-response)", form_text(ctx, action));
+	if (strcmp(head, "reply") == 0 && len == 2)
+	{
+		c->action = CUSTOM_REPLY;
+		if (!parse_hex_bytes(ctx, s7_cadr(action), "reply", c->reply, DEVICE_CUSTOM_REPLY_MAX, &n))
+			return false;
+		c->reply_len = (u16)n;
+		return true;
+	}
+	if (strcmp(head, "echo") == 0 && len == 1)
+	{
+		c->action = CUSTOM_ECHO;
+		return true;
+	}
+	if (strcmp(head, "no-response") == 0 && len == 1)
+	{
+		c->action = CUSTOM_NO_RESPONSE;
+		return true;
+	}
+	if (strcmp(head, "exception") == 0 && len == 2)
+	{
+		s64 code = 0;
+
+		c->action = CUSTOM_EXCEPTION;
+		if (!form_get_int(ctx, action, 1, 255, &code))
+			return false;
+		c->exception_code = (u8)code;
+		return true;
+	}
+	if (strcmp(head, "registers") == 0 && len == 4)
+	{
+		const char*	space = s7_is_symbol(s7_cadr(action)) ? s7_symbol_name(s7_cadr(action)) : "";
+		s7_pointer	addr  = s7_caddr(action);
+		s7_pointer	count = s7_cadddr(action);
+		u32		max;
+
+		c->action = CUSTOM_REGISTERS;
+		c->space  = SPACE_COUNT;
+		for (u32 i = 0; i < ARRAY_COUNT(SPACES); i++)
+		{
+			if (strcmp(space, SPACES[i]) == 0)
+				c->space = (space_kind_t)i;
+		}
+		if (c->space == SPACE_COUNT)
+			return form_fail(ctx, "%s: the space must be coil, discrete, input or holding",
+					 form_text(ctx, action));
+		max = space_is_bit(c->space) ? 2000 : 125;
+		if (!s7_is_integer(addr) ||
+		    !s7_is_integer(count) ||
+		    s7_integer(addr) < 0 ||
+		    s7_integer(count) < 1 ||
+		    (u64)s7_integer(count) > max ||
+		    s7_integer(addr) + s7_integer(count) > 65536)
+			return form_fail(ctx, "%s: expected ADDRESS 0-65535 and COUNT 1-%u that stay below 65536",
+					 form_text(ctx, action), max);
+		c->address = (u16)s7_integer(addr);
+		c->count   = (u16)s7_integer(count);
+		return true;
+	}
+	return form_fail(ctx, "%s: expected (reply \"HEX\"), (echo), (exception N), "
+			 "(registers SPACE ADDRESS COUNT) or (no-response)", form_text(ctx, action));
+}
+
+/* Repeatable (function-code CODE [(name "TEXT")] (on "HEX" ACTION)... | ACTION). */
+static bool
+parse_function_code(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	device_custom_fc_t	fc = { 0 };
+	s7_pointer		code = s7_is_pair(s7_cdr(item)) ? s7_cadr(item) : NULL;
+	const char*		error;
+
+	if (!code ||
+	    !s7_is_integer(code) ||
+	    s7_integer(code) < 1 ||
+	    s7_integer(code) > 127)
+		return form_fail(ctx, "%s: expected (function-code CODE ...) with CODE 1-127",
+				 form_text(ctx, item));
+	fc.code = (u8)s7_integer(code);
+	if (config_fc_is_builtin(fc.code))
+		return form_fail(ctx, "%s: function code %u (0x%02X) is implemented by mogbus and cannot be "
+				 "redefined", form_text(ctx, item), fc.code, fc.code);
+
+	for (s7_pointer p = s7_cddr(item); s7_is_pair(p); p = s7_cdr(p))
+	{
+		s7_pointer			entry = s7_car(p);
+		const char*			head  = form_head_name(entry);
+		struct device_custom_case_t*	c;
+
+		if (head && strcmp(head, "name") == 0)
+		{
+			const char* name = NULL;
+
+			if (!form_get_string(ctx, entry, &name))
+				return false;
+			if (strlen(name) >= sizeof(fc.name))
+				return form_fail(ctx, "%s: name is too long (max %u characters)",
+						 form_text(ctx, entry), (u32)sizeof(fc.name) - 1);
+			strcpy(fc.name, name);
+			continue;
+		}
+		if (fc.case_count >= DEVICE_MAX_CUSTOM_CASES)
+			return form_fail(ctx, "%s: too many cases (max %d)", form_text(ctx, item),
+					 DEVICE_MAX_CUSTOM_CASES);
+		c = &fc.cases[fc.case_count];
+		if (head && strcmp(head, "on") == 0)
+		{
+			u32 n = 0;
+
+			if (s7_list_length(ctx->sc, entry) != 3)
+				return form_fail(ctx, "%s: expected (on \"HEX PREFIX\" ACTION)", form_text(ctx, entry));
+			if (!parse_hex_bytes(ctx, s7_cadr(entry), "on", c->prefix, DEVICE_CUSTOM_PREFIX_MAX, &n) ||
+			    !parse_custom_action(ctx, s7_caddr(entry), c))
+				return false;
+			c->prefix_len = (u8)n;
+		}
+		else if (!parse_custom_action(ctx, entry, c))	/* a bare action matches every request */
+			return false;
+		fc.case_count++;
+	}
+	if (fc.case_count == 0)
+		return form_fail(ctx, "%s: needs at least one (on \"HEX\" ACTION) or ACTION",
+				 form_text(ctx, item));
+	error = device_add_custom_fc(dev, &fc);
+	if (error)
+		return form_fail(ctx, "%s: %s", form_text(ctx, item), error);
+	return true;
+}
+
 static bool
 parse_machine(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
@@ -686,6 +879,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "file",             parse_file             },
 	{ "fifo",             parse_fifo             },
 	{ "canopen-object",   parse_canopen_object   },
+	{ "function-code",    parse_function_code    },
 	{ "machine",          parse_machine          },
 };
 

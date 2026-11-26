@@ -3102,3 +3102,117 @@ TEST(SilentRequestsDoNotConsumeFaultScheduleSteps)
 	ASSERT_EQ(resp[0] == 0x83 && resp[1] == 0x05);
 	arena_release(arena);
 }
+
+/* User-defined function code 0x41 on make_device(): holding 0-1 = 0x1234 0x5678, coils 0-9 off. */
+static device_t*
+make_custom_fc_device(arena_t* arena)
+{
+	device_t*		dev = make_device(arena);
+	device_custom_fc_t	fc  = { .code = 0x41 };
+
+	fc.cases[0] = (struct device_custom_case_t){ .prefix = { 0x01 }, .prefix_len = 1,
+		.action = CUSTOM_REPLY, .reply = { 0x00, 0xAB, 0xCD }, .reply_len = 3 };
+	fc.cases[1] = (struct device_custom_case_t){ .prefix = { 0x02 }, .prefix_len = 1,
+		.action = CUSTOM_REGISTERS, .space = SPACE_HOLDING, .address = 0, .count = 2 };
+	fc.cases[2] = (struct device_custom_case_t){ .prefix = { 0x03 }, .prefix_len = 1,
+		.action = CUSTOM_REGISTERS, .space = SPACE_COIL, .address = 0, .count = 10 };
+	fc.cases[3] = (struct device_custom_case_t){ .prefix = { 0x04, 0x05 }, .prefix_len = 2,
+		.action = CUSTOM_ECHO };
+	fc.cases[4] = (struct device_custom_case_t){ .prefix = { 0x04 }, .prefix_len = 1,
+		.action = CUSTOM_EXCEPTION, .exception_code = 0x04 };
+	fc.cases[5] = (struct device_custom_case_t){ .prefix = { 0x06 }, .prefix_len = 1,
+		.action = CUSTOM_NO_RESPONSE };
+	fc.cases[6] = (struct device_custom_case_t){ .prefix = { 0x07 }, .prefix_len = 1,
+		.action = CUSTOM_REGISTERS, .space = SPACE_HOLDING, .address = 500, .count = 1 };
+	fc.case_count = 7;
+	ASSERT_EQ(device_add_custom_fc(dev, &fc) == NULL);
+	return dev;
+}
+
+static u32
+custom_call(device_t* dev, const u8* req, u32 len, u8* resp)
+{
+	return modbus_handle_pdu(dev, 0, req, len, resp);
+}
+
+TEST(UserDefinedFunctionCodeActions)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev = make_custom_fc_device(arena);
+	u8		resp[MODBUS_MAX_PDU];
+	const u8	reply[]  = { 0x41, 0x01 };
+	const u8	regs[]   = { 0x41, 0x02 };
+	const u8	bits[]   = { 0x41, 0x03 };
+	const u8	echo[]   = { 0x41, 0x04, 0x05, 0xEE };
+	const u8	exc[]    = { 0x41, 0x04, 0x99 };	/* "04 05" does not match: falls to "04" */
+	const u8	silent[] = { 0x41, 0x06 };
+	const u8	undef[]  = { 0x41, 0x07 };
+	const u8	nomatch[] = { 0x41, 0x09 };
+	const u8	empty[]  = { 0x41 };
+	u32		len;
+
+	len = custom_call(dev, reply, sizeof(reply), resp);
+	ASSERT_EQ(len == 4 && resp[0] == 0x41 && resp[1] == 0x00 && resp[2] == 0xAB && resp[3] == 0xCD);
+	len = custom_call(dev, regs, sizeof(regs), resp);
+	ASSERT_EQ(len == 6 && resp[1] == 4 && get_be16(resp + 2) == 0x1234 && get_be16(resp + 4) == 0x5678);
+	ASSERT_EQ(device_write(dev, SPACE_COIL, 9, 1, (const u16[]){ 1 }));
+	len = custom_call(dev, bits, sizeof(bits), resp);
+	ASSERT_EQ(len == 4 && resp[1] == 2 && resp[2] == 0x00 && resp[3] == 0x02);	/* coil 9 = bit 1 of byte 2 */
+	len = custom_call(dev, echo, sizeof(echo), resp);
+	ASSERT_EQ(len == sizeof(echo) && memcmp(resp, echo, sizeof(echo)) == 0);
+	len = custom_call(dev, exc, sizeof(exc), resp);
+	ASSERT_EQ(len == 2 && resp[0] == 0xC1 && resp[1] == 0x04);
+	ASSERT_EQ(custom_call(dev, silent, sizeof(silent), resp) == 0);
+	len = custom_call(dev, undef, sizeof(undef), resp);
+	ASSERT_EQ(len == 2 && resp[0] == 0xC1 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
+	len = custom_call(dev, nomatch, sizeof(nomatch), resp);
+	ASSERT_EQ(len == 2 && resp[0] == 0xC1 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	len = custom_call(dev, empty, sizeof(empty), resp);
+	ASSERT_EQ(len == 2 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
+	arena_release(arena);
+}
+
+TEST(UserDefinedFunctionCodesKeepBuiltinsAndUnknownCodes)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev = make_custom_fc_device(arena);
+	device_custom_fc_t	shadow = { .code = FC_READ_HOLDING_REGISTERS, .case_count = 1 };
+	u8			resp[MODBUS_MAX_PDU];
+	const u8		read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	const u8		other[] = { 0x42, 0x01 };
+	u32			len;
+
+	/* Config rejects redefining a built-in code; even if a device had one, the built-in wins. */
+	shadow.cases[0] = (struct device_custom_case_t){ .action = CUSTOM_ECHO };
+	ASSERT_EQ(device_add_custom_fc(dev, &shadow) == NULL);
+	len = custom_call(dev, read, sizeof(read), resp);
+	ASSERT_EQ(len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS && get_be16(resp + 2) == 0x1234);
+	len = custom_call(dev, other, sizeof(other), resp);
+	ASSERT_EQ(len == 2 && resp[0] == 0xC2 && resp[1] == EXC_ILLEGAL_FUNCTION);
+	ASSERT_EQ(device_add_custom_fc(dev, &shadow) != NULL);	/* duplicate code */
+	arena_release(arena);
+}
+
+TEST(UserDefinedFunctionCodesGoThroughFaultsAndCounters)
+{
+	arena_t*		arena = ARENA_ALLOC();
+	device_t*		dev = make_custom_fc_device(arena);
+	u8			resp[MODBUS_MAX_PDU];
+	const u8		reply[] = { 0x41, 0x01 };
+	const u8		nomatch[] = { 0x41, 0x09 };
+	fault_decision_t	decision = { 0 };
+	rng_t			rng;
+	u16			events = dev->com_event_count;
+	u32			len;
+
+	rng_seed(&rng, 1);
+	(void)custom_call(dev, reply, sizeof(reply), resp);
+	ASSERT_EQ(dev->com_event_count == (u16)(events + 1));
+	(void)custom_call(dev, nomatch, sizeof(nomatch), resp);
+	ASSERT_EQ(dev->diag_exception_count == 1);
+
+	set_fault(dev, FAULT_EXCEPTION, 0, EXC_DEVICE_BUSY, 100);
+	len = modbus_handle_request(dev, &rng, 0, reply, sizeof(reply), resp, &decision);
+	ASSERT_EQ(len == 2 && resp[0] == 0xC1 && resp[1] == EXC_DEVICE_BUSY);
+	arena_release(arena);
+}

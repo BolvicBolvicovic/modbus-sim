@@ -1,6 +1,8 @@
 #include "vtest.h"
 #include "build_config.h"
 #include "config/config.h"
+#include "config/config_device.h"
+#include "modbus/pdu.h"
 #include "device/machine.h"
 #include "vlib/macros.h"
 #include <math.h>
@@ -2675,4 +2677,53 @@ TEST(ConfigHttpEndpointRejectsBadValues)
 		     "http: port 1502 is already the Modbus server port");
 	EXPECT_ERROR("(server (mode rtu-tcp) (port 9102) (http)) (device (unit-id 1) (holding 0))",
 		     "http: port 9102 is already the Modbus server port");
+}
+
+TEST(ConfigUserDefinedFunctionCodes)
+{
+	config_t			config = { 0 };
+	char				err[256] = "";
+	const device_custom_fc_t*	fc;
+
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0)"
+				 " (function-code #x41 (name \"Vendor status\")"
+				 "   (on \"01 0a\" (reply \"00 12 34\"))"
+				 "   (on \"02\" (registers holding 0 1))"
+				 "   (on \"\" (exception 4)))"
+				 " (function-code 100 (echo)))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.devices[0]->custom_fc_count == 2);
+	fc = device_find_custom_fc(config.devices[0], 0x41);
+	ASSERT_EQ(fc != NULL && strcmp(fc->name, "Vendor status") == 0 && fc->case_count == 3);
+	ASSERT_EQ(fc->cases[0].prefix_len == 2 && fc->cases[0].prefix[0] == 0x01 && fc->cases[0].prefix[1] == 0x0A);
+	ASSERT_EQ(fc->cases[0].action == CUSTOM_REPLY && fc->cases[0].reply_len == 3 && fc->cases[0].reply[2] == 0x34);
+	ASSERT_EQ(fc->cases[1].action == CUSTOM_REGISTERS && fc->cases[1].space == SPACE_HOLDING &&
+		  fc->cases[1].count == 1);
+	ASSERT_EQ(fc->cases[2].prefix_len == 0 && fc->cases[2].action == CUSTOM_EXCEPTION &&
+		  fc->cases[2].exception_code == 4);
+	fc = device_find_custom_fc(config.devices[0], 100);
+	ASSERT_EQ(fc != NULL && fc->case_count == 1 && fc->cases[0].prefix_len == 0 &&
+		  fc->cases[0].action == CUSTOM_ECHO);
+}
+
+TEST(ConfigUserDefinedFunctionCodeErrors)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code 3 (echo)))",
+		     "function code 3 (0x03) is implemented by mogbus and cannot be redefined");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code 128 (echo)))", "CODE 1-127");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41))", "needs at least one");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (reply \"1\")))", "is not a list of hex bytes");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (on \"zz\" (echo))))", "is not a list of hex bytes");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (registers holding 0 126)))", "COUNT 1-125");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (registers coil 65535 2)))", "below 65536");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (registers tables 0 1)))", "coil, discrete, input or holding");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (exception 0)))", "exception");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (frob)))", "expected (reply");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0) (function-code #x41 (echo)) (function-code #x41 (echo)))",
+		     "already defined");
+}
+
+TEST(ConfigBuiltinFunctionCodesMatchThePduHandler)
+{
+	for (u32 fc = 0; fc < 256; fc++)
+		ASSERT_EQ(config_fc_is_builtin((u8)fc) == modbus_fc_is_builtin((u8)fc));
 }

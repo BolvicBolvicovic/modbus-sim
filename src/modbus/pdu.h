@@ -108,4 +108,11 @@ u32	modbus_handle_request(device_t* dev, rng_t* rng, u64 now_ms,
  */
 u32	modbus_exception(u8* resp, u8 function, u8 code);
 
+/**
+ * @brief True for the function codes mogbus implements itself.
+ *
+ * A device may define its own handling (user-defined function codes) only for the others.
+ */
+bool	modbus_fc_is_builtin(u8 fc);
+
 #endif

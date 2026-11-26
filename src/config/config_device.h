@@ -18,4 +18,7 @@
 bool	config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
 			    u64 start_ms, device_t** out);
 
+/** @brief True for the function codes mogbus implements, which (function-code ...) cannot redefine. */
+bool	config_fc_is_builtin(u8 fc);
+
 #endif

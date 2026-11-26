@@ -249,6 +249,12 @@ typedef struct mogbus_device_info_t
 		uint32_t	delay_ms;	/**< MOGBUS_FAULT_DELAY only */
 		uint8_t		exception_code;	/**< MOGBUS_FAULT_EXCEPTION only */
 	} faults[MOGBUS_FAULT_KIND_COUNT];	/**< indexed by mogbus_fault_kind_t */
+	uint32_t	custom_fc_count;	/**< user-defined function codes, from (function-code ...) */
+	struct
+	{
+		uint8_t		code;		/**< 1-127 */
+		const char*	name;		/**< borrowed; "" when unnamed */
+	} custom_fcs[8];
 } mogbus_device_info_t;
 
 /**

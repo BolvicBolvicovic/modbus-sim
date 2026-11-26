@@ -77,6 +77,9 @@ _Static_assert(MOGBUS_STEP_CONTINUE == NET_STEP_CONTINUE &&
 	       MOGBUS_STEP_DONE == NET_STEP_DONE &&
 	       MOGBUS_STEP_ERROR == NET_STEP_ERROR, "step results");
 _Static_assert(MOGBUS_MAX_DEVICES == SERVER_MAX_DEVICES, "device limit");
+_Static_assert(sizeof(((mogbus_device_info_t*)0)->custom_fcs) /
+	       sizeof(((mogbus_device_info_t*)0)->custom_fcs[0]) == DEVICE_MAX_CUSTOM_FCS,
+	       "custom function code limit");
 _Static_assert((int)MOGBUS_LOG_TEXT == (int)LOG_FORMAT_TEXT &&
 	       (int)MOGBUS_LOG_JSON == (int)LOG_FORMAT_JSON, "log format enum");
 
@@ -313,6 +316,12 @@ mogbus_device_info(const mogbus_device_t* handle, mogbus_device_info_t* out)
 		out->faults[i].percent        = fault->percent;
 		out->faults[i].delay_ms       = fault->delay_ms;
 		out->faults[i].exception_code = fault->exception_code;
+	}
+	out->custom_fc_count = dev->custom_fc_count;
+	for (u32 i = 0; i < dev->custom_fc_count; i++)
+	{
+		out->custom_fcs[i].code = dev->custom_fcs[i].code;
+		out->custom_fcs[i].name = dev->custom_fcs[i].name;
 	}
 	return true;
 }

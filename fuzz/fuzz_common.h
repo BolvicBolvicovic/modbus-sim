@@ -2,7 +2,8 @@
  * @file
  * @brief Shared setup for the libFuzzer harnesses: one device that owns something in every
  *        table and feature (registers, bits, a ramp, file records, a FIFO, identification and
- *        CANopen objects), so every function-code handler is reachable.
+ *        CANopen objects, a user-defined function code 0x41 with every action), so every
+ *        function-code handler is reachable.
  *
  * The device is built once per process and fuzz inputs may change its state, as clients do.
  */
@@ -70,6 +71,22 @@ fuzz_device(void)
 	FUZZ_CHECK(device_add_file_record(dev, 1, 0, 4, file_values) == NULL);
 	FUZZ_CHECK(device_add_fifo(dev, 5, 3, fifo_values) == NULL);
 	FUZZ_CHECK(device_add_canopen_object(dev, 1, 0x6041, 0, sizeof(sdo), sdo) == NULL);
+	{
+		static device_custom_fc_t fc = { .code = 0x41, .case_count = 6 };
+
+		fc.cases[0] = (struct device_custom_case_t){ .prefix = { 1 }, .prefix_len = 1,
+			.action = CUSTOM_REPLY, .reply = { 0x12, 0x34 }, .reply_len = 2 };
+		fc.cases[1] = (struct device_custom_case_t){ .prefix = { 2 }, .prefix_len = 1,
+			.action = CUSTOM_REGISTERS, .space = SPACE_HOLDING, .address = 0, .count = 16 };
+		fc.cases[2] = (struct device_custom_case_t){ .prefix = { 3 }, .prefix_len = 1,
+			.action = CUSTOM_REGISTERS, .space = SPACE_COIL, .address = 0, .count = 24 };
+		fc.cases[3] = (struct device_custom_case_t){ .prefix = { 4, 4 }, .prefix_len = 2,
+			.action = CUSTOM_ECHO };
+		fc.cases[4] = (struct device_custom_case_t){ .prefix = { 5 }, .prefix_len = 1,
+			.action = CUSTOM_NO_RESPONSE };
+		fc.cases[5] = (struct device_custom_case_t){ .action = CUSTOM_EXCEPTION, .exception_code = 4 };
+		FUZZ_CHECK(device_add_custom_fc(dev, &fc) == NULL);
+	}
 	snprintf(dev->name, sizeof(dev->name), "fuzz device");
 	return dev;
 }

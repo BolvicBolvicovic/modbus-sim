@@ -77,6 +77,10 @@ struct space_t
 #define DEVICE_MAX_FILE_SEGMENTS	64
 #define DEVICE_MAX_RECORD_VALUES	126
 #define DEVICE_MAX_FIFOS		16
+#define DEVICE_MAX_CUSTOM_FCS		8	/**< user-defined function codes per device */
+#define DEVICE_MAX_CUSTOM_CASES		16	/**< (on ...) cases per user-defined code */
+#define DEVICE_CUSTOM_PREFIX_MAX	16	/**< request bytes an (on "...") case matches */
+#define DEVICE_CUSTOM_REPLY_MAX		252	/**< reply data after the function code */
 #define DEVICE_MAX_FIFO_VALUES		31
 #define DEVICE_MAX_COM_EVENTS		64
 #define DEVICE_MAX_CANOPEN_OBJECTS	64
@@ -151,6 +155,44 @@ enum device_id_object
 	DEVICE_ID_STANDARD_COUNT       = 0x07,
 };
 
+/** @brief What a user-defined function code answers for one matching request. */
+typedef enum custom_action_t custom_action_t;
+enum custom_action_t
+{
+	CUSTOM_REPLY,		/**< fixed reply data after the function code */
+	CUSTOM_ECHO,		/**< the request data, unchanged */
+	CUSTOM_EXCEPTION,	/**< exception response with `exception_code` */
+	CUSTOM_REGISTERS,	/**< byte count + current values of a table range, like FC 01-04 */
+	CUSTOM_NO_RESPONSE,	/**< no response at all */
+};
+
+/**
+ * @brief One user-defined function code: cases matched in order on the request data (the bytes
+ *        after the function code).
+ *
+ * A case matches when the request data starts with its prefix; an empty prefix matches every
+ * request. A request no case matches gets exception 03 (illegal data value).
+ */
+typedef struct device_custom_fc_t device_custom_fc_t;
+struct device_custom_fc_t
+{
+	u8		code;			/**< 1-127, not a function code mogbus implements */
+	char		name[DEVICE_NAME_MAX];	/**< for logs and summaries; may be empty */
+	u32		case_count;
+	struct device_custom_case_t
+	{
+		u8		prefix[DEVICE_CUSTOM_PREFIX_MAX];
+		u8		prefix_len;
+		custom_action_t	action;
+		u8		exception_code;	/**< CUSTOM_EXCEPTION */
+		space_kind_t	space;		/**< CUSTOM_REGISTERS */
+		u16		address;	/**< CUSTOM_REGISTERS: first address */
+		u16		count;		/**< CUSTOM_REGISTERS: registers (or bits) */
+		u16		reply_len;	/**< CUSTOM_REPLY */
+		u8		reply[DEVICE_CUSTOM_REPLY_MAX];
+	} cases[DEVICE_MAX_CUSTOM_CASES];
+};
+
 /** @brief One simulated Modbus device (one unit id). */
 typedef struct device_t device_t;
 struct machine_system_t; /* defined in device/machine.h */
@@ -190,6 +232,8 @@ struct device_t
 	device_fifo_t*	fifos;			/**< DEVICE_MAX_FIFOS entries */
 	u32		canopen_object_count;
 	device_canopen_object_t* canopen_objects; /**< DEVICE_MAX_CANOPEN_OBJECTS entries */
+	u32		custom_fc_count;
+	device_custom_fc_t* custom_fcs;	/**< DEVICE_MAX_CUSTOM_FCS entries, allocated on first use */
 	char		device_id[DEVICE_ID_STANDARD_COUNT][DEVICE_ID_OBJECT_MAX + 1];
 	struct
 	{
@@ -300,6 +344,17 @@ bool		device_write_file_records(device_t* dev, u16 file_no, u16 record, u16 leng
  * Values are copied into the device arena and returned in order by FC 24. Returns NULL on
  * success, or a static error message.
  */
+/**
+ * @brief Adds a user-defined function code (copied).
+ *
+ * The caller checks that the code is not one mogbus implements. Returns NULL on success, or a
+ * static error message (duplicate code, too many codes, out of memory).
+ */
+const char*	device_add_custom_fc(device_t* dev, const device_custom_fc_t* fc);
+
+/** @brief The user-defined function code `code`, or NULL. */
+const device_custom_fc_t* device_find_custom_fc(const device_t* dev, u8 code);
+
 const char*	device_add_fifo(device_t* dev, u16 address, u16 count, const u16* values);
 
 /**

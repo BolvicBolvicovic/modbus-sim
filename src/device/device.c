@@ -489,6 +489,34 @@ find_fifo(const device_t* dev, u16 address)
 	return NULL;
 }
 
+const device_custom_fc_t*
+device_find_custom_fc(const device_t* dev, u8 code)
+{
+	for (u32 i = 0; i < dev->custom_fc_count; i++)
+	{
+		if (dev->custom_fcs[i].code == code)
+			return &dev->custom_fcs[i];
+	}
+	return NULL;
+}
+
+const char*
+device_add_custom_fc(device_t* dev, const device_custom_fc_t* fc)
+{
+	if (device_find_custom_fc(dev, fc->code))
+		return "function code is already defined on this device";
+	if (dev->custom_fc_count >= DEVICE_MAX_CUSTOM_FCS)
+		return "too many user-defined function codes on one device (max 8)";
+	if (!dev->custom_fcs)
+	{
+		dev->custom_fcs = ARENA_PUSH_ARRAY(dev->arena, device_custom_fc_t, DEVICE_MAX_CUSTOM_FCS);
+		if (!dev->custom_fcs)
+			return "out of memory while storing a user-defined function code";
+	}
+	dev->custom_fcs[dev->custom_fc_count++] = *fc;
+	return NULL;
+}
+
 const char*
 device_add_fifo(device_t* dev, u16 address, u16 count, const u16* values)
 {

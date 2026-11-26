@@ -1052,6 +1052,66 @@ is_restart_request(const u8* req, u32 req_len)
 	return data == 0x0000 || data == 0xFF00;
 }
 
+/* A user-defined function code: the first case whose prefix starts the request data answers. */
+static u32
+custom_respond(device_t* dev, const device_custom_fc_t* fc, const u8* req, u32 req_len, u8* resp)
+{
+	const u8*	data     = req + 1;
+	u32		data_len = req_len - 1;
+
+	for (u32 i = 0; i < fc->case_count; i++)
+	{
+		const struct device_custom_case_t* c = &fc->cases[i];
+
+		if (c->prefix_len > data_len || memcmp(data, c->prefix, c->prefix_len) != 0)
+			continue;
+		switch (c->action)
+		{
+			case CUSTOM_REPLY:
+				resp[0] = fc->code;
+				memcpy(resp + 1, c->reply, c->reply_len);
+				return 1 + c->reply_len;
+			case CUSTOM_ECHO:
+				resp[0] = fc->code;
+				memcpy(resp + 1, data, data_len);
+				return req_len;
+			case CUSTOM_EXCEPTION:
+				return modbus_exception(resp, fc->code, c->exception_code);
+			case CUSTOM_NO_RESPONSE:
+				return 0;
+			case CUSTOM_REGISTERS:
+			{
+				u16 words[MB_MAX_READ_BITS];
+
+				if (!device_read(dev, c->space, c->address, c->count, words))
+					return modbus_exception(resp, fc->code, EXC_ILLEGAL_DATA_ADDRESS);
+				resp[0] = fc->code;
+				if (space_is_bit(c->space))
+				{
+					u32 bytes = (c->count + 7u) / 8u;
+
+					resp[1] = (u8)bytes;
+					memset(resp + 2, 0, bytes);
+					for (u32 b = 0; b < c->count; b++)
+						resp[2 + b / 8] |= (u8)((words[b] ? 1u : 0u) << (b % 8));
+					return 2 + bytes;
+				}
+				resp[1] = (u8)(2u * c->count);
+				for (u32 r = 0; r < c->count; r++)
+					put_be16(resp + 2 + 2 * r, words[r]);
+				return 2 + 2u * c->count;
+			}
+		}
+	}
+	return modbus_exception(resp, fc->code, EXC_ILLEGAL_DATA_VALUE);
+}
+
+bool
+modbus_fc_is_builtin(u8 fc)
+{
+	return find_pdu_handler(fc) != NULL;
+}
+
 u32
 modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* resp)
 {
@@ -1078,13 +1138,15 @@ modbus_handle_pdu(device_t* dev, u64 now_ms, const u8* req, u32 req_len, u8* res
 	device_tick(dev, now_ms);
 
 	handler = find_pdu_handler(fc);
-	if (!handler)
+	if (handler)
+		resp_len = handler(dev, req, req_len, resp);
+	else if (device_find_custom_fc(dev, fc))
+		resp_len = custom_respond(dev, device_find_custom_fc(dev, fc), req, req_len, resp);
+	else
 	{
 		account_exception(dev, EXC_ILLEGAL_FUNCTION, 1);
 		return modbus_exception(resp, fc, EXC_ILLEGAL_FUNCTION);
 	}
-
-	resp_len = handler(dev, req, req_len, resp);
 	if (resp_len == 0)
 		return 0;
 	if ((resp[0] & 0x80) != 0)
