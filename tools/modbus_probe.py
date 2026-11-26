@@ -17,6 +17,8 @@ import sys
 import time
 
 EXCEPTIONS = {1: "illegal function", 2: "illegal data address", 3: "illegal data value",
+              4: "server device failure", 5: "acknowledge", 6: "server device busy",
+              7: "negative acknowledge", 8: "memory parity error", 10: "gateway path unavailable",
               11: "gateway target failed to respond"}
 _transaction = 0
 
