@@ -1,5 +1,5 @@
 ; motor.scm - a motor driven by a scripted state machine.
-; See docs/config-reference.md, section "(machine ...)".
+; See docs/user/config/machines/machine.md.
 ;
 ; Bits:
 ;   coil 0     run command (client writes this)

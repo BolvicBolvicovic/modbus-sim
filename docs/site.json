@@ -18,9 +18,200 @@
     {
       "title": "Reference",
       "items": [
-        "docs/user/config-reference.md",
+        "docs/user/config/format.md",
+        {
+          "index": "docs/user/config/server/index.md",
+          "title": "Server",
+          "groups": [
+            {
+              "title": "Transport",
+              "entries": [
+                "docs/user/config/server/server.md",
+                "docs/user/config/server/mode.md",
+                "docs/user/config/server/path.md",
+                "docs/user/config/server/framing.md"
+              ]
+            },
+            {
+              "title": "Network",
+              "entries": [
+                "docs/user/config/server/port.md",
+                "docs/user/config/server/bind.md",
+                "docs/user/config/server/seed.md",
+                "docs/user/config/server/idle-timeout-ms.md"
+              ]
+            },
+            {
+              "title": "Serial line and timing",
+              "entries": [
+                "docs/user/config/server/baud.md",
+                "docs/user/config/server/frame-gap-ms.md",
+                "docs/user/config/server/strict-t15.md",
+                "docs/user/config/server/broadcast-execute.md",
+                "docs/user/config/server/data-bits.md",
+                "docs/user/config/server/parity.md",
+                "docs/user/config/server/stop-bits.md"
+              ]
+            },
+            {
+              "title": "HTTP",
+              "entries": [
+                "docs/user/config/server/http.md"
+              ]
+            },
+            {
+              "title": "TLS",
+              "entries": [
+                "docs/user/config/server/tls.md",
+                "docs/user/config/server/tls-certificate.md",
+                "docs/user/config/server/tls-private-key.md",
+                "docs/user/config/server/tls-ca-certificate.md",
+                "docs/user/config/server/tls-handshake-timeout-ms.md",
+                "docs/user/config/server/tls-require-client-certificate.md",
+                "docs/user/config/server/tls-min-version.md",
+                "docs/user/config/server/tls-ciphers.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/config/device/index.md",
+          "title": "Device",
+          "groups": [
+            {
+              "title": "Device",
+              "entries": [
+                "docs/user/config/device/device.md",
+                "docs/user/config/device/unit-id.md",
+                "docs/user/config/device/name.md",
+                "docs/user/config/device/note.md"
+              ]
+            },
+            {
+              "title": "Diagnostics and identity",
+              "entries": [
+                "docs/user/config/device/exception-status.md",
+                "docs/user/config/device/server-id.md",
+                "docs/user/config/device/run-indicator.md",
+                "docs/user/config/device/server-id-additional-data.md",
+                "docs/user/config/device/com-status.md",
+                "docs/user/config/device/com-event.md",
+                "docs/user/config/device/identification.md",
+                "docs/user/config/device/device-id-object.md"
+              ]
+            },
+            {
+              "title": "Stored data",
+              "entries": [
+                "docs/user/config/device/canopen-object.md",
+                "docs/user/config/device/file.md",
+                "docs/user/config/device/fifo.md"
+              ]
+            },
+            {
+              "title": "Function codes",
+              "entries": [
+                "docs/user/config/device/function-code.md",
+                "docs/user/config/device/function-code-actions.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/config/points/index.md",
+          "title": "Points",
+          "groups": [
+            {
+              "title": "Points",
+              "entries": [
+                "docs/user/config/points/point.md",
+                "docs/user/config/points/type.md",
+                "docs/user/config/points/word-order.md",
+                "docs/user/config/points/byte-order.md",
+                "docs/user/config/points/string.md",
+                "docs/user/config/points/access.md",
+                "docs/user/config/points/count.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/config/behaviours/index.md",
+          "title": "Behaviours",
+          "groups": [
+            {
+              "title": "Behaviours",
+              "entries": [
+                "docs/user/config/behaviours/static.md",
+                "docs/user/config/behaviours/ramp.md",
+                "docs/user/config/behaviours/sine.md",
+                "docs/user/config/behaviours/lag.md",
+                "docs/user/config/behaviours/noise.md",
+                "docs/user/config/behaviours/degradation.md",
+                "docs/user/config/behaviours/client-writes.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/config/faults/index.md",
+          "title": "Faults",
+          "groups": [
+            {
+              "title": "Faults",
+              "entries": [
+                "docs/user/config/faults/fault.md",
+                "docs/user/config/faults/delay.md",
+                "docs/user/config/faults/drop.md",
+                "docs/user/config/faults/exception.md",
+                "docs/user/config/faults/corrupt.md",
+                "docs/user/config/faults/disconnect.md",
+                "docs/user/config/faults/restart.md",
+                "docs/user/config/faults/sensor-disconnect.md"
+              ]
+            },
+            {
+              "title": "When a fault fires",
+              "entries": [
+                "docs/user/config/faults/percent.md",
+                "docs/user/config/faults/schedule.md"
+              ]
+            }
+          ]
+        },
+        {
+          "index": "docs/user/config/machines/index.md",
+          "title": "Machines",
+          "groups": [
+            {
+              "title": "Machines",
+              "entries": [
+                "docs/user/config/machines/machine.md",
+                "docs/user/config/machines/initial.md",
+                "docs/user/config/machines/state-register.md",
+                "docs/user/config/machines/var.md",
+                "docs/user/config/machines/state.md",
+                "docs/user/config/machines/state-fault.md",
+                "docs/user/config/machines/on-write.md",
+                "docs/user/config/machines/transition.md"
+              ]
+            },
+            {
+              "title": "Statements and expressions",
+              "entries": [
+                "docs/user/config/machines/statements.md",
+                "docs/user/config/machines/expressions.md",
+                "docs/user/config/machines/points.md"
+              ]
+            }
+          ]
+        },
+        "docs/user/config/errors.md",
         "docs/user/modbus-support.md",
-        {"api": "include/mogbus.h", "title": "C API"}
+        {
+          "api": "include/mogbus.h",
+          "title": "C API"
+        }
       ]
     },
     {

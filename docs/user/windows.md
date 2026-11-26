@@ -232,7 +232,7 @@ driver for it. Then point mogbus at it:
 ```
 
 Use `(mode ascii-device)` for Modbus ASCII. The serial options are in
-[config-reference.md](config-reference.md).
+[server keys](config/server/index.md).
 
 Docker Desktop cannot pass Windows COM ports (or USB devices) into containers, so serial modes need WSL2.
 

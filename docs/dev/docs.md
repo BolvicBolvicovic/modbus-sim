@@ -26,9 +26,9 @@ unknown reference section or a reference entry out of order fail the build.
   "sections": [
     {"title": "Guide", "items": ["docs/user/profiles.md"]},
     {"title": "Reference", "items": [
-      "docs/user/config-reference.md",
-      {"index": "docs/user/config/index.md", "title": "Config keys",
-       "groups": [{"title": "Server", "entries": ["docs/user/config/server-mode.md"]}]},
+      "docs/user/config/format.md",
+      {"index": "docs/user/config/server/index.md", "title": "Server",
+       "groups": [{"title": "Server", "entries": ["docs/user/config/server/mode.md"]}]},
       {"api": "include/mogbus.h", "title": "C API"}
     ]},
     {"title": "Contributing", "items": ["CONTRIBUTING.md"]}

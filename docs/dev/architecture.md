@@ -38,7 +38,7 @@
    machines' active states; the earliest declared machine wins for each kind. A fired
    `sensor-disconnect` replaces successful FC 02/04 reads with exception 04 before sending, and a
    fired `restart` resets the device after the response is built. Schedule timing and limits are in
-   [config-reference.md](../user/config-reference.md#fault-).
+   [the fault reference](../user/config/faults/schedule.md).
 
 ## Modules
 

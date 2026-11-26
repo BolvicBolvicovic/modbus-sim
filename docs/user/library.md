@@ -128,7 +128,7 @@ time first.
 `MOGBUS_TYPE_U64/S64/F64` (4 registers) and `MOGBUS_TYPE_STRING`. `word_order` applies to 32- and
 64-bit types; `byte_order` (`MOGBUS_BYTES_BIG`, the zero default, or `MOGBUS_BYTES_LITTLE`) swaps
 the two bytes of every register of any register point. The two together give the ABCD, CDAB, BADC
-and DCBA layouts listed in [config-reference.md](config-reference.md). Decoded access
+and DCBA layouts listed in [byte order](config/points/byte-order.md). Decoded access
 goes through a `double`, so `u64`/`s64` above 2^53 round in `value`, `mogbus_device_get_value()`
 and ramps; `mogbus_device_read/write` are exact.
 

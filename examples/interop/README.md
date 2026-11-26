@@ -73,7 +73,7 @@ The same method applies to products you cannot script directly:
 
 Products often use vendor-specific function codes or quirks on top of the standard ones. Model
 those with `(function-code ...)` (see the
-[config reference](../../docs/user/config-reference.md#function-code--user-defined-function-codes)
+[config reference](../../docs/user/config/device/function-code.md)
 and [`profiles/vendor-function-codes.scm`](../../profiles/vendor-function-codes.scm)): a fixed
 reply, an echo, an exception, live register values or silence per request prefix. The logs and
 `/metrics` then show the vendor codes like any other.

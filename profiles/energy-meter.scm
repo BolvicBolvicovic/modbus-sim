@@ -18,7 +18,7 @@
 ;   coil 0      reset energy counter (writable)
 ;
 ; Decode BADC by swapping the two bytes of every register, then reading a normal big-endian
-; float32. See docs/user/config-reference.md for the byte-order and word-order table.
+; float32. See docs/user/config/points/byte-order.md for the byte-order and word-order table.
 
 (server (mode tcp) (port 1502))
 

@@ -116,7 +116,7 @@ MOGBUS_API void		mogbus_destroy(mogbus_t* ctx);
  * Adds the file's devices and remembers its (server ...) section for
  * mogbus_server_create_from_config(). On failure (bad file, too many devices, a unit id that
  * already exists) the context is unchanged. A later call replaces the remembered server section.
- * See docs/user/config-reference.md.
+ * See docs/user/config/format.md.
  *
  * @param ctx Context.
  * @param path Config file path.
@@ -263,7 +263,7 @@ MOGBUS_API size_t		mogbus_device_count(const mogbus_t* ctx);
  */
 MOGBUS_API mogbus_device_t*	mogbus_device_at(mogbus_t* ctx, size_t index);
 
-/** @brief Fault kinds a config file can attach to a device (see docs/user/config-reference.md). */
+/** @brief Fault kinds a config file can attach to a device (see docs/user/config/faults/fault.md). */
 enum mogbus_fault_kind_t
 {
 	MOGBUS_FAULT_DELAY,

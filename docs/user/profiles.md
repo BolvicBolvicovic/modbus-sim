@@ -65,7 +65,7 @@ If you already have the register map as a CSV table or a pymodbus simulator file
 1. Copy the closest profile: `cp profiles/power-meter.scm my-meter.scm`.
 2. Open your device's register table. For each entry you care about, write one line:
    - which table: `coil`, `discrete`, `input` or `holding`
-   - the address as sent on the wire (see [config-reference](config-reference.md#data-points))
+   - the address as sent on the wire (see [points](config/points/point.md))
    - the `type` and `word-order` if it is not a plain 16-bit unsigned value
    - the behaviour: `(static ...)` or `(ramp ...)`
 3. Check it: `./mogbus --check my-meter.scm`.

@@ -116,7 +116,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 |---|---|
 | Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. User-defined function codes (`(function-code ...)`: fixed reply, echo, exception, live registers or no response). |
 | Data | Coils, discrete inputs, input registers, holding registers. 16, 32 and 64-bit integers, float32/float64, ASCII strings, word and byte order (ABCD, CDAB, BADC, DCBA). |
-| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), **sine**, **lag** (first-order lag towards a number or another point, e.g. a heater following its setpoint), an optional **noise** modifier (uniform or gaussian, reproducible), an optional **degradation** modifier (drift, growing noise, stuck value and read failure with exception 04 over time, healed by a restart), and **machine** (bounded scripted state machine, see [config reference](docs/user/config-reference.md#machine-)). |
+| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), **sine**, **lag** (first-order lag towards a number or another point, e.g. a heater following its setpoint), an optional **noise** modifier (uniform or gaussian, reproducible), an optional **degradation** modifier (drift, growing noise, stuck value and read failure with exception 04 over time, healed by a restart), and **machine** (bounded scripted state machine, see [machine reference](docs/user/config/machines/machine.md)). |
 | Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
@@ -207,7 +207,7 @@ health check. Compose and Kubernetes examples live in `deploy/`; see
 
 `mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
 Any other entry is rejected at load time, even when its value is the default. See
-[docs/user/config-reference.md](docs/user/config-reference.md) for ranges and defaults.
+the [server keys](docs/user/config/server/index.md) for ranges and defaults.
 
 TCP-family listeners (`tcp`, `rtu-tcp`, `ascii-tcp`), `udp`, `ascii-udp` and `rtu-udp` bind to loopback (`127.0.0.1`) by default, so
 they accept only local clients. Bind explicitly to `0.0.0.0` (or `::` for IPv6) to accept remote
@@ -237,7 +237,7 @@ and in every mode of a no-TLS build.
 Set `(require-client-certificate off)` in `(tls ...)` to simulate anonymous clients; the CA entry is
 then optional. This is a testing relaxation, not a recommended deployment setting. There is no
 role-based authorization based on certificate fields. See
-[docs/user/config-reference.md](docs/user/config-reference.md) for TLS options and defaults.
+the [TLS reference](docs/user/config/server/tls.md) for TLS options and defaults.
 
 ```scheme
 ; Modbus RTU: choose a PTY or an existing device, never both in one config
@@ -342,7 +342,7 @@ See [docs/user/python.md](docs/user/python.md) for the API, the threading model 
 
 For users, in [docs/user/](https://github.com/BolvicBolvicovic/mogbus/tree/main/docs/user):
 
-- [docs/user/config-reference.md](docs/user/config-reference.md) - every config entry, with examples and error help
+- [docs/user/config/format.md](docs/user/config/format.md) - the config file format and a reference page for every key, with examples and error help
 - [docs/user/profiles.md](docs/user/profiles.md) - the profiles, and how to write your own
 - [docs/user/importing.md](docs/user/importing.md) - turn a vendor CSV register map or a pymodbus simulator file into a config
 - [docs/user/modbus-support.md](docs/user/modbus-support.md) - what the server answers, exceptions, limits

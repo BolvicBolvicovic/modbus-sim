@@ -121,7 +121,7 @@ become `?`.
 ### Byte layout
 
 mogbus describes the four common 32-bit layouts with `word-order` and `byte-order` (see
-[the config reference](config-reference.md#byte-order-)). The layout cell (or the type cell, as in
+[the byte order reference](config/points/byte-order.md)). The layout cell (or the type cell, as in
 `float32 CDAB`) is read as:
 
 | Layout | Written as | mogbus |
