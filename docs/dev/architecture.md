@@ -78,9 +78,17 @@ Headers sit next to their `.c` files.
 - Each address stores which *point* defines it (`owner`). `owner == 0` means "not defined",
   which is how unknown addresses become exception 02.
 - A `point_t` says where it lives, how it is encoded (`type`, `word-order`) and its behaviour
-  (`POINT_STATIC`, `POINT_RAMP` or `POINT_MACHINE`).
+  (`POINT_STATIC`, `POINT_RAMP`, `POINT_MODEL` or `POINT_MACHINE`).
 - `ramp_value()` is a pure function of `(params, start, now)`. No state, so results are
   reproducible and tests need no clock.
+- `POINT_MODEL` points (sine, lag, or a static value with noise) and ramps with noise are
+  evaluated by `model_value()` in `behaviour.c`, the one place to add a modifier. Sine and the
+  noise modifier are stateless (noise is a hash of unit id, point index and the sample slot
+  through `rng_t`). A lag keeps `lag_y`/`lag_ms` in its `model_t` and advances by the exact
+  discrete solution each `device_tick`; its target point is read from the tables at that
+  moment. `device_reset_models()` restarts lags once the device is complete (a target may be
+  declared later) and on `device_restart`. `point_is_timed()` is what machines use to refuse
+  ramp and model points.
 - A client write turns the owning point static (`device_write`) only when it is not machine-owned;
   a write touching a machine-owned point fails all-or-nothing with exception 02. A successful write
   runs matching machine `on-write` handlers in the same request, after the raw values are applied.
@@ -332,10 +340,6 @@ only outstanding work is listed here.
 
 ### Dynamic behaviour models
 
-- Add declarative `POINT_MODEL` entries for continuous dependencies (first-order lag, noise,
-  sine, a heater following its setpoint). Why: machines and ramps can approximate smooth behavior
-  only through hand-written tick logic; they cannot express declarative time/point-dependent
-  models.
 - Add gradual sensor degradation as a model variant. Why: drift and progressive failure should be
   configurable models, not bespoke per-test logic.
 

@@ -107,7 +107,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 |---|---|
 | Protocol | Modbus TCP (optionally TLS-wrapped) and Modbus UDP; Modbus RTU and Modbus ASCII over a PTY/serial device, a TCP byte stream, or UDP datagrams (one frame per datagram). Function codes 01, 02, 03, 04, 05, 06, 07, 08 (public diagnostics subfunctions 0x0000-0x0004, 0x000A-0x0012, 0x0014), 11, 12, 15, 16, 17, 20, 21, 22, 23, 24, 43 (MEI 14 and MEI 13 CANopen SDO upload/download). Exceptions 01, 02, 03, 0B; fault injection adds 04-08 and 0A. User-defined function codes (`(function-code ...)`: fixed reply, echo, exception, live registers or no response). |
 | Data | Coils, discrete inputs, input registers, holding registers. 16-bit, 32-bit and float32 values. |
-| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), and **machine** (bounded scripted state machine, see [config reference](docs/user/config-reference.md#machine-)). |
+| Behaviours | **static** (fixed value), **ramp** (moves over time: wrap, bounce or hold), **sine**, **lag** (first-order lag towards a number or another point, e.g. a heater following its setpoint), an optional **noise** modifier (uniform or gaussian, reproducible), and **machine** (bounded scripted state machine, see [config reference](docs/user/config-reference.md#machine-)). |
 | Fault | Repeatable per device, one definition per kind: **delay**, **drop**, **exception**, **corrupt** (PDU, register or checksum), **restart**, **sensor-disconnect**, and **disconnect** (TCP-family modes only), each firing by percent chance or a non-repeating `after-ms`/`count` schedule (max 8 steps). |
 | Devices | Up to 16 devices on one port or line, told apart by unit id. |
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
@@ -125,6 +125,7 @@ Packaging, reproducible builds and the release process are maintainer topics, de
 | [`profiles/rtu-udp.scm`](profiles/rtu-udp.scm) | Two registers over RTU-over-UDP | `(mode rtu-udp)` transport |
 | [`profiles/power-meter.scm`](profiles/power-meter.scm) | Three-phase power meter | float32 values, ramps, energy counter |
 | [`profiles/temperature-controller.scm`](profiles/temperature-controller.scm) | Temperature controller | signed values, setpoint, alarms |
+| [`profiles/heater.scm`](profiles/heater.scm) | Heater with a thermostat | setpoint-following lag, gaussian noise, sine ambient |
 | [`profiles/vfd-drive.scm`](profiles/vfd-drive.scm) | Motor drive | start-up ramp that holds, 32-bit counter |
 | [`profiles/motor.scm`](profiles/motor.scm) | Motor with a scripted machine | start/stop states, timed ramp, random trip |
 | [`profiles/flow-meter.scm`](profiles/flow-meter.scm) | Flow meter | float32 and 32-bit totalizer |

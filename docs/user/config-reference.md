@@ -302,7 +302,8 @@ Shape of a point:
 (holding ADDRESS
   (type ...)          ; registers only, default u16
   (word-order ...)    ; 32-bit types only, default high-first
-  (static VALUE)      ; or (ramp ...), not both. Without either, the value is 0 / off
+  (static VALUE)      ; or (ramp ...), (sine ...) or (lag ...): only one. None: 0 / off
+  (noise ...)         ; optional, registers only: added to any of the above
   (count N)           ; optional: repeat for N consecutive points
   (note "Text"))      ; optional comment
 ```
@@ -378,17 +379,81 @@ Ramps are not available for coils and discrete inputs.
   (ramp (from 180) (to 240) (step 2) (every-ms 3000) (mode bounce)))
 ```
 
+### `(sine ...)`
+
+The value is a sine wave of the time since the simulator started:
+`offset + amplitude * sin(2 pi * t / period + phase)`. Registers only.
+
+| Entry | Meaning | Default |
+|---|---|---|
+| `(offset N)` | centre value | required |
+| `(amplitude N)` | peak distance from the centre (any finite number) | required |
+| `(period-ms N)` | milliseconds per cycle, 1-86400000 | required |
+| `(phase-deg N)` | starting angle in degrees | `0` |
+
+```scheme
+(input 1 (type s16) (sine (offset 200) (amplitude 30) (period-ms 86400000)))
+```
+
+### `(lag ...)`
+
+A first-order lag: the value moves towards its goal `gain * target + offset` and closes
+`1 - 1/e` (63%) of the remaining distance every `tau-ms`. It is the "heater following its
+setpoint" model. Registers only.
+
+| Entry | Meaning | Default |
+|---|---|---|
+| `(target X)` | a number, or a point to follow: `(holding 1)`, `(input 4)`, `(coil 0)`, `(discrete 0)`. The point must be a configured point (first address); bits count as 0 or 1 | required |
+| `(tau-ms N)` | time constant, 1-86400000 | required |
+| `(initial N)` | value at start and after a restart | the goal |
+| `(gain N)` | multiplier of the target | `1` |
+| `(offset N)` | added to `gain * target` | `0` |
+
+The target may be declared before or after the point, but not be the point itself. The value
+is computed when a request arrives, with the exact solution over the time since the previous
+evaluation, so it does not depend on how often clients read. The target is read at that moment:
+a target that changes between two evaluations (for example a client writing the setpoint) is
+sampled at those times, and every request, reads and writes alike, evaluates the lag first.
+
+```scheme
+(holding 1 (type s16) (static 300))     ; setpoint, writable
+(input 0 (type s16) (lag (target (holding 1)) (tau-ms 60000) (initial 200)))
+```
+
+### `(noise ...)`
+
+Adds a pseudo-random offset to a `static`, `ramp`, `sine` or `lag` value. Registers only, and
+there must be one of those behaviours in the same point.
+
+| Entry | Meaning | Default |
+|---|---|---|
+| `(amplitude N)` | `uniform`: offset in `[-N, +N]`; `gaussian`: standard deviation `N`, limited to +-4N. 0 or more | required |
+| `(every-ms N)` | a new sample every N milliseconds (held in between), 1-86400000 | `1000` |
+| `(distribution ...)` | `uniform` or `gaussian` | `uniform` |
+
+The sample is a fixed function of the device unit id, the point's position in the device and
+`floor(time since start / every-ms)`: it is reproducible between runs, ignores `--seed`, does
+not depend on how often clients read, and two points get different sequences. For a `lag` the
+noise is added to the output and not fed back into the lag. Values go through the point's `type`
+afterwards: integer types round to the nearest and clamp to their range.
+
+```scheme
+(input 2 (type s16)
+  (sine (offset 200) (amplitude 30) (period-ms 600000))
+  (noise (amplitude 2) (every-ms 500) (distribution gaussian)))
+```
+
 ### What happens when a client writes
 
 Clients can write `coil` and `holding` points. The written value is stored and returned by
-later reads. If the point was a ramp, **it stops moving** and keeps the written value as a
+later reads. If the point was a ramp, sine or lag (or had noise), **it stops moving** and keeps the written value as a
 static value until the simulator is restarted. Machine-owned points, including state registers,
 reject client writes with exception 02 (see `(machine ...)` below).
 
 ### `(count N)`
 
 Repeats the point `N` times at consecutive addresses (the step is the point's width: 1 for
-16-bit types, 2 for 32-bit types). All copies get the same value or ramp. A device can have at
+16-bit types, 2 for 32-bit types). All copies get the same value, ramp or model (a lag target is not shifted). A device can have at
 most 8192 points total (`DEVICE_MAX_POINTS`); a count that would exceed this is rejected.
 
 ```scheme
@@ -454,7 +519,7 @@ Point accessors are `(coil ADDR)`, `(discrete ADDR)`, `(input ADDR)` and `(holdi
 through the configured point, so bit tables yield booleans and registers yield numbers with the
 point's type and word order applied. Both reads and `set!` targets must name the **first address of
 a configured point**; an undefined address or a continuation address of a 32-bit point is a load
-error. A machine can `set!` a static point but not a ramp point or a state-register point, and a
+error. A machine can `set!` a static point but not a ramp, sine or lag point or a state-register point, and a
 point may be driven by at most one machine. A machine-driven point stays machine-owned: a client
 write to any address of it fails with exception 02 and leaves the value unchanged, so the machine
 keeps driving it. Machine/internal writes still update the point normally.
@@ -644,7 +709,7 @@ It is rejected at load time in `rtu-pty`, `rtu-device`, `ascii-pty`, `ascii-devi
   never close the connection.
 - `restart` runs after the request is processed and the response is built, and does not replace the
   response; it still happens when that response is dropped or delayed. It resets configured points
-  to their configured kinds and initial values (undoing client writes), restarts ramp timelines,
+  to their configured kinds and initial values (undoing client writes), restarts ramp and sine timelines, resets lags to their `initial` value,
   resets all machines to their initial states, variables and timers and runs the initial `on-enter`
   (state registers included), and re-arms fault schedules from the restart time. The restart kind
   keeps its own schedule progress, so a scheduled restart advances through its steps and stops
@@ -847,7 +912,10 @@ is wrong and show the entry. Common ones:
 | `expected a number` / `expected a whole number` | A value has the wrong form, for example text in quotes |
 | `missing required option (to ...)` | A ramp needs `from` and `to` |
 | `coils and discrete inputs can only be (static on/off)` | No ramps and no `type` for bit tables |
-| `a point cannot have both (static ...) and (ramp ...)` | Choose one |
+| `a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)` | Choose one |
+| `(noise ...) needs a (static ...), (ramp ...), (sine ...) or (lag ...) to disturb` | Noise modifies a behaviour; add one |
+| `lag target holding 9 is not the first address of a configured point` | A lag follows a configured point; declare it or fix the address |
+| `a lag cannot follow itself` | Point the `target` at another point |
 | `ramp step must be greater than 0` | `step` is always positive; use `from` and `to` for the direction |
 | `ramp range is too large for the step` | The ramp would need 2^63 steps or more; increase `step` or narrow `from`/`to` |
 | `the file has more than one (server ...); only one is allowed` | Keep a single `(server ...)` block |
