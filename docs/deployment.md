@@ -11,6 +11,10 @@ docker run --rm -p 127.0.0.1:1502:1502 mogbus:0.0.1
 ./tools/modbus_probe.py holding 0 2        # from the host
 ```
 
+Podman works the same way (`podman build`, `podman run`, and `podman kube play` for the Kubernetes
+example). Build with `podman build --format docker ...`: the default OCI image format has no
+`HEALTHCHECK`, so podman would drop it. The image is about 85 MB.
+
 The image is multi-stage. The build stage (`debian:trixie`, pinned by tag and by digest) installs clang,
 make, pkg-config and libssl-dev and runs the normal prod `make` (hardened `-O2`, PIE, `WITH_TLS=1`). The
 runtime stage is `debian:trixie-slim` (same release, so the `libssl3t64` it installs matches the library the

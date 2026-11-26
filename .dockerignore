@@ -6,10 +6,13 @@
 **/*.o
 **/*.d
 mogbus
-mogbus-tests
-mogbus-tests.times
-libmogbus.a
+mogbus-*
+libmogbus*.a
 libmogbus.so
+*.times
+.build-mode
+.revision
+dist
 examples/embed_tcp_static
 examples/embed_tcp_shared
 compile_commands.json
