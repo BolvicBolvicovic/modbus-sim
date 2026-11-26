@@ -76,16 +76,39 @@ device_new(arena_t* arena, u64 start_ms)
 	return dev;
 }
 
+bool
+point_is_timed(const point_t* point)
+{
+	return point->kind == POINT_RAMP || point->kind == POINT_MODEL;
+}
+
 /** @brief Computes the point's current value and stores it in its address(es). */
 static void
-point_apply(device_t* dev, const point_t* point, u64 now_ms)
+point_apply(device_t* dev, u32 index, u64 now_ms)
 {
-	f64	value = point->static_value;
-	u16	words[2] = { 0, 0 };
-	u32	width = 0;
+	point_t*	point = &dev->points[index];
+	f64		value = point->static_value;
+	f64		target = 0;
+	u16		words[2] = { 0, 0 };
+	u32		width = 0;
 
 	if (point->kind == POINT_RAMP)
 		value = ramp_value(&point->ramp, dev->start_ms, now_ms);
+
+	if (point_is_timed(point))
+	{
+		if (model_needs_target(&point->model))
+		{
+			val_t	t = { 0 };
+
+			/* A missing target is a load-time error; 0 only covers API-built points. */
+			if (device_get_point(dev, (space_kind_t)point->model.target_space,
+					     point->model.target_address, &t))
+				target = t.type == VAL_BOOL ? (t.b ? 1.0 : 0.0) : t.n;
+		}
+		value = model_value(&point->model, value, target, dev->start_ms, now_ms,
+				    ((u64)dev->unit_id << 32) | index);
+	}
 
 	width = encode_value(point->type, point->order, value, words);
 	for (u32 i = 0; i < width; i++)
@@ -112,6 +135,33 @@ validate_point(const device_t* dev, const point_t* point)
 	{
 		if (space->owner[point->address + i] != 0)
 			return "address is already used by another point";
+	}
+
+	if (point->kind == POINT_MODEL || point->model.noise.amplitude != 0)
+	{
+		const model_t*	m = &point->model;
+
+		if (space_is_bit(point->space))
+			return "coils and discrete inputs cannot have a model or noise";
+
+		if (!isfinite(m->noise.amplitude) ||
+		    m->noise.amplitude < 0)
+			return "noise amplitude must be a finite number, 0 or more";
+
+		if (m->noise.amplitude > 0 &&
+		    (m->noise.every_ms == 0 || m->noise.every_ms > 86400000))
+			return "noise every-ms must be between 1 and 86400000";
+
+		if (m->shape == MODEL_SINE &&
+		    (m->period_ms == 0 || m->period_ms > 86400000 ||
+		     !isfinite(m->offset) || !isfinite(m->amplitude) || !isfinite(m->phase_deg)))
+			return "sine needs finite numbers and a period-ms between 1 and 86400000";
+
+		if (m->shape == MODEL_LAG &&
+		    (m->tau_ms == 0 || m->tau_ms > 86400000 ||
+		     !isfinite(m->offset) || !isfinite(m->gain) || !isfinite(m->initial) ||
+		     !isfinite(m->target_value)))
+			return "lag needs finite numbers and a tau-ms between 1 and 86400000";
 	}
 
 	if (point->kind != POINT_RAMP)
@@ -153,7 +203,7 @@ device_add_point(device_t* dev, const point_t* point)
 	for (u32 i = 0; i < width; i++)
 		dev->spaces[point->space].owner[point->address + i] = (u16)(index + 1);
 
-	point_apply(dev, point, dev->start_ms);
+	point_apply(dev, index, dev->start_ms);
 	return NULL;
 }
 
@@ -163,11 +213,29 @@ device_tick(device_t* dev, u64 now_ms)
 	dev->now_ms = now_ms;
 	for (u32 i = 0; i < dev->point_count; i++)
 	{
-		if (dev->points[i].kind != POINT_RAMP)
+		if (!point_is_timed(&dev->points[i]))
 			continue;
-		point_apply(dev, &dev->points[i], now_ms);
+		point_apply(dev, i, now_ms);
 	}
 	device_machines_advance(dev, now_ms);
+}
+
+void
+device_reset_models(device_t* dev, u64 now_ms)
+{
+	for (u32 i = 0; i < dev->point_count; i++)
+	{
+		if (dev->points[i].kind != POINT_MODEL ||
+		    dev->points[i].model.shape != MODEL_LAG)
+			continue;
+		model_reset(&dev->points[i].model);
+	}
+	for (u32 i = 0; i < dev->point_count; i++)
+	{
+		if (dev->points[i].kind == POINT_MODEL &&
+		    dev->points[i].model.shape == MODEL_LAG)
+			point_apply(dev, i, now_ms);
+	}
 }
 
 void
@@ -183,8 +251,9 @@ device_restart(device_t* dev, u64 now_ms)
 		if (point->kind == POINT_MACHINE)
 			kind = POINT_MACHINE;
 		point->kind = kind;
-		point_apply(dev, point, now_ms);
+		point_apply(dev, i, now_ms);
 	}
+	device_reset_models(dev, now_ms);
 	device_machines_restart(dev, now_ms);
 	/* Reboot re-arms every fault schedule from the new start time. The restart
 	 * kind keeps its own progress so a scheduled restart advances through its

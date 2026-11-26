@@ -13,6 +13,8 @@
 static const char* const TYPE_NAMES[]  = { "u16", "s16", "u32", "s32", "float32" };
 static const char* const ORDER_NAMES[] = { "high-first", "low-first" };
 static const char* const MODE_NAMES[]  = { "wrap", "bounce", "hold" };
+static const char* const DIST_NAMES[]  = { "uniform", "gaussian" };
+static const char* const SPACE_NAMES[] = { "coil", "discrete", "input", "holding" };
 
 /* --- simple device options --- */
 
@@ -381,31 +383,204 @@ parse_static(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
 	return true;
 }
 
+static bool
+parse_sine(form_ctx_t* ctx, s7_pointer item, point_t* point)
+{
+	static const char* const keys[] = { "offset", "amplitude", "period-ms", "phase-deg" };
+	s7_pointer	options = s7_cdr(item);
+	s64		period  = 0;
+
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "sine") ||
+	    !form_need(ctx, options, "offset", "sine") ||
+	    !form_need(ctx, options, "amplitude", "sine") ||
+	    !form_need(ctx, options, "period-ms", "sine"))
+		return false;
+
+	if (!form_opt_number(ctx, options, "offset", &point->model.offset) ||
+	    !form_opt_number(ctx, options, "amplitude", &point->model.amplitude) ||
+	    !form_opt_number(ctx, options, "phase-deg", &point->model.phase_deg) ||
+	    !form_opt_int(ctx, options, "period-ms", 1, 86400000, &period))
+		return false;
+
+	if (!isfinite(point->model.offset) ||
+	    !isfinite(point->model.amplitude) ||
+	    !isfinite(point->model.phase_deg))
+		return form_fail(ctx, "%s: sine numbers must be finite", form_text(ctx, item));
+
+	point->kind              = POINT_MODEL;
+	point->model.shape       = MODEL_SINE;
+	point->model.period_ms   = (u32)period;
+	return true;
+}
+
+/** @brief Reads (target NUMBER) or (target (holding|input|coil|discrete ADDRESS)). */
+static bool
+parse_lag_target(form_ctx_t* ctx, s7_pointer options, model_t* model)
+{
+	s7_pointer	form  = form_find(ctx, options, "target");
+	s7_pointer	value = NULL;
+	const char*	head  = NULL;
+	s64		address = 0;
+
+	if (!form_need(ctx, options, "target", "lag"))
+		return false;
+
+	if (s7_list_length(ctx->sc, form) != 2)
+		return form_fail(ctx, "%s: expected (target NUMBER) or (target (holding ADDRESS))",
+				 form_text(ctx, form));
+
+	value = s7_cadr(form);
+	if (s7_is_real(value))
+	{
+		model->target_value = (f64)s7_real(value);
+		if (!isfinite(model->target_value))
+			return form_fail(ctx, "%s: lag numbers must be finite", form_text(ctx, form));
+		return true;
+	}
+
+	head = form_head_name(value);
+	if (!head ||
+	    s7_list_length(ctx->sc, value) != 2 ||
+	    !s7_is_integer(s7_cadr(value)))
+		return form_fail(ctx, "%s: expected a number or a point like (holding 1)",
+				 form_text(ctx, form));
+
+	for (u32 space = 0; space < ARRAY_COUNT(SPACE_NAMES); space++)
+	{
+		if (strcmp(head, SPACE_NAMES[space]) != 0)
+			continue;
+
+		address = (s64)s7_integer(s7_cadr(value));
+		if (address < 0 || address > 65535)
+			return form_fail(ctx, "%s: address must be between 0 and 65535",
+					 form_text(ctx, value));
+		model->target_is_point = true;
+		model->target_space    = space;
+		model->target_address  = (u32)address;
+		return true;
+	}
+	return form_fail(ctx, "%s: expected a number or a point like (holding 1)",
+			 form_text(ctx, form));
+}
+
+static bool
+parse_lag(form_ctx_t* ctx, s7_pointer item, point_t* point)
+{
+	static const char* const keys[] = { "target", "tau-ms", "initial", "gain", "offset" };
+	s7_pointer	options = s7_cdr(item);
+	model_t*	model   = &point->model;
+	s64		tau     = 0;
+
+	model->gain = 1.0;
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "lag") ||
+	    !form_need(ctx, options, "tau-ms", "lag") ||
+	    !parse_lag_target(ctx, options, model))
+		return false;
+
+	model->has_initial = !form_is_absent(ctx, form_find(ctx, options, "initial"));
+	if (!form_opt_int(ctx, options, "tau-ms", 1, 86400000, &tau) ||
+	    !form_opt_number(ctx, options, "initial", &model->initial) ||
+	    !form_opt_number(ctx, options, "gain", &model->gain) ||
+	    !form_opt_number(ctx, options, "offset", &model->offset))
+		return false;
+
+	if (!isfinite(model->initial) ||
+	    !isfinite(model->gain) ||
+	    !isfinite(model->offset))
+		return form_fail(ctx, "%s: lag numbers must be finite", form_text(ctx, item));
+
+	point->kind      = POINT_MODEL;
+	model->shape     = MODEL_LAG;
+	model->tau_ms    = (u32)tau;
+	return true;
+}
+
+static bool
+parse_noise(form_ctx_t* ctx, s7_pointer item, point_t* point)
+{
+	static const char* const keys[] = { "amplitude", "every-ms", "distribution" };
+	s7_pointer	options = s7_cdr(item);
+	s64		every   = 1000;
+	u32		dist    = 0;
+
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "noise") ||
+	    !form_need(ctx, options, "amplitude", "noise"))
+		return false;
+
+	if (!form_opt_number(ctx, options, "amplitude", &point->model.noise.amplitude) ||
+	    !form_opt_int(ctx, options, "every-ms", 1, 86400000, &every) ||
+	    !form_opt_choice(ctx, options, "distribution", DIST_NAMES, ARRAY_COUNT(DIST_NAMES), &dist))
+		return false;
+
+	if (!isfinite(point->model.noise.amplitude) ||
+	    point->model.noise.amplitude < 0)
+		return form_fail(ctx, "%s: noise amplitude must be 0 or more", form_text(ctx, item));
+
+	point->model.noise.every_ms  = (u32)every;
+	point->model.noise.gaussian  = dist == 1;
+	return true;
+}
+
 /**
- * @brief Reads (static ...) or (ramp ...).
+ * @brief Reads (static ...), (ramp ...), (sine ...) or (lag ...), then an optional (noise ...).
  *
- * With neither, the point is a static 0.
+ * With none of the four, the point is a static 0.
  */
 static bool
 parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 {
-	s7_pointer	fixed = form_find(ctx, options, "static");
-	s7_pointer	moving = form_find(ctx, options, "ramp");
+	static const char* const names[] = { "static", "ramp", "sine", "lag" };
+	s7_pointer	found[ARRAY_COUNT(names)];
+	s7_pointer	noise = form_find(ctx, options, "noise");
+	u32		present = 0;
 
-	if (!form_is_absent(ctx, fixed) && !form_is_absent(ctx, moving))
-		return form_fail(ctx, "a point cannot have both (static ...) and (ramp ...)");
+	for (u32 i = 0; i < ARRAY_COUNT(names); i++)
+	{
+		found[i] = form_find(ctx, options, names[i]);
+		if (!form_is_absent(ctx, found[i]))
+			present++;
+	}
 
-	if (!form_is_absent(ctx, moving) && is_bit)
-		return form_fail(ctx, "%s: coils and discrete inputs can only be (static on/off)",
-				 form_text(ctx, moving));
+	if (present > 1)
+		return form_fail(ctx, "a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)");
 
-	if (!form_is_absent(ctx, moving))
-		return parse_ramp(ctx, moving, point);
+	if (is_bit)
+	{
+		for (u32 i = 1; i < ARRAY_COUNT(names); i++)
+		{
+			if (!form_is_absent(ctx, found[i]))
+				return form_fail(ctx, "%s: coils and discrete inputs can only be (static on/off)",
+						 form_text(ctx, found[i]));
+		}
+		if (!form_is_absent(ctx, noise))
+			return form_fail(ctx, "%s: coils and discrete inputs cannot have (noise ...)",
+					 form_text(ctx, noise));
+	}
 
-	if (!form_is_absent(ctx, fixed))
-		return parse_static(ctx, fixed, is_bit, point);
+	if (!form_is_absent(ctx, noise) && present == 0)
+		return form_fail(ctx, "%s: (noise ...) needs a (static ...), (ramp ...), (sine ...) or (lag ...) to disturb",
+				 form_text(ctx, noise));
 
 	point->kind = POINT_STATIC;
+	if (!form_is_absent(ctx, found[1]) && !parse_ramp(ctx, found[1], point))
+		return false;
+	if (!form_is_absent(ctx, found[2]) && !parse_sine(ctx, found[2], point))
+		return false;
+	if (!form_is_absent(ctx, found[3]) && !parse_lag(ctx, found[3], point))
+		return false;
+	if (!form_is_absent(ctx, found[0]) && !parse_static(ctx, found[0], is_bit, point))
+		return false;
+
+	if (form_is_absent(ctx, noise))
+		return true;
+
+	if (!parse_noise(ctx, noise, point))
+		return false;
+
+	/* A static value with noise is evaluated like a model; a ramp keeps its own kind. */
+	if (point->kind == POINT_STATIC &&
+	    point->model.noise.amplitude > 0)
+		point->kind = POINT_MODEL;
 	return true;
 }
 
@@ -434,7 +609,8 @@ parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 static bool
 parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 {
-	static const char* const keys[] = { "type", "word-order", "static", "ramp", "count", "note" };
+	static const char* const keys[] = { "type", "word-order", "static", "ramp", "sine", "lag", "noise", "count",
+		"note" };
 	const char*	head    = form_head_name(item);
 	bool		is_bit  = space_is_bit(space);
 	s7_pointer	options = s7_cddr(item);
@@ -942,6 +1118,26 @@ config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
 	if (!has_unit_id)
 		return form_fail(ctx, "device '%s': missing (unit-id N); every device must set its Modbus unit id",
 				 dev->name);
+
+	for (u32 i = 0; i < dev->point_count; i++)
+	{
+		const point_t*	point = &dev->points[i];
+		u32		target = 0;
+
+		if (!model_needs_target(&point->model))
+			continue;
+
+		target = device_find_point(dev, (space_kind_t)point->model.target_space,
+					   point->model.target_address);
+		if (target == DEVICE_MAX_POINTS)
+			return form_fail(ctx, "device '%s': %s %u: lag target %s %u is not the first address of a configured point",
+					 dev->name, space_name(point->space), point->address,
+					 SPACE_NAMES[point->model.target_space], point->model.target_address);
+		if (target == i)
+			return form_fail(ctx, "device '%s': %s %u: a lag cannot follow itself",
+					 dev->name, space_name(point->space), point->address);
+	}
+	device_reset_models(dev, dev->start_ms);
 
 	if (!config_machine_check_points(ctx, dev))
 		return false;

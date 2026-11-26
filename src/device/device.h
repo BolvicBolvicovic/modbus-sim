@@ -38,6 +38,7 @@ enum point_kind_t
 {
 	POINT_STATIC,	/**< value never changes by itself */
 	POINT_RAMP,	/**< value follows a ramp over time */
+	POINT_MODEL,	/**< value follows a sine or lag model, or a static value plus noise */
 	POINT_MACHINE,	/**< value is driven by a scripted device machine */
 };
 
@@ -58,6 +59,7 @@ struct point_t
 	point_kind_t	configured_kind;	/**< kind as configured, before client writes */
 	f64		static_value;
 	ramp_params_t	ramp;
+	model_t		model;			/**< POINT_MODEL shape; noise modifier of POINT_RAMP */
 };
 
 /**
@@ -268,6 +270,17 @@ u32		device_find_point(const device_t* dev, space_kind_t space, u32 address);
  * Call before serving a read.
  */
 void		device_tick(device_t* dev, u64 now_ms);
+
+/**
+ * @brief Starts every lag model from its initial value (or its goal) at `now_ms`.
+ *
+ * Call once the whole device is built, because a lag may follow a point declared after it.
+ * device_restart() calls it too.
+ */
+void		device_reset_models(device_t* dev, u64 now_ms);
+
+/** @brief True for points whose value changes with time: ramps and models. */
+bool		point_is_timed(const point_t* point);
 
 /**
  * @brief Restarts the device at `now_ms`: restores every point to its configured kind and

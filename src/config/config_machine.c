@@ -1361,7 +1361,7 @@ check_set_points(form_ctx_t* ctx, const machine_state_t* state, const device_t* 
 					 text, def->name, state_name,
 					 space_name((space_kind_t)stmt->space), stmt->address);
 		if (target.status == MACHINE_TARGET_RAMP)
-			return form_fail(ctx, "%s: machine '%s', state '%s': machine cannot drive a ramp point",
+			return form_fail(ctx, "%s: machine '%s', state '%s': machine cannot drive a ramp or modeled point",
 					 text, def->name, state_name);
 		if (target.status == MACHINE_TARGET_CONFLICT)
 			return form_fail(ctx, "%s: machine '%s', state '%s': point %s %u is already driven by another machine",
@@ -1398,8 +1398,8 @@ check_state_registers(form_ctx_t* ctx, const machine_state_t* state, const devic
 		if (index == DEVICE_MAX_POINTS)
 			return form_fail(ctx, "machine '%s': %s: state register must name the first address "
 					      "of a configured point", def->name, text);
-		if (dev->points[index].kind == POINT_RAMP)
-			return form_fail(ctx, "machine '%s': %s: state register cannot name a ramp point",
+		if (point_is_timed(&dev->points[index]))
+			return form_fail(ctx, "machine '%s': %s: state register cannot name a ramp or modeled point",
 					 def->name, text);
 		if (set_owners[index] != 0)
 			return form_fail(ctx, "machine '%s': %s: state register cannot name a point driven "

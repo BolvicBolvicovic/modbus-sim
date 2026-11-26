@@ -1106,3 +1106,127 @@ TEST(MasterWriteRejectsRangeContainingMachinePoint)
 	ASSERT_EQ(out[0] == 500 && out[1] == 0 && out[2] == 700);
 	arena_release(arena);
 }
+
+static point_t
+model_point(space_kind_t space, u32 address, value_type_t type, const model_t* model)
+{
+	point_t	p = static_point(space, address, type, 0);
+
+	p.kind  = POINT_MODEL;
+	p.model = *model;
+	return p;
+}
+
+static u16
+read_word(device_t* dev, space_kind_t space, u32 address)
+{
+	u16	out = 0;
+
+	ASSERT_SUCCESS(device_read(dev, space, address, 1, &out));
+	return out;
+}
+
+TEST(SinePointEncodesThroughItsTypeAndFreezesOnWrite)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	model_t		sine  = { .shape = MODEL_SINE, .offset = 100, .amplitude = 50, .period_ms = 4000 };
+	point_t		p     = model_point(SPACE_INPUT, 0, VT_S16, &sine);
+	u16		w     = 77;
+
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 100);
+	device_tick(dev, 1000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 150);
+	device_tick(dev, 3000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 50);
+
+	/* a point declared as holding is writable; the write freezes the model */
+	p = model_point(SPACE_HOLDING, 0, VT_U16, &sine);
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	ASSERT_SUCCESS(device_write(dev, SPACE_HOLDING, 0, 1, &w));
+	device_tick(dev, 1000);
+	ASSERT_EQ(read_word(dev, SPACE_HOLDING, 0) == 77);
+
+	device_restart(dev, 10000);
+	ASSERT_EQ(read_word(dev, SPACE_HOLDING, 0) == 100);
+	device_tick(dev, 11000);
+	ASSERT_EQ(read_word(dev, SPACE_HOLDING, 0) == 150);
+	arena_release(arena);
+}
+
+TEST(LagFollowsAWritableSetpointAndRestartResetsIt)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	point_t		sp    = static_point(SPACE_HOLDING, 1, VT_U16, 200);
+	model_t		lag   = { .shape = MODEL_LAG, .gain = 1, .tau_ms = 1000, .initial = 200,
+				  .has_initial = true, .target_is_point = true,
+				  .target_space = SPACE_HOLDING, .target_address = 1 };
+	point_t		temp  = model_point(SPACE_INPUT, 0, VT_S16, &lag);
+	u8		req[5] = { 0x06, 0, 1, 0x01, 0x2C };	/* write holding 1 = 300 */
+	u8		rd[5]  = { 0x04, 0, 0, 0, 1 };
+	u8		resp[260];
+
+	ASSERT_EQ(device_add_point(dev, &sp) == NULL);
+	ASSERT_EQ(device_add_point(dev, &temp) == NULL);
+	device_reset_models(dev, 0);
+
+	ASSERT_EQ(modbus_handle_pdu(dev, 0, rd, 5, resp) == 4);
+	ASSERT_EQ(resp[2] == 0 && resp[3] == 200);
+	ASSERT_EQ(modbus_handle_pdu(dev, 10000, req, 5, resp) == 5);
+	ASSERT_EQ(modbus_handle_pdu(dev, 11000, rd, 5, resp) == 4);
+	/* 200 + 100 * (1 - 1/e) = 263.2 after one tau at the new setpoint */
+	ASSERT_EQ(((resp[2] << 8) | resp[3]) == 263);
+	ASSERT_EQ(modbus_handle_pdu(dev, 60000, rd, 5, resp) == 4);
+	ASSERT_EQ(((resp[2] << 8) | resp[3]) == 300);
+
+	device_restart(dev, 70000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 200);
+	ASSERT_EQ(read_word(dev, SPACE_HOLDING, 1) == 200);
+	arena_release(arena);
+}
+
+TEST(HostWriteClaimsAModeledPointAndNoisyStaticIsModeled)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	model_t		noisy = { .shape = MODEL_BASE,
+				  .noise = { .amplitude = 5, .every_ms = 100 } };
+	point_t		p     = model_point(SPACE_INPUT, 0, VT_U16, &noisy);
+	val_t		v     = { .type = VAL_NUM, .n = 42 };
+
+	p.static_value = 1000;
+	ASSERT_EQ(device_add_point(dev, &p) == NULL);
+	for (u64 t = 0; t < 5000; t += 100)
+	{
+		device_tick(dev, t);
+		ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) >= 995 &&
+			  read_word(dev, SPACE_INPUT, 0) <= 1005);
+	}
+	ASSERT_SUCCESS(device_set_point(dev, SPACE_INPUT, 0, &v));
+	device_tick(dev, 9000);
+	ASSERT_EQ(read_word(dev, SPACE_INPUT, 0) == 42);
+	ASSERT_EQ(dev->points[0].kind == POINT_MACHINE);
+	arena_release(arena);
+}
+
+TEST(ModelsAreRejectedOnBitTablesAndWithBadNumbers)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = fresh_device(arena);
+	model_t		sine  = { .shape = MODEL_SINE, .amplitude = 1, .period_ms = 0 };
+	model_t		lag   = { .shape = MODEL_LAG, .tau_ms = 0 };
+	point_t		p     = model_point(SPACE_INPUT, 0, VT_U16, &sine);
+
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	p = model_point(SPACE_INPUT, 0, VT_U16, &lag);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	sine.period_ms = 1000;
+	p = model_point(SPACE_COIL, 0, VT_BOOL, &sine);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	sine.noise = (struct model_noise_t){ .amplitude = 1, .every_ms = 0 };
+	p = model_point(SPACE_INPUT, 0, VT_U16, &sine);
+	ASSERT_EQ(device_add_point(dev, &p) != NULL);
+	arena_release(arena);
+}

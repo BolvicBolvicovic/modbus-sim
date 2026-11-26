@@ -58,8 +58,21 @@ fuzz_device(void)
 	p.ramp  = (ramp_params_t){ .from = -50, .to = 50, .step = 5, .every_ms = 10, .mode = RAMP_BOUNCE };
 	p.address = 0;
 	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
-	p.kind = POINT_STATIC;
-	p.type = VT_BOOL;
+	p.kind    = POINT_MODEL;
+	p.type    = VT_S16;
+	p.address = 10;
+	p.model   = (model_t){ .shape = MODEL_SINE, .offset = 10, .amplitude = 5, .period_ms = 1000 };
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	p.type    = VT_F32;
+	p.address = 12;
+	p.model   = (model_t){ .shape = MODEL_LAG, .gain = 1, .tau_ms = 500, .target_is_point = true,
+			       .target_space = SPACE_HOLDING, .target_address = 3,
+			       .noise = { .amplitude = 1, .every_ms = 10, .gaussian = true } };
+	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	device_reset_models(dev, 0);
+	p.kind  = POINT_STATIC;
+	p.type  = VT_BOOL;
+	p.model = (model_t){ 0 };
 	for (u32 a = 0; a < 24; a++)
 	{
 		p.space   = SPACE_COIL;

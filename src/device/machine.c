@@ -57,7 +57,7 @@ machine_check_target_point(const device_t* dev, space_kind_t space, u32 address,
 		result.status = MACHINE_TARGET_NOT_FOUND;
 		return result;
 	}
-	if (dev->points[result.index].kind == POINT_RAMP)
+	if (point_is_timed(&dev->points[result.index]))
 	{
 		result.status = MACHINE_TARGET_RAMP;
 		return result;
@@ -279,7 +279,7 @@ validate_statement(const machine_def_t* def, u16 index, const char* machine, con
 				return machine_error(machine, state,
 						     "assignment target must be the first address of a configured point");
 			if (target.status == MACHINE_TARGET_RAMP)
-				return machine_error(machine, state, "machine cannot drive a ramp point");
+				return machine_error(machine, state, "machine cannot drive a ramp or modeled point");
 			if (target.status == MACHINE_TARGET_CONFLICT)
 				return machine_error(machine, state,
 						     "point is already driven by another machine");
@@ -506,8 +506,8 @@ collect_state_registers(validation_t* v)
 		if (index == DEVICE_MAX_POINTS)
 			return machine_error(def->name, NULL,
 					     "state register must name the first address of a configured point");
-		if (v->dev->points[index].kind == POINT_RAMP)
-			return machine_error(def->name, NULL, "state register cannot name a ramp point");
+		if (point_is_timed(&v->dev->points[index]))
+			return machine_error(def->name, NULL, "state register cannot name a ramp or modeled point");
 		if (v->reg_owner[index] != 0)
 			return machine_error(def->name, NULL,
 					     "state register point is also used by another machine");

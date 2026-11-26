@@ -2124,7 +2124,7 @@ TEST(ConfigMachineRejectsBadPointReferences)
 		     " (holding 0 (ramp (from 0) (to 10) (every-ms 100)))"
 		     " (machine m (initial idle)"
 		     "  (state idle (on-enter (set! (holding 0) 3)))))",
-		     "(holding 0): machine 'm', state 'idle': machine cannot drive a ramp point");
+		     "(holding 0): machine 'm', state 'idle': machine cannot drive a ramp or modeled point");
 	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
 		     " (machine a (initial idle)"
 		     "  (state idle (on-enter (set! (holding 0) 1))))"
@@ -2366,7 +2366,7 @@ TEST(ConfigMachineStateRegisterValidation)
 	EXPECT_ERROR("(device (unit-id 1)"
 		     " (holding 0 (ramp (from 0) (to 10) (every-ms 100)))"
 		     " (machine m (initial idle) (state-register (holding 0)) (state idle)))",
-		     "state register cannot name a ramp point");
+		     "state register cannot name a ramp or modeled point");
 	EXPECT_ERROR("(device (unit-id 1) (holding 0)"
 		     " (machine m (initial idle) (state-register (holding 0))"
 		     "  (state idle) (state done (on-enter (set! (holding 0) 1)))))",
@@ -2726,4 +2726,79 @@ TEST(ConfigBuiltinFunctionCodesMatchThePduHandler)
 {
 	for (u32 fc = 0; fc < 256; fc++)
 		ASSERT_EQ(config_fc_is_builtin((u8)fc) == modbus_fc_is_builtin((u8)fc));
+}
+
+TEST(ConfigParsesSineLagAndNoise)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev = NULL;
+	u16		w = 0;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)"
+		" (input 0 (type s16) (lag (target (holding 1)) (tau-ms 1000) (initial 200)))"
+		" (holding 1 (static 300))"
+		" (input 1 (sine (offset 10) (amplitude 5) (period-ms 4000) (phase-deg 0)))"
+		" (input 2 (lag (target 50) (tau-ms 1000) (gain 2) (offset 1)) (noise (amplitude 1)))"
+		" (input 3 (static 7) (noise (amplitude 2) (every-ms 50) (distribution gaussian)))"
+		" (input 4 (ramp (from 0) (to 10)) (noise (amplitude 0.5) (distribution uniform))))",
+		&config, err, sizeof(err)));
+	dev = config.devices[0];
+	ASSERT_EQ(dev->points[0].kind == POINT_MODEL && dev->points[0].model.shape == MODEL_LAG);
+	ASSERT_EQ(dev->points[4].kind == POINT_MODEL && dev->points[4].model.noise.gaussian);
+	ASSERT_EQ(dev->points[5].kind == POINT_RAMP && dev->points[5].model.noise.every_ms == 1000);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 0, 1, &w));
+	ASSERT_EQ(w == 200);
+	device_tick(dev, dev->start_ms + 1000);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 0, 1, &w));
+	ASSERT_EQ(w == 263);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 1, 1, &w));
+	ASSERT_EQ(w == 15);
+
+	/* a lag without (initial ...) starts at its goal, even if the target is declared later */
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1) (input 0 (lag (target (holding 1)) (tau-ms 1000)))"
+		" (holding 1 (static 300)))", &config, err, sizeof(err)));
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_INPUT, 0, 1, &w));
+	ASSERT_EQ(w == 300);
+}
+
+TEST(ConfigModelErrorsAreReadable)
+{
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (sine (offset 0) (amplitude 1))))", "missing required option (period-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (sine (offset 0) (period-ms 100))))", "missing required option (amplitude");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (sine (offset 0) (amplitude 1) (period-ms 0))))", "period-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (sine (offset 0) (amplitude 1) (period-ms 86400001))))", "period-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (sine (offset 0) (amplitude 1) (period-ms 5) (speed 2))))", "unknown option 'speed'");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (target 1))))", "missing required option (tau-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (tau-ms 100))))", "missing required option (target");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (target 1) (tau-ms 0))))", "tau-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (target \"x\") (tau-ms 10))))", "expected a number or a point");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (target (register 1)) (tau-ms 10))))", "expected a number or a point");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (target (holding 9)) (tau-ms 10))))",
+		     "lag target holding 9 is not the first address of a configured point");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type u32)) (input 0 (lag (target (holding 1)) (tau-ms 10))))",
+		     "is not the first address of a configured point");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (lag (target (input 0)) (tau-ms 10))))", "cannot follow itself");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (sine (offset 0) (amplitude 1) (period-ms 10))))", "can only be (static on/off)");
+	EXPECT_ERROR("(device (unit-id 1) (discrete 0 (lag (target 1) (tau-ms 10))))", "can only be (static on/off)");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (static on) (noise (amplitude 1))))", "cannot have (noise");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (noise (amplitude 1))))", "needs a (static");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (noise (amplitude 1) (distribution cauchy))))", "distribution");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (noise (every-ms 10))))", "missing required option (amplitude");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (noise (amplitude -1))))", "0 or more");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (noise (amplitude 1) (every-ms 0))))", "every-ms");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (static 1) (sine (offset 0) (amplitude 1) (period-ms 10))))", "only one of");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (sine (offset 0) (amplitude 1) (period-ms 10)) (lag (target 1) (tau-ms 10))))", "only one of");
+	EXPECT_ERROR("(device (unit-id 1) (input 0 (ramp (from 0) (to 1)) (lag (target 1) (tau-ms 10))))", "only one of");
+}
+
+TEST(ConfigMachinesCannotDriveModeledPoints)
+{
+	EXPECT_ERROR("(device (unit-id 1)"
+		     " (holding 0 (sine (offset 0) (amplitude 1) (period-ms 100)))"
+		     " (machine m (initial idle)"
+		     "  (state idle (on-enter (set! (holding 0) 3)))))",
+		     "machine cannot drive a ramp or modeled point");
 }

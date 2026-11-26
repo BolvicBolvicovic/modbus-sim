@@ -163,3 +163,120 @@ TEST(EncodeBool)
 	encode_value(VT_BOOL, WORDS_HIGH_FIRST, 0, w);
 	ASSERT_EQ(w[0] == 0);
 }
+
+static model_t
+make_lag(f64 tau_ms, f64 initial)
+{
+	return (model_t){ .shape = MODEL_LAG, .gain = 1, .tau_ms = (u32)tau_ms, .initial = initial,
+			  .has_initial = true, .target_value = 100 };
+}
+
+TEST(SineFollowsFormulaAtKnownTimes)
+{
+	model_t	m = { .shape = MODEL_SINE, .offset = 10, .amplitude = 4, .period_ms = 4000 };
+
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 0, 0), 10));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 1000, 0), 14));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 2000, 0), 10));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 3000, 0), 6));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 5000, 0), 14));
+	/* time counts from the start; before it the value is the one at the start */
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 1000, 2000, 0), 14));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 1000, 500, 0), 10));
+}
+
+TEST(SinePhaseShiftsTheWave)
+{
+	model_t	m = { .shape = MODEL_SINE, .amplitude = 1, .period_ms = 1000, .phase_deg = 90 };
+
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 0, 0), 1));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 500, 0), -1));
+}
+
+TEST(LagReachesOneMinusInverseEAfterTau)
+{
+	model_t	m = make_lag(1000, 0);
+
+	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 0, 0), 0));
+	ASSERT_EQ(fabs(model_value(&m, 0, 0, 0, 1000, 0) - 100 * (1 - exp(-1.0))) < 1e-9);
+	ASSERT_EQ(fabs(model_value(&m, 0, 0, 0, 1000000, 0) - 100) < 1e-6);
+}
+
+TEST(LagDoesNotDependOnPollRate)
+{
+	model_t	once = make_lag(5000, 20);
+	model_t	many = make_lag(5000, 20);
+	f64	y_once = 0;
+	f64	y_many = 0;
+
+	model_value(&once, 0, 0, 0, 0, 0);
+	y_once = model_value(&once, 0, 0, 0, 7300, 0);
+	model_value(&many, 0, 0, 0, 0, 0);
+	for (u64 t = 13; t < 7300; t += 13)
+		model_value(&many, 0, 0, 0, t, 0);
+	y_many = model_value(&many, 0, 0, 0, 7300, 0);
+	ASSERT_EQ(fabs(y_once - y_many) < 1e-9);
+}
+
+TEST(LagStartsAtGoalWithoutInitialAndAppliesGainAndOffset)
+{
+	model_t	m = { .shape = MODEL_LAG, .gain = 2, .offset = 5, .tau_ms = 1000,
+		      .target_is_point = true };
+
+	ASSERT_EQ(NEAR(model_value(&m, 0, 10, 0, 0, 0), 25));
+	ASSERT_EQ(NEAR(model_value(&m, 0, 10, 0, 50000, 0), 25));
+	model_reset(&m);
+	ASSERT_EQ(NEAR(model_value(&m, 0, 20, 60000, 60000, 0), 45));
+}
+
+TEST(NoiseStaysInBoundsAndIsDeterministic)
+{
+	model_t	m = { .shape = MODEL_BASE, .noise = { .amplitude = 2, .every_ms = 100 } };
+	bool	varies = false;
+	f64	first = model_value(&m, 50, 0, 0, 0, 7);
+
+	for (u64 slot = 0; slot < 500; slot++)
+	{
+		f64	v = model_value(&m, 50, 0, 0, slot * 100, 7);
+
+		ASSERT_EQ(v >= 48 && v <= 52);
+		ASSERT_EQ(v == model_value(&m, 50, 0, 0, slot * 100, 7));
+		ASSERT_EQ(v == model_value(&m, 50, 0, 0, slot * 100 + 99, 7));
+		varies = varies || v != first;
+	}
+	ASSERT_EQ(varies);
+	/* a different point gets a different sequence */
+	ASSERT_EQ(model_value(&m, 50, 0, 0, 0, 8) != first);
+}
+
+TEST(GaussianNoiseIsClampedToFourSigma)
+{
+	model_t	m = { .shape = MODEL_BASE,
+		      .noise = { .amplitude = 3, .every_ms = 1, .gaussian = true } };
+	f64	sum = 0;
+
+	for (u64 t = 0; t < 20000; t++)
+	{
+		f64	v = model_value(&m, 0, 0, 0, t, 1);
+
+		ASSERT_EQ(fabs(v) <= 12.0 + 1e-9);
+		sum += v;
+	}
+	ASSERT_EQ(fabs(sum / 20000) < 0.2);
+}
+
+TEST(NoiseIsAddedToLagOutputOnly)
+{
+	model_t	m = make_lag(1000, 0);
+	model_t	plain = make_lag(1000, 0);
+
+	m.noise = (struct model_noise_t){ .amplitude = 1, .every_ms = 10 };
+	for (u64 t = 0; t <= 5000; t += 100)
+	{
+		f64	noisy = model_value(&m, 0, 0, 0, t, 3);
+		f64	clean = model_value(&plain, 0, 0, 0, t, 3);
+
+		ASSERT_EQ(fabs(noisy - clean) <= 1.0);
+		ASSERT_EQ(fabs(m.lag_y - plain.lag_y) < 1e-12);
+	}
+}
