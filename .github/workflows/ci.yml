@@ -12,7 +12,8 @@ on:
       - 'examples/**'
       - 'tests/**'
       - 'tools/**'
-      - 'vlib/**'
+      - 'vlib'
+      - '.gitmodules'
       - 'third_party/**'
       - 'profiles/**'
       - 'python/**'
@@ -35,7 +36,8 @@ on:
       - 'examples/**'
       - 'tests/**'
       - 'tools/**'
-      - 'vlib/**'
+      - 'vlib'
+      - '.gitmodules'
       - 'third_party/**'
       - 'profiles/**'
       - 'python/**'
@@ -71,6 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          submodules: true
           fetch-depth: 0
 
       - name: Classify the change
@@ -89,6 +92,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install OpenSSL development files, ccache and mold
         run: sudo apt-get update && sudo apt-get install -y libssl-dev ccache mold
@@ -136,6 +141,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install ccache and mold
         run: sudo apt-get update && sudo apt-get install -y ccache mold
@@ -175,6 +182,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install OpenSSL development files and clang
         run: sudo apt-get update && sudo apt-get install -y libssl-dev clang
@@ -191,6 +200,8 @@ jobs:
       BUILD: dev
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install OpenSSL development files, ccache and mold
         run: sudo apt-get update && sudo apt-get install -y libssl-dev ccache mold
@@ -227,6 +238,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install clang and libFuzzer
         run: sudo apt-get update && sudo apt-get install -y clang "libclang-rt-$(clang -dumpversion | cut -d. -f1)-dev"
@@ -249,6 +262,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install OpenSSL development files and pymodbus
         run: |
@@ -268,6 +283,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install OpenSSL development files
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
@@ -288,6 +305,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install doxygen
         run: sudo apt-get update && sudo apt-get install -y doxygen
@@ -308,6 +327,8 @@ jobs:
       LDFLAGS: -pie -Wl,-z,relro,-z,now
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Install OpenSSL development files and clang static analyzer
         run: sudo apt-get update && sudo apt-get install -y libssl-dev clang-tools
@@ -327,6 +348,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
 
       - name: Build image
         run: docker build --build-arg VERSION=ci -t mogbus:ci .

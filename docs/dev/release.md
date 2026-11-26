@@ -16,7 +16,7 @@ A release is a tag `vX.Y.Z` whose version equals `MOGBUS_VERSION_MAJOR/MINOR/PAT
 4. Dry run: start the workflow manually (`workflow_dispatch`); it builds and uploads workflow
    artifacts only and publishes nothing.
 
-Releases are x86_64 only for now: the vendored test framework (`vlib/vtest.h`) uses x86
+Releases are x86_64 only for now: the test framework (`vlib/vtest.h`) uses x86
 intrinsics, so the tests cannot run on aarch64 and untested binaries are not published. Release
 assets per architecture: `mogbus-X.Y.Z-linux-<arch>.tar.gz` and
 `mogbus-X.Y.Z-linux-<arch>.spdx.json`, plus one `SHA256SUMS`.
@@ -47,7 +47,7 @@ gh attestation verify mogbus-X.Y.Z-linux-x86_64.tar.gz --repo BolvicBolvicovic/m
 `gh attestation verify` proves the file was built by this repository's release workflow from the
 tagged commit. The SBOM is the `.spdx.json` file (SPDX 2.3): mogbus (MIT, tarball checksum), the
 `bin/mogbus` file with SHA-1/SHA-256, vendored s7 (version from `third_party/s7/s7.h`, 0BSD) and
-vlib (no declared license or version), and each `DT_NEEDED` library of the binary (glibc and, in a TLS
+vlib (the submodule commit as version, no declared license), and each `DT_NEEDED` library of the binary (glibc and, in a TLS
 build, OpenSSL with the version found at build time) as `DYNAMIC_LINK` relationships. Its timestamp is
 `SOURCE_DATE_EPOCH`, so the same inputs give the same bytes.
 

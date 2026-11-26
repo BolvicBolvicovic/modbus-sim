@@ -20,6 +20,10 @@ created=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)
 tar_sha256=$(sha256sum "$tarball" | cut -d' ' -f1)
 bin_sha256=$(sha256sum "$binary" | cut -d' ' -f1)
 bin_sha1=$(sha1sum "$binary" | cut -d' ' -f1)
+# The vlib submodule commit: VLIB_REVISION, else the checkout's gitlink, else unknown.
+vlib_rev=${VLIB_REVISION:-$(git -C "$root" ls-tree HEAD vlib 2>/dev/null | awk '{print $3}')}
+vlib_version=NOASSERTION
+[ -z "$vlib_rev" ] || vlib_version=$vlib_rev
 s7_version=$(sed -n 's/^#define S7_VERSION "\(.*\)"/\1/p' "$root/third_party/s7/s7.h")
 [ -n "$s7_version" ] || { echo "gen_sbom.sh: S7_VERSION not found" >&2; exit 1; }
 # NOTICE.md and s7's LICENSE both say 0-clause BSD (SPDX: 0BSD); refuse to guess if that changes.
@@ -78,12 +82,13 @@ cat <<JSON
     {
       "SPDXID": "SPDXRef-Package-vlib",
       "name": "vlib",
+      "versionInfo": "$vlib_version",
       "downloadLocation": "https://github.com/BolvicBolvicovic/vlib",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
       "copyrightText": "NOASSERTION",
-      "comment": "Vendored in vlib/ unmodified (arena allocator and headers) and statically linked; it carries no version or license file."
+      "comment": "Git submodule vlib/ (arena allocator and headers), unmodified, pinned to the commit in versionInfo and statically linked; it carries no license file."
     }
 JSON
 needed=$(readelf -d "$binary" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | LC_ALL=C sort)

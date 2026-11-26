@@ -279,7 +279,7 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
 
 ## Coding rules used here
 
-- Plain C (gnu11), vlib types (`u8`, `u16`, `f64` ...), vlib macros (`ARRAY_COUNT`, `MIN`, `MAX`,
+- Plain C (gnu11), vlib (a git submodule, unmodified here) types (`u8`, `u16`, `f64` ...), vlib macros (`ARRAY_COUNT`, `MIN`, `MAX`,
   `ARENA_*`, `KB`/`MB`).
 - No inheritance-style tricks. Polymorphism is a table of `{name, function}` (see
   `DEVICE_ITEMS` in `config_device.c` and `EXPR_FORMS` in `config_machine.c`) or a `switch`.

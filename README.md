@@ -26,6 +26,9 @@ Start from one of the ready-made profiles and change what you need.
 
 ## Quick start
 
+The `vlib/` directory is a git submodule: clone with `git clone --recurse-submodules`, or run
+`git submodule update --init` in an existing clone (`make` stops with a clear error otherwise).
+
 ```bash
 make                                   # builds ./mogbus (TLS enabled when OpenSSL headers are found)
 ./mogbus profiles/minimal.scm          # start the simulator on port 1502
@@ -371,7 +374,7 @@ profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest); tests/fuzz/ has the libFuzzer harnesses (make fuzz-run)
 tools/          modbus_probe.py, loadtest.py, run_fuzz.sh, fuzz_seeds.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
-vlib/           the vlib toolchain (arena allocator, test framework), unmodified
+vlib/           git submodule: the vlib toolchain (arena allocator, test framework), unmodified
 ```
 
 ## Notes

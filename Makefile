@@ -1,3 +1,7 @@
+ifeq ($(wildcard vlib/arena.h),)
+$(error vlib submodule missing: run git submodule update --init)
+endif
+
 # mogbus build. Modeled on the Makefile vlib/gen_makefile.py generates, but the
 # source tree has sub-folders (one per module), so sources are found recursively.
 

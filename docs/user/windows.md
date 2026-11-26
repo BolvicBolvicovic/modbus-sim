@@ -62,7 +62,7 @@ In the Linux shell, install the build dependencies and build:
 ```bash
 sudo apt update
 sudo apt install make clang libssl-dev pkg-config python3 git
-git clone https://github.com/BolvicBolvicovic/mogbus.git
+git clone --recurse-submodules https://github.com/BolvicBolvicovic/mogbus.git
 cd mogbus
 make
 ./mogbus profiles/minimal.scm
