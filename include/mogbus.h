@@ -46,7 +46,7 @@ extern "C" {
 #define MOGBUS_API __attribute__((visibility("default")))
 
 #define MOGBUS_VERSION_MAJOR	0
-#define MOGBUS_VERSION_MINOR	1
+#define MOGBUS_VERSION_MINOR	2
 #define MOGBUS_VERSION_PATCH	0
 
 /* Same as the MOGBUS_VERSION_* macros, as "major.minor.patch". */
@@ -85,6 +85,7 @@ typedef enum mogbus_space_t
 	MOGBUS_DISCRETE,	/* read-only bit      (FC 02)         */
 	MOGBUS_INPUT,		/* read-only 16 bits  (FC 04)         */
 	MOGBUS_HOLDING,		/* read/write 16 bits (FC 03, 06, 16) */
+	MOGBUS_SPACE_COUNT,
 } mogbus_space_t;
 
 /* How a number is stored in 16-bit registers. Use MOGBUS_TYPE_BOOL for coils
@@ -149,6 +150,48 @@ MOGBUS_API mogbus_device_t*	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, co
 
 /* The device with this unit id, or NULL. Includes devices loaded from config. */
 MOGBUS_API mogbus_device_t*	mogbus_find_device(mogbus_t* ctx, uint8_t unit_id);
+
+/* Enumeration: devices are numbered 0..count-1 in the order they were added
+ * (devices of a config file keep file order). mogbus_device_at() returns NULL
+ * for an index out of range. */
+MOGBUS_API size_t		mogbus_device_count(const mogbus_t* ctx);
+MOGBUS_API mogbus_device_t*	mogbus_device_at(mogbus_t* ctx, size_t index);
+
+/* Fault kinds a config file can attach to a device (see docs/config-reference.md). */
+typedef enum mogbus_fault_kind_t
+{
+	MOGBUS_FAULT_DELAY,
+	MOGBUS_FAULT_DROP,
+	MOGBUS_FAULT_EXCEPTION,
+	MOGBUS_FAULT_CORRUPT,
+	MOGBUS_FAULT_DISCONNECT,
+	MOGBUS_FAULT_RESTART,
+	MOGBUS_FAULT_SENSOR_DISCONNECT,
+	MOGBUS_FAULT_KIND_COUNT,
+} mogbus_fault_kind_t;
+
+/* A snapshot of what a device is made of. Points are counted per address
+ * space (index with mogbus_space_t); faults are indexed by mogbus_fault_kind_t
+ * and only those configured on the device itself are listed. A fault fires on
+ * `percent` of the responses, or by a fixed schedule when `scheduled` is set
+ * (percent is then meaningless). delay_ms is set for MOGBUS_FAULT_DELAY and
+ * exception_code for MOGBUS_FAULT_EXCEPTION. */
+typedef struct mogbus_device_info_t
+{
+	const char*	name;			/* borrowed from the device */
+	uint8_t		unit_id;
+	uint32_t	point_count[MOGBUS_SPACE_COUNT];
+	struct
+	{
+		bool		present;
+		bool		scheduled;
+		uint32_t	percent;
+		uint32_t	delay_ms;
+		uint8_t		exception_code;
+	} faults[MOGBUS_FAULT_KIND_COUNT];
+} mogbus_device_info_t;
+
+MOGBUS_API bool		mogbus_device_info(const mogbus_device_t* dev, mogbus_device_info_t* out);
 
 /* Returns false with a message in err for an invalid point (type does not fit
  * the space, overlapping or out-of-range address, bad ramp, ...). */
@@ -246,15 +289,45 @@ typedef struct mogbus_server_options_t
  * required, TLS 1.2 minimum), fd -1. */
 MOGBUS_API mogbus_server_options_t	mogbus_server_options_defaults(void);
 
+/* Why a server could not be created (see mogbus_server_create()). */
+typedef enum mogbus_error_t
+{
+	MOGBUS_OK,
+	MOGBUS_ERR_INVALID,	/* bad options, no devices, or a limit reached */
+	MOGBUS_ERR_SERIAL,	/* the serial device or PTY could not be opened */
+	MOGBUS_ERR_LISTEN,	/* the listener could not start (port in use) or TLS setup failed */
+} mogbus_error_t;
+
 /* Starts serving every device the context has now (devices added later are
  * not served). Returns NULL with a message in err if the options are invalid
  * or the transport cannot start (port in use, serial device missing, TLS files
- * unreadable, no devices, MOGBUS_MAX_SERVERS reached). */
+ * unreadable, no devices, MOGBUS_MAX_SERVERS reached). `status` is optional:
+ * it receives MOGBUS_OK or the reason for the failure. */
 MOGBUS_API mogbus_server_t*	mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* options,
-						     char* err, size_t err_size);
+						     char* err, size_t err_size, mogbus_error_t* status);
 
 /* Same, using the (server ...) section of the last mogbus_load_config(). */
-MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size);
+MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size,
+								 mogbus_error_t* status);
+
+/* The (server ...) section of the last mogbus_load_config(), as options. Strings
+ * are borrowed from the context. Returns false if no config is loaded or the
+ * build has no config support. */
+MOGBUS_API bool		mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out);
+
+/* Validates options exactly as mogbus_server_create() would (device path, fd,
+ * serial line, string lengths, TLS files via a throwaway TLS context) without
+ * opening a listener, serial device or PTY, so it also passes for a port that
+ * is in use. Returns false with a message in err. */
+MOGBUS_API bool		mogbus_server_check(const mogbus_t* ctx, const mogbus_server_options_t* options,
+					    char* err, size_t err_size);
+
+/* RTU timing for a baud rate and optional explicit frame gap: the Modbus t3.5
+ * in microseconds (0 when baud is 0 = unknown) and the inter-frame gap in
+ * milliseconds a server would use (frame_gap_ms if nonzero, else derived from
+ * baud, else 20). Either output may be NULL. */
+MOGBUS_API void		mogbus_rtu_timing(uint32_t baud, uint32_t frame_gap_ms,
+					  uint32_t* t35_us, uint32_t* gap_ms);
 
 enum
 {

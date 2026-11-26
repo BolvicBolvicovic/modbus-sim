@@ -51,7 +51,7 @@ main(void)
 	}
 
 	options.port = free_port();
-	server = mogbus_server_create(ctx, &options, err, sizeof(err));
+	server = mogbus_server_create(ctx, &options, err, sizeof(err), NULL);
 	if (!server)
 	{
 		fprintf(stderr, "server: %s\n", err);

@@ -43,7 +43,7 @@ TEST(ApiVersionAndDefaults)
 {
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 
-	ASSERT_EQ(strcmp(mogbus_version(), "0.1.0") == 0);
+	ASSERT_EQ(strcmp(mogbus_version(), "0.2.0") == 0);
 	ASSERT_EQ(o.mode == MOGBUS_MODE_TCP && strcmp(o.bind_address, "127.0.0.1") == 0);
 	ASSERT_EQ(o.port == 1502 && o.fd == -1 && o.idle_timeout_ms == 0);
 	ASSERT_EQ(o.data_bits == 8 && o.parity == MOGBUS_PARITY_NONE && o.stop_bits == 1);
@@ -165,15 +165,15 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 
 	ASSERT_EQ(ctx != NULL);
 	o.port = ts_free_port();
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err)) == NULL);	/* no devices yet */
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL);	/* no devices yet */
 	ASSERT_EQ(strstr(err, "no devices") != NULL);
 
 	dev = mogbus_add_device(ctx, 1, "tcp", err, sizeof(err));
 	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	server = mogbus_server_create(ctx, &o, err, sizeof(err));
+	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
 	ASSERT_EQ(server != NULL);
 	ASSERT_EQ(mogbus_server_pty_name(server) == NULL);
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err)) == NULL && err[0]);	/* port in use */
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);	/* port in use */
 
 	fd = ts_connect_loopback(o.port, AF_INET, 1000);
 	ASSERT_EQ(fd >= 0);
@@ -196,22 +196,22 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 	mogbus_server_close(NULL);
 
 	/* The slot and the port are free again. */
-	other = mogbus_server_create(ctx, &o, err, sizeof(err));
+	other = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
 	ASSERT_EQ(other != NULL);
 	o.mode = MOGBUS_MODE_RTU_DEVICE;
 	o.path = NULL;
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err)) == NULL && strstr(err, "path"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "path"));
 	o.mode = MOGBUS_MODE_ASCII_FD;
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err)) == NULL && strstr(err, "fd"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "fd"));
 	o = mogbus_server_options_defaults();
 	o.tls_enabled = true;	/* unreadable files, or a build without TLS */
 	o.tls_certificate = "/nonexistent/cert.pem";
 	o.tls_private_key = "/nonexistent/key.pem";
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err)) == NULL && err[0]);
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
 	o = mogbus_server_options_defaults();
 	o.bind_address = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
 			 "01234567890123456789012345678901234567890123456789";
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err)) == NULL && strstr(err, "too long"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "too long"));
 	mogbus_destroy(ctx);	/* closes `other` */
 }
 
@@ -238,7 +238,7 @@ TEST(ApiLoadsConfigAndServesFromIt)
 	ASSERT_EQ(write(cfd, text, strlen(text)) == (ssize_t)strlen(text));
 	close(cfd);
 
-	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err)) == NULL);	/* nothing loaded */
+	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err), NULL) == NULL);	/* nothing loaded */
 	ASSERT_EQ(strstr(err, "no config") != NULL);
 	ASSERT_EQ(!mogbus_load_config(ctx, "/nonexistent/mogbus.scm", err, sizeof(err)) && err[0]);
 	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
@@ -256,7 +256,7 @@ TEST(ApiLoadsConfigAndServesFromIt)
 
 		ASSERT_EQ(extra != NULL && mogbus_device_add_point(extra, &p, err, sizeof(err)));
 	}
-	server = mogbus_server_create_from_config(ctx, err, sizeof(err));
+	server = mogbus_server_create_from_config(ctx, err, sizeof(err), NULL);
 	ASSERT_EQ(server != NULL);
 	fd = ts_connect_loopback(port, AF_INET, 1000);
 	ASSERT_EQ(fd >= 0);
@@ -282,7 +282,7 @@ TEST(ApiConfigFunctionsFailWithoutConfigSupport)
 	ASSERT_EQ(!mogbus_load_config(ctx, "/nonexistent/mogbus.scm", err, sizeof(err)));
 	ASSERT_EQ(strcmp(err, "built without config support") == 0);
 	err[0] = '\0';
-	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err)) == NULL);
+	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err), NULL) == NULL);
 	ASSERT_EQ(strcmp(err, "built without config support") == 0);
 	mogbus_destroy(ctx);
 }
@@ -311,7 +311,7 @@ TEST(ApiServesAnExistingFdInRtuAndAsciiModes)
 		o.mode = modes[i];
 		o.fd = pair[1];
 		o.frame_gap_ms = 2;
-		server = mogbus_server_create(ctx, &o, NULL, 0);
+		server = mogbus_server_create(ctx, &o, NULL, 0, NULL);
 		ASSERT_EQ(server != NULL);
 		sent = ascii ? ts_ascii_send(pair[0], 3, READ_HOLDING, sizeof(READ_HOLDING), true) :
 			       ts_rtu_send(pair[0], 3, READ_HOLDING, sizeof(READ_HOLDING), true);
@@ -363,7 +363,7 @@ TEST(ApiLogSinkReceivesServerLogs)
 	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, NULL, 0));
 	o.port = ts_free_port();
 	mogbus_set_log_sink(sink_fn, &sink);
-	server = mogbus_server_create(ctx, &o, NULL, 0);
+	server = mogbus_server_create(ctx, &o, NULL, 0, NULL);
 	ASSERT_EQ(server != NULL);
 	ASSERT_EQ(sink.count >= 1 && sink.level == MOGBUS_LOG_INFO);
 	ASSERT_EQ(strstr(sink.last, "listening") != NULL);
@@ -380,3 +380,244 @@ TEST(ApiLogSinkReceivesServerLogs)
 	mogbus_set_log_sink(NULL, NULL);
 	mogbus_destroy(ctx);
 }
+
+TEST(ApiRtuTimingMatchesTheServer)
+{
+	uint32_t t35 = 99;
+	uint32_t gap = 99;
+
+	mogbus_rtu_timing(9600, 0, &t35, &gap);
+	ASSERT_EQ(t35 == 4011 && gap == 5);
+	mogbus_rtu_timing(19200, 0, &t35, &gap);
+	ASSERT_EQ(t35 == 2006 && gap == 3);
+	mogbus_rtu_timing(115200, 0, &t35, &gap);
+	ASSERT_EQ(t35 == 1750 && gap == 2);
+	mogbus_rtu_timing(9600, 12, &t35, &gap);	/* an explicit gap wins over the baud */
+	ASSERT_EQ(t35 == 4011 && gap == 12);
+	mogbus_rtu_timing(0, 0, &t35, &gap);		/* unknown baud: the default gap */
+	ASSERT_EQ(t35 == 0 && gap == 20);
+	mogbus_rtu_timing(9600, 0, NULL, &gap);
+	mogbus_rtu_timing(9600, 0, &t35, NULL);
+	ASSERT_EQ(gap == 5 && t35 == 4011);
+}
+
+TEST(ApiServerCheckValidatesWithoutOpeningAnything)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev;
+	mogbus_point_t	p = holding(0, 1);
+	mogbus_server_options_t o = mogbus_server_options_defaults();
+	mogbus_server_t* server;
+	mogbus_error_t	status = MOGBUS_OK;
+	char		err[256] = "";
+
+	ASSERT_EQ(ctx != NULL);
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "no devices"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, NULL, 0, &status) == NULL && status == MOGBUS_ERR_INVALID);
+	dev = mogbus_add_device(ctx, 1, "chk", err, sizeof(err));
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+
+	/* A port that is already in use passes the check, but not the create. */
+	o.port = ts_free_port();
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	server = mogbus_server_create(ctx, &o, err, sizeof(err), &status);
+	ASSERT_EQ(server != NULL && status == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
+		  status == MOGBUS_ERR_LISTEN);
+
+	/* A missing serial device passes the check (nothing is opened) and fails on create. */
+	o = mogbus_server_options_defaults();
+	o.mode = MOGBUS_MODE_RTU_DEVICE;
+	o.path = "/nonexistent/ttyMOGBUS";
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
+		  status == MOGBUS_ERR_SERIAL && strstr(err, "serial") != NULL);
+	o.path = NULL;
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "path"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
+		  status == MOGBUS_ERR_INVALID);
+	o = mogbus_server_options_defaults();
+	o.stop_bits = 3;
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "serial line"));
+	o = mogbus_server_options_defaults();
+	o.bind_address = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
+			 "01234567890123456789012345678901234567890123456789";
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "too long"));
+	o = mogbus_server_options_defaults();
+	o.mode = (mogbus_mode_t)99;
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && err[0]);
+
+	/* TLS files are loaded for the check (unreadable here, or a build without TLS). */
+	o = mogbus_server_options_defaults();
+	o.tls_enabled = true;
+	o.tls_certificate = "/nonexistent/cert.pem";
+	o.tls_private_key = "/nonexistent/key.pem";
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && err[0]);
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, NULL, 0));
+	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
+		  status == MOGBUS_ERR_LISTEN);
+#if WITH_TLS
+	o.tls_certificate = "tests/tls/server.pem";
+	o.tls_private_key = "tests/tls/server.key";
+	o.tls_ca_certificate = "tests/tls/ca.pem";
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	o.tls_ca_certificate = NULL;	/* client certificates are required by default */
+	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "CA"));
+	o.tls_require_client_certificate = false;
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+#endif
+	mogbus_destroy(ctx);
+}
+
+#if WITH_CONFIG
+static bool
+write_config(char* path, const char* text)
+{
+	int fd = mkstemp(path);
+	bool ok = fd >= 0 && write(fd, text, strlen(text)) == (ssize_t)strlen(text);
+
+	if (fd >= 0)
+		close(fd);
+	return ok;
+}
+
+TEST(ApiConfigServerOptionsRoundTrip)
+{
+	char		path[] = "/tmp/mogbus-api-XXXXXX";
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_server_options_t o;
+	char		err[256] = "";
+
+	ASSERT_EQ(ctx != NULL && !mogbus_config_server_options(ctx, &o));	/* nothing loaded */
+	ASSERT_EQ(write_config(path,
+		"(server (mode rtu-device) (path \"/dev/ttyUSB9\") (baud 19200)\n"
+		"        (parity even) (stop-bits 2) (strict-t15 on) (broadcast-execute on)\n"
+		"        (seed 42))\n"
+		"(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
+	ASSERT_EQ(o.mode == MOGBUS_MODE_RTU_DEVICE && strcmp(o.path, "/dev/ttyUSB9") == 0);
+	ASSERT_EQ(o.baud == 19200 && o.frame_gap_ms == 0 && o.seed == 42);
+	ASSERT_EQ(o.data_bits == 8 && o.parity == MOGBUS_PARITY_EVEN && o.stop_bits == 2);
+	ASSERT_EQ(o.strict_t15 && o.broadcast_execute && !o.tls_enabled && o.fd == -1);
+	mogbus_destroy(ctx);
+	unlink(path);
+
+	ctx = mogbus_create();
+	strcpy(path, "/tmp/mogbus-api-XXXXXX");
+	ASSERT_EQ(write_config(path,
+		"(server (mode ascii-device) (path \"/dev/ttyUSB8\") (data-bits 7) (parity even))\n"
+		"(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
+	ASSERT_EQ(o.mode == MOGBUS_MODE_ASCII_DEVICE && o.data_bits == 7 && o.stop_bits == 1);
+	mogbus_destroy(ctx);
+	unlink(path);
+
+	ctx = mogbus_create();
+	strcpy(path, "/tmp/mogbus-api-XXXXXX");
+	ASSERT_EQ(write_config(path,
+		"(server (mode ascii-tcp) (port 4321) (bind \"0.0.0.0\") (idle-timeout-ms 1500))\n"
+		"(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
+	ASSERT_EQ(o.mode == MOGBUS_MODE_ASCII_TCP && o.port == 4321 && o.idle_timeout_ms == 1500);
+	ASSERT_EQ(strcmp(o.bind_address, "0.0.0.0") == 0 && o.path == NULL);
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	mogbus_destroy(ctx);
+	unlink(path);
+
+#if WITH_TLS
+	ctx = mogbus_create();
+	strcpy(path, "/tmp/mogbus-api-XXXXXX");
+	ASSERT_EQ(write_config(path,
+		"(server (mode tcp) (port 4802) (tls (certificate \"tests/tls/server.pem\")\n"
+		"  (private-key \"tests/tls/server.key\") (ca-certificate \"tests/tls/ca.pem\")\n"
+		"  (handshake-timeout-ms 777) (min-version tls1.3)))\n"
+		"(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
+	ASSERT_EQ(o.mode == MOGBUS_MODE_TCP && o.port == 4802 && o.tls_enabled);
+	ASSERT_EQ(strcmp(o.tls_certificate, "tests/tls/server.pem") == 0);
+	ASSERT_EQ(strcmp(o.tls_private_key, "tests/tls/server.key") == 0);
+	ASSERT_EQ(strcmp(o.tls_ca_certificate, "tests/tls/ca.pem") == 0);
+	ASSERT_EQ(o.tls_handshake_timeout_ms == 777 && o.tls_require_client_certificate);
+	ASSERT_EQ(o.tls_min_version == MOGBUS_TLS_1_3 && o.tls_ciphers_1_2 == NULL);
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	mogbus_destroy(ctx);
+	unlink(path);
+
+	/* Without a CA and without required client certificates TLS still works. */
+	ctx = mogbus_create();
+	strcpy(path, "/tmp/mogbus-api-XXXXXX");
+	ASSERT_EQ(write_config(path,
+		"(server (mode tcp) (tls (certificate \"tests/tls/server.pem\")\n"
+		"  (private-key \"tests/tls/server.key\") (require-client-certificate off)))\n"
+		"(device (unit-id 1) (holding 0))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_config_server_options(ctx, &o) && o.tls_ca_certificate == NULL);
+	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	mogbus_destroy(ctx);
+	unlink(path);
+#endif
+}
+
+TEST(ApiEnumeratesDevicesAndDescribesThem)
+{
+	char		path[] = "/tmp/mogbus-api-XXXXXX";
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_info_t info;
+	mogbus_point_t	p = holding(0, 1);
+	char		err[256] = "";
+
+	ASSERT_EQ(mogbus_device_count(ctx) == 0 && mogbus_device_at(ctx, 0) == NULL);
+	ASSERT_EQ(write_config(path,
+		"(device (name \"meter\") (unit-id 3)\n"
+		"  (coil 0 (static 1)) (coil 1 (static 0)) (discrete 5 (static 1))\n"
+		"  (input 0 (static 1)) (holding 0 (static 2)) (holding 1 (static 3)) (holding 2 (static 4))\n"
+		"  (fault (kind delay) (percent 25) (delay-ms 40))\n"
+		"  (fault (kind exception) (code 6) (percent 10))\n"
+		"  (fault (kind drop) (schedule (step (after-ms 100) (count 2))))\n"
+		"  (fault (kind sensor-disconnect) (percent 100)))\n"
+		"(device (unit-id 9) (holding 0))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	{
+		mogbus_device_t* extra = mogbus_add_device(ctx, 11, "code", err, sizeof(err));
+
+		ASSERT_EQ(extra != NULL && mogbus_device_add_point(extra, &p, err, sizeof(err)));
+	}
+	ASSERT_EQ(mogbus_device_count(ctx) == 3);
+	ASSERT_EQ(mogbus_device_at(ctx, 3) == NULL);
+	ASSERT_EQ(mogbus_device_at(ctx, 0) == mogbus_find_device(ctx, 3));
+	ASSERT_EQ(mogbus_device_at(ctx, 2) == mogbus_find_device(ctx, 11));
+
+	ASSERT_EQ(mogbus_device_info(mogbus_device_at(ctx, 0), &info));
+	ASSERT_EQ(strcmp(info.name, "meter") == 0 && info.unit_id == 3);
+	ASSERT_EQ(info.point_count[MOGBUS_COIL] == 2 && info.point_count[MOGBUS_DISCRETE] == 1);
+	ASSERT_EQ(info.point_count[MOGBUS_INPUT] == 1 && info.point_count[MOGBUS_HOLDING] == 3);
+	ASSERT_EQ(info.faults[MOGBUS_FAULT_DELAY].present && !info.faults[MOGBUS_FAULT_DELAY].scheduled);
+	ASSERT_EQ(info.faults[MOGBUS_FAULT_DELAY].percent == 25 && info.faults[MOGBUS_FAULT_DELAY].delay_ms == 40);
+	ASSERT_EQ(info.faults[MOGBUS_FAULT_EXCEPTION].present && info.faults[MOGBUS_FAULT_EXCEPTION].percent == 10);
+	ASSERT_EQ(info.faults[MOGBUS_FAULT_EXCEPTION].exception_code == 6);
+	ASSERT_EQ(info.faults[MOGBUS_FAULT_DROP].present && info.faults[MOGBUS_FAULT_DROP].scheduled);
+	ASSERT_EQ(info.faults[MOGBUS_FAULT_SENSOR_DISCONNECT].present);
+	ASSERT_EQ(!info.faults[MOGBUS_FAULT_CORRUPT].present && !info.faults[MOGBUS_FAULT_DISCONNECT].present);
+	ASSERT_EQ(!info.faults[MOGBUS_FAULT_RESTART].present);
+
+	ASSERT_EQ(mogbus_device_info(mogbus_device_at(ctx, 2), &info));
+	ASSERT_EQ(strcmp(info.name, "code") == 0 && info.point_count[MOGBUS_HOLDING] == 1);
+	ASSERT_EQ(!info.faults[MOGBUS_FAULT_DELAY].present && !mogbus_device_info(NULL, &info));
+	mogbus_destroy(ctx);
+	unlink(path);
+}
+#else
+TEST(ApiConfigOptionsAreUnavailableWithoutConfigSupport)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_server_options_t o;
+
+	ASSERT_EQ(ctx != NULL && !mogbus_config_server_options(ctx, &o));
+	mogbus_destroy(ctx);
+}
+#endif

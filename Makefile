@@ -135,7 +135,8 @@ SRCS        = $(filter-out $(SRC_DIR)/net/net_tls_stub.c,$(TREE_SRCS))
 else
 SRCS        = $(filter-out $(SRC_DIR)/net/net_tls.c,$(TREE_SRCS))
 endif
-OBJS        = $(SRCS:.c=$(OBJEXT)) $(MAIN:.c=$(OBJEXT))
+MAIN_OBJ    = $(MAIN:.c=$(OBJEXT))
+OBJS        = $(SRCS:.c=$(OBJEXT)) $(MAIN_OBJ)
 
 # s7 is third-party code: built with its own relaxed flags, without sanitizers.
 # UBSan reports a misaligned load in its local_strncmp (third_party/s7/s7.c:4028).
@@ -168,6 +169,10 @@ TEST_OBJS   = $(filter-out $(SRC_DIR)/util/arena_impl$(OBJEXT),$(SRCS:.c=$(OBJEX
 # Everything but main.c, plus s7 so the library is self-contained.
 LIB_OBJS    = $(SRCS:.c=$(OBJEXT)) $(CFG_S7_OBJ)
 
+# The binary is main.o linked against a static library of the same build variant
+# (libmogbus.dev.a, libmogbus.notls.asan.a, ...). The prod variant is LIB_STATIC itself.
+LIB_VARIANT = libmogbus$(OBJEXT:.o=.a)
+
 # Relink when switching BUILD, WITH_TLS or WITH_CONFIG even though the output
 # names stay the same (objects of every variant may already be up to date).
 BUILD_STAMP = .build-mode
@@ -180,6 +185,7 @@ ALL_SRCS    = $(TREE_SRCS) $(MAIN) $(TEST_MAIN) $(ALL_TEST_SRCS) third_party/s7/
 ALL_OBJ_SUFFIXES = $(foreach d,.- .dev,$(foreach t,.- .notls,$(foreach c,.- .nocfg,$(foreach a,.o .asan.o,$(subst .-,,$d)$(subst .-,,$t)$(subst .-,,$c)$a))))
 ALL_OBJS    = $(foreach suffix,$(ALL_OBJ_SUFFIXES),$(ALL_SRCS:.c=$(suffix)))
 ALL_DEPS    = $(ALL_OBJS:.o=.d)
+ALL_LIBS    = $(foreach suffix,$(ALL_OBJ_SUFFIXES),libmogbus$(suffix:.o=.a))
 
 # `all` builds only the binary; `make lib` adds libmogbus.a and libmogbus.so.
 # Without config there is no binary, so `all` builds the libraries.
@@ -203,7 +209,7 @@ dev:
 endif
 
 ifeq ($(WITH_CONFIG),1)
-$(BIN): $(BUILD_STAMP) $(OBJS) $(S7_OBJ)
+$(BIN): $(BUILD_STAMP) $(MAIN_OBJ) $(LIB_VARIANT)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 endif
 
@@ -214,9 +220,15 @@ endif
 	./tools/run_tests.sh ./$(TESTS)
 
 # ar only adds members, so start from scratch to drop objects of another build mode.
-$(LIB_STATIC): $(BUILD_STAMP) $(LIB_OBJS)
+$(LIB_VARIANT): $(BUILD_STAMP) $(LIB_OBJS)
 	$(RM) $@
 	$(AR) rcs $@ $(filter-out $(BUILD_STAMP),$^)
+
+# The user-facing archive is the current variant (the same file in a prod build).
+ifneq ($(LIB_VARIANT),$(LIB_STATIC))
+$(LIB_STATIC): $(BUILD_STAMP) $(LIB_VARIANT)
+	cp $(LIB_VARIANT) $@
+endif
 
 # -pie is for executables only; relro/now stay.
 $(LIB_SHARED): $(BUILD_STAMP) $(LIB_OBJS)
@@ -267,7 +279,7 @@ asan:
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 MOGBUS_BIN=./$(ASAN_BIN) ./tools/run_tests.sh ./$(ASAN_TESTS)
 
 clean:
-	rm -f $(ALL_OBJS) $(ALL_DEPS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
+	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A)
 
 distclean: clean

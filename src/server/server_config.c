@@ -23,7 +23,8 @@ server_options_from_config(config_t* config)
 		.tls = {
 			.certificate                = config->tls_certificate,
 			.private_key                = config->tls_private_key,
-			.ca_certificate             = config->tls_ca_certificate,
+			.ca_certificate             = config->tls_ca_certificate[0] ?
+						      config->tls_ca_certificate : NULL,
 			.require_client_certificate = config->tls_require_client_certificate,
 			.min_version                = config->tls_min_version == CONFIG_TLS_VERSION_1_3 ?
 						      NET_TLS_VERSION_1_3 : NET_TLS_VERSION_1_2,

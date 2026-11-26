@@ -46,15 +46,15 @@
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
 | `src/api` | `mogbus.c` | the public C API behind `include/mogbus.h` (see [library.md](library.md)): context, devices and points, server handles, logging; the top layer, nothing includes it |
-| `src/main.c` | | command line, signal handlers, `--check` summary, printing the PTY slave name |
+| `src/main.c` | | command line, signal handlers, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
 Dependencies point one way: `server → net → modbus → device → util`, `config → device → util`,
-`server_config → server, config`, `main → server_config, server, config`, and `api → server_config, server, config, device, util`. `config` includes only
+`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, device, util` (`net` only for the RTU timing helpers). `config` includes only
 `server/server_mode.h` (the transport enum) and `server/server_limits.h` (array limits and option defaults shared with `api`),
 each in its own header so config does not pull in `net`, and `api` does not need config for them.
 A host that builds `server_options_t` itself can drop `config/` and `server_config.c`: `WITH_CONFIG=0`
 does exactly that (plus s7 and `main.c`); `api` then compiles its two config entry points as stubs that
-fail with `built without config support`. `tools/check_deps.sh` enforces that only `server_config.{c,h}` includes `config/`.
+fail with `built without config support`. `tools/check_deps.sh` enforces that only `server_config.{c,h}` includes `config/` and that `main.c` includes only `mogbus.h`.
 `net_tls` wraps OpenSSL and keeps its headers out of other modules; `net_tls_ctx_t` is a
 caller-owned struct holding the `SSL_CTX*` plus its own pool of 32 `net_tls_conn_t` sessions
 (handshake/want flags and deadline), so there is no process-global TLS state. In a no-TLS build `net_tls_stub.c`
@@ -128,7 +128,7 @@ opens the PTY/serial fd for the `*_pty`/`*_device` modes (and auto-detects a rea
 fd the host already owns (socketpair, PTY master) and never close it; the config file cannot select them.
 
 The net layer installs no signal handlers. `main.c` owns SIGINT/SIGTERM (no `SA_RESTART`, calling
-`server_stop` on the running `server_t`) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
+`mogbus_server_stop`, which only sets a flag, on the running server) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
 byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
 embedding a TLS server must ignore SIGPIPE itself.
 
@@ -228,7 +228,7 @@ only the no-TLS stub and omits OpenSSL flags/libraries. `WITH_CONFIG=1` (default
 Makefile skips `src/config/*`, `src/server/server_config.c`, `main.c` and s7, so there is no `mogbus`
 binary, `make` builds the libraries, and `make tests` builds the test binary without the tests that need
 the config loader or the binary (`config`, the `*_cli`, `tcp_server`, `*_tcp_server` and `machine_e2e` test files).
-Object files are tagged per TLS (`.notls`) and config (`.nocfg`) setting, and `.build-mode` records
+The `mogbus` binary is `main.o` linked with a static library of the same build variant (`libmogbus.a` in a prod build, else `libmogbus.dev.a`, `libmogbus.notls.asan.a`, ...; `make clean` removes them all), never with the `.so`. Object files are tagged per TLS (`.notls`) and config (`.nocfg`) setting, and `.build-mode` records
 both, so switching configurations without a clean rebuild is safe. s7 is compiled with its own relaxed flags
 (`-DWITH_SYSTEM_EXTRAS=0 -DWITH_C_LOADER=0`, so even s7's file and OS functions are off).
 

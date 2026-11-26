@@ -4,6 +4,7 @@
 #include "mogbus.h"
 #include "build_config.h"
 #include "device/device.h"
+#include "net/rtu_framer.h"
 #include "server/server.h"
 #include "server/server_limits.h"
 #include "util/clock.h"
@@ -22,7 +23,8 @@
 _Static_assert((int)MOGBUS_COIL == (int)SPACE_COIL &&
 	       (int)MOGBUS_DISCRETE == (int)SPACE_DISCRETE &&
 	       (int)MOGBUS_INPUT == (int)SPACE_INPUT &&
-	       (int)MOGBUS_HOLDING == (int)SPACE_HOLDING, "space enum");
+	       (int)MOGBUS_HOLDING == (int)SPACE_HOLDING &&
+	       (int)MOGBUS_SPACE_COUNT == (int)SPACE_COUNT, "space enum");
 _Static_assert((int)MOGBUS_TYPE_U16 == (int)VT_U16 && (int)MOGBUS_TYPE_S16 == (int)VT_S16 &&
 	       (int)MOGBUS_TYPE_U32 == (int)VT_U32 && (int)MOGBUS_TYPE_S32 == (int)VT_S32 &&
 	       (int)MOGBUS_TYPE_F32 == (int)VT_F32 && (int)MOGBUS_TYPE_BOOL == (int)VT_BOOL,
@@ -54,6 +56,14 @@ _Static_assert((int)MOGBUS_LOG_DEBUG == (int)LOG_LEVEL_DEBUG &&
 	       (int)MOGBUS_LOG_INFO == (int)LOG_LEVEL_INFO &&
 	       (int)MOGBUS_LOG_WARN == (int)LOG_LEVEL_WARN &&
 	       (int)MOGBUS_LOG_OFF == (int)LOG_LEVEL_OFF, "log level enum");
+_Static_assert((int)MOGBUS_FAULT_DELAY == (int)FAULT_DELAY &&
+	       (int)MOGBUS_FAULT_DROP == (int)FAULT_DROP &&
+	       (int)MOGBUS_FAULT_EXCEPTION == (int)FAULT_EXCEPTION &&
+	       (int)MOGBUS_FAULT_CORRUPT == (int)FAULT_CORRUPT &&
+	       (int)MOGBUS_FAULT_DISCONNECT == (int)FAULT_DISCONNECT &&
+	       (int)MOGBUS_FAULT_RESTART == (int)FAULT_RESTART &&
+	       (int)MOGBUS_FAULT_SENSOR_DISCONNECT == (int)FAULT_SENSOR_DISCONNECT &&
+	       (int)MOGBUS_FAULT_KIND_COUNT == (int)FAULT_KIND_COUNT, "fault kind enum");
 _Static_assert(MOGBUS_STEP_CONTINUE == NET_STEP_CONTINUE &&
 	       MOGBUS_STEP_DONE == NET_STEP_DONE &&
 	       MOGBUS_STEP_ERROR == NET_STEP_ERROR, "step results");
@@ -64,20 +74,24 @@ _Static_assert(MOGBUS_MAX_DEVICES == SERVER_MAX_DEVICES, "device limit");
 
 /* Name: mogbus_server_t
  * Description: a server slot. Slots are reused after close because arena memory
- * cannot be freed one by one. Strings of the options are copied here.
+ * cannot be freed one by one. Strings of the options are copied into `strings`
+ * (mogbus_server_check() validates into a stack copy of the same struct).
  * */
 struct mogbus_server_t
 {
 	server_t	server;
 	mogbus_t*	ctx;
 	bool		in_use;
-	char		bind[SERVER_BIND_MAX];
-	char		path[SERVER_PATH_MAX];
-	char		certificate[SERVER_TLS_PATH_MAX];
-	char		private_key[SERVER_TLS_PATH_MAX];
-	char		ca_certificate[SERVER_TLS_PATH_MAX];
-	char		tls1_2_ciphers[SERVER_TLS_CIPHER_MAX];
-	char		tls1_3_ciphersuites[SERVER_TLS_CIPHER_MAX];
+	struct strings_t
+	{
+		char	bind[SERVER_BIND_MAX];
+		char	path[SERVER_PATH_MAX];
+		char	certificate[SERVER_TLS_PATH_MAX];
+		char	private_key[SERVER_TLS_PATH_MAX];
+		char	ca_certificate[SERVER_TLS_PATH_MAX];
+		char	tls1_2_ciphers[SERVER_TLS_CIPHER_MAX];
+		char	tls1_3_ciphersuites[SERVER_TLS_CIPHER_MAX];
+	} strings;
 };
 
 struct mogbus_t
@@ -250,6 +264,54 @@ mogbus_find_device(mogbus_t* ctx, uint8_t unit_id)
 	return (mogbus_device_t*)find_device(ctx, unit_id);
 }
 
+size_t
+mogbus_device_count(const mogbus_t* ctx)
+{
+	return ctx->device_count;
+}
+
+mogbus_device_t*
+mogbus_device_at(mogbus_t* ctx, size_t index)
+{
+	return index < ctx->device_count ? (mogbus_device_t*)ctx->devices[index] : NULL;
+}
+
+bool
+mogbus_device_info(const mogbus_device_t* handle, mogbus_device_info_t* out)
+{
+	const device_t*	dev = (const device_t*)handle;
+
+	if (!dev || !out)
+		return false;
+	memset(out, 0, sizeof(*out));
+	out->name    = dev->name;
+	out->unit_id = dev->unit_id;
+	for (u32 i = 0; i < dev->point_count; i++)
+		out->point_count[dev->points[i].space]++;
+	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
+	{
+		const fault_t* fault = &dev->faults.by_kind[i];
+
+		if ((dev->faults.present & FAULT_BIT(i)) == 0)
+			continue;
+		out->faults[i].present        = true;
+		out->faults[i].scheduled      = fault->schedule_id != 0;
+		out->faults[i].percent        = fault->percent;
+		out->faults[i].delay_ms       = fault->delay_ms;
+		out->faults[i].exception_code = fault->exception_code;
+	}
+	return true;
+}
+
+void
+mogbus_rtu_timing(uint32_t baud, uint32_t frame_gap_ms, uint32_t* t35_us, uint32_t* gap_ms)
+{
+	if (t35_us)
+		*t35_us = rtu_t35_us(baud);
+	if (gap_ms)
+		*gap_ms = rtu_effective_gap_ms(frame_gap_ms, baud);
+}
+
 bool
 mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in, char* err, size_t err_size)
 {
@@ -409,45 +471,75 @@ copy_string(char* dst, size_t cap, const char* src, const char* what, bool* ok,
 	return dst;
 }
 
-/* Common tail of both create functions. `o` borrows its strings; they are copied
- * into the slot, so the caller's storage may go away. */
-static mogbus_server_t*
-create_server(mogbus_t* ctx, server_options_t o, char* err, size_t err_size)
+/* The validation shared by create and mogbus_server_check(): fails for no devices,
+ * a missing path or fd, a bad serial line, over-long strings and unusable TLS
+ * files. `o` borrows its strings; they are copied into `st`, so the caller's
+ * storage may go away, and `o` is repointed at the copies. Opens nothing. */
+static mogbus_error_t
+validate_options(const mogbus_t* ctx, server_options_t* o, struct strings_t* st,
+		 char* err, size_t err_size)
 {
-	mogbus_server_t*	s    = NULL;
+	bool ok = true;
+
+	if (ctx->device_count == 0)
+	{
+		set_err(err, err_size, "the context has no devices to serve");
+		return MOGBUS_ERR_INVALID;
+	}
+	if ((o->mode == SERVER_MODE_RTU_DEVICE || o->mode == SERVER_MODE_ASCII_DEVICE) &&
+	    (!o->path || !o->path[0]))
+	{
+		set_err(err, err_size, "this mode needs a device path");
+		return MOGBUS_ERR_INVALID;
+	}
+	if ((o->mode == SERVER_MODE_RTU_FD || o->mode == SERVER_MODE_ASCII_FD) && o->fd < 0)
+	{
+		set_err(err, err_size, "this mode needs an open fd");
+		return MOGBUS_ERR_INVALID;
+	}
+	if ((o->data_bits != 7 && o->data_bits != 8) ||
+	    (o->stop_bits != 1 && o->stop_bits != 2) ||
+	    (unsigned)o->parity > PARITY_SPACE)
+	{
+		set_err(err, err_size, "serial line needs 7 or 8 data bits, 1 or 2 stop bits and a valid parity");
+		return MOGBUS_ERR_INVALID;
+	}
+
+	o->bind_address = copy_string(st->bind, sizeof(st->bind), o->bind_address, "bind address",
+				      &ok, err, err_size);
+	o->path         = copy_string(st->path, sizeof(st->path), o->path, "device path", &ok, err, err_size);
+	o->tls.certificate = copy_string(st->certificate, sizeof(st->certificate), o->tls.certificate,
+					 "TLS certificate path", &ok, err, err_size);
+	o->tls.private_key = copy_string(st->private_key, sizeof(st->private_key), o->tls.private_key,
+					 "TLS private key path", &ok, err, err_size);
+	o->tls.ca_certificate = copy_string(st->ca_certificate, sizeof(st->ca_certificate),
+					    o->tls.ca_certificate, "TLS CA path", &ok, err, err_size);
+	o->tls.tls1_2_ciphers = copy_string(st->tls1_2_ciphers, sizeof(st->tls1_2_ciphers),
+					    o->tls.tls1_2_ciphers, "TLS 1.2 cipher list", &ok, err, err_size);
+	o->tls.tls1_3_ciphersuites = copy_string(st->tls1_3_ciphersuites, sizeof(st->tls1_3_ciphersuites),
+						 o->tls.tls1_3_ciphersuites, "TLS 1.3 ciphersuites",
+						 &ok, err, err_size);
+	if (!ok)
+		return MOGBUS_ERR_INVALID;
+	if (o->tls_enabled && !server_check_tls(o, err, (u32)err_size))
+		return MOGBUS_ERR_LISTEN;
+	return MOGBUS_OK;
+}
+
+/* Common tail of both create functions. */
+static mogbus_server_t*
+create_server(mogbus_t* ctx, server_options_t o, char* err, size_t err_size, mogbus_error_t* status)
+{
+	mogbus_server_t*	s     = NULL;
 	char			local[256];
-	bool			ok   = true;
-	s32			rc   = 0;
+	mogbus_error_t		error = MOGBUS_ERR_INVALID;
+	s32			rc    = 0;
 
 	if (!err || err_size == 0)
 	{
 		err      = local;
 		err_size = sizeof(local);
 	}
-	if (ctx->device_count == 0)
-	{
-		set_err(err, err_size, "the context has no devices to serve");
-		return NULL;
-	}
-	if ((o.mode == SERVER_MODE_RTU_DEVICE || o.mode == SERVER_MODE_ASCII_DEVICE) &&
-	    (!o.path || !o.path[0]))
-	{
-		set_err(err, err_size, "this mode needs a device path");
-		return NULL;
-	}
-	if ((o.mode == SERVER_MODE_RTU_FD || o.mode == SERVER_MODE_ASCII_FD) && o.fd < 0)
-	{
-		set_err(err, err_size, "this mode needs an open fd");
-		return NULL;
-	}
-	if ((o.data_bits != 7 && o.data_bits != 8) ||
-	    (o.stop_bits != 1 && o.stop_bits != 2) ||
-	    (unsigned)o.parity > PARITY_SPACE)
-	{
-		set_err(err, err_size, "serial line needs 7 or 8 data bits, 1 or 2 stop bits and a valid parity");
-		return NULL;
-	}
-
 	for (u32 i = 0; i < MOGBUS_MAX_SERVERS && !s; i++)
 	{
 		if (!ctx->servers[i])
@@ -457,53 +549,59 @@ create_server(mogbus_t* ctx, server_options_t o, char* err, size_t err_size)
 		else if (!ctx->servers[i])
 		{
 			set_err(err, err_size, "out of memory while creating a server");
-			return NULL;
+			goto fail;
 		}
 	}
 	if (!s)
 	{
 		set_err(err, err_size, "too many servers (max %d per context)", MOGBUS_MAX_SERVERS);
-		return NULL;
+		goto fail;
 	}
 
-	o.bind_address = copy_string(s->bind, sizeof(s->bind), o.bind_address, "bind address",
-				     &ok, err, err_size);
-	o.path         = copy_string(s->path, sizeof(s->path), o.path, "device path", &ok, err, err_size);
-	o.tls.certificate = copy_string(s->certificate, sizeof(s->certificate), o.tls.certificate,
-					"TLS certificate path", &ok, err, err_size);
-	o.tls.private_key = copy_string(s->private_key, sizeof(s->private_key), o.tls.private_key,
-					"TLS private key path", &ok, err, err_size);
-	o.tls.ca_certificate = copy_string(s->ca_certificate, sizeof(s->ca_certificate),
-					   o.tls.ca_certificate, "TLS CA path", &ok, err, err_size);
-	o.tls.tls1_2_ciphers = copy_string(s->tls1_2_ciphers, sizeof(s->tls1_2_ciphers),
-					   o.tls.tls1_2_ciphers, "TLS 1.2 cipher list", &ok, err, err_size);
-	o.tls.tls1_3_ciphersuites = copy_string(s->tls1_3_ciphersuites, sizeof(s->tls1_3_ciphersuites),
-						o.tls.tls1_3_ciphersuites, "TLS 1.3 ciphersuites",
-						&ok, err, err_size);
-	if (!ok)
-		return NULL;
-	if (o.tls_enabled && !server_check_tls(&o, err, (u32)err_size))
-		return NULL;
+	error = validate_options(ctx, &o, &s->strings, err, err_size);
+	if (error != MOGBUS_OK)
+	{
+		/* A server that fails on TLS has always logged it; keep that for log readers. */
+		if (error == MOGBUS_ERR_LISTEN)
+			LOG_WARN("cannot configure TLS: %s", err);
+		goto fail;
+	}
 
 	o.devices      = ctx->devices;
 	o.device_count = ctx->device_count;
 	rc = server_init(&s->server, &o);
 	if (rc != 0)
 	{
+		error = rc == 1 ? MOGBUS_ERR_SERIAL : MOGBUS_ERR_LISTEN;
 		set_err(err, err_size, rc == 1 ? "cannot open the serial device or PTY" :
 			"cannot listen on %s:%u (address in use, invalid, or TLS setup failed)",
 			o.bind_address ? o.bind_address : "", o.port);
-		return NULL;
+		goto fail;
 	}
 	s->ctx    = ctx;
 	s->in_use = true;
+	if (status)
+		*status = MOGBUS_OK;
 	return s;
+
+fail:
+	if (status)
+		*status = error;
+	return NULL;
 }
 
-mogbus_server_t*
-mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* in, char* err, size_t err_size)
+/* Public options to internal ones; false with a message for an enum out of range. */
+static bool
+options_from_public(const mogbus_server_options_t* in, server_options_t* o, char* err, size_t err_size)
 {
-	server_options_t o = {
+	if ((unsigned)in->mode > MOGBUS_MODE_ASCII_FD ||
+	    (unsigned)in->parity > MOGBUS_PARITY_SPACE ||
+	    (unsigned)in->tls_min_version > MOGBUS_TLS_1_3)
+	{
+		set_err(err, err_size, "invalid mode, parity or TLS version");
+		return false;
+	}
+	*o = (server_options_t){
 		.mode                     = (server_mode_t)in->mode,
 		.bind_address             = in->bind_address ? in->bind_address : "127.0.0.1",
 		.port                     = in->port,
@@ -530,35 +628,107 @@ mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* in, char* err
 			.tls1_3_ciphersuites        = in->tls_ciphersuites_1_3,
 		},
 	};
+	return true;
+}
 
-	if ((unsigned)in->mode > MOGBUS_MODE_ASCII_FD ||
-	    (unsigned)in->parity > MOGBUS_PARITY_SPACE ||
-	    (unsigned)in->tls_min_version > MOGBUS_TLS_1_3)
+mogbus_server_t*
+mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* in, char* err, size_t err_size,
+		     mogbus_error_t* status)
+{
+	server_options_t o;
+
+	if (!options_from_public(in, &o, err, err_size))
 	{
-		set_err(err, err_size, "invalid mode, parity or TLS version");
+		if (status)
+			*status = MOGBUS_ERR_INVALID;
 		return NULL;
 	}
-	return create_server(ctx, o, err, err_size);
+	return create_server(ctx, o, err, err_size, status);
+}
+
+bool
+mogbus_server_check(const mogbus_t* ctx, const mogbus_server_options_t* in, char* err, size_t err_size)
+{
+	server_options_t	o;
+	struct strings_t	strings;
+	char			local[256];
+
+	if (!err || err_size == 0)
+	{
+		err      = local;
+		err_size = sizeof(local);
+	}
+	return options_from_public(in, &o, err, err_size) &&
+	       validate_options(ctx, &o, &strings, err, err_size) == MOGBUS_OK;
 }
 
 #if WITH_CONFIG
 mogbus_server_t*
-mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size)
+mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size, mogbus_error_t* status)
 {
 	if (!ctx->has_config)
 	{
 		set_err(err, err_size, "no config loaded; call mogbus_load_config first");
+		if (status)
+			*status = MOGBUS_ERR_INVALID;
 		return NULL;
 	}
-	return create_server(ctx, server_options_from_config(&ctx->config), err, err_size);
+	return create_server(ctx, server_options_from_config(&ctx->config), err, err_size, status);
+}
+
+bool
+mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
+{
+	/* The config lives in the (non-const) context; the options only read it. */
+	server_options_t	o;
+
+	if (!ctx->has_config)
+		return false;
+	o = server_options_from_config((config_t*)&ctx->config);
+	*out = (mogbus_server_options_t){
+		.mode                           = (mogbus_mode_t)o.mode,
+		.bind_address                   = o.bind_address,
+		.port                           = o.port,
+		.path                           = o.path[0] ? o.path : NULL,
+		.fd                             = -1,
+		.seed                           = o.seed,
+		.idle_timeout_ms                = o.idle_timeout_ms,
+		.frame_gap_ms                   = o.frame_gap_ms,
+		.baud                           = o.baud,
+		.strict_t15                     = o.strict_t15,
+		.broadcast_execute              = o.broadcast_execute,
+		.data_bits                      = o.data_bits,
+		.parity                         = (mogbus_parity_t)o.parity,
+		.stop_bits                      = o.stop_bits,
+		.tls_enabled                    = o.tls_enabled,
+		.tls_handshake_timeout_ms       = o.tls_handshake_timeout_ms,
+		.tls_certificate                = o.tls.certificate[0] ? o.tls.certificate : NULL,
+		.tls_private_key                = o.tls.private_key[0] ? o.tls.private_key : NULL,
+		.tls_ca_certificate             = o.tls.ca_certificate,
+		.tls_require_client_certificate = o.tls.require_client_certificate,
+		.tls_min_version                = (mogbus_tls_version_t)o.tls.min_version,
+		.tls_ciphers_1_2                = o.tls.tls1_2_ciphers,
+		.tls_ciphersuites_1_3           = o.tls.tls1_3_ciphersuites,
+	};
+	return true;
 }
 #else
 mogbus_server_t*
-mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size)
+mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size, mogbus_error_t* status)
 {
 	(void)ctx;
 	set_err(err, err_size, "built without config support");
+	if (status)
+		*status = MOGBUS_ERR_INVALID;
 	return NULL;
+}
+
+bool
+mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
+{
+	(void)ctx;
+	(void)out;
+	return false;
 }
 #endif
 

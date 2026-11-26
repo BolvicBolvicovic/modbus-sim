@@ -1,13 +1,6 @@
-/* mogbus: a Modbus TCP device simulator configured with a Scheme file.
- * The vlib arena implementation lives in util/arena_impl.c. */
-#include "device/fault.h"
-#include "vlib/arena.h"
-#include "vlib/sizes.h" // IWYU pragma: keep
-#include "config/config.h"
-#include "net/rtu_framer.h"
-#include "server/server.h"
-#include "server/server_config.h"
-#include "util/log.h"
+/* mogbus: a Modbus device simulator configured with a Scheme file. A pure client
+ * of the public library API (mogbus.h); nothing here touches an internal module. */
+#include "mogbus.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,16 +8,16 @@
 #include <unistd.h>
 
 /* The binary owns signal handling; the handler stops the running server. */
-static server_t* volatile	g_server;
+static mogbus_server_t* volatile	g_server;
 
 static void
 on_stop_signal(int signo)
 {
-	server_t* server = g_server;
+	mogbus_server_t* server = g_server;
 
 	(void)signo;
 	if (server)
-		server_stop(server);
+		mogbus_server_stop(server);
 }
 
 typedef struct cli_t cli_t;
@@ -99,50 +92,40 @@ parse_args(int argc, char** argv, cli_t* cli)
 	return true;
 }
 
-static inline u32
-count_points(const device_t* dev, space_kind_t space)
-{
-	u32	count = 0;
-
-	for (u32 i = 0; i < dev->point_count; i++)
-		count += (dev->points[i].space == space);
-	return count;
-}
-
 static const char*
-fault_text(const fault_set_t* set, char* buf, u32 size)
+fault_text(const mogbus_device_info_t* info, char* buf, size_t size)
 {
-	u32 used = 0;
+	size_t used = 0;
 
 	buf[0] = '\0';
-	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
+	for (int i = 0; i < MOGBUS_FAULT_KIND_COUNT; i++)
 	{
 		char	part[80];
 		char	trigger[40];
-		u32	written;
+		size_t	written;
 
-		if ((set->present & FAULT_BIT(i)) == 0)
+		if (!info->faults[i].present)
 			continue;
-		if (set->by_kind[i].schedule_id != 0)
+		if (info->faults[i].scheduled)
 			snprintf(trigger, sizeof(trigger), "by schedule");
 		else
-			snprintf(trigger, sizeof(trigger), "%u%% of responses", set->by_kind[i].percent);
-		switch ((fault_kind_t)i)
+			snprintf(trigger, sizeof(trigger), "%u%% of responses", info->faults[i].percent);
+		switch ((mogbus_fault_kind_t)i)
 		{
-			case FAULT_DROP       : snprintf(part, sizeof(part), "drop %s", trigger); break;
-			case FAULT_DELAY      : snprintf(part, sizeof(part), "delay %s by %u ms",
-							 trigger, set->by_kind[i].delay_ms); break;
-			case FAULT_EXCEPTION  : snprintf(part, sizeof(part), "exception %u on %s",
-							 set->by_kind[i].exception_code, trigger); break;
-			case FAULT_CORRUPT    : snprintf(part, sizeof(part), "corrupt %s", trigger); break;
-			case FAULT_DISCONNECT : snprintf(part, sizeof(part), "disconnect %s", trigger); break;
-			case FAULT_RESTART    : snprintf(part, sizeof(part), "restart %s", trigger); break;
-			case FAULT_SENSOR_DISCONNECT :
+			case MOGBUS_FAULT_DROP       : snprintf(part, sizeof(part), "drop %s", trigger); break;
+			case MOGBUS_FAULT_DELAY      : snprintf(part, sizeof(part), "delay %s by %u ms",
+								trigger, info->faults[i].delay_ms); break;
+			case MOGBUS_FAULT_EXCEPTION  : snprintf(part, sizeof(part), "exception %u on %s",
+								info->faults[i].exception_code, trigger); break;
+			case MOGBUS_FAULT_CORRUPT    : snprintf(part, sizeof(part), "corrupt %s", trigger); break;
+			case MOGBUS_FAULT_DISCONNECT : snprintf(part, sizeof(part), "disconnect %s", trigger); break;
+			case MOGBUS_FAULT_RESTART    : snprintf(part, sizeof(part), "restart %s", trigger); break;
+			case MOGBUS_FAULT_SENSOR_DISCONNECT :
 				snprintf(part, sizeof(part), "sensor-disconnect %s", trigger); break;
 			default: continue;
 		}
-		written = (u32)snprintf(buf + used, size - used, "%s%s",
-					used ? "; " : "", part);
+		written = (size_t)snprintf(buf + used, size - used, "%s%s",
+					   used ? "; " : "", part);
 		if (written >= size - used)
 			break;
 		used += written;
@@ -151,83 +134,79 @@ fault_text(const fault_set_t* set, char* buf, u32 size)
 }
 
 static void
-print_rtu_timing(const config_t* config)
+print_rtu_timing(const mogbus_server_options_t* options)
 {
-	if (config->frame_gap_ms > 0)
-		printf(", frame-gap %u ms (override)", config->frame_gap_ms);
-	else if (config->baud > 0)
-		printf(", baud %u, t3.5 %u us (frame-gap %u ms)",
-		       config->baud, rtu_t35_us(config->baud),
-		       rtu_effective_gap_ms(0, config->baud));
+	uint32_t	t35_us;
+	uint32_t	gap_ms;
+
+	mogbus_rtu_timing(options->baud, 0, &t35_us, &gap_ms);
+	if (options->frame_gap_ms > 0)
+		printf(", frame-gap %u ms (override)", options->frame_gap_ms);
+	else if (options->baud > 0)
+		printf(", baud %u, t3.5 %u us (frame-gap %u ms)", options->baud, t35_us, gap_ms);
 	else
-		printf(", frame-gap %u ms (default; baud unknown)",
-		       rtu_effective_gap_ms(0, 0));
+		printf(", frame-gap %u ms (default; baud unknown)", gap_ms);
 }
 
 static void
-print_summary(const config_t* config)
+print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 {
-	char	fault[512];
+	char		fault[512];
 	const char*	serial_path = "pty";
+	size_t		count       = mogbus_device_count(ctx);
 
-	if (config->mode == SERVER_MODE_RTU_DEVICE ||
-	    config->mode == SERVER_MODE_ASCII_DEVICE)
-		serial_path = config->path;
+	if (options->mode == MOGBUS_MODE_RTU_DEVICE ||
+	    options->mode == MOGBUS_MODE_ASCII_DEVICE)
+		serial_path = options->path;
 
-	switch (config->mode)
+	switch (options->mode)
 	{
-		case SERVER_MODE_RTU_TCP:
-			printf("%u device%s, RTU-over-TCP %s:%u",
-			       config->device_count, config->device_count == 1 ? "" : "s",
-			       config->bind_address, config->port);
-			print_rtu_timing(config);
-			if (config->broadcast_execute)
+		case MOGBUS_MODE_RTU_TCP:
+			printf("%zu device%s, RTU-over-TCP %s:%u",
+			       count, count == 1 ? "" : "s", options->bind_address, options->port);
+			print_rtu_timing(options);
+			if (options->broadcast_execute)
 				printf(", broadcast-execute on");
 			putchar('\n');
 			break;
-		case SERVER_MODE_ASCII_TCP:
-			printf("%u device%s, ASCII-over-TCP %s:%u\n",
-			       config->device_count, config->device_count == 1 ? "" : "s",
-			       config->bind_address, config->port);
+		case MOGBUS_MODE_ASCII_TCP:
+			printf("%zu device%s, ASCII-over-TCP %s:%u\n",
+			       count, count == 1 ? "" : "s", options->bind_address, options->port);
 			break;
-		case SERVER_MODE_ASCII_PTY:
-		case SERVER_MODE_ASCII_DEVICE:
-			printf("%u device%s, ASCII %s\n",
-			       config->device_count, config->device_count == 1 ? "" : "s",
-			       serial_path);
+		case MOGBUS_MODE_ASCII_PTY:
+		case MOGBUS_MODE_ASCII_DEVICE:
+			printf("%zu device%s, ASCII %s\n", count, count == 1 ? "" : "s", serial_path);
 			break;
-		case SERVER_MODE_RTU_PTY:
-		case SERVER_MODE_RTU_DEVICE:
-			printf("%u device%s, RTU %s",
-			       config->device_count, config->device_count == 1 ? "" : "s",
-			       serial_path);
-			print_rtu_timing(config);
-			if (config->broadcast_execute)
+		case MOGBUS_MODE_RTU_PTY:
+		case MOGBUS_MODE_RTU_DEVICE:
+			printf("%zu device%s, RTU %s", count, count == 1 ? "" : "s", serial_path);
+			print_rtu_timing(options);
+			if (options->broadcast_execute)
 				printf(", broadcast-execute on");
 			putchar('\n');
 			break;
-		case SERVER_MODE_TCP:
-			printf("%u device%s on %s:%u", config->device_count,
-			       config->device_count == 1 ? "" : "s",
-			       config->bind_address, config->port);
-			if (config->tls_enabled)
+		case MOGBUS_MODE_TCP:
+			printf("%zu device%s on %s:%u", count, count == 1 ? "" : "s",
+			       options->bind_address, options->port);
+			if (options->tls_enabled)
 				printf(" (TLS, client certificates %s)",
-				       config->tls_require_client_certificate ? "required" : "optional");
+				       options->tls_require_client_certificate ? "required" : "optional");
 			putchar('\n');
 			break;
-		case SERVER_MODE_RTU_FD:
-		case SERVER_MODE_ASCII_FD:
+		case MOGBUS_MODE_RTU_FD:
+		case MOGBUS_MODE_ASCII_FD:
 			break;	/* host-only, never loaded from config */
 	}
 
-	for (u32 i = 0; i < config->device_count; i++)
+	for (size_t i = 0; i < count; i++)
 	{
-		const device_t*	dev = config->devices[i];
+		mogbus_device_info_t info;
 
+		mogbus_device_info(mogbus_device_at(ctx, i), &info);
 		printf("  unit %-3u %-32s coils %u, discrete %u, input %u, holding %u, fault: %s\n",
-		       dev->unit_id, dev->name, count_points(dev, SPACE_COIL),
-		       count_points(dev, SPACE_DISCRETE), count_points(dev, SPACE_INPUT),
-		       count_points(dev, SPACE_HOLDING), fault_text(&dev->faults, fault, sizeof(fault)));
+		       info.unit_id, info.name, info.point_count[MOGBUS_COIL],
+		       info.point_count[MOGBUS_DISCRETE], info.point_count[MOGBUS_INPUT],
+		       info.point_count[MOGBUS_HOLDING], fault_text(&info, fault, sizeof(fault)));
 	}
 }
 
@@ -236,13 +215,12 @@ int
 main(int argc, char** argv)
 {
 	cli_t		cli     = { 0 };
-	config_t	config  = { 0 };
-	server_options_t options;
-	server_t	server;
+	mogbus_t*	ctx     = NULL;
+	mogbus_server_t* server = NULL;
+	mogbus_server_options_t options;
+	mogbus_error_t	failure = MOGBUS_OK;
 	char		error[512];
-	arena_t*	app     = NULL;
-	arena_t*	scratch = NULL;
-	s32		status  = 1;
+	int		status  = 1;
 
 	if (!parse_args(argc, argv, &cli))
 		return 2;
@@ -253,33 +231,25 @@ main(int argc, char** argv)
 		return cli.show_help ? 0 : 2;
 	}
 
-	log_set_level(cli.verbose ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO);
-	app = ARENA_ALLOC();
-	if (!app)
+	mogbus_set_log_level(cli.verbose ? MOGBUS_LOG_DEBUG : MOGBUS_LOG_INFO);
+	ctx = mogbus_create();
+	if (!ctx)
 	{
 		fprintf(stderr, "out of memory allocating app arena\n");
 		return 1;
 	}
-	scratch = ARENA_ALLOC();
-	if (!scratch)
-	{
-		fprintf(stderr, "out of memory allocating scratch arena\n");
-		goto cleanup;
-	}
 
-	if (!config_load(app, scratch, cli.config_path, &config, error, sizeof(error)))
+	if (!mogbus_load_config(ctx, cli.config_path, error, sizeof(error)))
 	{
 		fprintf(stderr, "%s: %s\n", cli.config_path, error);
 		goto cleanup;
 	}
-	arena_release(scratch);
-	scratch = NULL;
 
-	print_summary(&config);
-	options = server_options_from_config(&config);
+	mogbus_config_server_options(ctx, &options);
+	print_summary(ctx, &options);
 	if (cli.check_only)
 	{
-		if (!server_check_tls(&options, error, sizeof(error)))
+		if (!mogbus_server_check(ctx, &options, error, sizeof(error)))
 		{
 			fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path, error);
 			goto cleanup;
@@ -298,23 +268,27 @@ main(int argc, char** argv)
 		signal(SIGPIPE, SIG_IGN);
 	}
 
-	status = server_init(&server, &options);
-	if (status != 0)
-		goto cleanup;
-	g_server = &server;
-	if (server_pty_name(&server))
+	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
+	server = mogbus_server_create_from_config(ctx, error, sizeof(error), &failure);
+	if (!server)
 	{
-		printf("%s PTY slave: %s\n", config.mode == SERVER_MODE_RTU_PTY ? "RTU" : "ASCII",
-		       server_pty_name(&server));
+		if (failure == MOGBUS_ERR_INVALID)
+			fprintf(stderr, "%s: %s\n", cli.config_path, error);
+		status = failure == MOGBUS_ERR_SERIAL ? 1 : 2;
+		goto cleanup;
+	}
+	g_server = server;
+	if (mogbus_server_pty_name(server))
+	{
+		printf("%s PTY slave: %s\n", options.mode == MOGBUS_MODE_RTU_PTY ? "RTU" : "ASCII",
+		       mogbus_server_pty_name(server));
 		fflush(stdout);
 	}
-	status = server_serve(&server);
+	status = mogbus_server_run(server);
 	g_server = NULL;
 
 cleanup:
-	if (scratch)
-		arena_release(scratch);
-	if (app)
-		arena_release(app);
+	mogbus_server_close(server);
+	mogbus_destroy(ctx);
 	return status;
 }

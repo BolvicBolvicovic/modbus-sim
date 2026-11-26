@@ -4,7 +4,7 @@ The `mogbus` binary is one front end; the same code builds as `libmogbus.a` and 
 with a small C API, so a test harness or application can embed simulated Modbus devices and drive
 them from its own loop. The only header is [`include/mogbus.h`](../include/mogbus.h) (it needs just
 `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`; every symbol is `mogbus_*` / `MOGBUS_*`). The current
-version is 0.1.0 (`MOGBUS_VERSION_*`, `mogbus_version()`).
+version is 0.2.0 (`MOGBUS_VERSION_*`, `mogbus_version()`).
 
 ## Build and link
 
@@ -13,7 +13,7 @@ make -j$(nproc) lib          # libmogbus.a + libmogbus.so
 make -j$(nproc) lib-check    # also builds and runs examples/embed_tcp.c against both
 ```
 
-`make` alone still builds only the `mogbus` binary; `make tests` runs `lib-check`. The `.a` contains
+`make` alone still builds only the `mogbus` binary, which is itself `src/main.c` linked against the static library of the current build variant (it is the reference client of this API: `main.c` includes only `mogbus.h`; `tools/check_deps.sh` enforces it). `make tests` runs `lib-check`. The `.a` contains
 every project object plus the vendored s7 parser and the arena implementation
 (`src/util/arena_impl.c`), so it is self-contained. The `.so` exports only `mogbus_*` symbols
 (`lib-check` fails otherwise); everything else is `-fvisibility=hidden`.
@@ -48,10 +48,23 @@ set serves the binary and both libraries.
 | Area | Calls |
 |---|---|
 | Context | `mogbus_create`, `mogbus_destroy`, `mogbus_load_config` |
-| Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point` |
+| Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point`, `mogbus_device_count`, `mogbus_device_at`, `mogbus_device_info` |
 | Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded) |
-| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name` |
+| Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_rtu_timing` |
 | Logging | `mogbus_set_log_sink`, `mogbus_set_log_level` |
+
+Introspection (used by the binary's `--check` summary): `mogbus_device_count()`/`mogbus_device_at()`
+enumerate devices in order, and `mogbus_device_info()` fills a `mogbus_device_info_t` with name, unit id,
+point counts per space and, per `mogbus_fault_kind_t`, whether the fault is configured, whether it fires by
+schedule, its percent, delay and exception code. `mogbus_config_server_options()` returns the loaded
+`(server ...)` section as `mogbus_server_options_t` (strings borrowed from the context; false without a
+config). `mogbus_server_check()` validates options exactly like create (device path, fd, serial line,
+string lengths, and TLS files through a throwaway TLS context) without opening a listener, PTY or serial
+device, so a port that is in use still passes. `mogbus_rtu_timing()` gives the t3.5 and the effective
+inter-frame gap for a baud/frame-gap pair. Both create functions take an optional `mogbus_error_t* status`
+(`MOGBUS_ERR_INVALID`, `MOGBUS_ERR_SERIAL` for a serial/PTY open failure, `MOGBUS_ERR_LISTEN` for a
+listener or TLS failure); the binary maps serial to exit status 1 and listen/TLS to 2. A TLS setup failure is
+also logged at WARN, like the transports log their own start-up errors.
 
 A context holds up to `MOGBUS_MAX_DEVICES` (16) devices and `MOGBUS_MAX_SERVERS` (8) servers. A
 server serves every device the context has when it is created. Points support static values and
@@ -107,5 +120,5 @@ mogbus_destroy(ctx);
 ```
 
 The implementation is `src/api/mogbus.c`, the top layer: it depends on `server`, `server_config`,
-`config`, `device` and `util`, and nothing includes it. Public enums mirror the internal ones and
+`config`, `device` and `util` (plus `net` for the RTU timing helpers), and nothing but the binary's `main.c` uses it through `mogbus.h`. Public enums mirror the internal ones and
 are checked with `_Static_assert`.

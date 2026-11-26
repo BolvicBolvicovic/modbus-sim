@@ -5,7 +5,8 @@ set -eu
 #   net -> modbus -> device -> util
 #   config -> device -> util
 #   server -> net, config -> server (server_mode.h, server_limits.h only)
-#   api -> config, device, server, util
+#   api -> config, device, net, server, util
+#   main.c -> mogbus.h only (the binary is a pure client of the public API)
 # Only src/server/server_config.{c,h} may use config/, and config/ may use only
 # server_mode.h and server_limits.h from server/, so WITH_CONFIG=0 leaves out
 # config/ and server_config.c and nothing else changes.
@@ -88,6 +89,18 @@ check_extra_rules() {
 		"config/ may include only server_mode.h and server_limits.h from server/"
 }
 
+check_main() {
+	root=$1
+	file=$root/src/main.c
+	[ -f "$file" ] || return 0
+	bad=$(grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*"' "$file" 2>/dev/null |
+		grep -vE '#[[:space:]]*include[[:space:]]*"mogbus\.h"' || true)
+	[ -n "$bad" ] || return 0
+	printf 'Forbidden dependency include found (main.c may include only "mogbus.h"):\n' >&2
+	printf '%s:%s\n' "$file" "$bad" >&2
+	exit 1
+}
+
 check_tree() {
 	root=$1
 	check_layer "$root" net    "net modbus util"
@@ -95,9 +108,10 @@ check_tree() {
 	check_layer "$root" device "device util"
 	check_layer "$root" config "config device server util"
 	check_layer "$root" server "server net modbus device util config"
-	check_layer "$root" api    "api config device server util"
+	check_layer "$root" api    "api config device net server util"
 	check_layer "$root" util   "util"
 	check_extra_rules "$root"
+	check_main "$root"
 }
 
 self_test() {
@@ -119,6 +133,8 @@ self_test() {
 	printf '#include "modbus/pdu.h"\n'     >"$clean/src/net/ok.c"
 	printf '#include "util/log.h"\n'       >"$clean/src/net/ok-util.c"
 	printf '#include "util/rng.h"\n'       >"$clean/src/util/ok.c"
+	printf '#include "net/rtu_framer.h"\n' >"$clean/src/api/ok-net.c"
+	printf '#include "mogbus.h"\n#include <stdio.h>\n' >"$clean/src/main.c"
 	check_tree "$clean"
 
 	expect_fail() {
@@ -155,6 +171,13 @@ self_test() {
 	expect_fail device-api      device "api/x.h"
 	expect_fail config-server   config "server/server.h"
 	expect_fail server-config   server "config/config.h"
+
+	mkdir -p "$tmp/main-internal/src"
+	printf '#include "mogbus.h"\n#include "util/log.h"\n' >"$tmp/main-internal/src/main.c"
+	if ( check_tree "$tmp/main-internal" ) >/dev/null 2>&1; then
+		printf 'check_deps.sh self-test: main-internal did not fail\n' >&2
+		exit 1
+	fi
 
 	# Issue 50 acceptance fixture.
 	mkdir -p "$tmp/rtu-tcp-server-peer/src/net"
