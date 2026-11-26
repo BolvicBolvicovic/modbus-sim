@@ -349,7 +349,7 @@ class LogTest(unittest.TestCase):
 
 class ServeHelperTest(unittest.TestCase):
     def test_serve_config_text(self):
-        with mogbus.serve(config_text=DEVICES) as srv:
+        with mogbus.serve(config_text=DEVICES, port=0) as srv:
             self.assertGreater(srv.port, 0)
             with socket.create_connection(("127.0.0.1", srv.port), timeout=2) as sock:
                 self.assertEqual(mbap_read(sock, 7, 0), [42])
@@ -365,7 +365,7 @@ class ServeHelperTest(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".scm") as f:
             f.write(DEVICES)
             f.flush()
-            with mogbus.serve(config=f.name, mode="udp") as srv:
+            with mogbus.serve(config=f.name, mode="udp", port=0) as srv:
                 self.assertTrue(mogbus.probe(ServerOptions(mode="udp", port=srv.port), 7))
 
     def test_serve_uses_config_server_section(self):
@@ -395,7 +395,7 @@ class ServeHelperTest(unittest.TestCase):
 
 class LockTest(unittest.TestCase):
     def test_concurrent_access_while_serving(self):
-        with mogbus.serve(config_text=DEVICES) as srv:
+        with mogbus.serve(config_text=DEVICES, port=0) as srv:
             dev = srv.device(7)
             errors = []
 

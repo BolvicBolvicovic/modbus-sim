@@ -37,7 +37,7 @@ config = """
 (device (name "meter") (unit-id 1)
   (holding 0 (static 42)))
 """
-with mogbus.serve(config_text=config) as srv:           # TCP on a free loopback port
+with mogbus.serve(config_text=config, port=0) as srv:   # TCP on a free loopback port
     meter = srv.device(1)
     meter.set_value("holding", 0, 100)                  # the client now reads 100
     with socket.create_connection(("127.0.0.1", srv.port)) as s:
@@ -49,11 +49,10 @@ with mogbus.serve(config_text=config) as srv:           # TCP on a free loopback
 serves it from a background thread and yields an object with `.context`, `.server`, `.port` (the
 port actually served) and `.device(unit_id)`. On exit it stops the thread and destroys the context.
 
-The server uses the config's own `(server ...)` section (mode, port, bind address, serial, TLS,
-HTTP, all of it). Keyword arguments override single fields of it: `mogbus.serve(config=path,
-mode="rtu-tcp", idle_timeout_ms=500)`. Passing `port=0` in a network mode picks a free loopback
-port, which is also what you get without a config or when the config has no `(server ...)` section
-(then TCP on a free port).
+With a config the server uses exactly what the binary would (the config's `(server ...)` section,
+or the defaults, TCP on 1502, when it has none) and only the keyword arguments you pass override
+its fields: `mogbus.serve(config=path, port=0, mode="rtu-tcp", idle_timeout_ms=500)`. `port=0` in
+a network mode picks a free loopback port; without a config you get TCP on a free port.
 
 ## API overview
 
