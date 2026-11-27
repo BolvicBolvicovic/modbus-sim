@@ -30,6 +30,7 @@ WIDTH = {"u16": 1, "s16": 1, "u32": 2, "s32": 2, "float32": 2, "u64": 4, "s64": 
 INT_RANGE = {"u16": (0, 65535), "s16": (-32768, 32767), "u32": (0, 2**32 - 1),
              "s32": (-2**31, 2**31 - 1), "u64": (0, 2**64 - 1), "s64": (-2**63, 2**63 - 1)}
 MAX_POINTS = 8192
+MAX_ACTIONS = 256  # ACTION_MAX_INSTANCES in src/device/action.h
 NET_MODES = ("tcp", "rtu-tcp", "ascii-tcp", "udp", "rtu-udp", "ascii-udp")
 DEVICE_MODES = ("rtu-device", "ascii-device")
 PTY_MODES = ("rtu-pty", "ascii-pty")
@@ -1026,6 +1027,9 @@ def pm_device(dev, dname, args, rep):
     pts = pm_points(cells, shared, sizes, args, rep)
     if len(sum(([p] * p.count for p in pts), [])) > MAX_POINTS:
         rep.error("more than %d points; a mogbus device holds at most %d" % (MAX_POINTS, MAX_POINTS))
+    if sum(1 for p in pts if p.on_read) > MAX_ACTIONS:
+        rep.error("more than %d cells with a custom action; a mogbus device holds at most %d point "
+                  "actions (a bits cell counts 16, twice with shared blocks)" % (MAX_ACTIONS, MAX_ACTIONS))
     res = Result(name=args.name if args.name and not args.all_devices else dname, unit_id=1, points=pts,
                  source="pymodbus simulator file %s, device %r" % (os.path.basename(args.file), dname))
     if setup.get("shared blocks"):

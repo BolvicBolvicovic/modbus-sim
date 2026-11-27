@@ -595,7 +595,7 @@ class Pymodbus(ImportCase):
             "float32": [{"addr": [10, 11], "value": 1.5, "action": "tick"}]}))
         joined = "\n".join(pts)
         self.assertNotIn("(count", joined)
-        self.assertEqual(joined.count("(on-read (tick))"), 4 * len(re.findall(r"\(holding|\(input", joined)) // 4 if False else 8)
+        self.assertEqual(joined.count("(on-read (tick))"), 8)   # 3 u16 + 1 float32, in holding and input
         self.assertIn("(holding 10 (type float32)", joined)
         self.check_scm("range.scm", out)
 
@@ -604,6 +604,11 @@ class Pymodbus(ImportCase):
         self.assertEqual("\n".join(pts).count("(on-read (blink))"), 32)
         self.assertEqual(out.count("(define-action blink"), 1)
         self.check_scm("bits-custom.scm", out)
+
+    def test_custom_actions_over_the_device_limit_fail(self):
+        code, _, err = self.pm(pm_doc({"bits": [{"addr": [0, 8], "value": 5, "action": "blink"}]}))
+        self.assertNotEqual(code, 0)
+        self.assertIn("at most 256 point actions", err)
 
     def test_custom_action_names_are_valid_and_unique(self):
         _, out, _ = self.body(pm_doc({"uint16": [
