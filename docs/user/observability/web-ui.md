@@ -40,9 +40,11 @@ The start-up summary (and `--check`) prints the address, for example
   a read failed. Dense series are reduced to the minimum and maximum of every pixel column, and drawing
   runs once per animation frame, independent of the sampling rate. `Pause` freezes the view. The legend
   gives colour, table and address, type, latest value, and a `×` button to remove the series. Below it,
-  `Add point` picks a table and searches its points by address or label (for example `holding 10 ·
-  float32 · ramp`); `Add` or Enter plots the single match (an exact address wins) and the point's
-  checkbox in the list follows. Samples are kept in the browser only and are lost on reload.
+  `Add point` picks a table and lists its plottable points (for example `holding 10 ·
+  float32 · ramp`); the box next to it filters the list by address or label. Select several with
+  Ctrl/Shift-click and press `Add` (or double-click an option, or Enter in the filter) to plot them all;
+  with nothing selected and a single point left after filtering, that one is added. At most 8 points
+  are plotted, extra ones are skipped with a message. The points' checkboxes in the list follow. Samples are kept in the browser only and are lost on reload.
 - **Refresh**: the visible page and the plotted points are read again every second by default (the
   `Refresh every` selector offers 10 ms, 20 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s, 2 s, 5 s and 10 s, applies at once to
   both views and is remembered in the browser; a read still running makes the next tick skip, and the achieved rate is shown next to the selector), one raw read per run of adjacent points

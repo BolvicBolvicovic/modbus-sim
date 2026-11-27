@@ -86,9 +86,10 @@ input { width: 9rem; }
 <div id="legend" class="legend"></div>
 <div class="bar" style="margin-top:8px">
 <label>Add point <select id="padd_space"></select></label>
-<input id="padd" list="padd_list" placeholder="address or type" autocomplete="off" aria-label="Point to add">
-<datalist id="padd_list"></datalist>
+<input id="padd" placeholder="filter by address or type" autocomplete="off" aria-label="Filter the points to add">
+<select id="padd_list" multiple size="6" aria-label="Points to add"></select>
 <button id="padd_go" type="button">Add</button>
+<span class="muted">Ctrl/Shift-click to pick several</span>
 </div>
 </div>
 
@@ -258,7 +259,7 @@ input { width: 9rem; }
     }
     return null;
   }
-  function addSeries(space, pt) {
+  function addSeries(space, pt, batch) {
     var i, used = {};
     if (st.sel.length >= MAX_SERIES) {
       say("message", "At most " + MAX_SERIES + " points can be plotted; remove one first");
@@ -267,8 +268,7 @@ input { width: 9rem; }
     st.sel.forEach(function (x) { used[x.c] = true; });
     for (i = 0; used[i]; i++) { }
     st.sel.push({ space: space, pt: pt, c: i, buf: [], last: "" });
-    say("message", "", false);
-    refresh();
+    if (!batch) { say("message", "", false); refresh(); }
     return true;
   }
   function selChanged() { syncChecks(); fillAdd(); requestDraw(); }
@@ -410,31 +410,37 @@ input { width: 9rem; }
     clear(list);
     if (unit === null || !space) { return; }
     tablePoints(space).then(function (pts) {
+      var text = $("padd").value.trim().toLowerCase();
       if (unit !== st.unit || space !== $("padd_space").value) { return; }
       clear(list);
       pts.forEach(function (pt) {
-        var o;
+        var o, label = pointLabel(space, pt);
         if (pt.type === "string" || findSeries(space, pt.address) !== null) { return; }
-        o = el("option");
+        if (text !== "" && label.toLowerCase().indexOf(text) < 0) { return; }
+        o = el("option", label);
         o.value = String(pt.address);
-        o.label = pointLabel(space, pt);
         list.appendChild(o);
       });
     }).catch(function (e) { say("message", "Cannot list points: " + e.message); });
   }
-  function addFromSearch() {
-    var space = $("padd_space").value, text = $("padd").value.trim().toLowerCase();
+  function addFromList() {
+    var space = $("padd_space").value, list = $("padd_list"), opts = [], i, added = 0, skipped = 0;
     if (st.unit === null) { return; }
+    for (i = 0; i < list.options.length; i++) {
+      if (list.options[i].selected) { opts.push(list.options[i]); }
+    }
+    if (!opts.length && list.options.length === 1) { opts.push(list.options[0]); }
+    if (!opts.length) { say("message", "Select the points to add first", true); return; }
     tablePoints(space).then(function (pts) {
-      var ok = pts.filter(function (pt) { return pt.type !== "string"; }), hit;
-      hit = ok.filter(function (pt) { return String(pt.address) === text; });
-      if (!hit.length && text !== "") {
-        hit = ok.filter(function (pt) { return pointLabel(space, pt).toLowerCase().indexOf(text) >= 0; });
-      }
-      if (!hit.length) { say("message", "No " + space + " point matches \"" + text + "\"", true); return; }
-      if (hit.length > 1) { say("message", hit.length + " " + space + " points match; type more of the address", true); return; }
-      if (findSeries(space, hit[0].address) !== null) { say("message", pointLabel(space, hit[0]) + " is already plotted", true); return; }
-      if (addSeries(space, hit[0])) { $("padd").value = ""; selChanged(); }
+      opts.forEach(function (o) {
+        var pt = pts.filter(function (p) { return String(p.address) === o.value; })[0];
+        if (!pt || findSeries(space, pt.address) !== null) { return; }
+        if (addSeries(space, pt, true)) { added++; } else { skipped++; }
+      });
+      say("message", skipped ? "At most " + MAX_SERIES + " points can be plotted; " + skipped + " not added, remove some first" : "", skipped > 0);
+      $("padd").value = "";
+      if (added) { refresh(); }
+      selChanged();
     }).catch(function (e) { say("message", "Cannot list points: " + e.message); });
   }
 
@@ -676,8 +682,10 @@ input { width: 9rem; }
     SPACES.forEach(function (s) { var o = el("option", s); o.value = s; $("padd_space").appendChild(o); });
     $("padd_space").value = st.space;
     $("padd_space").addEventListener("change", fillAdd);
-    $("padd_go").addEventListener("click", addFromSearch);
-    $("padd").addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); addFromSearch(); } });
+    $("padd_go").addEventListener("click", addFromList);
+    $("padd_list").addEventListener("dblclick", addFromList);
+    $("padd").addEventListener("input", fillAdd);
+    $("padd").addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); addFromList(); } });
     var t = $("tabs");
     SPACES.forEach(function (s) {
       var b = el("button", s);
