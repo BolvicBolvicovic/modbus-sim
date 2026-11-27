@@ -469,7 +469,15 @@ main(int argc, char** argv)
 
 	count = mogbus_config_server_count(ctx);
 	for (size_t i = 0; i < count; i++)
-		mogbus_config_server_options_at(ctx, i, &options[i]);
+	{
+		if (!mogbus_config_server_options_at(ctx, i, &options[i]))
+			count = 0;
+	}
+	if (count == 0)
+	{
+		fprintf(stderr, "%s: no server section could be read\n", cli.config_path);
+		goto cleanup;
+	}
 	if (cli.server_id)
 	{
 		for (selected = 0; selected < count; selected++)
