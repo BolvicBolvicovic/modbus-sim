@@ -4,165 +4,54 @@
 #include "vlib/macros.h"
 #include <float.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #define NEAR(a, b)	(fabs((a) - (b)) < 1e-9)
 
-static ramp_params_t
-make_ramp(f64 from, f64 to, f64 step, ramp_mode_t mode)
+TEST(RampValuesAtKnownTimes)
 {
-	return (ramp_params_t){ .from = from, .to = to, .step = step, .every_ms = 1000, .mode = mode };
-}
+	static const struct {
+		const char*	name;
+		ramp_params_t	r;
+		u64		start;
+		u32		count;
+		struct { u64 now; f64 want; } at[5];
+	} cases[] = {
+		{ "wrap restarts 0 10 20 30 0", { .from = 0, .to = 30, .step = 10, .every_ms = 1000, .mode = RAMP_WRAP }, 0, 5,
+		  { { 0, 0 }, { 999, 0 }, { 1000, 10 }, { 3000, 30 }, { 4000, 0 } } },
+		{ "bounce walks back", { .from = 0, .to = 30, .step = 10, .every_ms = 1000, .mode = RAMP_BOUNCE }, 0, 4,
+		  { { 3000, 30 }, { 4000, 20 }, { 6000, 0 }, { 7000, 10 } } },
+		{ "hold stops", { .from = 0, .to = 30, .step = 10, .every_ms = 1000, .mode = RAMP_HOLD }, 0, 2,
+		  { { 3000, 30 }, { 999000, 30 } } },
+		{ "goes down when to is below from", { .from = 100, .to = 80, .step = 10, .every_ms = 1000, .mode = RAMP_HOLD }, 0, 2,
+		  { { 1000, 90 }, { 5000, 80 } } },
+		{ "never passes to", { .from = 0, .to = 25, .step = 10, .every_ms = 1000, .mode = RAMP_HOLD }, 0, 1,
+		  { { 99000, 20 } } },
+		{ "before start shows from", { .from = 5, .to = 50, .step = 5, .every_ms = 1000, .mode = RAMP_WRAP }, 10000, 1,
+		  { { 2000, 5 } } },
+		{ "from equals to is constant", { .from = 7, .to = 7, .step = 1, .every_ms = 1000, .mode = RAMP_BOUNCE }, 0, 1,
+		  { { 12345, 7 } } },
+		{ "bounce just below the limit", { .from = 0, .to = 0x1p62, .step = 1, .every_ms = 1000, .mode = RAMP_BOUNCE }, 0, 3,
+		  { { 0, 0 }, { 1000, 1 }, { 2000, 2 } } },
+		/* validation rejects these; the runtime guard must not crash */
+		{ "bounce last == 2^63", { .from = 0, .to = 0x1p63, .step = 1, .every_ms = 1000, .mode = RAMP_BOUNCE }, 0, 2,
+		  { { 0, 0 }, { 1000, 0 } } },
+		{ "bounce above the u64 limit", { .from = 0, .to = 0x1p64, .step = 1, .every_ms = 1000, .mode = RAMP_BOUNCE }, 0, 2,
+		  { { 0, 0 }, { 1000, 0 } } },
+	};
 
-TEST(RampWrapRestarts)
-{
-	ramp_params_t	r = make_ramp(0, 30, 10, RAMP_WRAP);	/* 0 10 20 30 0 ... */
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+		for (u32 j = 0; j < cases[i].count; j++)
+		{
+			bool ok = NEAR(ramp_value(&cases[i].r, cases[i].start, cases[i].at[j].now),
+				       cases[i].at[j].want);
 
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 999), 0));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 10));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 3000), 30));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 4000), 0));
-}
-
-TEST(RampBounceWalksBack)
-{
-	ramp_params_t	r = make_ramp(0, 30, 10, RAMP_BOUNCE);	/* 0 10 20 30 20 10 0 10 */
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 3000), 30));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 4000), 20));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 6000), 0));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 7000), 10));
-}
-
-TEST(RampHoldStops)
-{
-	ramp_params_t	r = make_ramp(0, 30, 10, RAMP_HOLD);
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 3000), 30));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 999000), 30));
-}
-
-TEST(RampGoesDownWhenToIsBelowFrom)
-{
-	ramp_params_t	r = make_ramp(100, 80, 10, RAMP_HOLD);
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 90));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 5000), 80));
-}
-
-TEST(RampNeverPassesTo)
-{
-	ramp_params_t	r = make_ramp(0, 25, 10, RAMP_HOLD);	/* last value is 20 */
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 99000), 20));
-}
-
-TEST(RampBeforeStartShowsFrom)
-{
-	ramp_params_t	r = make_ramp(5, 50, 5, RAMP_WRAP);
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 10000, 2000), 5));
-}
-
-TEST(RampFromEqualsToIsConstant)
-{
-	ramp_params_t	r = make_ramp(7, 7, 1, RAMP_BOUNCE);
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 12345), 7));
-}
-
-TEST(RampBounceJustBelowLimit)
-{
-	ramp_params_t	r = make_ramp(0, 0x1p62, 1, RAMP_BOUNCE);
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 1));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 2000), 2));
-}
-
-TEST(RampBounceLargeStepCountIsRobust)
-{
-	ramp_params_t	r = make_ramp(0, 0x1p63, 1, RAMP_BOUNCE);
-
-	/* last == 2^63: validation must reject this, but the runtime guard must not crash. */
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 0));
-}
-
-TEST(RampBounceAboveU64LimitIsRobust)
-{
-	ramp_params_t	r = make_ramp(0, 0x1p64, 1, RAMP_BOUNCE);
-
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 0), 0));
-	ASSERT_EQ(NEAR(ramp_value(&r, 0, 1000), 0));
-}
-
-TEST(EncodeIntegers)
-{
-	u16	w[4] = { 0, 0, 0, 0 };
-
-	ASSERT_EQ(encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, 70000, w) == 1);
-	ASSERT_EQ(w[0] == 65535);
-	encode_value(VT_S16, WORDS_HIGH_FIRST, BYTES_BIG, -2, w);
-	ASSERT_EQ(w[0] == 0xFFFE);
-	encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, 12.6, w);
-	ASSERT_EQ(w[0] == 13);
-	encode_value(VT_U16, WORDS_HIGH_FIRST, BYTES_BIG, NAN, w);
-	ASSERT_EQ(w[0] == 0);
-	encode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, INFINITY, w);
-	ASSERT_EQ(w[0] == 0x7FFF && w[1] == 0xFFFF);
-	encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w);
-	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x0000);
-}
-
-TEST(EncodeThirtyTwoBitWordOrder)
-{
-	u16	w[4] = { 0, 0, 0, 0 };
-
-	ASSERT_EQ(encode_value(VT_U32, WORDS_HIGH_FIRST, BYTES_BIG, 0x12345678, w) == 2);
-	ASSERT_EQ(w[0] == 0x1234 && w[1] == 0x5678);
-	encode_value(VT_U32, WORDS_LOW_FIRST, BYTES_BIG, 0x12345678, w);
-	ASSERT_EQ(w[0] == 0x5678 && w[1] == 0x1234);
-	encode_value(VT_S32, WORDS_HIGH_FIRST, BYTES_BIG, -1, w);
-	ASSERT_EQ(w[0] == 0xFFFF && w[1] == 0xFFFF);
-}
-
-TEST(EncodeFloat32)
-{
-	u16	w[4] = { 0, 0, 0, 0 };
-	u32	raw  = 0;
-	f32	real = 0;
-
-	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, 1.0, w);	/* 0x3F800000 */
-	ASSERT_EQ(w[0] == 0x3F80 && w[1] == 0x0000);
-	encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, 1.0, w);
-	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x3F80);
-
-	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, NAN, w);
-	raw = ((u32)w[0] << 16) | w[1];
-	memcpy(&real, &raw, sizeof(real));
-	ASSERT_EQ(isnan(real));
-
-	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, INFINITY, w);
-	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w);
-	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
-
-	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, (f64)FLT_MAX * 2.0, w);
-	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -((f64)FLT_MAX * 2.0), w);
-	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
-}
-
-TEST(EncodeBool)
-{
-	u16	w[4] = { 0, 0, 0, 0 };
-
-	encode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, 5, w);
-	ASSERT_EQ(w[0] == 1);
-	encode_value(VT_BOOL, WORDS_HIGH_FIRST, BYTES_BIG, 0, w);
-	ASSERT_EQ(w[0] == 0);
+			if (!ok)
+				fprintf(stderr, "ramp '%s' at %llu\n", cases[i].name,
+					(unsigned long long)cases[i].at[j].now);
+			ASSERT_EQ(ok);
+		}
 }
 
 static model_t
@@ -172,26 +61,32 @@ make_lag(f64 tau_ms, f64 initial)
 			  .has_initial = true, .target_value = 100 };
 }
 
-TEST(SineFollowsFormulaAtKnownTimes)
+TEST(SineFollowsFormulaPhaseAndStart)
 {
-	model_t	m = { .shape = MODEL_SINE, .offset = 10, .amplitude = 4, .period_ms = 4000 };
+	static const model_t plain = { .shape = MODEL_SINE, .offset = 10, .amplitude = 4, .period_ms = 4000 };
+	static const model_t phased = { .shape = MODEL_SINE, .amplitude = 1, .period_ms = 1000, .phase_deg = 90 };
+	static const struct {
+		const model_t*	m;
+		u64		start, now;
+		f64		want;
+	} cases[] = {
+		{ &plain, 0, 0, 10 }, { &plain, 0, 1000, 14 }, { &plain, 0, 2000, 10 },
+		{ &plain, 0, 3000, 6 }, { &plain, 0, 5000, 14 },
+		/* time counts from the start; before it the value is the one at the start */
+		{ &plain, 1000, 2000, 14 }, { &plain, 1000, 500, 10 },
+		{ &phased, 0, 0, 1 }, { &phased, 0, 500, -1 },
+	};
 
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 0, 0), 10));
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 1000, 0), 14));
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 2000, 0), 10));
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 3000, 0), 6));
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 5000, 0), 14));
-	/* time counts from the start; before it the value is the one at the start */
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 1000, 2000, 0), 14));
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 1000, 500, 0), 10));
-}
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		model_t	m = *cases[i].m;
 
-TEST(SinePhaseShiftsTheWave)
-{
-	model_t	m = { .shape = MODEL_SINE, .amplitude = 1, .period_ms = 1000, .phase_deg = 90 };
+		bool	ok = NEAR(model_value(&m, 0, 0, cases[i].start, cases[i].now, 0), cases[i].want);
 
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 0, 0), 1));
-	ASSERT_EQ(NEAR(model_value(&m, 0, 0, 0, 500, 0), -1));
+		if (!ok)
+			fprintf(stderr, "sine case %u\n", i);
+		ASSERT_EQ(ok);
+	}
 }
 
 TEST(LagReachesOneMinusInverseEAfterTau)

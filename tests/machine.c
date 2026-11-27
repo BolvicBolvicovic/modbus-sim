@@ -1105,126 +1105,80 @@ TEST(MachineValidatesNamesCountsAndStatementRanges)
 
 TEST(MachineValidatesExpressionTypesAndCycles)
 {
-	arena_t* arena = ARENA_ALLOC();
-	machine_def_t* def = NULL;
-	u16 root = 0;
+	typedef enum {
+		ROOT_OUT_OF_RANGE, CHILD_OUT_OF_RANGE, CYCLE, UNKNOWN_KIND, ADD_BOOL, EQ_MIXED,
+		IF_LITERAL_BRANCHES, IF_VAR_BRANCHES, IF_POINT_BRANCHES, IF_NUM_CONDITION,
+		VAR_OUT_OF_RANGE, POINT_SPACE_OUT_OF_RANGE, BOOL_INTO_NUM_VAR, WHEN_NUM_CONDITION
+	} bad_t;
 
-	def = simple_def(arena);
-	set_var_stmt(def, 0, 99); /* no var, but out-of-range expression root first */
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
+	for (bad_t bad = ROOT_OUT_OF_RANGE; bad <= WHEN_NUM_CONDITION; bad++)
+	{
+		arena_t*	arena = ARENA_ALLOC();
+		machine_def_t*	def   = simple_def(arena);
+		u16		root  = 99;
+		u16		tick  = 0;
 
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_binary(def, EXPR_ADD, 1, 1);
-	def->nodes[root].b = 99;
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_binary(def, EXPR_ADD, 0, 1);
-	def->nodes[1] = plain_node(EXPR_NUM);
-	def->nodes[1].literal = (val_t){ .type = VAL_NUM, .n = 1 };
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def); /* expression cycle */
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = def->node_count++;
-	def->nodes[root] = plain_node((expr_kind_t)999);
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_binary(def, EXPR_ADD, node_bool(def, true), node_num(def, 1));
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_binary(def, EXPR_EQ, node_bool(def, true), node_num(def, 1));
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_if(def, node_bool(def, true), node_bool(def, false), node_num(def, 1));
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def); /* literal IF branches */
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	add_bool_var(def, "b", true);
-	root = node_if(def, node_bool(def, true), node_var(def, 1), node_var(def, 0));
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def); /* VAR IF branches */
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_if(def, node_bool(def, true),
-		       node_point(def, SPACE_COIL, 1), node_point(def, SPACE_HOLDING, 1));
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def); /* POINT IF branches */
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_if(def, node_num(def, 1), node_num(def, 1), node_num(def, 2));
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def); /* non-bool IF condition */
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_var(def, 5);
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	root = node_point(def, (space_kind_t)SPACE_COUNT, 0);
-	set_var_stmt(def, 0, root);
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	add_num_var(def, "n", 0);
-	set_var_stmt(def, 0, node_bool(def, true)); /* bool value into num var */
-	def->states[0].on_tick_first = 0;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def);
-
-	def = simple_def(arena);
-	u16 guard = guard_stmt(def, STMT_WHEN, node_num(def, 1), 0, 0);
-
-	def->states[0].on_tick_first = guard;
-	def->states[0].on_tick_count = 1;
-	expect_def_error(arena, def); /* non-bool condition */
-	arena_release(arena);
+		if (bad != ROOT_OUT_OF_RANGE && bad != WHEN_NUM_CONDITION)
+			add_num_var(def, "n", 0);
+		switch (bad)
+		{
+		case ROOT_OUT_OF_RANGE:
+			break;
+		case CHILD_OUT_OF_RANGE:
+			root = node_binary(def, EXPR_ADD, 1, 1);
+			def->nodes[root].b = 99;
+			break;
+		case CYCLE:
+			root = node_binary(def, EXPR_ADD, 0, 1);
+			def->nodes[1] = plain_node(EXPR_NUM);
+			def->nodes[1].literal = (val_t){ .type = VAL_NUM, .n = 1 };
+			break;
+		case UNKNOWN_KIND:
+			root = def->node_count++;
+			def->nodes[root] = plain_node((expr_kind_t)999);
+			break;
+		case ADD_BOOL:
+			root = node_binary(def, EXPR_ADD, node_bool(def, true), node_num(def, 1));
+			break;
+		case EQ_MIXED:
+			root = node_binary(def, EXPR_EQ, node_bool(def, true), node_num(def, 1));
+			break;
+		case IF_LITERAL_BRANCHES:
+			root = node_if(def, node_bool(def, true), node_bool(def, false), node_num(def, 1));
+			break;
+		case IF_VAR_BRANCHES:
+			add_bool_var(def, "b", true);
+			root = node_if(def, node_bool(def, true), node_var(def, 1), node_var(def, 0));
+			break;
+		case IF_POINT_BRANCHES:
+			root = node_if(def, node_bool(def, true),
+				       node_point(def, SPACE_COIL, 1), node_point(def, SPACE_HOLDING, 1));
+			break;
+		case IF_NUM_CONDITION:
+			root = node_if(def, node_num(def, 1), node_num(def, 1), node_num(def, 2));
+			break;
+		case VAR_OUT_OF_RANGE:
+			root = node_var(def, 5);
+			break;
+		case POINT_SPACE_OUT_OF_RANGE:
+			root = node_point(def, (space_kind_t)SPACE_COUNT, 0);
+			break;
+		case BOOL_INTO_NUM_VAR:
+			root = node_bool(def, true);
+			break;
+		case WHEN_NUM_CONDITION:
+			tick = guard_stmt(def, STMT_WHEN, node_num(def, 1), 0, 0);
+			break;
+		}
+		if (bad != WHEN_NUM_CONDITION)
+			set_var_stmt(def, 0, root);
+		def->states[0].on_tick_first = tick;
+		def->states[0].on_tick_count = 1;
+		fprintf(stderr, "invalid expression case %d\n", (int)bad);
+		expect_def_error(arena, def);
+		arena_release(arena);
+	}
 }
-
 TEST(MachineRejectsDuplicateAndExcessMachines)
 {
 	arena_t* arena = ARENA_ALLOC();

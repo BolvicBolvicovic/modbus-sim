@@ -5,6 +5,7 @@
 #include "modbus/bytes.h"
 #include "modbus/mei_canopen.h"
 #include "vlib/macros.h"
+#include <stdio.h>
 #include <string.h>
 
 static void
@@ -280,103 +281,184 @@ TEST(UnknownFunctionIsIllegalFunction)
 	arena_release(arena);
 }
 
-TEST(ReadExceptionStatusReturnsConfiguredByte)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_READ_EXCEPTION_STATUS };
-	u8		resp[MODBUS_MAX_PDU];
+typedef enum {
+	PDU_DEV_BASE,
+	PDU_DEV_FILES,
+	PDU_DEV_FIFOS,
+	PDU_DEV_HOLD10,
+	PDU_DEV_HOLD1,
+} pdu_dev_t;
 
-	dev->exception_status = 0x5A;
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
-	ASSERT_EQ(resp[0] == FC_READ_EXCEPTION_STATUS && resp[1] == 0x5A);
-	arena_release(arena);
+typedef struct pdu_case_t pdu_case_t;
+
+/* A named scenario: a device (plus presets), then requests run in order, each
+ * answered exactly as listed. A step with req_len 0 ends the list. */
+struct pdu_case_t {
+	const char*	name;
+	pdu_dev_t	dev;
+	bool		via_request;	/* modbus_handle_request instead of modbus_handle_pdu */
+	struct pdu_preset {
+		bool	set_id;
+		u8	server_id;
+		u8	run_indicator;
+		u8	exception_status;
+		u8	extra[4];
+		u8	extra_len;
+		u16	com_status;
+		u16	com_event_count;
+		u16	message_count;
+		u8	events[3];
+		u8	event_log_count;
+	} preset;
+	struct pdu_step {
+		u8	req[40];
+		u32	req_len;
+		u8	resp[72];
+		u32	resp_len;
+	} steps[6];
+};
+
+static device_t*
+make_file_device(arena_t* arena)
+{
+	device_t*	dev    = device_new(arena, 0);
+	u16		data1[] = { 0x1234, 0x5678 };
+	u16		data2[] = { 0x000A, 0x000B, 0x000C };
+	u16		data3[] = { 0x00FF };
+
+	device_add_file_record(dev, 1, 0, 2, data1);
+	device_add_file_record(dev, 1, 10, 3, data2);
+	device_add_file_record(dev, 4, 2, 1, data3);
+	return dev;
 }
 
-TEST(ReadExceptionStatusDefaultsToZero)
+static device_t*
+make_hold_device(arena_t* arena, f64 first)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { 0x07 };
-	u8		resp[MODBUS_MAX_PDU];
+	device_t*	dev = device_new(arena, 0);
+	point_t		p   = { 0 };
 
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x07 && resp[1] == 0x00);
-	arena_release(arena);
+	p.kind  = POINT_STATIC;
+	p.space = SPACE_HOLDING;
+	p.type  = VT_U16;
+	for (u32 i = 0; i < 4; i++)
+	{
+		p.address      = i;
+		p.static_value = first + (f64)i;
+		device_add_point(dev, &p);
+	}
+	return dev;
 }
 
-TEST(ReadExceptionStatusRejectsMalformedRequest)
+static device_t*
+make_fifo_device(arena_t* arena)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		extra[] = { 0x07, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
+	device_t*	dev    = device_new(arena, 0);
+	u16		data[] = { 0x1234, 0x5678, 0x0003 };
+	u16		pair[] = { 0x0001, 0x0002 };
 
-	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x87 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	arena_release(arena);
+	device_add_fifo(dev, 10, 3, data);
+	device_add_fifo(dev, 1, 0, pair);
+	device_add_fifo(dev, 2, 2, pair);
+	device_add_fifo(dev, 7, 0, NULL);
+	return dev;
 }
 
-TEST(ReportServerIdReturnsConfiguredValues)
+static void
+run_pdu_cases(const pdu_case_t* cases, u32 count)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_REPORT_SERVER_ID };
-	u8		resp[MODBUS_MAX_PDU];
+	for (u32 i = 0; i < count; i++)
+	{
+		const pdu_case_t*	c     = &cases[i];
+		arena_t*		arena = ARENA_ALLOC();
+		device_t*		dev   = NULL;
+		rng_t			rng;
+		fault_decision_t	decision = { 0 };
+		u8			resp[MODBUS_MAX_PDU];
 
-	dev->server_id     = 0x2A;
-	dev->run_indicator = 0x00;
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 4);
-	ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID);
-	ASSERT_EQ(resp[1] == 2);
-	ASSERT_EQ(resp[2] == 0x2A && resp[3] == 0x00);
-	arena_release(arena);
+		switch (c->dev)
+		{
+		case PDU_DEV_BASE:	dev = make_device(arena); break;
+		case PDU_DEV_FILES:	dev = make_file_device(arena); break;
+		case PDU_DEV_FIFOS:	dev = make_fifo_device(arena); break;
+		case PDU_DEV_HOLD10:	dev = make_hold_device(arena, 10); break;
+		case PDU_DEV_HOLD1:	dev = make_hold_device(arena, 1); break;
+		}
+		rng_seed(&rng, 1);
+		if (c->preset.set_id)
+		{
+			dev->server_id     = c->preset.server_id;
+			dev->run_indicator = c->preset.run_indicator;
+		}
+		dev->exception_status = c->preset.exception_status;
+		dev->server_id_additional_data_len = c->preset.extra_len;
+		memcpy(dev->server_id_additional_data, c->preset.extra, c->preset.extra_len);
+		if (c->preset.com_status != 0)
+			dev->com_status = c->preset.com_status;
+		dev->com_event_count = c->preset.com_event_count;
+		dev->message_count   = c->preset.message_count;
+		memcpy(dev->com_events, c->preset.events, sizeof(c->preset.events));
+		dev->com_event_log_count = c->preset.event_log_count;
+
+		for (u32 j = 0; j < ARRAY_COUNT(c->steps) && c->steps[j].req_len != 0; j++)
+		{
+			const struct pdu_step*	s   = &c->steps[j];
+			u32			len = c->via_request ?
+				run_request(dev, &rng, s->req, s->req_len, resp, &decision) :
+				run(dev, s->req, s->req_len, resp);
+			bool			ok  = len == s->resp_len &&
+						      memcmp(resp, s->resp, len) == 0;
+
+			if (!ok)
+				fprintf(stderr, "pdu case '%s' step %u failed\n", c->name, j);
+			ASSERT_EQ(ok);
+		}
+		arena_release(arena);
+	}
 }
 
-TEST(ReportServerIdDefaults)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { 0x11 };
-	u8		resp[MODBUS_MAX_PDU];
+#define READ1   { 0x03, 0x00, 0x00, 0x00, 0x01 }, 5, { 0x03, 0x02, 0x12, 0x34 }, 4
+#define BAD_QTY { 0x03, 0x00, 0x00, 0x00, 0x00 }, 5, { 0x83, 0x03 }, 2
 
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 4);
-	ASSERT_EQ(resp[0] == 0x11 && resp[1] == 2);
-	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0xFF);
-	arena_release(arena);
+TEST(MalformedStatusAndEventRequestsAreIllegalDataValue)
+{
+	static const pdu_case_t cases[] = {
+		{ "fc07 extra byte", PDU_DEV_BASE, .steps = { { { 0x07, 0x00 }, 2, { 0x87, 0x03 }, 2 } } },
+		{ "fc11 extra byte", PDU_DEV_BASE, .steps = { { { 0x11, 0x00 }, 2, { 0x91, 0x03 }, 2 } } },
+		{ "fc0b extra byte", PDU_DEV_BASE, .steps = { { { 0x0B, 0x00 }, 2, { 0x8B, 0x03 }, 2 } } },
+		{ "fc0c extra byte", PDU_DEV_BASE, .steps = { { { 0x0C, 0x00 }, 2, { 0x8C, 0x03 }, 2 } } },
+		{ "fc0b/fc0c extra byte keep configured values", PDU_DEV_BASE,
+		  .preset = { .com_status = 0xFFFF, .events = { 0x42 }, .event_log_count = 1 },
+		  .steps = { { { 0x0B, 0x00 }, 2, { 0x8B, 0x03 }, 2 },
+			     { { 0x0C, 0x00 }, 2, { 0x8C, 0x03 }, 2 },
+			     /* exceptions are not events; both malformed PDUs counted as messages */
+			     { { 0x0C }, 1, { 0x0C, 0x07, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x03, 0x42 }, 9 } } },
+		{ "fc16 short", PDU_DEV_BASE,
+		  .steps = { { { 0x16, 0x00, 0x00, 0xFF, 0xFF, 0x00 }, 6, { 0x96, 0x03 }, 2 } } },
+		{ "fc16 long", PDU_DEV_BASE,
+		  .steps = { { { 0x16, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00 }, 8, { 0x96, 0x03 }, 2 } } },
+		{ "fc18 short", PDU_DEV_FIFOS, .steps = { { { 0x18, 0x00 }, 2, { 0x98, 0x03 }, 2 } } },
+		{ "fc18 long", PDU_DEV_FIFOS, .steps = { { { 0x18, 0x00, 0x01, 0x00 }, 4, { 0x98, 0x03 }, 2 } } },
+	};
+
+	run_pdu_cases(cases, ARRAY_COUNT(cases));
 }
 
-TEST(ReportServerIdRejectsMalformedRequest)
+TEST(ReadExceptionStatusAndReportServerId)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		extra[] = { FC_REPORT_SERVER_ID, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
+	static const pdu_case_t cases[] = {
+		{ "fc07 default is zero", PDU_DEV_BASE, .steps = { { { 0x07 }, 1, { 0x07, 0x00 }, 2 } } },
+		{ "fc07 configured byte", PDU_DEV_BASE, .preset = { .exception_status = 0x5A },
+		  .steps = { { { 0x07 }, 1, { 0x07, 0x5A }, 2 } } },
+		{ "fc11 defaults", PDU_DEV_BASE, .steps = { { { 0x11 }, 1, { 0x11, 0x02, 0x00, 0xFF }, 4 } } },
+		{ "fc11 configured values", PDU_DEV_BASE, .preset = { .set_id = true, .server_id = 0x2A },
+		  .steps = { { { 0x11 }, 1, { 0x11, 0x02, 0x2A, 0x00 }, 4 } } },
+		{ "fc11 additional data", PDU_DEV_BASE,
+		  .preset = { .set_id = true, .server_id = 0x2A, .extra = { 0xDE, 0xAD, 0xBE, 0xEF }, .extra_len = 4 },
+		  .steps = { { { 0x11 }, 1, { 0x11, 0x06, 0x2A, 0x00, 0xDE, 0xAD, 0xBE, 0xEF }, 8 } } },
+	};
 
-	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_REPORT_SERVER_ID | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	arena_release(arena);
-}
-
-TEST(ReportServerIdReturnsConfiguredAdditionalData)
-{
-	arena_t*	arena  = ARENA_ALLOC();
-	device_t*	dev    = make_device(arena);
-	u8		req[]  = { FC_REPORT_SERVER_ID };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		extra[] = { 0xDE, 0xAD, 0xBE, 0xEF };
-
-	dev->server_id     = 0x2A;
-	dev->run_indicator = 0x00;
-	dev->server_id_additional_data_len = sizeof(extra);
-	memcpy(dev->server_id_additional_data, extra, sizeof(extra));
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 4 + sizeof(extra));
-	ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2 + sizeof(extra));
-	ASSERT_EQ(resp[2] == 0x2A && resp[3] == 0x00);
-	ASSERT_EQ(memcmp(resp + 4, extra, sizeof(extra)) == 0);
-	arena_release(arena);
+	run_pdu_cases(cases, ARRAY_COUNT(cases));
 }
 
 TEST(ReportServerIdAcceptsMaxAdditionalData)
@@ -399,178 +481,38 @@ TEST(ReportServerIdAcceptsMaxAdditionalData)
 	arena_release(arena);
 }
 
-TEST(GetComEventCounterReturnsStatusAndCount)
+TEST(GetComEventCounterAndLog)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
-	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
-	u8		resp[MODBUS_MAX_PDU];
+	static const pdu_case_t cases[] = {
+		{ "fc0b status and count", PDU_DEV_BASE,
+		  .steps = { { READ1 }, { { 0x0B }, 1, { 0x0B, 0, 0, 0, 1 }, 5 } } },
+		{ "fc0b counts successful completions only", PDU_DEV_BASE,
+		  .steps = { { { 0x0B }, 1, { 0x0B, 0, 0, 0, 0 }, 5 }, { READ1 }, { BAD_QTY },
+			     { { 0x0B }, 1, { 0x0B, 0, 0, 0, 1 }, 5 } } },
+		{ "fc0b wraps at 16 bits", PDU_DEV_BASE, .preset = { .com_event_count = 0xFFFF },
+		  .steps = { { READ1 }, { { 0x0B }, 1, { 0x0B, 0, 0, 0, 0 }, 5 } } },
+		{ "fc0b configured status is not an event", PDU_DEV_BASE, .preset = { .com_status = 0xFFFF },
+		  .steps = { { { 0x0B }, 1, { 0x0B, 0xFF, 0xFF, 0, 0 }, 5 } } },
+		{ "fc0c counts and empty log", PDU_DEV_BASE,
+		  .steps = { { READ1 }, { { 0x0C }, 1, { 0x0C, 6, 0, 0, 0, 1, 0, 2 }, 8 } } },
+		{ "fc0c matches fc0b", PDU_DEV_BASE,
+		  .steps = { { READ1 }, { { 0x0B }, 1, { 0x0B, 0, 0, 0, 1 }, 5 }, { BAD_QTY },
+			     { { 0x0C }, 1, { 0x0C, 6, 0, 0, 0, 1, 0, 4 }, 8 },
+			     { { 0x0B }, 1, { 0x0B, 0, 0, 0, 1 }, 5 } } },
+		{ "fc0c wraps at 16 bits", PDU_DEV_BASE,
+		  .preset = { .com_event_count = 0xFFFF, .message_count = 0xFFFF },
+		  .steps = { { { 0x0C }, 1, { 0x0C, 6, 0, 0, 0xFF, 0xFF, 0, 0 }, 8 } } },
+		{ "fc0c configured status and events", PDU_DEV_BASE,
+		  .preset = { .com_status = 0xFFFF, .events = { 0x01, 0x80, 0xFF }, .event_log_count = 3 },
+		  .steps = { { { 0x0C }, 1, { 0x0C, 9, 0xFF, 0xFF, 0, 0, 0, 1, 0x01, 0x80, 0xFF }, 11 } } },
+		/* modbus_handle_request: FC 0B/0C are never counted as events themselves */
+		{ "fc0c is not an event on the request path", PDU_DEV_BASE, true,
+		  .steps = { { READ1 }, { { 0x0C }, 1, { 0x0C, 6, 0, 0, 0, 1, 0, 2 }, 8 },
+			     { { 0x0C }, 1, { 0x0C, 6, 0, 0, 0, 1, 0, 3 }, 8 },
+			     { { 0x0B }, 1, { 0x0B, 0, 0, 0, 1 }, 5 } } },
+	};
 
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
-	ASSERT_EQ(resp[1] == 0x00 && resp[2] == 0x00);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
-	arena_release(arena);
-}
-
-TEST(GetComEventCounterCountsSuccessfulCompletions)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
-	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
-	u8		bad[]  = { 0x03, 0x00, 0x00, 0x00, 0x00 };	/* illegal quantity -> exception */
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00);
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
-	run(dev, bad, sizeof(bad), resp);
-	ASSERT_EQ(resp[0] == 0x83 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
-	arena_release(arena);
-}
-
-TEST(GetComEventCounterWrapsAt16Bits)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
-	u8		req[]  = { FC_GET_COM_EVENT_COUNTER };
-	u8		resp[MODBUS_MAX_PDU];
-
-	dev->com_event_count = 0xFFFF;
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[1] == 0x00 && resp[2] == 0x00);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00);
-	arena_release(arena);
-}
-
-TEST(GetComEventCounterRejectsMalformedRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		extra[] = { FC_GET_COM_EVENT_COUNTER, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_COUNTER | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	arena_release(arena);
-}
-
-TEST(GetComEventLogReturnsCountsAndEmptyLog)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
-	u8		req[]  = { FC_GET_COM_EVENT_LOG };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 8);
-	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG);
-	ASSERT_EQ(resp[1] == 6);
-	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x00);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x01);
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x02);
-	arena_release(arena);
-}
-
-TEST(GetComEventLogMatchesComEventCounter)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x01 };
-	u8		fc11[] = { FC_GET_COM_EVENT_COUNTER };
-	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
-	u8		bad[]  = { 0x03, 0x00, 0x00, 0x00, 0x00 };	/* illegal quantity -> exception */
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
-	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
-	run(dev, bad, sizeof(bad), resp);
-	ASSERT_EQ(resp[0] == 0x83 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8);
-	ASSERT_EQ(resp[1] == 6);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x01);
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x04);
-	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x01);
-	arena_release(arena);
-}
-
-TEST(GetComEventLogWrapsAt16Bits)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_GET_COM_EVENT_LOG };
-	u8		resp[MODBUS_MAX_PDU];
-
-	dev->com_event_count = 0xFFFF;
-	dev->message_count   = 0xFFFF;
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 8);
-	ASSERT_EQ(resp[1] == 6);
-	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x00);
-	ASSERT_EQ(resp[4] == 0xFF && resp[5] == 0xFF);
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x00);
-	arena_release(arena);
-}
-
-TEST(GetComEventLogRejectsMalformedRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		extra[] = { FC_GET_COM_EVENT_LOG, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_LOG | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	arena_release(arena);
-}
-
-TEST(GetComEventCounterReportsConfiguredStatus)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[] = { FC_GET_COM_EVENT_COUNTER };
-	u8		resp[MODBUS_MAX_PDU];
-
-	dev->com_status = 0xFFFF;
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
-	ASSERT_EQ(resp[1] == 0xFF && resp[2] == 0xFF);
-	ASSERT_EQ(resp[3] == 0x00 && resp[4] == 0x00); /* FC 11 is not an event */
-	arena_release(arena);
-}
-
-TEST(GetComEventLogReportsConfiguredStatusAndEvents)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[] = { FC_GET_COM_EVENT_LOG };
-	u8		resp[MODBUS_MAX_PDU];
-
-	dev->com_status         = 0xFFFF;
-	dev->com_events[0]      = 0x01;
-	dev->com_events[1]      = 0x80;
-	dev->com_events[2]      = 0xFF;
-	dev->com_event_log_count = 3;
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 11);
-	ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG);
-	ASSERT_EQ(resp[1] == 9);
-	ASSERT_EQ(resp[2] == 0xFF && resp[3] == 0xFF);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00); /* no events counted */
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x01); /* message count */
-	ASSERT_EQ(resp[8] == 0x01 && resp[9] == 0x80 && resp[10] == 0xFF);
-	arena_release(arena);
+	run_pdu_cases(cases, ARRAY_COUNT(cases));
 }
 
 TEST(GetComEventLogReportsMaximumEvents)
@@ -595,56 +537,218 @@ TEST(GetComEventLogReportsMaximumEvents)
 	arena_release(arena);
 }
 
-TEST(GetComEventFunctionsRejectMalformedWithConfiguredValues)
+#define BYTES(...) { __VA_ARGS__ }, sizeof((const u8[]){ __VA_ARGS__ })
+#define EXC(fc, code) BYTES(fc), BYTES((fc) | 0x80, code)
+
+TEST(FileRecordRequests)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		fc11_extra[] = { FC_GET_COM_EVENT_COUNTER, 0x00 };
-	u8		fc12_extra[] = { FC_GET_COM_EVENT_LOG, 0x00 };
-	u8		req[]        = { FC_GET_COM_EVENT_LOG };
-	u8		resp[MODBUS_MAX_PDU];
+	/* file 1: record 0-1, 10-12; file 4: record 2 */
+	static const pdu_case_t cases[] = {
+		{ "read single sub-request", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02),
+			       BYTES(0x14, 0x06, 0x05, 0x06, 0x12, 0x34, 0x56, 0x78) } } },
+		{ "read multiple sub-requests", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x0E, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+				     0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01),
+			       BYTES(0x14, 0x08, 0x03, 0x06, 0x12, 0x34, 0x03, 0x06, 0x00, 0xFF) } } },
+		{ "write single sub-request echoes and updates", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x0B, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xAA, 0xAA, 0xBB, 0xBB),
+			       BYTES(0x15, 0x0B, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xAA, 0xAA, 0xBB, 0xBB) },
+			     { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02),
+			       BYTES(0x14, 0x06, 0x05, 0x06, 0xAA, 0xAA, 0xBB, 0xBB) } } },
+		{ "write multiple sub-requests", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x12, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x11,
+				     0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01, 0x00, 0x22),
+			       BYTES(0x15, 0x12, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x11,
+				     0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01, 0x00, 0x22) },
+			     { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02),
+			       BYTES(0x14, 0x06, 0x05, 0x06, 0x00, 0x11, 0x56, 0x78) },
+			     { BYTES(0x14, 0x07, 0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01),
+			       BYTES(0x14, 0x04, 0x03, 0x06, 0x00, 0x22) } } },
+		{ "write is all or nothing", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x12, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x77,
+				     0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x88),
+			       BYTES(0x95, 0x02) },
+			     { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01),
+			       BYTES(0x14, 0x04, 0x03, 0x06, 0x12, 0x34) } } },
+		/* FC 20 malformed */
+		{ "read: missing sub-request", PDU_DEV_FILES, .steps = { { EXC(0x14, 0x03) } } },
+		{ "read: byte count mismatch", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x06, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01), BYTES(0x94, 0x03) } } },
+		{ "read: byte count not multiple of 7", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00), BYTES(0x94, 0x03) } } },
+		{ "read: byte count above maximum", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0xF6, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01), BYTES(0x94, 0x03) } } },
+		{ "read: PDU longer than byte count", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00), BYTES(0x94, 0x03) } } },
+		{ "read: reference type", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01), BYTES(0x94, 0x03) } } },
+		{ "read: zero record length", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00), BYTES(0x94, 0x03) } } },
+		{ "read: record number above 0x270F", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01), BYTES(0x94, 0x03) } } },
+		{ "read: range above 0x270F", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02), BYTES(0x94, 0x03) } } },
+		{ "read: file number 0", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01), BYTES(0x94, 0x03) } } },
+		{ "read: response exceeds the PDU", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7E), BYTES(0x94, 0x03) } } },
+		/* FC 21 malformed */
+		{ "write: missing sub-request", PDU_DEV_FILES, .steps = { { EXC(0x15, 0x03) } } },
+		{ "write: byte count mismatch", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: byte count below minimum", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: byte count above maximum", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0xFC, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: PDU longer than byte count", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00), BYTES(0x95, 0x03) } } },
+		{ "write: reference type", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: zero record length", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00), BYTES(0x95, 0x03) } } },
+		{ "write: record number above 0x270F", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: range above 0x270F", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x0B, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02), BYTES(0x95, 0x03) } } },
+		{ "write: file number 0", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: claims 2 registers, provides 1", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01), BYTES(0x95, 0x03) } } },
+		{ "write: trailing byte after a sub-request", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x0A, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00), BYTES(0x95, 0x03) } } },
+		/* unavailable records are address errors */
+		{ "read: missing file", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01), BYTES(0x94, 0x02) } } },
+		{ "read: missing record", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01), BYTES(0x94, 0x02) } } },
+		{ "read: range spans an undefined record", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03), BYTES(0x94, 0x02) } } },
+		{ "read: no file records configured", PDU_DEV_BASE,
+		  .steps = { { BYTES(0x14, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01), BYTES(0x94, 0x02) } } },
+		{ "write: missing file", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x02) } } },
+		{ "write: missing record", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x02) } } },
+		{ "write: range spans an undefined record", PDU_DEV_FILES,
+		  .steps = { { BYTES(0x15, 0x0D, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03),
+			       BYTES(0x95, 0x02) } } },
+		{ "write: no file records configured", PDU_DEV_BASE,
+		  .steps = { { BYTES(0x15, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01), BYTES(0x95, 0x02) } } },
+	};
 
-	dev->com_status          = 0xFFFF;
-	dev->com_events[0]       = 0x42;
-	dev->com_event_log_count = 1;
+	run_pdu_cases(cases, ARRAY_COUNT(cases));
+}
 
-	ASSERT_EQ(run(dev, fc11_extra, sizeof(fc11_extra), resp) == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_COUNTER | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	ASSERT_EQ(run(dev, fc12_extra, sizeof(fc12_extra), resp) == 2);
-	ASSERT_EQ(resp[0] == (u8)(FC_GET_COM_EVENT_LOG | 0x80));
-	ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_VALUE);
+TEST(ReadFifoQueueAndReadWriteMultipleRegisters)
+{
+	static const pdu_case_t cases[] = {
+		{ "fifo configured values", PDU_DEV_FIFOS,
+		  .steps = { { BYTES(0x18, 0x00, 0x0A),
+			       BYTES(0x18, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03) } } },
+		{ "fifo empty and reads are not destructive", PDU_DEV_FIFOS,
+		  .steps = { { BYTES(0x18, 0x00, 0x01), BYTES(0x18, 0x00, 0x02, 0x00, 0x00) },
+			     { BYTES(0x18, 0x00, 0x02), BYTES(0x18, 0x00, 0x06, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02) },
+			     { BYTES(0x18, 0x00, 0x02), BYTES(0x18, 0x00, 0x06, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02) } } },
+		{ "fifo without values", PDU_DEV_FIFOS,
+		  .steps = { { BYTES(0x18, 0x00, 0x07), BYTES(0x18, 0x00, 0x02, 0x00, 0x00) } } },
+		{ "rwm writes and reads back", PDU_DEV_BASE,
+		  .steps = { { BYTES(0x17, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x04, 0xAA, 0xAA, 0xBB, 0xBB),
+			       BYTES(0x17, 0x04, 0xAA, 0xAA, 0xBB, 0xBB) },
+			     { BYTES(0x03, 0x00, 0x00, 0x00, 0x02), BYTES(0x03, 0x04, 0xAA, 0xAA, 0xBB, 0xBB) } } },
+		/* read of 1,2,3 after the write to 0,1,2 gives 101,102,13 */
+		{ "rwm write before read, overlapping", PDU_DEV_HOLD10,
+		  .steps = { { BYTES(0x17, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x06, 0x00, 0x64, 0x00, 0x65, 0x00, 0x66),
+			       BYTES(0x17, 0x06, 0x00, 0x65, 0x00, 0x66, 0x00, 0x0D) },
+			     { BYTES(0x03, 0x00, 0x00, 0x00, 0x04),
+			       BYTES(0x03, 0x08, 0x00, 0x64, 0x00, 0x65, 0x00, 0x66, 0x00, 0x0D) } } },
+		{ "rwm write before read, non-overlapping", PDU_DEV_HOLD1,
+		  .steps = { { BYTES(0x17, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x00, 0x14),
+			       BYTES(0x17, 0x04, 0x00, 0x03, 0x00, 0x04) },
+			     { BYTES(0x03, 0x00, 0x00, 0x00, 0x04),
+			       BYTES(0x03, 0x08, 0x00, 0x0A, 0x00, 0x14, 0x00, 0x03, 0x00, 0x04) } } },
+	};
 
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 9);
-	ASSERT_EQ(resp[1] == 7 && resp[2] == 0xFF && resp[3] == 0xFF);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00); /* exceptions are not events */
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x03); /* both malformed PDUs counted */
-	ASSERT_EQ(resp[8] == 0x42);
-	arena_release(arena);
+	run_pdu_cases(cases, ARRAY_COUNT(cases));
 }
 
 TEST(DiagnosticsReturnQueryDataEchoesRequest)
 {
+	static const u8 reqs[][7] = {
+		{ FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 },
+		{ FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78 },	/* arbitrary data field */
+	};
+	static const u32 lens[] = { 5, 7 };
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
 	u8		resp[MODBUS_MAX_PDU];
 
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(memcmp(resp, req, 5) == 0);
+	for (u32 i = 0; i < ARRAY_COUNT(lens); i++)
+	{
+		ASSERT_EQ(run(dev, reqs[i], lens[i], resp) == lens[i]);
+		ASSERT_EQ(memcmp(resp, reqs[i], lens[i]) == 0);
+	}
 	arena_release(arena);
 }
 
-TEST(DiagnosticsReturnQueryDataEchoesArbitraryDataField)
+TEST(DiagnosticsRestartCommunicationsClearsCountersAndEventLog)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78 };
-	u8		resp[MODBUS_MAX_PDU];
+	static const struct {
+		const char*	name;
+		u16		data;
+		bool		keeps_log;
+	} cases[] = {
+		{ "0000 preserves the event log", 0x0000, true },
+		{ "FF00 clears the event log",    0xFF00, false },
+	};
+	static const u8	log[] = { 0x11, 0x22, 0x33 };
+	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
 
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	arena_release(arena);
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_device(arena);
+		u8		req[5];
+		u8		resp[MODBUS_MAX_PDU];
+		u32		log_len = cases[i].keeps_log ? sizeof(log) : 0;
+
+		fprintf(stderr, "restart %s\n", cases[i].name);
+		dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
+		dev->com_event_count        = 11;
+		dev->com_event_log_count    = (u16)sizeof(log);
+		dev->diag_comm_error_count  = 7;
+		dev->diag_exception_count   = 8;
+		dev->diag_no_response_count = 9;
+		dev->diag_nak_count         = 4;
+		dev->diag_busy_count        = 5;
+		dev->diag_overrun_count     = 6;
+		dev->message_count          = 13;
+		memcpy(dev->com_events, log, sizeof(log));
+
+		diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, cases[i].data);
+		ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
+		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
+		ASSERT_EQ(!dev->listen_only);
+		ASSERT_EQ(dev->diagnostic_register == 0);
+		ASSERT_EQ(dev->com_event_count == 0);
+		ASSERT_EQ(dev->message_count == 0);
+		ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
+		ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
+		ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
+		ASSERT_EQ(dev->com_event_log_count == log_len);
+		if (cases[i].keeps_log)
+			ASSERT_EQ(memcmp(dev->com_events, log, sizeof(log)) == 0);
+		else
+			for (u32 k = 0; k < DEVICE_MAX_COM_EVENTS; k++)
+				ASSERT_EQ(dev->com_events[k] == 0);
+
+		ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8 + log_len);
+		ASSERT_EQ(resp[1] == 6 + log_len);
+		ASSERT_EQ(resp[4] == 0 && resp[5] == 0);
+		ASSERT_EQ(resp[6] == 0 && resp[7] == 1);
+		ASSERT_EQ(memcmp(resp + 8, log, log_len) == 0);
+		arena_release(arena);
+	}
 }
 
 TEST(DiagnosticsRejectsMalformedRequest)
@@ -714,130 +818,6 @@ TEST(DiagnosticsReservedDataWordMustBeZero)
 	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
 	ASSERT_EQ(run(dev, req, 6, resp) == 2);
 	ASSERT_EQ(exception_response_is(resp, 2, EXC_ILLEGAL_DATA_VALUE));
-	arena_release(arena);
-}
-
-TEST(DiagnosticsRestartCommunicationsClearsStateAndEchoes)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[5];
-	u8		resp[MODBUS_MAX_PDU];
-
-	dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
-	dev->diag_comm_error_count  = 7;
-	dev->diag_exception_count   = 8;
-	dev->diag_no_response_count = 9;
-	dev->diag_nak_count         = 4;
-	dev->diag_busy_count        = 5;
-	dev->diag_overrun_count     = 6;
-	dev->com_event_count        = 11;
-
-	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	ASSERT_EQ(dev->diagnostic_register == 0);
-	ASSERT_EQ(dev->message_count == 0);
-	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
-	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
-	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
-	ASSERT_EQ(dev->com_event_count == 0);
-
-	dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
-	dev->diag_comm_error_count  = 7;
-	dev->diag_exception_count   = 8;
-	dev->diag_no_response_count = 9;
-	dev->diag_nak_count         = 4;
-	dev->diag_busy_count        = 5;
-	dev->diag_overrun_count     = 6;
-	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0xFF00);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	ASSERT_EQ(!dev->listen_only);
-	ASSERT_EQ(dev->com_event_count == 0);
-	ASSERT_EQ(dev->diagnostic_register == 0);
-	ASSERT_EQ(dev->message_count == 0);
-	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
-	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
-	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
-	arena_release(arena);
-}
-
-TEST(DiagnosticsRestart0000ClearsCountersAndPreservesEventLog)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[5];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
-	static const u8	log[] = { 0x11, 0x22, 0x33 };
-
-	dev->com_event_count        = 11;
-	dev->com_event_log_count    = (u16)sizeof(log);
-	dev->diag_comm_error_count  = 7;
-	dev->diag_exception_count   = 8;
-	dev->diag_no_response_count = 9;
-	dev->diag_nak_count         = 4;
-	dev->diag_busy_count        = 5;
-	dev->diag_overrun_count     = 6;
-	dev->message_count          = 13;
-	memcpy(dev->com_events, log, sizeof(log));
-
-	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0x0000);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	ASSERT_EQ(dev->com_event_count == 0);
-	ASSERT_EQ(dev->message_count == 0);
-	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
-	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
-	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
-	ASSERT_EQ(dev->com_event_log_count == sizeof(log));
-	ASSERT_EQ(memcmp(dev->com_events, log, sizeof(log)) == 0);
-
-	ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8 + sizeof(log));
-	ASSERT_EQ(resp[1] == 6 + sizeof(log));
-	ASSERT_EQ(resp[4] == 0 && resp[5] == 0);
-	ASSERT_EQ(resp[6] == 0 && resp[7] == 1);
-	ASSERT_EQ(memcmp(resp + 8, log, sizeof(log)) == 0);
-	arena_release(arena);
-}
-
-TEST(DiagnosticsRestartFF00ClearsCountersAndEventLog)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[5];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		fc12[] = { FC_GET_COM_EVENT_LOG };
-	static const u8	log[] = { 0x11, 0x22, 0x33 };
-
-	dev->com_event_count        = 11;
-	dev->com_event_log_count    = (u16)sizeof(log);
-	dev->diag_comm_error_count  = 7;
-	dev->diag_exception_count   = 8;
-	dev->diag_no_response_count = 9;
-	dev->diag_nak_count         = 4;
-	dev->diag_busy_count        = 5;
-	dev->diag_overrun_count     = 6;
-	dev->message_count          = 13;
-	memcpy(dev->com_events, log, sizeof(log));
-
-	diagnostic_request(req, DIAG_SUB_RESTART_COMMUNICATIONS, 0xFF00);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	ASSERT_EQ(dev->com_event_count == 0);
-	ASSERT_EQ(dev->message_count == 0);
-	ASSERT_EQ(dev->diag_comm_error_count == 0 && dev->diag_exception_count == 0);
-	ASSERT_EQ(dev->diag_no_response_count == 0 && dev->diag_nak_count == 0);
-	ASSERT_EQ(dev->diag_busy_count == 0 && dev->diag_overrun_count == 0);
-	ASSERT_EQ(dev->com_event_log_count == 0);
-	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
-		ASSERT_EQ(dev->com_events[i] == 0);
-
-	ASSERT_EQ(run(dev, fc12, sizeof(fc12), resp) == 8);
-	ASSERT_EQ(resp[1] == 6);
-	ASSERT_EQ(resp[4] == 0 && resp[5] == 0);
-	ASSERT_EQ(resp[6] == 0 && resp[7] == 1);
 	arena_release(arena);
 }
 
@@ -1150,127 +1130,6 @@ TEST(MbapHeaderRoundTripAndValidation)
 	ASSERT_FAILURE(mbap_is_valid(&out));
 }
 
-static device_t*
-make_file_device(arena_t* arena)
-{
-	device_t*	dev    = device_new(arena, 0);
-	u16		data1[] = { 0x1234, 0x5678 };
-	u16		data2[] = { 0x000A, 0x000B, 0x000C };
-	u16		data3[] = { 0x00FF };
-
-	device_add_file_record(dev, 1, 0, 2, data1);
-	device_add_file_record(dev, 1, 10, 3, data2);
-	device_add_file_record(dev, 4, 2, 1, data3);
-	return dev;
-}
-
-TEST(ReadFileRecordSingleSubRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		req[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		want[] = { FC_READ_FILE_RECORD, 0x06, 0x05, 0x06, 0x12, 0x34, 0x56, 0x78 };
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want));
-	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
-	arena_release(arena);
-}
-
-TEST(ReadFileRecordMultipleSubRequests)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		req[]  = {
-		FC_READ_FILE_RECORD, 0x0E,
-		0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,	/* file 1, rec 0, len 1 */
-		0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01,	/* file 4, rec 2, len 1 */
-	};
-	u8		resp[MODBUS_MAX_PDU];
-	u8		want[] = {
-		FC_READ_FILE_RECORD, 0x08,
-		0x03, 0x06, 0x12, 0x34,
-		0x03, 0x06, 0x00, 0xFF,
-	};
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want));
-	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
-	arena_release(arena);
-}
-
-TEST(ReadFileRecordRejectsMalformedRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		short_req[] = { FC_READ_FILE_RECORD };
-	u8		bad_count[] = { FC_READ_FILE_RECORD, 0x06, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8		bad_mod7[]  = { FC_READ_FILE_RECORD, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00 };
-	u8		bad_high[]  = { FC_READ_FILE_RECORD, 0xF6, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8		bad_len[]   = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00 };
-	u8		bad_ref[]   = { FC_READ_FILE_RECORD, 0x07, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8		bad_rlen[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
-	u8		bad_rec[]   = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01 };
-	u8		bad_range[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02 };
-	u8		bad_file[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
-	u8		big_resp[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7E };
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, short_req, sizeof(short_req), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_count, sizeof(bad_count), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_mod7, sizeof(bad_mod7), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_high, sizeof(bad_high), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_len, sizeof(bad_len), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_ref, sizeof(bad_ref), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_rlen, sizeof(bad_rlen), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_rec, sizeof(bad_rec), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_range, sizeof(bad_range), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_file, sizeof(bad_file), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, big_resp, sizeof(big_resp), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	arena_release(arena);
-}
-
-TEST(ReadFileRecordUnavailableIsAddressError)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		missing_file[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01 };
-	u8		missing_rec[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01 };
-	u8		gap[]          = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, missing_file, sizeof(missing_file), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	run(dev, missing_rec, sizeof(missing_rec), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	/* Range 0-2 spans undefined record 2 between configured segments. */
-	run(dev, gap, sizeof(gap), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
-TEST(ReadFileRecordUnavailableWhenNoFileRecordsConfigured)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[0] == 0x94 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
 TEST(ReadFileRecordMultipleSubRequestsExceedPduSize)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1302,139 +1161,6 @@ TEST(ReadFileRecordMultipleSubRequestsExceedPduSize)
 	arena_release(arena);
 }
 
-TEST(WriteFileRecordSingleSubRequestEchoesAndUpdates)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		req[]  = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xAA, 0xAA, 0xBB, 0xBB };
-	u8		read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		want[] = { FC_READ_FILE_RECORD, 0x06, 0x05, 0x06, 0xAA, 0xAA, 0xBB, 0xBB };
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == sizeof(want));
-	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
-	arena_release(arena);
-}
-
-TEST(WriteFileRecordMultipleSubRequests)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		req[]  = {
-		FC_WRITE_FILE_RECORD, 0x12,
-		0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x11,	/* file 1, rec 0 */
-		0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01, 0x00, 0x22,	/* file 4, rec 2 */
-	};
-	u8		read1[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
-	u8		read4[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(req));
-	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-
-	run(dev, read1, sizeof(read1), resp);
-	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[4] == 0x00 && resp[5] == 0x11 && resp[6] == 0x56 && resp[7] == 0x78);
-	run(dev, read4, sizeof(read4), resp);
-	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[4] == 0x00 && resp[5] == 0x22);
-	arena_release(arena);
-}
-
-TEST(WriteFileRecordRejectsMalformedRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		short_req[] = { FC_WRITE_FILE_RECORD };
-	u8		bad_count[] = { FC_WRITE_FILE_RECORD, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 }; /* byte count does not match PDU */
-	u8		bad_low[]   = { FC_WRITE_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 }; /* byte count below FC21 minimum */
-	u8		bad_high[]  = { FC_WRITE_FILE_RECORD, 0xFC, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 }; /* byte count above FC21 maximum */
-	u8		bad_len[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00 }; /* PDU longer than byte count */
-	u8		bad_ref[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
-	u8		bad_rlen[]  = { FC_WRITE_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
-	u8		bad_rec[]   = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x27, 0x10, 0x00, 0x01, 0x00, 0x01 };
-	u8		bad_range[] = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x27, 0x0F, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 }; /* range exceeds 0x270F */
-	u8		bad_file[]  = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
-	u8		trunc[]     = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01 }; /* claims 2 registers but only 1 provided */
-	u8		misaligned[]= { FC_WRITE_FILE_RECORD, 0x0A, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00 }; /* trailing byte after complete sub-request */
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, short_req, sizeof(short_req), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_count, sizeof(bad_count), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_low, sizeof(bad_low), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_high, sizeof(bad_high), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_len, sizeof(bad_len), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_ref, sizeof(bad_ref), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_rlen, sizeof(bad_rlen), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_rec, sizeof(bad_rec), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_range, sizeof(bad_range), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, bad_file, sizeof(bad_file), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, trunc, sizeof(trunc), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	run(dev, misaligned, sizeof(misaligned), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	arena_release(arena);
-}
-
-TEST(WriteFileRecordUnavailableIsAddressError)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		missing_file[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
-	u8		missing_rec[]  = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01 };
-	u8		gap[]          = { FC_WRITE_FILE_RECORD, 0x0D, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, missing_file, sizeof(missing_file), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	run(dev, missing_rec, sizeof(missing_rec), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	run(dev, gap, sizeof(gap), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
-TEST(WriteFileRecordIsAllOrNothing)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_file_device(arena);
-	u8		req[]  = {
-		FC_WRITE_FILE_RECORD, 0x12,
-		0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x77,	/* valid */
-		0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x88,	/* unavailable file */
-	};
-	u8		read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	run(dev, read, sizeof(read), resp);
-	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[4] == 0x12 && resp[5] == 0x34);
-	arena_release(arena);
-}
-
-TEST(WriteFileRecordUnavailableWhenNoFileRecordsConfigured)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[0] == 0x95 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
 TEST(MaskWriteRegisterAppliesFormulaAndEchoes)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1448,21 +1174,6 @@ TEST(MaskWriteRegisterAppliesFormulaAndEchoes)
 	ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
 	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 4);
 	ASSERT_EQ(resp[2] == 0x12 && resp[3] == 0x25);
-	arena_release(arena);
-}
-
-TEST(MaskWriteRegisterRejectsMalformedRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		short_req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00 };
-	u8		extra[]     = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	ASSERT_EQ(run(dev, extra, sizeof(extra), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	arena_release(arena);
 }
 
@@ -1490,91 +1201,6 @@ TEST(MaskWriteRegisterUnavailableAddressIsAddressError)
 	device_add_point(dev, &p);
 	run(dev, readonly, sizeof(readonly), resp);
 	ASSERT_EQ(resp[0] == 0x96 && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
-TEST(ReadWriteMultipleRegistersSuccessAndReadback)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = {
-		FC_READ_WRITE_MULTIPLE_REGISTERS,
-		0x00, 0x00, 0x00, 0x02,	/* read addr 0, qty 2 */
-		0x00, 0x00, 0x00, 0x02,	/* write addr 0, qty 2 */
-		0x04,			/* byte count */
-		0xAA, 0xAA, 0xBB, 0xBB,	/* write values */
-	};
-	u8		read[] = { 0x03, 0x00, 0x00, 0x00, 0x02 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 6);
-	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04);
-	ASSERT_EQ(resp[2] == 0xAA && resp[3] == 0xAA && resp[4] == 0xBB && resp[5] == 0xBB);
-
-	ASSERT_EQ(run(dev, read, sizeof(read), resp) == 6);
-	ASSERT_EQ(resp[2] == 0xAA && resp[3] == 0xAA && resp[4] == 0xBB && resp[5] == 0xBB);
-	arena_release(arena);
-}
-
-TEST(ReadWriteMultipleRegistersWriteBeforeReadWithOverlap)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	point_t		p     = { 0 };
-	u8		req[]  = {
-		FC_READ_WRITE_MULTIPLE_REGISTERS,
-		0x00, 0x01, 0x00, 0x03,	/* read addr 1, qty 3 */
-		0x00, 0x00, 0x00, 0x03,	/* write addr 0, qty 3 */
-		0x06,
-		0x00, 0x64, 0x00, 0x65, 0x00, 0x66,	/* 100,101,102 */
-	};
-	u8		resp[MODBUS_MAX_PDU];
-	u16		out[4] = { 0, 0, 0, 0 };
-
-	p.kind = POINT_STATIC;
-	p.space = SPACE_HOLDING;
-	p.type = VT_U16;
-	for (u32 i = 0; i < 4; i++) { p.address = i; p.static_value = 10 + i; device_add_point(dev, &p); }
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 8);
-	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x06);
-	/* read of 1,2,3 after write to 0,1,2 => 101,102,13 */
-	ASSERT_EQ(resp[2] == 0x00 && resp[3] == 0x65);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x66);
-	ASSERT_EQ(resp[6] == 0x00 && resp[7] == 0x0D);
-
-	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, out));
-	ASSERT_EQ(out[0] == 100 && out[1] == 101 && out[2] == 102 && out[3] == 13);
-	arena_release(arena);
-}
-
-TEST(ReadWriteMultipleRegistersWriteBeforeReadNonOverlapping)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	point_t		p     = { 0 };
-	u8		req[]  = {
-		FC_READ_WRITE_MULTIPLE_REGISTERS,
-		0x00, 0x02, 0x00, 0x02,	/* read addr 2, qty 2 */
-		0x00, 0x00, 0x00, 0x02,	/* write addr 0, qty 2 */
-		0x04,
-		0x00, 0x0A, 0x00, 0x14,	/* 10,20 */
-	};
-	u8		resp[MODBUS_MAX_PDU];
-	u16		out[4] = { 0, 0, 0, 0 };
-
-	p.kind = POINT_STATIC;
-	p.space = SPACE_HOLDING;
-	p.type = VT_U16;
-	for (u32 i = 0; i < 4; i++) { p.address = i; p.static_value = (f64)(i + 1); device_add_point(dev, &p); }
-
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 6);
-	ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04);
-	/* Read returns post-write state for non-overlapping ranges. */
-	ASSERT_EQ(get_be16(resp + 2) == 3 && get_be16(resp + 4) == 4);
-
-	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, out));
-	ASSERT_EQ(out[0] == 10 && out[1] == 20 && out[2] == 3 && out[3] == 4);
 	arena_release(arena);
 }
 
@@ -1679,45 +1305,6 @@ TEST(ReadWriteMultipleRegistersRejectsNonHoldingTarget)
 	arena_release(arena);
 }
 
-TEST(ReadFifoQueueReturnsConfiguredValues)
-{
-	arena_t*	arena  = ARENA_ALLOC();
-	device_t*	dev    = device_new(arena, 0);
-	u16		data[] = { 0x1234, 0x5678, 0x0003 };
-	u8		req[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03 };
-
-	ASSERT_EQ(device_add_fifo(dev, 10, 3, data) == NULL);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == sizeof(want));
-	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
-	arena_release(arena);
-}
-
-TEST(ReadFifoQueueEmptyAndNonDestructive)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	u16		data[] = { 0x0001, 0x0002 };
-	u8		req1[] = { FC_READ_FIFO_QUEUE, 0x00, 0x01 };
-	u8		req2[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		empty[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02, 0x00, 0x00 };
-	u8		want[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x06, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 };
-
-	ASSERT_EQ(device_add_fifo(dev, 1, 0, data) == NULL);
-	ASSERT_EQ(device_add_fifo(dev, 2, 2, data) == NULL);
-
-	ASSERT_EQ(run(dev, req1, sizeof(req1), resp) == sizeof(empty));
-	ASSERT_EQ(memcmp(resp, empty, sizeof(empty)) == 0);
-
-	ASSERT_EQ(run(dev, req2, sizeof(req2), resp) == sizeof(want));
-	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
-	ASSERT_EQ(run(dev, req2, sizeof(req2), resp) == sizeof(want));
-	ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
-	arena_release(arena);
-}
-
 TEST(ReadFifoQueueMaxCount)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -1736,39 +1323,6 @@ TEST(ReadFifoQueueMaxCount)
 	ASSERT_EQ(get_be16(resp + 3) == DEVICE_MAX_FIFO_VALUES);
 	ASSERT_EQ(get_be16(resp + 5) == 1);
 	ASSERT_EQ(get_be16(resp + 5 + 2 * (DEVICE_MAX_FIFO_VALUES - 1)) == DEVICE_MAX_FIFO_VALUES);
-	arena_release(arena);
-}
-
-TEST(ReadFifoQueueZeroValues)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	u8		req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x07 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(device_add_fifo(dev, 7, 0, NULL) == NULL);
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 5);
-	ASSERT_EQ(resp[0] == FC_READ_FIFO_QUEUE);
-	ASSERT_EQ(get_be16(resp + 1) == 2);
-	ASSERT_EQ(get_be16(resp + 3) == 0);
-	arena_release(arena);
-}
-
-TEST(ReadFifoQueueRejectsMalformedRequest)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	u16		data[] = { 1 };
-	u8		short_req[] = { FC_READ_FIFO_QUEUE, 0x00 };
-	u8		long_req[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x01, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	ASSERT_EQ(device_add_fifo(dev, 1, 1, data) == NULL);
-
-	ASSERT_EQ(run(dev, short_req, sizeof(short_req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x98 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
-	ASSERT_EQ(run(dev, long_req, sizeof(long_req), resp) == 2);
-	ASSERT_EQ(resp[0] == 0x98 && resp[1] == EXC_ILLEGAL_DATA_VALUE);
 	arena_release(arena);
 }
 
@@ -2001,269 +1555,124 @@ TEST(CanopenNetworkIdEcho)
 	arena_release(arena);
 }
 
-TEST(ReadDeviceIdentificationBasicStream)
+typedef enum {
+	MEI_DEV_BASIC,		/* default identification objects only */
+	MEI_DEV_REGULAR,	/* + vendor url, product, model and application names */
+	MEI_DEV_EXTENDED,	/* + url, product and extended objects 0x80, 0x90, 0xA0 */
+	MEI_DEV_LONG_EXTENDED,	/* three 130-byte extended objects: only one fits a response */
+	MEI_DEV_LONG_BASIC,	/* three 244-byte basic objects on an empty device */
+} mei_dev_t;
+
+TEST(ReadDeviceIdentificationStreamsAndSpecificObjects)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
-	u32		off = 7;
+	typedef struct { u8 id; const char* value; } obj_t;
+	static char	long130[131], long_v[245], long_p[245], long_r[245];
+	static const obj_t objs[][8] = {
+		[MEI_DEV_BASIC]    = { { 0x00, "mogbus" }, { 0x01, "mogbus" }, { 0x02, "1.0" } },
+		[MEI_DEV_REGULAR]  = { { 0x00, "mogbus" }, { 0x01, "mogbus" }, { 0x02, "1.0" },
+				       { 0x03, "https://example.invalid" }, { 0x04, "Simulator" },
+				       { 0x05, "M1" }, { 0x06, "TestApp" } },
+		[MEI_DEV_EXTENDED] = { { 0x00, "mogbus" }, { 0x01, "mogbus" }, { 0x02, "1.0" },
+				       { 0x03, "url" }, { 0x04, "Sim" }, { 0x80, "Alpha" },
+				       { 0x90, "Mike" }, { 0xA0, "Zulu" } },
+		[MEI_DEV_LONG_EXTENDED] = { { 0x00, "mogbus" }, { 0x01, "mogbus" }, { 0x02, "1.0" },
+					    { 0x80, long130 }, { 0x90, long130 }, { 0xA0, long130 } },
+		[MEI_DEV_LONG_BASIC] = { { 0x00, long_v }, { 0x01, long_p }, { 0x02, long_r } },
+	};
+	/* conformity 0 = skip; exc != 0 = expect that exception; objects are a slice of objs[dev] */
+	static const struct {
+		const char*	name;
+		mei_dev_t	dev;
+		u8		code, obj, conformity, exc, more, next, from, n;
+	} cases[] = {
+		{ "basic stream", MEI_DEV_BASIC, 1, 0x00, 0x81, 0, 0x00, 0x00, 0, 3 },
+		{ "specific, known but unconfigured object", MEI_DEV_BASIC, 4, 0x03, 0, EXC_ILLEGAL_DATA_ADDRESS, 0, 0, 0, 0 },
+		{ "regular stream", MEI_DEV_REGULAR, 2, 0x00, 0x82, 0, 0x00, 0x00, 0, 7 },
+		{ "extended stream from 3", MEI_DEV_REGULAR, 3, 0x03, 0x82, 0, 0x00, 0x00, 3, 4 },
+		{ "specific object 1", MEI_DEV_REGULAR, 4, 0x01, 0x82, 0, 0x00, 0x00, 1, 1 },
+		{ "specific object 4", MEI_DEV_REGULAR, 4, 0x04, 0x82, 0, 0x00, 0x00, 4, 1 },
+		{ "extended: full stream", MEI_DEV_EXTENDED, 3, 0x00, 0x83, 0, 0x00, 0x00, 0, 8 },
+		{ "extended: resume at 0x90", MEI_DEV_EXTENDED, 3, 0x90, 0x83, 0, 0x00, 0x00, 6, 2 },
+		{ "extended: unknown start restarts at 0", MEI_DEV_EXTENDED, 3, 0x7F, 0, 0, 0x00, 0x00, 0, 8 },
+		{ "extended: basic category", MEI_DEV_EXTENDED, 1, 0x00, 0x83, 0, 0x00, 0x00, 0, 3 },
+		{ "extended: regular category", MEI_DEV_EXTENDED, 2, 0x00, 0x83, 0, 0x00, 0x00, 0, 5 },
+		{ "extended: specific 0x90", MEI_DEV_EXTENDED, 4, 0x90, 0x83, 0, 0x00, 0x00, 6, 1 },
+		{ "extended: specific absent object", MEI_DEV_EXTENDED, 4, 0x81, 0, EXC_ILLEGAL_DATA_ADDRESS, 0, 0, 0, 0 },
+		{ "extended more follows 1", MEI_DEV_LONG_EXTENDED, 3, 0x00, 0x83, 0, 0xFF, 0x90, 0, 4 },
+		{ "extended more follows 2", MEI_DEV_LONG_EXTENDED, 3, 0x90, 0, 0, 0xFF, 0xA0, 4, 1 },
+		{ "extended more follows 3", MEI_DEV_LONG_EXTENDED, 3, 0xA0, 0, 0, 0x00, 0x00, 5, 1 },
+		/* 7-byte MEI header + 2-byte object header + 244-byte value = 253 (MODBUS_MAX_PDU) */
+		{ "more follows 1", MEI_DEV_LONG_BASIC, 1, 0x00, 0, 0, 0xFF, 0x01, 0, 1 },
+		{ "more follows 2", MEI_DEV_LONG_BASIC, 1, 0x01, 0, 0, 0xFF, 0x02, 1, 1 },
+		{ "more follows 3", MEI_DEV_LONG_BASIC, 1, 0x02, 0, 0, 0x00, 0x00, 2, 1 },
+	};
 
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
-	ASSERT_EQ(resp[1] == 0x0E);
-	ASSERT_EQ(resp[2] == 0x01);
-	ASSERT_EQ(resp[3] == 0x81); /* basic only: no regular objects configured */
-	ASSERT_EQ(resp[4] == 0x00);
-	ASSERT_EQ(resp[5] == 0x00);
-	ASSERT_EQ(resp[6] == 0x03);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-	ASSERT_EQ(len == off);
-	arena_release(arena);
-}
+	memset(long130, 'E', 130);
+	memset(long_v, 'V', 244);
+	memset(long_p, 'P', 244);
+	memset(long_r, 'R', 244);
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_device(arena);
+		u8		req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, cases[i].code, cases[i].obj };
+		u8		resp[MODBUS_MAX_PDU];
+		u32		off = 7;
+		u32		len;
 
-TEST(ReadDeviceIdentificationRegularAndExtended)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x02, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
-	u32		off = 7;
+		switch (cases[i].dev)
+		{
+		case MEI_DEV_BASIC:
+			break;
+		case MEI_DEV_REGULAR:
+			strcpy(dev->device_id[DEVICE_ID_VENDOR_URL], "https://example.invalid");
+			strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
+			strcpy(dev->device_id[DEVICE_ID_MODEL_NAME], "M1");
+			strcpy(dev->device_id[DEVICE_ID_USER_APPLICATION_NAME], "TestApp");
+			break;
+		case MEI_DEV_EXTENDED:
+			strcpy(dev->device_id[DEVICE_ID_VENDOR_URL], "url");
+			strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Sim");
+			add_extended_id(dev, 0xA0, "Zulu");
+			add_extended_id(dev, 0x80, "Alpha");
+			add_extended_id(dev, 0x90, "Mike");
+			break;
+		case MEI_DEV_LONG_EXTENDED:
+			add_extended_id(dev, 0x80, long130);
+			add_extended_id(dev, 0x90, long130);
+			add_extended_id(dev, 0xA0, long130);
+			break;
+		case MEI_DEV_LONG_BASIC:
+			dev = device_new(arena, 0);
+			strcpy(dev->device_id[DEVICE_ID_VENDOR_NAME], long_v);
+			strcpy(dev->device_id[DEVICE_ID_PRODUCT_CODE], long_p);
+			strcpy(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], long_r);
+			break;
+		}
 
-	strcpy(dev->device_id[DEVICE_ID_VENDOR_URL], "https://example.invalid");
-	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
-	strcpy(dev->device_id[DEVICE_ID_MODEL_NAME], "M1");
-	strcpy(dev->device_id[DEVICE_ID_USER_APPLICATION_NAME], "TestApp");
+		fprintf(stderr, "device id case '%s'\n", cases[i].name);
+		len = run(dev, req, sizeof(req), resp);
+		if (cases[i].exc != 0)
+		{
+			ASSERT_EQ(len == 2 && resp[0] == 0xAB && resp[1] == cases[i].exc);
+			arena_release(arena);
+			continue;
+		}
+		ASSERT_EQ(len <= MODBUS_MAX_PDU);
+		ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT && resp[1] == 0x0E);
+		ASSERT_EQ(resp[2] == cases[i].code);
+		ASSERT_EQ(cases[i].conformity == 0 || resp[3] == cases[i].conformity);
+		ASSERT_EQ(resp[4] == cases[i].more && resp[5] == cases[i].next);
+		ASSERT_EQ(resp[6] == cases[i].n);
+		for (u32 k = 0; k < cases[i].n; k++)
+		{
+			const obj_t* o = &objs[cases[i].dev][cases[i].from + k];
 
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[2] == 0x02);
-	ASSERT_EQ(resp[3] == 0x82);
-	ASSERT_EQ(resp[4] == 0x00);
-	ASSERT_EQ(resp[6] == 0x07);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-	assert_mei_object(resp, &off, 0x03, "https://example.invalid");
-	assert_mei_object(resp, &off, 0x04, "Simulator");
-	assert_mei_object(resp, &off, 0x05, "M1");
-	assert_mei_object(resp, &off, 0x06, "TestApp");
-	ASSERT_EQ(len == off);
-
-	req[2] = 0x03;
-	req[3] = 0x03;
-	len = run(dev, req, sizeof(req), resp);
-	off = 7;
-	ASSERT_EQ(resp[2] == 0x03);
-	ASSERT_EQ(resp[3] == 0x82);
-	ASSERT_EQ(resp[4] == 0x00);
-	ASSERT_EQ(resp[6] == 0x04);
-	assert_mei_object(resp, &off, 0x03, "https://example.invalid");
-	assert_mei_object(resp, &off, 0x04, "Simulator");
-	assert_mei_object(resp, &off, 0x05, "M1");
-	assert_mei_object(resp, &off, 0x06, "TestApp");
-	ASSERT_EQ(len == off);
-	arena_release(arena);
-}
-
-TEST(ReadDeviceIdentificationSpecific)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-	u32		off = 7;
-
-	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Simulator");
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 6);
-	ASSERT_EQ(resp[2] == 0x04);
-	ASSERT_EQ(resp[3] == 0x82);
-	ASSERT_EQ(resp[4] == 0x00);
-	ASSERT_EQ(resp[5] == 0x00);
-	ASSERT_EQ(resp[6] == 0x01);
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-
-	req[3] = 0x04;
-	ASSERT_EQ(run(dev, req, sizeof(req), resp) == 7 + 2 + 9);
-	off = 7;
-	assert_mei_object(resp, &off, 0x04, "Simulator");
-	arena_release(arena);
-}
-
-TEST(ReadDeviceIdentificationSpecificUnknownObjectIsAddressError)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x03 };
-	u8		resp[MODBUS_MAX_PDU];
-
-	/* 0x03 is a known regular id but not configured on this basic-only device. */
-	run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
-TEST(ReadDeviceIdentificationExtendedObjects)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		stream[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
-	u8		resume[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x90 };
-	u8		basic[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
-	u8		regular[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x02, 0x00 };
-	u8		specific[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x90 };
-	u8		unknown[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x7F };
-	u8		absent[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x81 };
-	u8		resp[MODBUS_MAX_PDU];
-	u32		off = 7;
-
-	strcpy(dev->device_id[DEVICE_ID_VENDOR_URL], "url");
-	strcpy(dev->device_id[DEVICE_ID_PRODUCT_NAME], "Sim");
-	add_extended_id(dev, 0xA0, "Zulu");
-	add_extended_id(dev, 0x80, "Alpha");
-	add_extended_id(dev, 0x90, "Mike");
-
-	run(dev, stream, sizeof(stream), resp);
-	ASSERT_EQ(resp[3] == 0x83); /* extended conformity takes precedence */
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x08);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-	assert_mei_object(resp, &off, 0x03, "url");
-	assert_mei_object(resp, &off, 0x04, "Sim");
-	assert_mei_object(resp, &off, 0x80, "Alpha");
-	assert_mei_object(resp, &off, 0x90, "Mike");
-	assert_mei_object(resp, &off, 0xA0, "Zulu");
-
-	off = 7;
-	run(dev, resume, sizeof(resume), resp);
-	ASSERT_EQ(resp[3] == 0x83 && resp[6] == 0x02);
-	assert_mei_object(resp, &off, 0x90, "Mike");
-	assert_mei_object(resp, &off, 0xA0, "Zulu");
-
-	off = 7;
-	run(dev, unknown, sizeof(unknown), resp);
-	ASSERT_EQ(resp[6] == 0x08 && resp[7] == 0x00);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-	assert_mei_object(resp, &off, 0x03, "url");
-	assert_mei_object(resp, &off, 0x04, "Sim");
-	assert_mei_object(resp, &off, 0x80, "Alpha");
-	assert_mei_object(resp, &off, 0x90, "Mike");
-	assert_mei_object(resp, &off, 0xA0, "Zulu");
-
-	off = 7;
-	run(dev, basic, sizeof(basic), resp);
-	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x03);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-
-	off = 7;
-	run(dev, regular, sizeof(regular), resp);
-	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[6] == 0x05);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-	assert_mei_object(resp, &off, 0x03, "url");
-	assert_mei_object(resp, &off, 0x04, "Sim");
-
-	off = 7;
-	run(dev, specific, sizeof(specific), resp);
-	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x01);
-	assert_mei_object(resp, &off, 0x90, "Mike");
-
-	run(dev, absent, sizeof(absent), resp);
-	ASSERT_EQ(resp[0] == 0xAB && resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	arena_release(arena);
-}
-
-TEST(ReadDeviceIdentificationExtendedMoreFollows)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena);
-	u8		req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-	char		value[131];
-	u32		len = 0;
-	u32		off = 7;
-
-	memset(value, 'E', 130);
-	value[130] = '\0';
-	add_extended_id(dev, 0x80, value);
-	add_extended_id(dev, 0x90, value);
-	add_extended_id(dev, 0xA0, value);
-
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(len <= MODBUS_MAX_PDU);
-	ASSERT_EQ(resp[3] == 0x83 && resp[4] == 0xFF && resp[5] == 0x90 && resp[6] == 0x04);
-	assert_mei_object(resp, &off, 0x00, "mogbus");
-	assert_mei_object(resp, &off, 0x01, "mogbus");
-	assert_mei_object(resp, &off, 0x02, "1.0");
-	assert_mei_object(resp, &off, 0x80, value);
-	ASSERT_EQ(len == off);
-
-	req[3] = resp[5];
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(len <= MODBUS_MAX_PDU);
-	ASSERT_EQ(resp[4] == 0xFF && resp[5] == 0xA0 && resp[6] == 0x01 && resp[7] == 0x90);
-	ASSERT_EQ(len == 7 + 2 + 130);
-
-	req[3] = resp[5];
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(len <= MODBUS_MAX_PDU);
-	ASSERT_EQ(resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x01 && resp[7] == 0xA0);
-	ASSERT_EQ(len == 7 + 2 + 130);
-	arena_release(arena);
-}
-
-TEST(ReadDeviceIdentificationMoreFollows)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	u8		req[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
-
-	/* 7-byte MEI header + 2-byte object header + 244-byte value = 253 (MODBUS_MAX_PDU). */
-	memset(dev->device_id[DEVICE_ID_VENDOR_NAME], 'V', DEVICE_ID_OBJECT_MAX);
-	dev->device_id[DEVICE_ID_VENDOR_NAME][DEVICE_ID_OBJECT_MAX] = '\0';
-	memset(dev->device_id[DEVICE_ID_PRODUCT_CODE], 'P', DEVICE_ID_OBJECT_MAX);
-	dev->device_id[DEVICE_ID_PRODUCT_CODE][DEVICE_ID_OBJECT_MAX] = '\0';
-	memset(dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION], 'R', DEVICE_ID_OBJECT_MAX);
-	dev->device_id[DEVICE_ID_MAJOR_MINOR_REVISION][DEVICE_ID_OBJECT_MAX] = '\0';
-
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
-	ASSERT_EQ(resp[4] == 0xFF);
-	ASSERT_EQ(resp[5] == 0x01);
-	ASSERT_EQ(resp[6] == 0x01);
-	ASSERT_EQ(resp[7] == 0x00);
-	ASSERT_EQ(resp[8] == DEVICE_ID_OBJECT_MAX);
-	ASSERT_EQ(len == 7 + 2 + DEVICE_ID_OBJECT_MAX);
-
-	req[3] = resp[5];
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[4] == 0xFF);
-	ASSERT_EQ(resp[5] == 0x02);
-	ASSERT_EQ(resp[6] == 0x01);
-	ASSERT_EQ(resp[7] == 0x01);
-	ASSERT_EQ(resp[8] == DEVICE_ID_OBJECT_MAX);
-	ASSERT_EQ(len == 7 + 2 + DEVICE_ID_OBJECT_MAX);
-
-	req[3] = resp[5];
-	len = run(dev, req, sizeof(req), resp);
-	ASSERT_EQ(resp[4] == 0x00);
-	ASSERT_EQ(resp[5] == 0x00);
-	ASSERT_EQ(resp[6] == 0x01);
-	ASSERT_EQ(resp[7] == 0x02);
-	ASSERT_EQ(resp[8] == DEVICE_ID_OBJECT_MAX);
-	ASSERT_EQ(len == 7 + 2 + DEVICE_ID_OBJECT_MAX);
-	arena_release(arena);
+			assert_mei_object(resp, &off, o->id, o->value);
+		}
+		ASSERT_EQ(len == off);
+		arena_release(arena);
+	}
 }
 
 TEST(ReadDeviceIdentificationErrors)
@@ -2473,83 +1882,46 @@ TEST(SilentRequestSuppressesDisconnectFault)
 	arena_release(arena);
 }
 
-TEST(InjectedBusyExceptionCountsAsException)
+TEST(InjectedExceptionsAreCountedByCode)
 {
-	arena_t*		arena = ARENA_ALLOC();
-	device_t*		dev   = make_device(arena);
-	rng_t			rng;
-	fault_decision_t	decision = { 0 };
-	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
-	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
-	u8			resp[MODBUS_MAX_PDU];
+	static const struct {
+		const char*	name;
+		u8		code;
+		bool		corrupt;
+		u8		resp_code;
+		u16		busy;
+		u16		nak;
+	} cases[] = {
+		{ "busy",              EXC_SLAVE_DEVICE_BUSY,   false, EXC_SLAVE_DEVICE_BUSY, 1, 0 },
+		{ "nak",               EXC_DEVICE_NAK,          false, EXC_DEVICE_NAK,        0, 1 },
+		{ "other",             EXC_MEMORY_PARITY_ERROR, false, EXC_MEMORY_PARITY_ERROR, 0, 0 },
+		/* corruption flips the reply but the counters keep the injected code */
+		{ "busy then corrupt", EXC_SLAVE_DEVICE_BUSY,   true,  EXC_SLAVE_DEVICE_BUSY ^ 0xFF, 1, 0 },
+	};
+	u8 read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	u8 fc11[] = { FC_GET_COM_EVENT_COUNTER };
 
-	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
-	rng_seed(&rng, 1);
-	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
-	ASSERT_EQ(resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80));
-	ASSERT_EQ(resp[1] == EXC_SLAVE_DEVICE_BUSY && !decision.drop);
-	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
-	ASSERT_EQ(get_be16(resp + 3) == 0);
-	assert_exception_counters(dev, 1, 1, 0);
-	arena_release(arena);
-}
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		arena_t*		arena = ARENA_ALLOC();
+		device_t*		dev   = make_device(arena);
+		rng_t			rng;
+		fault_decision_t	decision = { 0 };
+		u8			resp[MODBUS_MAX_PDU];
 
-TEST(InjectedNakExceptionCountsAsException)
-{
-	arena_t*		arena = ARENA_ALLOC();
-	device_t*		dev   = make_device(arena);
-	rng_t			rng;
-	fault_decision_t	decision = { 0 };
-	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
-	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
-	u8			resp[MODBUS_MAX_PDU];
-
-	set_fault(dev, FAULT_EXCEPTION, 0, EXC_DEVICE_NAK, 100);
-	rng_seed(&rng, 1);
-	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
-	ASSERT_EQ(resp[1] == EXC_DEVICE_NAK);
-	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
-	ASSERT_EQ(get_be16(resp + 3) == 0);
-	assert_exception_counters(dev, 1, 0, 1);
-	arena_release(arena);
-}
-
-TEST(InjectedOtherExceptionOnlyCountsException)
-{
-	arena_t*		arena = ARENA_ALLOC();
-	device_t*		dev   = make_device(arena);
-	rng_t			rng;
-	fault_decision_t	decision = { 0 };
-	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
-	u8			resp[MODBUS_MAX_PDU];
-
-	set_fault(dev, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 100);
-	rng_seed(&rng, 1);
-	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
-	ASSERT_EQ(resp[1] == EXC_MEMORY_PARITY_ERROR);
-	assert_exception_counters(dev, 1, 0, 0);
-	arena_release(arena);
-}
-
-TEST(CorruptInjectedBusyExceptionKeepsInjectedCodeCounters)
-{
-	arena_t*		arena = ARENA_ALLOC();
-	device_t*		dev   = make_device(arena);
-	rng_t			rng;
-	fault_decision_t	decision = { 0 };
-	u8			read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
-	u8			fc11[] = { FC_GET_COM_EVENT_COUNTER };
-	u8			resp[MODBUS_MAX_PDU];
-
-	set_fault(dev, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
-	set_fault(dev, FAULT_CORRUPT, 0, 0, 100);
-	rng_seed(&rng, 1);
-	ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
-	ASSERT_EQ(resp[1] == (EXC_SLAVE_DEVICE_BUSY ^ 0xFF));
-	ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
-	ASSERT_EQ(get_be16(resp + 3) == 0);
-	assert_exception_counters(dev, 1, 1, 0);
-	arena_release(arena);
+		fprintf(stderr, "injected exception case '%s'\n", cases[i].name);
+		set_fault(dev, FAULT_EXCEPTION, 0, cases[i].code, 100);
+		if (cases[i].corrupt)
+			set_fault(dev, FAULT_CORRUPT, 0, 0, 100);
+		rng_seed(&rng, 1);
+		ASSERT_EQ(run_request(dev, &rng, read, sizeof(read), resp, &decision) == 2);
+		ASSERT_EQ(resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80));
+		ASSERT_EQ(resp[1] == cases[i].resp_code && !decision.drop);
+		ASSERT_EQ(run(dev, fc11, sizeof(fc11), resp) == 5);
+		ASSERT_EQ(get_be16(resp + 3) == 0);
+		assert_exception_counters(dev, 1, cases[i].busy, cases[i].nak);
+		arena_release(arena);
+	}
 }
 
 TEST(InjectedExceptionReplacesRealExceptionAccounting)

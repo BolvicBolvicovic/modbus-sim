@@ -281,56 +281,38 @@ TEST(ExprBooleanOperators)
 	ASSERT_EQ(out.type == VAL_BOOL && !out.b);
 }
 
-TEST(ExprNestedIfEvaluatesOnlyChosenBranch)
+static void
+expect_value(const expr_node_t* nodes, u16 root, u32 budget, val_type_t type, f64 want)
 {
-	expr_node_t nodes[] = {
-		conditional(1, 2, 3),
-		boolean(true),
-		num(10),
-		conditional(4, 5, 6),
-		boolean(false),
-		num(20),
-		num(30),
-	};
-	expr_ctx_t ctx = context(NULL, 3);
-	val_t out = { 0 };
+	expr_ctx_t	ctx = context(NULL, budget);
+	val_t		out = { 0 };
 
-	ASSERT_SUCCESS(expr_eval(nodes, 0, &ctx, &out));
-	ASSERT_EQ(out.type == VAL_NUM && out.n == 10 && ctx.budget == 0);
-
-	nodes[1] = boolean(false);
-	ctx.budget = 5;
-	ASSERT_SUCCESS(expr_eval(nodes, 0, &ctx, &out));
-	ASSERT_EQ(out.type == VAL_NUM && out.n == 30 && ctx.budget == 0);
-
-	nodes[4] = boolean(true);
-	ctx.budget = 5;
-	ASSERT_SUCCESS(expr_eval(nodes, 0, &ctx, &out));
-	ASSERT_EQ(out.type == VAL_NUM && out.n == 20 && ctx.budget == 0);
+	ASSERT_SUCCESS(expr_eval(nodes, root, &ctx, &out));
+	ASSERT_EQ(out.type == type);
+	ASSERT_EQ((type == VAL_BOOL ? (f64)out.b : out.n) == want);
+	ASSERT_EQ(ctx.budget == 0);	/* only the evaluated nodes are charged */
 }
 
-TEST(ExprIfSameTypedBranches)
+TEST(ExprIfEvaluatesOnlyTheChosenBranch)
 {
+	expr_node_t nested[] = {
+		conditional(1, 2, 3), boolean(true), num(10),
+		conditional(4, 5, 6), boolean(false), num(20), num(30),
+	};
 	/* T4 must reject different IF branch types at load time, including
 	 * VAR/POINT branches; the evaluator only checks the nodes it evaluates. */
-	expr_node_t nodes[] = {
-		conditional(3, 1, 2),
-		boolean(true),
-		boolean(false),
-		boolean(true),
-		conditional(7, 5, 6),
-		num(11),
-		num(22),
-		boolean(false),
+	expr_node_t typed[] = {
+		conditional(3, 1, 2), boolean(true), boolean(false), boolean(true),
+		conditional(7, 5, 6), num(11), num(22), boolean(false),
 	};
-	expr_ctx_t ctx = context(NULL, 6);
-	val_t out = { 0 };
 
-	ASSERT_SUCCESS(expr_eval(nodes, 0, &ctx, &out));
-	ASSERT_EQ(out.type == VAL_BOOL && out.b);
-	ASSERT_SUCCESS(expr_eval(nodes, 4, &ctx, &out));
-	ASSERT_EQ(out.type == VAL_NUM && out.n == 22);
-	ASSERT_EQ(ctx.budget == 0);
+	expect_value(nested, 0, 3, VAL_NUM, 10);
+	nested[1] = boolean(false);
+	expect_value(nested, 0, 5, VAL_NUM, 30);
+	nested[4] = boolean(true);
+	expect_value(nested, 0, 5, VAL_NUM, 20);
+	expect_value(typed, 0, 3, VAL_BOOL, 1);
+	expect_value(typed, 4, 3, VAL_NUM, 22);
 }
 
 TEST(ExprSharedIfDagChargesOnlyEvaluatedNodes)

@@ -4,7 +4,9 @@
 #include "device/fault.h"
 #include "modbus/pdu.h"
 #include "util/rng.h"
+#include <float.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include "vlib/macros.h"
 
@@ -301,57 +303,6 @@ TEST(FaultDisconnectAlwaysImpliesDrop)
 		fault_decision_t	d = decide(&set, &rng);
 
 		ASSERT_EQ(!d.disconnect && !d.drop);
-	}
-}
-
-TEST(FaultDelayAndCorruptCombine)
-{
-	rng_t		rng;
-	fault_set_t	set = { 0 };
-
-	add_fault(&set, FAULT_DELAY, 200, 0, 100);
-	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
-	rng_seed(&rng, 11);
-	for (u32 i = 0; i < 100; i++)
-	{
-		fault_decision_t	d = decide(&set, &rng);
-
-		ASSERT_EQ(d.delay_ms == 200 && d.corrupt);
-		ASSERT_EQ(!d.drop && !d.disconnect && d.exception_code == 0);
-	}
-}
-
-TEST(FaultExceptionAndCorruptCombine)
-{
-	rng_t		rng;
-	fault_set_t	set = { 0 };
-
-	add_fault(&set, FAULT_EXCEPTION, 0, EXC_SLAVE_DEVICE_BUSY, 100);
-	add_fault(&set, FAULT_CORRUPT, 0, 0, 100);
-	rng_seed(&rng, 12);
-	for (u32 i = 0; i < 100; i++)
-	{
-		fault_decision_t	d = decide(&set, &rng);
-
-		ASSERT_EQ(d.exception_code == EXC_SLAVE_DEVICE_BUSY && d.corrupt);
-		ASSERT_EQ(!d.drop && !d.disconnect);
-	}
-}
-
-TEST(FaultDropAndExceptionCombine)
-{
-	rng_t		rng;
-	fault_set_t	set = { 0 };
-
-	add_fault(&set, FAULT_DROP, 0, 0, 100);
-	add_fault(&set, FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, 100);
-	rng_seed(&rng, 13);
-	for (u32 i = 0; i < 100; i++)
-	{
-		fault_decision_t	d = decide(&set, &rng);
-
-		ASSERT_EQ(d.drop && d.exception_code == EXC_MEMORY_PARITY_ERROR);
-		ASSERT_EQ(!d.disconnect && !d.corrupt);
 	}
 }
 
@@ -874,8 +825,56 @@ TEST(CanopenObjectRejectsDuplicatesAndBounds)
 	arena_release(arena);
 }
 
+TEST(FaultPairsCombineInOneDecision)
+{
+	static const struct {
+		const char*	name;
+		fault_kind_t	a, b;
+		u32		delay_ms;
+		u8		code;
+		bool		drop, corrupt;
+	} cases[] = {
+		{ "delay+corrupt",     FAULT_DELAY,     FAULT_CORRUPT,   200, 0, false, true },
+		{ "exception+corrupt", FAULT_EXCEPTION, FAULT_CORRUPT,   0, EXC_SLAVE_DEVICE_BUSY, false, true },
+		{ "drop+exception",    FAULT_DROP,      FAULT_EXCEPTION, 0, EXC_MEMORY_PARITY_ERROR, true, false },
+	};
+
+	for (u32 c = 0; c < ARRAY_COUNT(cases); c++)
+	{
+		rng_t		rng;
+		fault_set_t	set = { 0 };
+
+		fprintf(stderr, "fault pair '%s'\n", cases[c].name);
+		for (u32 k = 0; k < 2; k++)
+		{
+			fault_kind_t kind = k == 0 ? cases[c].a : cases[c].b;
+
+			add_fault(&set, kind, kind == FAULT_DELAY ? cases[c].delay_ms : 0,
+				  kind == FAULT_EXCEPTION ? cases[c].code : 0, 100);
+		}
+		rng_seed(&rng, 11 + c);
+		for (u32 i = 0; i < 100; i++)
+		{
+			fault_decision_t	d = decide(&set, &rng);
+
+			ASSERT_EQ(d.delay_ms == cases[c].delay_ms);
+			ASSERT_EQ(d.exception_code == cases[c].code);
+			ASSERT_EQ(d.drop == cases[c].drop && d.corrupt == cases[c].corrupt);
+			ASSERT_EQ(!d.disconnect);
+		}
+	}
+}
+
 TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
 {
+	static const struct {
+		f64	in;
+		u16	high;
+	} cases[] = {
+		{ INFINITY, 0x7F80 }, { -INFINITY, 0xFF80 },
+		{ 1e39, 0x7F80 }, { -1e39, 0xFF80 },
+		{ (f64)FLT_MAX * 2.0, 0x7F80 }, { -((f64)FLT_MAX * 2.0), 0xFF80 },
+	};
 	u16	w[4] = { 0, 0, 0, 0 };
 	u32	raw  = 0;
 	f32	real = 0;
@@ -885,15 +884,44 @@ TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)
 	memcpy(&real, &raw, sizeof(real));
 	ASSERT_EQ(isnan(real));
 
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, INFINITY, w) == 2);
-	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -INFINITY, w) == 2);
-	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, cases[i].in, w) == 2);
+		ASSERT_EQ(w[0] == cases[i].high && w[1] == 0x0000);
+	}
 
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, 1e39, w) == 2);
-	ASSERT_EQ(w[0] == 0x7F80 && w[1] == 0x0000);
-	ASSERT_EQ(encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, -1e39, w) == 2);
-	ASSERT_EQ(w[0] == 0xFF80 && w[1] == 0x0000);
+	/* 1.0 = 0x3F800000 */
+	encode_value(VT_F32, WORDS_HIGH_FIRST, BYTES_BIG, 1.0, w);
+	ASSERT_EQ(w[0] == 0x3F80 && w[1] == 0x0000);
+	encode_value(VT_F32, WORDS_LOW_FIRST, BYTES_BIG, 1.0, w);
+	ASSERT_EQ(w[0] == 0x0000 && w[1] == 0x3F80);
+}
+
+TEST(EncodeIntegersClampRoundAndBoolIsOneBit)
+{
+	static const struct {
+		value_type_t	type;
+		f64		in;
+		u16		w0, w1;
+	} cases[] = {
+		{ VT_U16, 70000, 65535, 0 },
+		{ VT_S16, -2, 0xFFFE, 0 },
+		{ VT_U16, 12.6, 13, 0 },
+		{ VT_U16, NAN, 0, 0 },
+		{ VT_S32, INFINITY, 0x7FFF, 0xFFFF },
+		{ VT_U32, -INFINITY, 0x0000, 0x0000 },
+		{ VT_BOOL, 5, 1, 0 },
+		{ VT_BOOL, 0, 0, 0 },
+	};
+
+	for (u32 i = 0; i < ARRAY_COUNT(cases); i++)
+	{
+		u16	w[4] = { 0, 0, 0, 0 };
+
+		ASSERT_EQ(encode_value(cases[i].type, WORDS_HIGH_FIRST, BYTES_BIG, cases[i].in, w) ==
+			  value_width(cases[i].type));
+		ASSERT_EQ(w[0] == cases[i].w0 && w[1] == cases[i].w1);
+	}
 }
 
 static void
