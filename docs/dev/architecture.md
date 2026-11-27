@@ -65,7 +65,7 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/os` | `os_socket`, `os_wait`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
+| `src/os` | `os_socket`, `os_wait`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX, `WSAPoll` on Windows), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
 | `src/util` | `rng`, `log`, `arena_impl` | reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
@@ -314,8 +314,8 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
   `<sys/...>`, `<netinet/...>`, `<arpa/...>` header (`tools/check_deps.sh`); ISO C headers
   (`stdio.h`, `string.h`, `stdint.h`, `math.h`, `time.h`, `ctype.h`, ...) are fine, and `net_tls.c`
   may include OpenSSL. Errors are classified with `os_error.h`, not `errno`. One header per module
-  (`os_X.h`) with its implementation in `os_X_<platform>.c`; the Makefile builds `PLATFORM ?= posix`
-  (the only value so far; anything else fails, and `os/*_win32.c` is excluded from the build).
+  (`os_X.h`) with its implementation in `os_X_<platform>.c`; `PLATFORM ?= posix` selects
+  `os_*_posix.c`, `PLATFORM=win32` selects `os_*_win32.c` (see [Windows build](#windows-build)).
 - No `malloc`/`free` in project code: vlib arenas only, and no allocation per request.
 - Compiled with `-Wall -Wextra -Werror`.
 - Doc comments use Doxygen: every source file starts with `/** @file @brief ... */`; a type,
@@ -398,6 +398,36 @@ see [Run mogbus in Docker](../user/deployment/docker.md).
 
 The vendored s7 is version 10.6. To update, replace `third_party/s7/s7.c` and `s7.h`.
 
+### Windows build
+
+`make PLATFORM=win32 WITH_TLS=0` cross-compiles a native Windows build on Linux with MinGW-w64 GCC
+(GNU C extensions rule out MSVC); it covers the network modes only. Users get it through
+[Windows](../user/windows/windows-route.md), which also documents Docker Desktop and WSL2 (including
+serial adapters through usbipd-win).
+
+- `src/os/os_*_win32.c`: `os_error` (`WSAGetLastError`, `FormatMessage`), `os_socket` (Winsock 2:
+  `WSAStartup` on every socket creation, since it is reference counted; `ioctlsocket` `FIONBIO` plus a
+  non-inheritable handle for nonblocking and close-on-exec; `SO_EXCLUSIVEADDRUSE` instead of
+  `SO_REUSEADDR`; UDP `SIO_UDP_CONNRESET` off and `WSAEMSGSIZE` reported as cap + 1), `os_wait`
+  (`WSAPoll` over sockets in 50 ms slices, so the console handler's interrupt flag is seen like
+  `EINTR`; serial entries are flagged invalid), `os_time` (`QueryPerformanceCounter`,
+  `GetSystemTimePreciseAsFileTime`) and `os_console` (`SetConsoleCtrlHandler`). `os_socket_t` is the
+  handle type (`uintptr_t` on Windows), compared only through `os_socket_valid()` and
+  `OS_SOCKET_INVALID` outside `src/os`.
+- `os_serial_win32.c` is a stub (`os_serial_supported()` is false): serial ports, PTYs and the `*_fd`
+  modes fail with a clear message.
+- vlib arenas use their `VirtualAlloc` backend.
+- Toolchain: the MinGW `printf` format attribute is the old MSVCRT dialect, so `-Wno-format` applies
+  to this platform and the Linux build keeps the format checks; `_FORTIFY_SOURCE=2` and
+  `-fstack-protector-strong` link against MinGW's static libssp; `mogbus.exe` links `-static` with
+  `--dynamicbase --nxcompat --high-entropy-va`, next to `libmogbus.win32.a`, `mogbus.dll` (+
+  `libmogbus.dll.a`) and `mogbus-tests.exe`. TLS is not ported (`net_tls.c` is POSIX only, Windows
+  builds use `net_tls_stub.c`).
+- Tests: `TESTS_POSIX_ONLY` in the Makefile lists the tests that fork, use PTYs/termios/`poll()` or
+  spawn the binary through `test_support.c`; `make PLATFORM=win32 tests` runs the rest under Wine.
+  The CI job `windows-cross` runs `tools/win32_check.sh`: cross build, unit tests under Wine,
+  `mogbus.exe` in all six network modes with `--health`, `modbus_probe.py` and pymodbus interop.
+
 ## Roadmap
 
 Implemented behaviour is documented in the transport, device-model and config sections above;
@@ -422,34 +452,43 @@ only outstanding work is listed here.
   `docs/user/import/import-pymodbus-servers.md`).
 - A browser UI over the HTTP control API (tables, values, faults). Why: the pymodbus simulator has
   one, and some users want to change a running device without curl.
-- Windows: Docker Desktop and WSL2 (including serial adapters through usbipd-win) are documented in
-  `docs/user/windows/windows-route.md`, together with the experimental native build of the network modes. Why: many
-  PLC and SCADA engineers work on Windows. Plan:
-  - Done: the `src/os/` layer (see Modules) is the only code that includes OS headers (enforced by
-    `tools/check_deps.sh`), with `os_*_posix.c` and `os_*_win32.c` picked by `PLATFORM`.
-  - Done: the Windows implementations of `os_error` (`WSAGetLastError`, `FormatMessage`), `os_socket`
-    (Winsock 2: `WSAStartup` on every socket creation, since it is reference counted; `ioctlsocket`
-    `FIONBIO` plus a non-inheritable handle for nonblocking and close-on-exec; `SO_EXCLUSIVEADDRUSE`
-    instead of `SO_REUSEADDR`; UDP `SIO_UDP_CONNRESET` off and `WSAEMSGSIZE` reported as cap + 1),
-    `os_wait` (`WSAPoll` over sockets in 50 ms slices, so the console handler's interrupt flag is seen
-    like `EINTR`; serial entries are flagged invalid), `os_time` (`QueryPerformanceCounter`,
-    `GetSystemTimePreciseAsFileTime`) and `os_console` (`SetConsoleCtrlHandler`). `os_socket_t` is the
-    handle type (`uintptr_t` on Windows), compared only through `os_socket_valid()` and
-    `OS_SOCKET_INVALID` outside `src/os`.
-  - Done: `os_serial_win32.c` is a stub (`os_serial_supported()` is false): serial ports, PTYs and the
-    `*_fd` modes fail with a clear message. The `os_wait` serial entry (overlapped COM I/O plus
-    `WaitForMultipleObjects`, comm events) and `DCB`/`COMMTIMEOUTS` setup are the remaining work for
-    COM ports; there is no PTY on Windows, so tests would use a com0com pair.
-  - Done: vlib arenas have a `VirtualAlloc` backend.
-  - Toolchain: MinGW-w64 GCC cross-compiles on Linux (`make PLATFORM=win32 WITH_TLS=0`; GNU C
-    extensions rule out MSVC). The `printf` format attribute is the old MSVCRT dialect there, so
-    `-Wno-format` applies to this platform and the Linux build keeps the format checks;
-    `_FORTIFY_SOURCE=2` and `-fstack-protector-strong` link against the static libssp of MinGW, the
-    executable links `-static` with `--dynamicbase --nxcompat --high-entropy-va`. TLS is not ported
-    (`net_tls.c` is POSIX only, Windows builds use `net_tls_stub.c`).
-  - CI: job `windows-cross` runs `tools/win32_check.sh` (cross build, unit tests under Wine,
-    `mogbus.exe` in all six network modes, pymodbus interop). `TESTS_POSIX_ONLY` in the Makefile lists
-    the tests that fork, use PTYs/termios/`poll()` or spawn the binary through `test_support.c`; a
-    portable `test_support` would bring most of them to Windows.
-  - Next: tests on `windows-latest` (unit, Python, interop), native COM tests with com0com, OpenSSL
-    (or Schannel) for TLS, then release artifacts.
+- Windows (see [Windows build](#windows-build) for what exists). Why: many PLC and SCADA engineers
+  work on Windows. Remaining:
+  - COM ports: the `os_wait` serial entry (overlapped COM I/O plus `WaitForMultipleObjects`, comm
+    events) and `DCB`/`COMMTIMEOUTS` setup in `os_serial_win32.c`; there is no PTY on Windows, so
+    tests would use a com0com pair.
+  - A portable `test_support`, which would bring most of `TESTS_POSIX_ONLY` to Windows.
+  - Tests on `windows-latest` (unit, Python, interop), native COM tests with com0com.
+  - OpenSSL (or Schannel) for TLS.
+  - Windows release artifacts.
+- Simulator actions in Python: a post-write notification (the access hook runs before a write and
+  can only allow or veto it), and a programmable callback for user-defined function codes (today
+  they are config-only pattern matching). Why: pymodbus datastores get `setValues` after a write and
+  custom `ModbusPDU` subclasses can run arbitrary logic.
+- Frame trace hooks: a host callback that sees, and may rewrite, each received and sent frame. Why:
+  pymodbus has `trace_packet`/`trace_pdu`/`trace_connect`; fault injection covers only fixed cases.
+- asyncio integration for the Python package. Why: `Server.start()` steps on a background thread, so
+  it does not plug into an existing event loop as pymodbus does.
+- A frame decoder command (hex frame in, decoded MBAP/RTU/ASCII ADU and PDU out). Why: pymodbus ships
+  a message decoder, and it helps when reading captures.
+- Gateway/forwarder: a device whose tables are served by a real remote Modbus device. Why: pymodbus
+  has `RemoteDeviceContext` for TCP-to-serial gateways.
+
+### Client side (gaps compared with libmodbus and pymodbus)
+
+- A client (master) API in C and Python: connect over every transport, the FC requests as calls,
+  raw requests, response/byte timeouts, retries and reconnects. Why: both libraries are mainly used as
+  clients; mogbus only has `mogbus_probe` (one FC 08 echo for `--health`). The codecs in
+  `src/modbus/` already encode and decode every frame.
+
+### Platforms and integration (gaps compared with libmodbus)
+
+- RS-485 line control: `TIOCSRS485` and manual RTS toggling with a delay. Why: half-duplex
+  adapters need it, and libmodbus has `modbus_rtu_set_serial_mode` and RTS callbacks.
+- macOS and the BSDs. Why: libmodbus builds there natively. Needs a vlib arena backend check and
+  `os_serial`/PTY differences.
+- Host names in `bind` (getaddrinfo). Why: only IPv4/IPv6 literals are accepted today.
+- Public value helpers (float/int32/int64 from registers in each word and byte order). Why: libmodbus
+  has `modbus_get_float_abcd` and friends; mogbus does this only inside points.
+- `make install` with a `pkg-config` file. Why: the release ships a tarball only, which makes linking
+  against `libmogbus` harder than against libmodbus.
