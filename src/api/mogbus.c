@@ -418,6 +418,64 @@ mogbus_device_action_at(const mogbus_device_t* handle, uint32_t index, mogbus_ac
 	return true;
 }
 
+mogbus_error_t
+mogbus_device_set_action_param(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
+			       bool on_write, const char* name, double value)
+{
+	device_t*	dev = (device_t*)handle;
+	mogbus_t*	ctx = dev ? dev->owner : NULL;
+	action_event_t	event = on_write ? ACTION_ON_WRITE : ACTION_ON_READ;
+	val_t		current = { 0 };
+	val_t		next = { 0 };
+
+	if (!dev ||
+	    !name ||
+	    (unsigned)space >= SPACE_COUNT)
+		return fail(ctx, MOGBUS_ERR_INVALID, "device, space and parameter name are required");
+	if (!device_action_param_get(dev, (space_kind_t)space, address, event, name, &current))
+	{
+		return fail(ctx, MOGBUS_ERR_INVALID, "no parameter '%s' on the %s action at %s %u", name,
+			    on_write ? "on-write" : "on-read", space_name((space_kind_t)space), address);
+	}
+	if (!isfinite(value))
+		return fail(ctx, MOGBUS_ERR_INVALID, "parameter value must be a finite number");
+	next.type = current.type;
+	if (current.type == VAL_BOOL)
+	{
+		if (value != 0 &&
+		    value != 1)
+			return fail(ctx, MOGBUS_ERR_INVALID, "boolean parameter '%s' takes 0 or 1", name);
+		next.b = value != 0;
+	}
+	else
+		next.n = value;
+	device_action_param_set(dev, (space_kind_t)space, address, event, name, &next);
+	return MOGBUS_OK;
+}
+
+mogbus_error_t
+mogbus_device_get_action_param(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
+			       bool on_write, const char* name, double* out)
+{
+	device_t*	dev = (device_t*)handle;
+	mogbus_t*	ctx = dev ? dev->owner : NULL;
+	val_t		v = { 0 };
+
+	if (!dev ||
+	    !name ||
+	    !out ||
+	    (unsigned)space >= SPACE_COUNT)
+		return fail(ctx, MOGBUS_ERR_INVALID, "device, space, parameter name and output are required");
+	if (!device_action_param_get(dev, (space_kind_t)space, address,
+				     on_write ? ACTION_ON_WRITE : ACTION_ON_READ, name, &v))
+	{
+		return fail(ctx, MOGBUS_ERR_INVALID, "no parameter '%s' on the %s action at %s %u", name,
+			    on_write ? "on-write" : "on-read", space_name((space_kind_t)space), address);
+	}
+	*out = v.type == VAL_BOOL ? (v.b ? 1 : 0) : v.n;
+	return MOGBUS_OK;
+}
+
 uint64_t
 mogbus_now_ms(void)
 {

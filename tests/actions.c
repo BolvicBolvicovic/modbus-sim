@@ -3,7 +3,11 @@
 #include "device/action.h"
 #include "modbus/pdu.h"
 #include "mogbus.h"
+#include "net/net_obs.h"
+#include "os/os_socket.h"
 #include "vlib/macros.h"
+#include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -490,4 +494,147 @@ TEST(ActionPublicListingShowsParams)
 	ASSERT_EQ(a.param_count == 2 && strcmp(a.params[0].name, "step") == 0 &&
 		  !a.params[0].is_bool && a.params[0].number == 5);
 	ASSERT_FAILURE(mogbus_device_action_at((const mogbus_device_t*)dev, 2, &a));
+}
+
+TEST(ActionPublicParamSetGet)
+{
+	device_t*	dev = load_device(SERVER
+		"(define-action gate (param on #t) (param level 1.5) (set! self (if on level 0)))"
+		"(device (unit-id 1) (holding 0 (static 0) (on-read (gate))))");
+	mogbus_device_t* h = (mogbus_device_t*)dev;
+	double		v = -1;
+	u16		value = 0;
+
+	ASSERT_SUCCESS(mogbus_device_get_action_param(h, MOGBUS_HOLDING, 0, false, "on", &v) == MOGBUS_OK && v == 1);
+	ASSERT_SUCCESS(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 0, false, "level", 7) == MOGBUS_OK);
+	ASSERT_SUCCESS(read_first(dev, 1000, 3, 0, 1, &value) == 0 && value == 7);
+	ASSERT_SUCCESS(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 0, false, "on", 0) == MOGBUS_OK);
+	ASSERT_SUCCESS(mogbus_device_get_action_param(h, MOGBUS_HOLDING, 0, false, "on", &v) == MOGBUS_OK && v == 0);
+	ASSERT_SUCCESS(read_first(dev, 1001, 3, 0, 1, &value) == 0 && value == 0);
+	/* Rejected: a boolean takes 0 or 1, the value must be finite, and the target must exist. */
+	ASSERT_EQ(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 0, false, "on", 2) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 0, false, "level", (double)NAN) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 0, false, "nope", 1) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 0, true, "on", 1) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_set_action_param(h, MOGBUS_HOLDING, 5, false, "on", 1) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_get_action_param(h, MOGBUS_HOLDING, 0, false, "nope", &v) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_set_action_param(NULL, MOGBUS_HOLDING, 0, false, "on", 1) == MOGBUS_ERR_INVALID);
+	/* A restart keeps the current parameter values. */
+	device_restart(dev, 2000);
+	ASSERT_SUCCESS(mogbus_device_get_action_param(h, MOGBUS_HOLDING, 0, false, "level", &v) == MOGBUS_OK && v == 7);
+}
+
+static struct net_http_conn_t g_conn;
+
+/* One request through the HTTP endpoint without sockets; returns the status, the body in `*out`. */
+static int
+http_do(net_obs_t* obs, const char* method, const char* path, const char* body, const char** out)
+{
+	char	request[NET_OBS_HTTP_IN + NET_OBS_HTTP_BODY + 128];
+	int	code = 0;
+	char*	b;
+
+	snprintf(request, sizeof(request), "%s %s HTTP/1.1\r\nHost: localhost\r\nContent-Length: %zu\r\n\r\n%s",
+		 method, path, strlen(body), body);
+	memset(&g_conn, 0, offsetof(struct net_http_conn_t, in));
+	g_conn.fd = OS_SOCKET_INVALID;
+	snprintf(g_conn.in, sizeof(g_conn.in), "%s", request);
+	g_conn.in_len = (u32)strlen(request);
+	if (!net_obs_http_feed(obs, &g_conn) || !g_conn.writing)
+		return -1;
+	g_conn.out[g_conn.out_len < sizeof(g_conn.out) ? g_conn.out_len : sizeof(g_conn.out) - 1] = '\0';
+	sscanf(g_conn.out, "HTTP/1.1 %d", &code);
+	b = strstr(g_conn.out, "\r\n\r\n");
+	*out = b ? b + 4 : "";
+	return code;
+}
+
+TEST(ActionHttpListAndSetParam)
+{
+	device_t*	dev = load_device(SERVER
+		"(define-action gate (param on #t) (param level 1.5) (set! self (if on level 0)))"
+		"(device (unit-id 1) (holding 0 (static 0) (on-read (gate))) (coil 4 (static #f) (on-write (set! self #f))))");
+	device_t*	devs[] = { dev };
+	net_obs_t	obs;
+	const char*	body = "";
+	u16		value = 0;
+
+	net_obs_init(&obs, "tcp", devs, 1, NULL, 0);
+	obs.control.enabled = true;
+	ASSERT_EQ(http_do(&obs, "GET", "/api/devices/1/actions", "", &body) == 200);
+	ASSERT_EQ(strcmp(body, "{\"actions\":[{\"space\":\"coil\",\"address\":4,\"event\":\"write\",\"name\":\"\",\"params\":[]},"
+			 "{\"space\":\"holding\",\"address\":0,\"event\":\"read\",\"name\":\"gate\",\"params\":["
+			 "{\"name\":\"on\",\"type\":\"bool\",\"value\":1},{\"name\":\"level\",\"type\":\"number\",\"value\":1.5}]}],"
+			 "\"next\":null}") == 0);
+	ASSERT_EQ(http_do(&obs, "GET", "/api/devices/1/actions?from=1&limit=1", "", &body) == 200 &&
+		  strstr(body, "\"gate\"") != NULL && strstr(body, "\"coil\"") == NULL);
+	ASSERT_EQ(http_do(&obs, "GET", "/api/devices/1/actions?limit=1", "", &body) == 200 &&
+		  strstr(body, "\"next\":1") != NULL);
+	ASSERT_EQ(http_do(&obs, "GET", "/api/devices/1/actions?limit=0", "", &body) == 400);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"name\":\"level\",\"value\":9}", &body) == 200);
+	ASSERT_SUCCESS(read_first(dev, 1000, 3, 0, 1, &value) == 0 && value == 9);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"name\":\"on\",\"value\":0}", &body) == 200);
+	ASSERT_EQ(http_do(&obs, "GET", "/api/devices/1/actions", "", &body) == 200 &&
+		  strstr(body, "\"name\":\"on\",\"type\":\"bool\",\"value\":0") != NULL);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"name\":\"on\",\"value\":2}", &body) == 422);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"name\":\"nope\",\"value\":1}", &body) == 404);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/write", "{\"name\":\"on\",\"value\":1}", &body) == 404);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/later", "{\"name\":\"on\",\"value\":1}", &body) == 404);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/flash/0/read", "{\"name\":\"on\",\"value\":1}", &body) == 404);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"value\":1}", &body) == 400);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"name\":1,\"value\":1}", &body) == 400);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0/read", "{\"name\":\"on\",\"values\":[1]}", &body) == 400);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/holding/0/value", "{\"name\":\"on\",\"value\":1}", &body) == 400);
+	ASSERT_EQ(http_do(&obs, "POST", "/api/devices/1/actions", "", &body) == 405);
+	ASSERT_EQ(http_do(&obs, "GET", "/api/devices/1/actions/holding/0/read", "", &body) == 405);
+	ASSERT_EQ(http_do(&obs, "PUT", "/api/devices/1/actions/holding/0", "{}", &body) == 404);
+	ASSERT_EQ(obs.metrics.control_requests[0] + obs.metrics.control_requests[1] > 10);
+}
+
+TEST(ActionHttpListPagesWithinTheResponseLimit)
+{
+	static char	text[200000];
+	static char	pname[65];
+	device_t*	dev = NULL;
+	device_t*	devs[1];
+	net_obs_t	obs;
+	const char*	body = "";
+	u32		used = 0;
+	u32		seen = 0;
+	u32		from = 0;
+	u32		pages = 0;
+
+	used += (u32)snprintf(text + used, sizeof(text) - used, "%s(define-action big", SERVER);
+	for (u32 p = 0; p < 16; p++)
+	{
+		memset(pname, 'a' + (int)p, 63);
+		pname[63] = '\0';
+		used += (u32)snprintf(text + used, sizeof(text) - used, " (param %s %u)", pname, p);
+	}
+	used += (u32)snprintf(text + used, sizeof(text) - used, " (set! self 1))(device (unit-id 1)");
+	for (u32 a = 0; a < 200; a++)
+		used += (u32)snprintf(text + used, sizeof(text) - used, " (holding %u (static 0) (on-read (big)))", a);
+	snprintf(text + used, sizeof(text) - used, ")");
+	dev = load_device(text);
+	devs[0] = dev;
+	net_obs_init(&obs, "tcp", devs, 1, NULL, 0);
+	obs.control.enabled = true;
+	for (;;)
+	{
+		char		path[96];
+		const char*	p;
+
+		snprintf(path, sizeof(path), "/api/devices/1/actions?from=%u&limit=256", from);
+		ASSERT_EQ(http_do(&obs, "GET", path, "", &body) == 200);
+		for (p = body; (p = strstr(p, "\"event\":")) != NULL; p++)
+			seen++;
+		pages++;
+		p = strstr(body, "\"next\":");
+		ASSERT_EQ(p != NULL);
+		if (strncmp(p, "\"next\":null", 11) == 0)
+			break;
+		from = (u32)strtoul(p + 7, NULL, 10);
+		ASSERT_EQ(pages < 100);
+	}
+	ASSERT_EQ(seen == 200 && pages > 1);
 }

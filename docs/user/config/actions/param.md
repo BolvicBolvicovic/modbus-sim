@@ -25,8 +25,23 @@ type or the same name twice is an error. Inside the action a param reads like a 
 `set!` on it is rejected at load time.
 
 Each use stores its params in its own slots, so one definition can serve points with different
-settings. The current values survive a device restart (variables are reset, params are not), and the
-library keeps them addressable by point, event and name for runtime changes.
+settings. The current values survive a device restart (variables are reset, params are not).
+
+**Changing a param at runtime.**
+
+A param is read-only to the action, but the host can change it while the server runs; the new value
+is used from the next run of the action. A point is addressed by table, first address and event
+(`read` or `write`), and a boolean param takes exactly 0 or 1.
+
+- C: `mogbus_device_set_action_param(dev, MOGBUS_HOLDING, 0, false, "step", 5)` and
+  `mogbus_device_get_action_param(...)`; the instances and their current values are listed by
+  `mogbus_device_action_at()`. A failure returns `MOGBUS_ERR_INVALID` with the message in
+  `mogbus_last_error()`.
+- Python: `Device.actions()`, `Device.set_action_param("holding", 0, "read", "step", 5)` (a bool
+  or a number) and `Device.get_action_param(...)`.
+- HTTP, with `(control on)`: [List actions](../../observability/api/api-list-actions.md) and
+  [Set an action param](../../observability/api/api-set-action-param.md); the
+  [web UI](../../observability/web-ui.md) has an `Actions` panel for them.
 
 `--check` lists every instance with its current param values.
 

@@ -130,6 +130,17 @@ input { width: 9rem; }
 <div id="werr" class="err" role="alert"></div>
 </div>
 
+<div id="actions_panel" hidden>
+<h2>Actions</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>Point</th><th>Event</th><th>Action</th><th>Parameters</th></tr></thead>
+<tbody id="actions"></tbody>
+</table>
+</div>
+<div id="aerr" class="err" role="alert"></div>
+</div>
+
 <h2>Faults</h2>
 <div class="scroll">
 <table>
@@ -735,6 +746,51 @@ input { width: 9rem; }
     }).catch(function (e) { say("ferr", "Cannot list faults: " + e.message); });
   }
 
+  /* Point actions: the parameters take effect from the action's next run. */
+  function loadActions() {
+    var gen = st.gen, rows = [];
+    function page(from) {
+      return api("GET", base() + "/actions?from=" + from).then(function (j) {
+        rows = rows.concat(j.actions);
+        return j.next === null ? rows : page(j.next);
+      });
+    }
+    page(0).then(function (list) {
+      var body = $("actions");
+      if (gen !== st.gen) { return; }
+      clear(body);
+      $("actions_panel").hidden = !list.length;
+      list.forEach(function (a) {
+        var tr = el("tr"), td = el("td");
+        tr.appendChild(el("td", a.space + " " + a.address));
+        tr.appendChild(el("td", a.event));
+        tr.appendChild(el("td", a.name || "(inline)"));
+        a.params.forEach(function (p) {
+          var inp = el("input"), b = el("button", "Set"), lab = el("label", p.name + " ");
+          inp.value = p.value;
+          inp.size = 8;
+          inp.setAttribute("aria-label", "Value of " + p.name);
+          b.type = "button";
+          b.setAttribute("aria-label", "Set " + p.name);
+          b.addEventListener("click", function () {
+            var v = inp.value.trim();
+            if (!/^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(v)) { say("aerr", "Value must be a number" + (p.type === "bool" ? " (0 or 1)" : "")); return; }
+            api("PUT", base() + "/actions/" + a.space + "/" + a.address + "/" + a.event, { name: p.name, value: Number(v) })
+              .then(function () { say("aerr", "Set " + p.name, false); })
+              .catch(function (e) { say("aerr", e.message); });
+          });
+          lab.appendChild(inp);
+          td.appendChild(lab);
+          td.appendChild(b);
+          td.appendChild(document.createTextNode(" "));
+        });
+        if (!a.params.length) { td.textContent = "none"; td.className = "muted"; }
+        tr.appendChild(td);
+        body.appendChild(tr);
+      });
+    }).catch(function (e) { say("aerr", "Cannot list actions: " + e.message); });
+  }
+
   function num(id) { var s = $(id).value.trim(); return /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(s) ? Number(s) : NaN; }
   function addr() {
     var a = num("addr");
@@ -787,7 +843,7 @@ input { width: 9rem; }
   $("refresh").addEventListener("click", refresh);
   $("prev").addEventListener("click", function () { st.page--; render(); });
   $("next").addEventListener("click", function () { st.page++; render(); });
-  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; st.sel = []; pcache = {}; pticks = {}; meas = null; updateMeasure(); requestDraw(); loadPoints(); fillAdd(); });
+  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; st.sel = []; pcache = {}; pticks = {}; meas = null; updateMeasure(); requestDraw(); loadPoints(); loadActions(); fillAdd(); });
 
   var EVERY = [10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000], every = EVERY_MS, timer = null;
   function schedule() {
@@ -958,6 +1014,7 @@ input { width: 9rem; }
     if (!devices.length) { return; }
     st.unit = devices[0].unit;
     loadPoints();
+    loadActions();
     fillAdd();
     schedule();
   }).catch(function (e) { say("message", "Cannot read /api/devices: " + e.message); });

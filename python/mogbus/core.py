@@ -42,7 +42,7 @@ The classes mirror `mogbus.h`: Context is `mogbus_create`/`mogbus_destroy`, Cont
 Device.add_point `mogbus_device_add_point`, Device.read/write `mogbus_device_read/write` (raw
 registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (decoded),
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
-`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Context.serve
+`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Device.actions `mogbus_device_action_at`, Device.set_action_param/get_action_param `mogbus_device_set_action_param`/`mogbus_device_get_action_param`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
 `mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, probe `mogbus_probe`,
 rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
@@ -498,6 +498,22 @@ class PointInfo:
     byte_order: ByteOrder
     length: int
     read_only: bool
+
+
+@dataclass
+class ActionInfo:
+    """@brief One point action of a device, from Device.actions().
+    @param space The table of the point the action is attached to.
+    @param address Address of that point.
+    @param event `"read"` (`on-read`) or `"write"` (`on-write`).
+    @param name The `define-action` name; `""` for an inline body.
+    @param params The parameters with their current values: a bool for a boolean parameter, else a float.
+    """
+    space: Space
+    address: int
+    event: str
+    name: str
+    params: Dict[str, Union[bool, float]]
 
 
 @dataclass
@@ -1208,6 +1224,68 @@ class Device:
             out.append(PointInfo(Space(c.space), c.address, ValueType(c.type), WordOrder(c.word_order),
                                  ByteOrder(c.byte_order), c.length, bool(c.read_only)))
         return out
+
+    @_locked
+    def actions(self) -> List[ActionInfo]:
+        """@brief Lists the point actions (`on-read`, `on-write` from a config file) with their current parameter values.
+        @return A list of ActionInfo ordered by table, address, then read before write.
+        """
+        out = []
+        c = _lib.ActionC()
+        while lib.mogbus_device_action_at(self._live(), len(out), ctypes.byref(c)):
+            params = {}
+            for i in range(min(c.param_count, 16)):
+                p = c.params[i]
+                params[_decode(p.name) or ""] = bool(p.flag) if p.is_bool else p.number
+            out.append(ActionInfo(Space(c.space), c.address, "write" if c.on_write else "read",
+                                  _decode(c.name) or "", params))
+        return out
+
+    @_locked
+    def set_action_param(self, space, address, event, name, value) -> None:
+        """@brief Changes a parameter of a point action; the new value is used from the action's next run.
+
+        A device restart keeps the current value. A boolean parameter takes a bool, 0 or 1.
+        @param space The table of the point the action is attached to: a Space or its name.
+        @param address Address of that point.
+        @param event `"read"` or `"write"`.
+        @param name The parameter name.
+        @param value A bool or a finite number.
+        @throws MogbusError If no such action or parameter exists, or the value does not fit it.
+        """
+        sp = int(_coerce(Space, space, "space"))
+        addr = _u(address, "address", 65536)
+        if event not in ("read", "write"):
+            raise MogbusError("event must be 'read' or 'write'")
+        code = lib.mogbus_device_set_action_param(self._live(), sp, addr, event == "write",
+                                                  name.encode(), float(value))
+        if code != 0:
+            raise _fail(self._ctx._h, code, "cannot set action parameter")
+
+    @_locked
+    def get_action_param(self, space, address, event, name) -> Union[bool, float]:
+        """@brief Reads the current value of a point action parameter.
+        @param space The table of the point the action is attached to: a Space or its name.
+        @param address Address of that point.
+        @param event `"read"` or `"write"`.
+        @param name The parameter name.
+        @return A bool for a boolean parameter, else a float.
+        @throws MogbusError If no such action or parameter exists.
+        """
+        sp = int(_coerce(Space, space, "space"))
+        addr = _u(address, "address", 65536)
+        if event not in ("read", "write"):
+            raise MogbusError("event must be 'read' or 'write'")
+        out = ctypes.c_double()
+        code = lib.mogbus_device_get_action_param(self._live(), sp, addr, event == "write",
+                                                  name.encode(), ctypes.byref(out))
+        if code != 0:
+            raise _fail(self._ctx._h, code, "cannot read action parameter")
+        for a in self.actions():
+            if a.space == sp and a.address == addr and a.event == event:
+                if isinstance(a.params.get(name), bool):
+                    return out.value != 0
+        return out.value
 
 
 class Server:

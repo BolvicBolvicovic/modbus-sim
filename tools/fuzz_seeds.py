@@ -68,12 +68,16 @@ def http_seeds():
         'GET /api/devices/1/faults HTTP/1.1\r\n\r\n',
         'GET /api/devices/1/points?space=holding HTTP/1.1\r\n\r\n',
         'GET /api/devices/1/points?space=input&from=5&limit=2 HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/actions HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/actions?from=1&limit=1 HTTP/1.1\r\n\r\n',
         'DELETE /api/devices/1/faults/delay HTTP/1.1\r\n\r\n',
     ]
     bodies = [
         ('PUT /api/devices/1/holding/0', '{"values":[1,2,3]}'),
         ('PUT /api/devices/1/coil/0', '{"values":[1,0,1]}'),
         ('PUT /api/devices/1/holding/100/value', '{"value":-12.5}'),
+        ('PUT /api/devices/1/actions/holding/0/read', '{"name":"step","value":5}'),
+        ('PUT /api/devices/1/actions/holding/0/read', '{"name":"on","value":0}'),
         ('PUT /api/devices/1/faults/delay', '{"delay_ms":100,"percent":50}'),
         ('PUT /api/devices/1/faults/exception', '{"exception_code":6}'),
         ('PUT /api/devices/1/faults/corrupt', '{"mode":"checksum"}'),
