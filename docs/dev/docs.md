@@ -64,7 +64,9 @@ relies on:
   is labelled Response. Put a paragraph between blocks that are not alternatives.
 - Callouts are blockquotes that start with a bold keyword, which also reads well on GitHub:
   `> **Note:** ...`, `> **Warning:** ...`, `> **Tip:** ...`. In header comments `@note` and
-  `@warning` give the same result.
+  `@warning` give the same result. `> **Summary:** ...` is the purple summary box of a tutorial
+  step: put it right under the page title, as the page's first paragraph; it is also the page
+  summary used by the search index and meta description.
 - Titles may use backticks, as in a heading that names a config form.
 
 ## Reference entries and indexes

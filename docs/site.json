@@ -126,10 +126,12 @@
         "docs/user/library/library-hooks.md",
         "docs/user/library/library-lifetimes.md",
         "docs/user/python/python-start.md",
-        "docs/user/python/python-process.md",
-        "docs/user/python/python-observe.md",
-        "docs/user/python/python-testing.md",
-        "docs/user/python/python-threading.md"
+        "docs/user/python/python-device.md",
+        "docs/user/python/python-serve.md",
+        "docs/user/python/python-simulate.md",
+        "docs/user/python/python-hooks.md",
+        "docs/user/python/python-lifetimes.md",
+        "docs/user/python/python-testing.md"
       ]
     },
     {

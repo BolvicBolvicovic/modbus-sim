@@ -42,7 +42,7 @@ SPECIAL = {
     'larr': '←', 'times': '×', 'deg': '°', 'plusmn': '±',
     'zwj': '\u200d', 'zwnj': '\u200c', 'le': '≤', 'ge': '≥', 'ne': '≠', 'bull': '•', 'sp': ' ',
 }
-CALLOUTS = {'note': 'note', 'warning': 'warning', 'tip': 'tip', 'important': 'warning',
+CALLOUTS = {'summary': 'summary', 'note': 'note', 'warning': 'warning', 'tip': 'tip', 'important': 'warning',
             'caution': 'warning', 'attention': 'warning'}
 BLOCK_TAGS = {'programlisting', 'table', 'itemizedlist', 'orderedlist', 'simplesect',
               'parameterlist', 'blockquote', 'para', 'verbatim', 'preformatted', 'hruler',
@@ -620,6 +620,14 @@ def first_summary(lead, rd):
     for p in lead:
         if p.tag != 'para':
             continue
+        for bq in p.findall('blockquote'):
+            # "> **Summary:** text" is the summary paragraph of a tutorial step.
+            first = bq.find('para')
+            b = first[0] if first is not None and len(first) else None
+            if b is not None and b.tag == 'bold' and plain(b).strip().rstrip(':').lower() == 'summary':
+                txt = re.sub(r'^\s*Summary:?\s*', '', plain(first).strip())
+                if txt:
+                    return first, txt
         if any(x.tag in BLOCK_TAGS for x in p):
             continue
         txt = plain(p).strip()
@@ -963,6 +971,7 @@ class Api:
                 if d['kind'] == 'struct':
                     for sd in d['el'].iter('memberdef'):
                         self.s.symbols[sd.get('id')] = url
+        self.s.symbols[self.fcd.get('id')] = 'api/index.html'
         for tid, nm in sym.items():
             for d in els:
                 if d['name'] == nm:

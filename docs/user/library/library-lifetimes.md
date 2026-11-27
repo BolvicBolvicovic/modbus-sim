@@ -1,10 +1,12 @@
 # Step 5: Observe, shut down, lifetimes and threading
 
-Route the library's log lines, read metrics, stop cleanly on Ctrl-C, and know which thread may touch what.
+> **Summary:** Route the library's log lines, read metrics, stop cleanly on Ctrl-C, and know which thread may touch what.
 
 ## Logging
 
 Logging is process-wide. By default the library writes timestamped `INFO` and `WARN` lines to stderr. @ref mogbus_set_log_sink "mogbus_set_log_sink()" sends each line to a function instead, synchronously on the thread that logs (truncated to 1023 bytes, valid only during the call); @ref mogbus_set_log_level "mogbus_set_log_level()" drops lines below a level (`DEBUG` adds one line per request) and @ref mogbus_set_log_format "mogbus_set_log_format()" switches to one JSON object per line, in which case a sink receives the whole object as its message.
+
+The tutorial program installs a sink that prefixes each line and counts warnings in a global, `g_warnings`:
 
 ```c
 static void
@@ -19,7 +21,7 @@ log_sink(void* user, mogbus_log_level_t level, const char* message)
 mogbus_set_log_sink(log_sink, NULL);
 ```
 
-A harness uses the sink to put the simulator's lines into its own log, or to fail a test on a warning. The program prints the count at the end when it is not zero. `--verbose` sets `MOGBUS_LOG_DEBUG`:
+`main()` registers it with `mogbus_set_log_sink(log_sink, NULL)` (the second argument is the `user` pointer, unused here). A harness uses the sink to put the simulator's lines into its own log, or to fail a test on a warning. The program prints the count at the end when it is not zero. `--verbose` sets `MOGBUS_LOG_DEBUG`:
 
 ```text
   [mogbus info] listening on 127.0.0.1:41347 (3 devices). Ctrl-C to stop.
@@ -28,7 +30,7 @@ A harness uses the sink to put the simulator's lines into its own log, or to fai
 
 ## Metrics
 
-@ref mogbus_server_metrics "mogbus_server_metrics()" renders the server's counters in the Prometheus text format, the same text the HTTP endpoint serves on `/metrics`, for a host that exports metrics itself. Counters start at zero when the server is created; 32 KiB is enough for 16 devices. The example prints a few lines at the end of the self-test (see the [metrics reference](../observability/metrics/metrics.md)):
+@ref mogbus_server_metrics "mogbus_server_metrics()" renders the server's counters in the Prometheus text format, the same text the HTTP endpoint serves on `/metrics`, for a host that exports metrics itself. Counters start at zero when the server is created; 32 KiB is enough for 16 devices. The program prints the metrics of the server before it exits (`print_metrics()`; the self-test run shows these lines, the run quoted here used `--unit 10`) (see the [metrics reference](../observability/metrics/metrics.md)):
 
 ```text
 metrics:
@@ -49,6 +51,8 @@ The vetoes of step 4 are counted like any exception the simulator answers: one `
 ## Stopping on signals
 
 The library installs no signal handlers unless asked. For a console program, @ref mogbus_stop_on_signals "mogbus_stop_on_signals()" does what `main.c` does: SIGINT and SIGTERM stop the server stored in a slot you own, and SIGPIPE is ignored (a TLS write can raise it when a client vanishes). It is process-wide, so call it once, and the slot must stay valid for the life of the process. The handler does nothing while the slot is NULL, so install it before creating the server and store the server afterwards:
+
+The program keeps the server in a global that the signal handler reads, installs the handler before the server exists and stores the server once it is created (the second snippet is the end of the server creation of step 2):
 
 ```c
 static mogbus_server_t* volatile g_server;
@@ -73,7 +77,7 @@ If you install your own handler instead, have it call `mogbus_server_stop()` on 
 
 ## Shutting down
 
-Leave the loop, clear the slot, then close in order:
+When the loop ends, `main()` jumps to its `done:` label (which error paths use too), clears the slot, then closes in order (`server` may be NULL, `ctx` is the context of step 1):
 
 ```c
 done:
@@ -98,7 +102,7 @@ done:
 - @ref mogbus_probe "mogbus_probe()" blocks, so call it from another thread or process, as in step 2.
 - Logging is process-wide: a sink is called on whichever thread logs, so make it safe for the threads that step servers.
 
-The [Python package](../python/python-threading.md) applies these rules with one lock per context and an optional stepping thread.
+The [Python package](../python/python-lifetimes.md#threads-and-locks) applies these rules with one lock per context and an optional stepping thread.
 
 ## Where next
 

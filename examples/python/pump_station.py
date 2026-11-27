@@ -283,6 +283,18 @@ def main():
     except mogbus.MogbusError as exc:
         print("rejected:", exc)
 
+    # Step 1, from a config file: when a device does not need code, describe it as a config.
+    heading("1b. The device from a config file")
+    with mogbus.serve(config_text='(device (unit-id 1) (holding 0 (static 7)))', port=0) as srv:
+        with Client(srv.port) as plc:
+            print("config_text:", plc.holding(0))
+            check("an inline config serves its value", plc.holding(0) == [7])
+    with mogbus.serve(config=str(ROOT / "profiles" / "flow-meter.scm"), port=0) as srv:
+        srv.device(1).set_value("input", 0, 12.5)
+        with Client(srv.port) as meter:
+            print("flow meter from profiles/flow-meter.scm:", meter.read_f32(4, 0), "m3/h")
+            check("the profile serves the value set by the host", meter.read_f32(4, 0) == 12.5)
+
     # Step 2: serve it and talk to it like a client would.
     heading("2. Serve and read")
     process = Process(dev)
@@ -306,18 +318,32 @@ def main():
             print("write to the read-only name:", exc)
             check("the site name is read-only (exception 02)", exc.code == 2)
 
-        # The ramp moves on its own; set_value pins it so the demo is repeatable.
+        # The ramp moves on its own (step 3 pins it with set_value so the demo is repeatable).
         first = plc.read_f32(4, INFLOW, low_first=True)
         time.sleep(1.2)
         second = plc.read_f32(4, INFLOW, low_first=True)
         print(f"inlet flow moved by itself: {first:.0f} -> {second:.0f} m3/h")
         check("the ramp moves", first != second)
-        dev.set_value("input", INFLOW, 40.0)
+
+        # Step 2, other transports: the options of a config and the same devices over other transports.
+        heading("2b. Options from a config, other transports")
+        with mogbus.Context() as ctx2:
+            ctx2.load_config(str(ROOT / "profiles" / "flow-meter.scm"))
+            wanted = ctx2.config_server_options()
+            print(f"the profile asks for {wanted.mode.name.lower()} on port {wanted.port}")
+            for mode in ("tcp", "udp", "rtu-tcp", "ascii-tcp"):
+                ctx2.check_server(wanted, mode=mode, port=free_port())
+            rtu = mogbus.ServerOptions(mode="rtu-tcp", port=free_port())
+            with ctx2.serve(rtu).start():
+                alive = mogbus.probe(rtu, 1, 1000)
+                print("rtu-tcp server probe:", alive)
+                check("the same device answers over RTU-over-TCP", alive)
+            print("RTU timing at 19200 baud:", mogbus.rtu_timing(19200))
+        # Step 3: simulate the process from the host.
+        heading("3. Simulate the process")
+        dev.set_value("input", INFLOW, 40.0)       # pin the ramp: set_value takes the point over
         time.sleep(1.1)
         check("set_value pins the ramp at 40", plc.read_f32(4, INFLOW, low_first=True) == 40.0)
-
-        # Step 3: the process.
-        heading("3. The process")
         print("minute  level  pump  run-s")
         for minute in range(0, 8):
             if minute:
@@ -327,8 +353,8 @@ def main():
                   f"{plc.input(RUN_SECONDS, 2)[1]:5d}")
         check("auto mode started the pump", plc.discrete(RUNNING)[0] == 1 or process.seconds > 0)
 
-        # Step 4: a client changes the plant; the access hook has its say.
-        heading("4. Writes, rules and the audit trail")
+        # Step 4: guard clients (access hook) and keep records.
+        heading("4. Guard clients and keep records: rules and the audit trail")
         try:
             plc.write_f32(SETPOINT, 9.0)
         except ModbusException as exc:
@@ -347,7 +373,7 @@ def main():
         check("two writes refused", policy.refused == 2)
 
         # Alarms: in manual mode with the pump stopped the tank fills up.
-        heading("5. Alarms, the event log and the alarm FIFO")
+        heading("4b. Alarms, the event log and the alarm FIFO")
         while not process.high:
             process.tick(10.0)
         print("high-level alarm:", plc.discrete(HIGH_ALARM)[0], "level", round(plc.read_f32(4, LEVEL), 2))
@@ -361,7 +387,7 @@ def main():
         check("the FIFO holds both alarms, oldest first", plc.fifo(ALARM_FIFO) == [EV_HIGH_ON, EV_LOW_ON])
 
         # Vendor function code: the status block is computed when the request arrives.
-        heading("5b. A vendor function code")
+        heading("4c. A vendor function code")
         block = plc.call(struct.pack(">BB", FC_STATUS_BLOCK, 1))
         block_id, mode, flags, level_cm, outflow, refused = struct.unpack(">BBBHHH", block[1:])
         print(f"status block: mode {mode}, flags {flags:03b}, level {level_cm / 100} m, "
@@ -373,21 +399,8 @@ def main():
         except ModbusException as exc:
             check("an unknown block id is answered with exception 03", exc.code == 3)
 
-        # Step 6: the process on a thread, while the server answers clients.
-        heading("6. The process on a thread")
-        plc.write_registers(MODE, [AUTO])
-        process.start(speed=600.0)          # ten simulated minutes per second
-        wait_for(lambda: plc.discrete(RUNNING)[0] == 1)
-        print("auto mode: pump running =", bool(plc.discrete(RUNNING)[0]))
-        check("the thread ticked while clients were served", plc.discrete(RUNNING)[0] == 1)
-        plc.write_registers(MODE, [OFF])
-        wait_for(lambda: plc.discrete(RUNNING)[0] == 0)
-        process.stop()
-        print("mode off: pump running =", bool(plc.discrete(RUNNING)[0]))
-        check("mode off stops the pump", plc.discrete(RUNNING)[0] == 0)
-
-        # Step 7: logs, metrics and the control API.
-        heading("7. Logs, metrics, runtime control")
+        # Step 5: observe: logs, metrics and the control API.
+        heading("5. Logs, metrics, runtime control")
         lines = []
         mogbus.set_log_level("debug")
         mogbus.set_log_format("json")
@@ -413,37 +426,23 @@ def main():
             check("the injected fault answers exception 06", exc.code == 6)
         urllib.request.urlopen(urllib.request.Request(
             base + "/api/devices/1/faults/exception", method="DELETE"), timeout=2)
-        check("the fault is cleared", plc.holding(MODE) == [OFF])
+        check("the fault is cleared", plc.holding(MODE) == [MANUAL])
+
+        # Step 5, threads: the process on a thread, while the server answers clients.
+        heading("5b. The process on a thread")
+        plc.write_registers(MODE, [AUTO])
+        process.start(speed=600.0)          # ten simulated minutes per second
+        wait_for(lambda: plc.discrete(RUNNING)[0] == 1)
+        print("auto mode: pump running =", bool(plc.discrete(RUNNING)[0]))
+        check("the thread ticked while clients were served", plc.discrete(RUNNING)[0] == 1)
+        plc.write_registers(MODE, [OFF])
+        wait_for(lambda: plc.discrete(RUNNING)[0] == 0)
+        process.stop()
+        print("mode off: pump running =", bool(plc.discrete(RUNNING)[0]))
+        check("mode off stops the pump", plc.discrete(RUNNING)[0] == 0)
 
     server.close()
     ctx.close()
-
-    # Step 8: a profile instead of code.
-    heading("8. A profile from a file")
-    with mogbus.serve(config_text='(device (unit-id 1) (holding 0 (static 7)))', port=0) as srv:
-        with Client(srv.port) as plc:
-            print("config_text:", plc.holding(0))
-            check("an inline config serves its value", plc.holding(0) == [7])
-    with mogbus.serve(config=str(ROOT / "profiles" / "flow-meter.scm"), port=0) as srv:
-        srv.device(1).set_value("input", 0, 12.5)
-        with Client(srv.port) as meter:
-            print("flow meter from profiles/flow-meter.scm:", meter.read_f32(4, 0), "m3/h")
-            check("the profile serves the value set by the host", meter.read_f32(4, 0) == 12.5)
-
-    # Step 9: the options of a config, other transports.
-    heading("9. Options from a config, other transports")
-    with mogbus.Context() as ctx2:
-        ctx2.load_config(str(ROOT / "profiles" / "flow-meter.scm"))
-        wanted = ctx2.config_server_options()
-        print(f"the profile asks for {wanted.mode.name.lower()} on port {wanted.port}")
-        for mode in ("tcp", "udp", "rtu-tcp", "ascii-tcp"):
-            ctx2.check_server(wanted, mode=mode, port=free_port())
-        rtu = mogbus.ServerOptions(mode="rtu-tcp", port=free_port())
-        with ctx2.serve(rtu).start():
-            alive = mogbus.probe(rtu, 1, 1000)
-            print("rtu-tcp server probe:", alive)
-            check("the same device answers over RTU-over-TCP", alive)
-        print("RTU timing at 19200 baud:", mogbus.rtu_timing(19200))
 
     print("\nall checks passed" if not check.failed else f"\n{check.failed} check(s) failed")
     return 1 if check.failed else 0

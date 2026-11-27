@@ -1,12 +1,12 @@
 # Step 2: Serve it from your own loop
 
-Pick a transport, create the server, and step it from the program's own loop instead of handing the thread over.
+> **Summary:** Pick a transport, create the server, and step it from the program's own loop instead of handing the thread over.
 
-A server (@ref mogbus_server_t "mogbus_server_t") exposes every device the context has at the moment it is created, over one transport. Devices added later are not served, so build the devices first. A context holds up to `MOGBUS_MAX_SERVERS` servers.
+A server (`mogbus_server_t*`, created below) exposes every device the context has at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [step 1](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
 
 ## Options
 
-Start from @ref mogbus_server_options_defaults "mogbus_server_options_defaults()", which matches the config defaults (TCP on `127.0.0.1:1502`, 8N1, no TLS) and change what you need (@ref mogbus_server_options_t "mogbus_server_options_t"):
+A server is described by a @ref mogbus_server_options_t "mogbus_server_options_t". Start from @ref mogbus_server_options_defaults "mogbus_server_options_defaults()", which matches the config defaults (TCP on `127.0.0.1:1502`, 8N1, no TLS), and change what you need. When the tutorial program runs with `--self-test` it needs a private loopback TCP port, so it sets the mode, the bind address and a free port (`free_port()` is the program's own helper: it binds port 0 and reads back the port the OS chose):
 
 ```c
 mogbus_server_options_t options = mogbus_server_options_defaults();
@@ -20,11 +20,11 @@ Every transport of the `mogbus` binary is a `mogbus_mode_t`: Modbus TCP (optiona
 
 The `*_FD` modes take a byte-stream file descriptor you own (a socketpair or a PTY master), which makes a test harness possible without any network: one end is the simulator, the other the client under test. The library never closes it.
 
-If you loaded a config, @ref mogbus_config_server_options "mogbus_config_server_options()" gives you its `(server ...)` section as options, and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" creates the server from it directly. The pump-station program starts from the file's options when there is one, lets `--port` override the port, and forces loopback TCP in `--self-test`.
+If you loaded a config in step 1, @ref mogbus_config_server_options "mogbus_config_server_options()" gives you its `(server ...)` section as options, and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" creates the server from it directly. The tutorial program starts from the file's options when there is one, and lets `--port` override the port.
 
 ## Check, then create
 
-@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport:
+@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and returns the server, or NULL. In `main()`, `ctx` is the context of step 1 and `g_server` a global that step 5 explains (it lets Ctrl-C stop the server):
 
 ```c
 if (mogbus_server_check(ctx, &options) != MOGBUS_OK) { ... }
@@ -38,11 +38,11 @@ if (!server)
 g_server = server;
 ```
 
-On failure @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" (a @ref mogbus_error_t "mogbus_error_t") tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the code itself: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The binary maps serial to exit status 1 and listen to 2. A TLS server needs a build with TLS; without it creation fails with an error.
+On failure @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" (a @ref mogbus_error_t "mogbus_error_t") tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the code itself: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The `mogbus` binary maps serial to exit status 1 and listen to 2. A TLS server needs a library built with TLS; without it creation fails with an error.
 
 ## The loop
 
-You own the thread. @ref mogbus_server_step "mogbus_server_step()" runs one poll iteration (accept, read, answer, write whatever is ready) and returns after at most `max_wait_ms` (0 = do not block, -1 = until the server's next deadline). Interleave it with your own work:
+You own the thread. @ref mogbus_server_step "mogbus_server_step()" runs one poll iteration (accept, read, answer, write whatever is ready) and returns after at most `max_wait_ms` (0 = do not block, -1 = until the server's next deadline). Interleave it with your own work. In the tutorial program, `now_s()` is the program's clock in seconds, `st` the `struct station` of step 1, `speed` the `--speed` factor and `simulate()` the process model of [step 3](library-simulate.md); each pass of the loop advances the simulation by the real time elapsed since the last pass:
 
 ```c
 while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
@@ -61,7 +61,7 @@ One thread does everything. Requests are answered inside `mogbus_server_step`, s
 
 ## Check that it answers
 
-@ref mogbus_probe "mogbus_probe()" is what `mogbus --health` uses: one FC 08 Return Query Data request to a unit of a server, `MOGBUS_OK` for the echo or a Modbus exception (on failure the message is `mogbus_last_error(NULL)`). It blocks with a deadline, so the thread that steps the server cannot call it. The example forks and probes from the child while the parent keeps stepping:
+@ref mogbus_probe "mogbus_probe()" is what `mogbus --health` uses: one FC 08 Return Query Data request to a unit of a server, `MOGBUS_OK` for the echo or a Modbus exception (on failure the message is `mogbus_last_error(NULL)`). It blocks with a deadline, so the thread that steps the server cannot call it. The program's helper `probe_self()` therefore forks a child that probes while the parent keeps stepping the server until the child exits (`options` and `unit` are the server options and unit id from above):
 
 ```c
 pid_t pid = fork();
@@ -74,15 +74,15 @@ for (...)
 }
 ```
 
-In a real program a probe thread or an external `mogbus --health` does the same. It works for the TCP, UDP, RTU-over-TCP/UDP and ASCII-over-TCP/UDP modes (a wildcard bind is reached through loopback, a TLS server is only connected to) and rejects serial and fd modes. A fault that drops or delays replies on the probed unit fails it.
+In a real program a probe thread or an external `mogbus --health` does the same. It works for the TCP, UDP, RTU-over-TCP/UDP and ASCII-over-TCP/UDP modes (a wildcard bind is reached through loopback, a TLS server is only connected to) and rejects serial and fd modes. A fault that drops or delays replies on the probed unit fails it. With `--self-test` the program prints:
 
 ```text
   ok   mogbus_probe answers from a child process
 ```
 
-## The self-test client
+## The program as its own client
 
-`--self-test` makes the program its own Modbus TCP client in the same thread. `exchange()` sends one request and steps the server between reads until the reply is complete, so no second thread or process is needed:
+Everything the tutorial shows about requests is checked by `--self-test`, a mode of the tutorial program (not of mogbus) in which the program sends Modbus TCP requests to its own server and prints an `ok` or `FAIL` line for each expectation, as quoted in the steps. It needs no second thread or process because it steps the server itself. The helper `exchange()` writes one request on a connected socket `fd`, then steps the server between reads until the reply is complete:
 
 ```c
 for (int i = 0; i < 2000; i++)
@@ -100,11 +100,11 @@ The checks that follow use it, and the reads are real Modbus traffic:
   ok   FC 03 reads the site name string
 ```
 
-The same trick tests any harness that needs a client and a server in one process.
+The same trick tests any harness that needs a client and a server in one process. The self-test is how the tutorial program is verified, so the `ok` lines in these pages can be reproduced by running it.
 
 ## An HTTP endpoint and the web UI
 
-The options also carry the observability endpoint. `--http PORT` sets three fields:
+The options also carry the observability endpoint. With `--http PORT` the tutorial program sets three fields before creating the server (`http_port` is the number from the command line):
 
 ```c
 options.http_bind_address = "127.0.0.1";

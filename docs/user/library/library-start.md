@@ -2,7 +2,7 @@
 
 Build a Modbus test harness around mogbus: a program that owns a simulated water pumping station, runs the process behind it, and serves it to the client you want to test.
 
-The `mogbus` binary is one front end. The same code is a static and a shared library with a small C API, so your own program can create devices, serve them over any transport from its own loop, move their values from the host side and veto or react to client requests. This tutorial walks through one realistic program, step by step. The API itself is described in the @ref mogbus_t "C API reference"; the tutorial links to it and does not repeat signatures.
+The `mogbus` binary is one front end. The same code is a static and a shared library with a small C API, so your own program can create devices, serve them over any transport from its own loop, move their values from the host side and veto or react to client requests. This tutorial walks through one realistic program, step by step. The API itself is described in the @ref mogbus.h "C API reference"; the tutorial links to it and does not repeat signatures.
 
 From Python, see [Using mogbus from Python](../python/python-start.md): a `ctypes` package over `libmogbus.so`.
 
@@ -30,41 +30,46 @@ The program adds an inlet temperature ramp (input 6), a wall-clock minute (input
 
 The complete program is
 [`examples/tutorial/pump_station.c`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/tutorial/pump_station.c).
-It runs in CI through `make lib-check`, so it cannot rot. Each step explains one part of it.
+Each step explains one part of it, and the code shown in a step is quoted from that file.
 
-1. [Build the device](library-device.md): context, device, points of every kind, strings, read-only points, ramps, clock fields, file records, FIFO and loading a config.
+1. [Build the device](library-device.md): context, device, points of every kind, strings, read-only points, ramps, clock fields, file records, FIFO and building the device from a config file.
 2. [Serve it from your own loop](library-serve.md): server options and modes, `mogbus_server_step`, probing, errors, the HTTP endpoint and web UI.
 3. [Simulate the process from the host](library-simulate.md): client writes against host writes, decoded and raw values, strings.
 4. [Guard clients and keep records](library-hooks.md): the access hook, file records as an event log, a FIFO refreshed on demand.
 5. [Observe, shut down, lifetimes and threading](library-lifetimes.md): logging, metrics, signals, ownership rules.
 
+The [Python tutorial](../python/python-start.md) follows the same five steps.
+
 ## Build and link
 
-```bash
-make -j$(nproc) lib          # libmogbus.a + libmogbus.so
-make -j$(nproc) lib-check    # also builds and runs the examples against both
-```
+You need two things: the header [`include/mogbus.h`](https://github.com/BolvicBolvicovic/mogbus/blob/main/include/mogbus.h) (the whole API; it needs only `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`) and the library, either static (`libmogbus.a`) or shared (`libmogbus.so`). Both libraries contain the whole simulator, including the config parser, so nothing else of mogbus is needed. The shared library exports only `mogbus_*` symbols.
 
-`make` alone builds only the `mogbus` binary, which is itself a client of this API linked against the static library. `make WITH_CONFIG=0` builds the libraries instead, since there is no binary then. The `.a` contains the whole simulator, including the vendored s7 parser, so it is self-contained. The `.so` exports only `mogbus_*` symbols; everything else is hidden. The only header is [`include/mogbus.h`](https://github.com/BolvicBolvicovic/mogbus/blob/main/include/mogbus.h); it needs just `<stdint.h>`, `<stdbool.h>` and `<stddef.h>`.
+The release tarball ships them as `lib/libmogbus.a`, `lib/libmogbus.so` and `include/mogbus.h`. From a source checkout, build them with
 
 ```bash
-# shared (found at run time via rpath or LD_LIBRARY_PATH)
-cc -Iinclude examples/tutorial/pump_station.c -L. -lmogbus -Wl,-rpath,'$ORIGIN' -o pump_station
-# static: also link what the library needs (-lm, plus -lssl -lcrypto in a TLS build)
-cc -Iinclude examples/tutorial/pump_station.c libmogbus.a -lm -lssl -lcrypto -o pump_station
+make -j$(nproc) lib          # libmogbus.a and libmogbus.so in the repository root
 ```
 
-Build options:
+Then compile your program against the header and link the library you chose. Assuming the tarball layout (`include/` and `lib/` next to each other; in a checkout use `-Iinclude` and `-L.`):
 
-- `WITH_TLS=auto|0|1` (default `auto`): OpenSSL support, see [Build from source](../building.md). A `WITH_TLS=0` build has no OpenSSL dependency; creating a server with `tls_enabled` then fails with an error.
-- `WITH_CONFIG=1|0` (default `1`): `0` leaves out the config file loader and the vendored s7, so the libraries serve only devices built in code. The header and the exported symbols are identical, so the ABI does not change: @ref mogbus_load_config "mogbus_load_config()" returns `MOGBUS_ERR_UNSUPPORTED` and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" returns NULL, both with the message `built without config support` in `mogbus_last_error()`. Combine freely with `WITH_TLS=0`.
+```bash
+# static: the library is part of your executable; add what it needs (-lm, and OpenSSL when the library was built with TLS)
+cc -Iinclude pump_station.c lib/libmogbus.a -lm -lssl -lcrypto -o pump_station
 
-The current version is 0.0.1 (`MOGBUS_VERSION_*`, @ref mogbus_version "mogbus_version()"). The tutorial program is POSIX (it uses `fork` and `poll`); the library API is the same in the [native Windows build](../windows/windows-native.md).
+# shared: the library is found when the program starts, here next to it through an rpath
+cc -Iinclude pump_station.c -Llib -lmogbus -Wl,-rpath,'$ORIGIN/lib' -o pump_station
+```
+
+A library built without TLS (`make WITH_TLS=0`) needs neither `-lssl` nor `-lcrypto`, and creating a server with `tls_enabled` then fails with an error. A library built without the config loader (`make WITH_CONFIG=0`) has the same header and symbols, but @ref mogbus_load_config "mogbus_load_config()" returns `MOGBUS_ERR_UNSUPPORTED` and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" returns NULL, both with `built without config support` in `mogbus_last_error()`. See [Build from source](../building.md) for all build options.
+
+With a shared library, `LD_LIBRARY_PATH` works instead of the rpath. The version is available at run time from @ref mogbus_version "mogbus_version()" and at compile time from `MOGBUS_VERSION_MAJOR`, `MOGBUS_VERSION_MINOR` and `MOGBUS_VERSION_PATCH`. The tutorial program is POSIX (it uses `fork` and `poll`); the library API is the same in the [native Windows build](../windows/windows-native.md).
 
 ## Run it
 
+Build the tutorial program with one of the commands above (from a checkout, with `examples/tutorial/pump_station.c` as the source) and run it for a few seconds:
+
 ```bash
-./examples/tutorial/pump_station_static --seconds 7 --port 1502
+./pump_station --seconds 7 --port 1502
 ```
 
 ```text
@@ -79,10 +84,17 @@ level 2.25 m, pump ON, events 9, client writes 0 ok / 0 refused
 stopping
 ```
 
-Point your client at `127.0.0.1:1502`, unit 1, while it runs. `--speed X` (default 10) scales the simulated time. `--self-test` makes the program its own client and exits 0 when every check passes, which is how CI runs it; `--config FILE` loads a profile first, `--unit N` moves the station to another unit id so the two can coexist, and `--http PORT` turns on the web UI. The checks of the self-test are quoted in the steps below.
+Point your client at `127.0.0.1:1502`, unit 1, while it runs.
+
+The options belong to the tutorial program, not to mogbus; they are parsed by its own `main()`:
+
+- `--port N` sets the Modbus TCP port and `--seconds N` stops the program after N seconds (the default is to run until Ctrl-C).
+- `--speed X` (default 10) scales the simulated time.
+- `--self-test` makes the program its own Modbus client: it serves the station, sends a series of requests to itself, prints one `ok` or `FAIL` line for each check and exits 0 when every check passed. The steps below quote those lines to show what each API call does on the wire.
+- `--config FILE` loads a config file first (see [step 1](library-device.md#building-the-device-from-a-config-file)), `--unit N` moves the station to another unit id so it can coexist with the devices of that file, `--http PORT` turns on the web UI and `--verbose` logs every request.
 
 ## See also
 
-- @ref mogbus_t "C API reference"
+- @ref mogbus.h "C API reference"
 - [Using mogbus from Python](../python/python-start.md)
 - [Config reference](../config/format.md)

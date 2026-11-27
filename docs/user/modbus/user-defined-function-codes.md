@@ -59,7 +59,7 @@ The callback gets the request data and fills `reply` (at most 252 bytes) and `*r
 
 - The same rules as a config code apply to the code number: 1 to 127, not built in, not defined twice on a device, and the same limit of 8 per device; a code cannot be removed. The call fails (false, `MogbusError`) otherwise.
 - The request goes through the same path: unit routing, faults, listen-only, the diagnostic counters, metrics and the access log. With `broadcast-execute` on, the callback runs once per device for a broadcast (`unit_id` is 0) and its reply is dropped.
-- The callback runs on the thread that steps the server and must not block. It may call the other device functions, for example to read the live values it reports (the [C tutorial](../library/library-hooks.md#a-vendor-function-code) and the [Python tutorial](../python/python-process.md#a-vendor-function-code) build a station status block this way).
+- The callback runs on the thread that steps the server and must not block. It may call the other device functions, for example to read the live values it reports (the [C tutorial](../library/library-hooks.md#a-vendor-function-code) and the [Python tutorial](../python/python-hooks.md#a-vendor-function-code) build a station status block this way).
 - `mogbus_device_info()` lists such a code with an empty name.
 
 See @ref mogbus_device_add_function_code "mogbus_device_add_function_code()" and @ref mogbus_function_fn "mogbus_function_fn".

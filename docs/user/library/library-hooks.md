@@ -1,8 +1,10 @@
 # Step 4: Guard clients and keep records
 
-Install an access hook that vets client writes, log events in file records, and serve a FIFO that is refreshed just before a client reads it.
+> **Summary:** Install an access hook that vets client writes, react after accepted writes, log events in file records, and serve a FIFO that is refreshed just before a client reads it.
 
 An access hook (@ref mogbus_access_fn "mogbus_access_fn") runs on the Modbus client path of one device. It is the embedded counterpart of subclassing a datastore: refresh a value right before a read, react to a write, or veto it. Install it with @ref mogbus_device_set_access_hook "mogbus_device_set_access_hook()" (NULL removes it; a device has one hook and a new one replaces it):
+
+In the tutorial program, `main()` installs its function `on_access` on the station's device, passing the address of its `struct station` (see [step 1](library-device.md#the-programs-state)) as the `user` pointer, which the library hands back to the hook on every call:
 
 ```c
 mogbus_device_set_access_hook(st.dev, on_access, &st);
@@ -18,6 +20,8 @@ The hook gets the `user` pointer, the device and a @ref mogbus_access_t "mogbus_
 - a setpoint outside 0.5 to 4.5 m, or half of the float32, is refused with exception 03;
 - a mode above 2 is refused with exception 03;
 - the event log is the host's: client writes to it get exception 01.
+
+The excerpts below are from `on_access`, where `a` is the `mogbus_access_t` of the request, `dev` the device, `st` the station struct recovered from `user`, and `float_of()` a helper that decodes two registers as a float32. The first rule reads the current mode with the host-side `mogbus_device_get_value()` (a host call, so it does not trigger the hook again) and refuses any write but a single write to the mode register while the station is off; the second decodes the float32 the client is writing and refuses it outside the range:
 
 ```c
 mogbus_device_get_value(dev, MOGBUS_HOLDING, HOLD_MODE, &mode);
@@ -61,13 +65,11 @@ The hook runs on the thread that steps the server, so it may call the other `mog
 The access hook runs before a write, so it cannot tell that the write happened. A *post-write hook* (@ref mogbus_written_fn "mogbus_written_fn", installed with @ref mogbus_device_set_written_hook "mogbus_device_set_written_hook()") runs after a Modbus client write was applied: the embedded counterpart of pymodbus `setValues`. The example uses it to count and log accepted writes and to put setpoint and mode changes in the event log, instead of polling the registers every tick:
 
 ```c
-mogbus_device_set_written_hook(st.dev, on_written, &st);
-...
 if (a->address <= HOLD_MODE && end > HOLD_MODE)
 	log_event(st, EVT_MODE | a->values[HOLD_MODE - a->address]);
 ```
 
-It gets the same @ref mogbus_access_t "mogbus_access_t" as the access hook, with `kind` always `MOGBUS_ACCESS_WRITE` and `values` the registers that were stored (bits as 0 or 1; for FC 16 the masked result). It runs once per written range: FC 05, 06, 0F, 10, 16, the write half of FC 17 (before the read half is answered) and, once per sub-request in order, FC 15 file records (`MOGBUS_TARGET_FILE_RECORD`). With `broadcast-execute` on it runs once per device.
+In the tutorial program `main()` installs `on_written` the same way as the access hook (`mogbus_device_set_written_hook(st.dev, on_written, &st)`). In the excerpt, `a` is the access describing the write that was applied, `st` the station struct and `end` the first address after the written range; the program writes a line to the event log (below) when the range covers the mode register. It gets the same @ref mogbus_access_t "mogbus_access_t" as the access hook, with `kind` always `MOGBUS_ACCESS_WRITE` and `values` the registers that were stored (bits as 0 or 1; for FC 16 the masked result). It runs once per written range: FC 05, 06, 0F, 10, 16, the write half of FC 17 (before the read half is answered) and, once per sub-request in order, FC 15 file records (`MOGBUS_TARGET_FILE_RECORD`). With `broadcast-execute` on it runs once per device.
 
 - It does not run for a write the access hook vetoed, for a request answered with an exception, or for host calls (`mogbus_device_write`, `set_value`, the HTTP control API, machines). That is why `log_event` and the other `mogbus_device_*` calls it makes do not trigger it again.
 - Faults do not change request processing: the hook runs even when the response is then dropped, delayed or corrupted, and a `restart` fault resets the device after the response is built, so the hook has already run.
@@ -88,7 +90,7 @@ Some devices answer function codes the standard does not define. The pump statio
 mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st);
 ```
 
-`status_block` gets the request data (one byte, the block id) and writes the reply data: block id, mode, flags (high, low, running), level in cm, outflow in 0.1 m3/h and the hook's refusal count, read with `mogbus_device_get_value()` and `mogbus_device_read()`. It returns 0 to reply, a Modbus exception code to refuse (an unknown block id answers 3) or `MOGBUS_FUNCTION_NO_RESPONSE` for silence. The request counts in the diagnostic counters and metrics like any other, and faults and listen-only apply. See [user-defined function codes](../modbus/user-defined-function-codes.md#programmable-from-c-and-python) for the rules (1-127, not built in, 8 per device).
+`FC_STATUS_BLOCK` is the program's constant for 0x41, `status_block` its callback and `&st` the `user` pointer again. `status_block` gets the request data (one byte, the block id) and writes the reply data: block id, mode, flags (high, low, running), level in cm, outflow in 0.1 m3/h and the hook's refusal count, read with `mogbus_device_get_value()` and `mogbus_device_read()`. It returns 0 to reply, a Modbus exception code to refuse (an unknown block id answers 3) or `MOGBUS_FUNCTION_NO_RESPONSE` for silence. The request counts in the diagnostic counters and metrics like any other, and faults and listen-only apply. See [user-defined function codes](../modbus/user-defined-function-codes.md#programmable-from-c-and-python) for the rules (1-127, not built in, 8 per device).
 
 ```text
   ok   FC 0x41 returns the status block computed from the live values
@@ -113,7 +115,7 @@ mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st);
 
 ## An event log in file records
 
-Clients read the event log with FC 14; the host appends to it. The layout is the program's own: record 1 counts the events, records 2 to 100 are a ring of codes (high byte what, low byte value). `log_event` writes with @ref mogbus_device_write_file_records "mogbus_device_write_file_records()", a host call that does not trigger the hook:
+Clients read the event log with FC 14; the host appends to it. The layout is the program's own: record 1 counts the events, records 2 to 100 are a ring of codes (high byte what, `EVT_*` constants such as `EVT_PUMP` and `EVT_MODE`; low byte the value). The program's `log_event(st, code)`, called by `simulate()` and by the post-write hook, appends one code: it picks the next slot of the ring from the event counter `st->events` and writes with @ref mogbus_device_write_file_records "mogbus_device_write_file_records()", a host call that does not trigger the hook:
 
 ```c
 uint16_t slot = (uint16_t)(2 + st->events % (LOG_RECORDS - 1));
@@ -131,7 +133,7 @@ mogbus_device_write_file_records(st->dev, LOG_FILE, 1, 1, &count);
 
 ## A FIFO refreshed on read
 
-FC 18 returns a queue of up to 31 values. The simulation keeps the last 31 level samples (in centimetres); the hook copies them into the queue right before a client reads it:
+FC 18 returns a queue of up to 31 values. `simulate()` keeps the last 31 level samples (in centimetres, newest last) in `st->samples`, `st->sample_count` of them; the first branch of `on_access` copies them into the queue right before a client reads it (`a->address` is the queue's pointer address):
 
 ```c
 if (a->target == MOGBUS_TARGET_FIFO)
@@ -154,6 +156,8 @@ For FC 2B/0D, @ref mogbus_device_add_canopen_object "mogbus_device_add_canopen_o
 ## Watching and rewriting frames
 
 The hooks above work on requests the device understood. A *frame hook* (@ref mogbus_frame_fn "mogbus_frame_fn", installed per server with @ref mogbus_server_set_frame_hook "mogbus_server_set_frame_hook()") sees the transport frames themselves, so a host can log traffic, or rewrite and drop frames to test a client against corrupt or missing answers; fixed fault injection covers only fixed cases. It is the counterpart of pymodbus `trace_packet`. It works on every transport: TCP (also with TLS, as plaintext), UDP, RTU (PTY, device, fd), RTU over TCP and UDP, ASCII (PTY, device, fd), ASCII over TCP and UDP.
+
+This example is not part of the tutorial program. The hook below prints every frame and breaks the CRC of every RTU-over-TCP answer (it uses the `mogbus_frame_t` described after it):
 
 ```c
 static size_t

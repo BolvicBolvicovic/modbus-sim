@@ -1,6 +1,6 @@
-# Testing your client against the station
+# Step 6: Test your client against the station
 
-Turn the station into a test fixture: a fresh simulated plant per test, simulated time under the test's control, unittest or pytest.
+> **Summary:** Turn the station into a test fixture: a fresh simulated plant per test, simulated time under the test's control, unittest or pytest.
 
 The point of all this is to test *your* code, so the last step is to put the station in a fixture and
 write tests for the kind of code you ship. The example has two small functions standing in for it (a
@@ -12,7 +12,7 @@ status screen and a setpoint raiser) in
 `running_station()` in the example builds the device, installs the hook, pins the inflow so every run
 has the same curve, serves on free loopback ports with the control API on, and closes everything on
 exit. The process model is *not* ticking: a test moves simulated time by calling `process.tick()`,
-which makes tests fast and deterministic.
+which makes tests fast and deterministic. The function yields a `Station`, a small object that holds `ctx`, `dev`, `process`, `policy`, `server` and the ports, and has `client()` (a new `Client` of step 2) and `http(method, path, body)` (a call to the runtime control API of [step 5](python-lifetimes.md#runtime-control)). The excerpt omits the lines that also install the post-write hook and the vendor function code of [step 4](python-hooks.md).
 
 ```python
 @contextlib.contextmanager
@@ -34,7 +34,7 @@ tests run in parallel: any two tests may run at once.
 
 ## unittest
 
-pytest is not required. Plain `unittest` tests need only the library, and they are what CI runs:
+pytest is not required. Plain `unittest` tests need only the library. The example's tests (`ps` is the `pump_station` module; `setUp` builds the station with `running_station()`, `self.station` and `self.plc` are the station and its client; `read_status()` and `raise_setpoint()` are the two small functions standing in for your code under test):
 
 ```python
 class PumpStationTest(unittest.TestCase):
@@ -44,6 +44,10 @@ class PumpStationTest(unittest.TestCase):
         self.addCleanup(manager.__exit__, None, None, None)
         self.plc = self.station.client()
         self.addCleanup(self.plc.close)
+
+    def run_until(self, condition, step=10.0, limit=2000):
+        # ticks the process in `step` simulated seconds until condition() is true
+        ...
 
     def test_setpoint_rules(self):
         self.assertTrue(raise_setpoint(self.plc, 1.0))
@@ -69,7 +73,7 @@ make python-examples      # builds libmogbus.so, runs pump_station.py and these 
 ```text
 .......
 ----------------------------------------------------------------------
-Ran 7 tests in 0.183s
+Ran 8 tests in 0.183s
 
 OK
 ```
@@ -90,7 +94,7 @@ def test_client_survives_an_injected_exception(self):
 
 > **Note:** The library's log is process-wide and goes to stderr. The example silences it with
 > `mogbus.set_log_level("off")` in `setUpModule()`; leave it on while debugging, or collect it with a
-> [log sink](python-observe.md#step-7-logs-metrics-and-the-control-api).
+> [log sink](python-lifetimes.md#logs).
 
 ## pytest
 
@@ -118,8 +122,8 @@ def test_bad_setpoints_are_refused(station, setpoint):
     assert station.dev.get_value("holding", ps.SETPOINT) == 2.5
 ```
 
-pytest is not a dependency of mogbus, so CI does not run these (`make python-examples` runs the
-unittest file); `pip install pytest` and
+pytest is not a dependency of mogbus, so `make python-examples` runs only the unittest file;
+`pip install pytest` and
 `PYTHONPATH=python python3 -m pytest examples/python` run everything, the unittest tests too. A
 simpler fixture around \ref mogbus::core::serve "serve()" with a config is in
 `examples/python/conftest.py` (`meter`).
@@ -128,7 +132,7 @@ simpler fixture around \ref mogbus::core::serve "serve()" with a config is in
 
 - One context per test, closed by a `with` or a cleanup, so ports and threads never leak.
 - Move simulated time with a function, not `time.sleep()`: put the model behind `tick(dt)` and keep
-  the thread of [step 6](python-threading.md#step-6-the-process-on-a-thread) for demos.
+  the thread of [step 5](python-lifetimes.md#threads-and-locks) for demos.
 - Use `probe()` or a first request to wait for readiness; the transport listens as soon as
   `serve()` returns, so a client can connect before the first step.
 - Assert on the audit trail and on the metrics (`Server.metrics()`) to check what your client sent,
@@ -136,27 +140,8 @@ simpler fixture around \ref mogbus::core::serve "serve()" with a config is in
 - Use faults from the control API (or from a config) to see how your client reacts to exceptions,
   delays, dropped replies and disconnects.
 
-## Watching and rewriting frames
-
-\ref mogbus::core::Server::set_frame_hook "Server.set_frame_hook()" shows every frame a server
-receives and sends (the counterpart of pymodbus `trace_packet`) and lets a test rewrite or drop
-them, which fixed faults cannot do. The hook gets a `Frame` (`direction`, `mode`, `peer`, `data`,
-`capacity`) and returns `None` to pass it on, the replacement bytes, or `b""` to drop it:
-
-```python
-def hook(frame):
-    log.append((frame.direction.name, frame.data.hex()))
-    if frame.direction == mogbus.FrameDirection.SENT:
-        return frame.data[:-1] + bytes([frame.data[-1] ^ 0xFF])   # the client sees a wrong last byte
-
-server.set_frame_hook(hook)
-```
-
-Received frames are shown before they are validated, so the rewritten bytes are handled as if they
-had arrived; sent frames are shown after fault injection and just before they are written. A
-replacement longer than `capacity` drops the frame and logs a warning, and an exception in the hook
-is printed and lets the frame through. The same rules per transport are in
-[Guard clients and keep records](../library/library-hooks.md#watching-and-rewriting-frames).
+Frame hooks, which show and rewrite what a server sends, are covered in
+[step 4](python-hooks.md#watching-and-rewriting-frames).
 
 ## Where next
 
@@ -171,6 +156,6 @@ is printed and lets the frame through. The same rules per transport are in
 
 ## See also
 
-- [Python tutorial](python-start.md)
-- [Threads, locks and shutdown](python-threading.md)
+- [Using mogbus from Python](python-start.md)
+- [Step 5: Observe, shut down, lifetimes and threading](python-lifetimes.md)
 - \ref core.py "Python API reference"
