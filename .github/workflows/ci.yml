@@ -128,7 +128,7 @@ jobs:
 
       - name: Check all profiles
         run: |
-          for profile in profiles/*.scm; do
+          for profile in profiles/*.scm examples/tutorial/*.scm; do
             ./mogbus --check "$profile"
           done
 
@@ -166,7 +166,7 @@ jobs:
 
       - name: Check all profiles without TLS
         run: |
-          for profile in profiles/*.scm; do
+          for profile in profiles/*.scm examples/tutorial/*.scm; do
             ./mogbus --check "$profile"
           done
 
@@ -245,7 +245,7 @@ jobs:
 
       - name: Check all profiles (dev)
         run: |
-          for profile in profiles/*.scm; do
+          for profile in profiles/*.scm examples/tutorial/*.scm; do
             ./mogbus --check "$profile"
           done
 

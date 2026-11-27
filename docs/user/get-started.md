@@ -89,6 +89,8 @@ Only the points you configure exist. A client that reads any other address gets 
 
 ## Where to go next
 
+- Follow the [pumping station tutorial](tutorial-app.md): a full simulated device with behaviours, a
+  machine, faults, the web UI and the control API.
 - Copy a [profile](profiles/using-profiles.md) that is close to your device, or
   [import a register map](import/import-overview.md).
 - Add behaviour and faults: the [config reference](config/format.md).

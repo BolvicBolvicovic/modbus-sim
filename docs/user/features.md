@@ -24,6 +24,8 @@ while the config is read. Linux first (the OS calls live in `src/os`); on Window
 
 ## Where to read more
 
+New here? The [pumping station tutorial](tutorial-app.md) walks through most of these features.
+
 | Feature | Page |
 |---|---|
 | Protocol | [Modbus support](modbus/modbus-overview.md), [Function codes](modbus/function-codes.md), [Transports](transports/transports.md) |
