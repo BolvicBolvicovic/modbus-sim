@@ -637,7 +637,7 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 			extra = "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
 				"X-Frame-Options: DENY\r\n"
 				"Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; "
-				"style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'\r\n";
+				"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'\r\n";
 			body_len = page_len;
 		}
 		else
