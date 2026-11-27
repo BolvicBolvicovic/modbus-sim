@@ -61,4 +61,7 @@ struct expr_ctx_t
 
 bool expr_eval(const expr_node_t* nodes, u16 root, expr_ctx_t* ctx, val_t* out);
 
+/** @brief Log text of an evaluation failure ("" for EXPR_FAIL_NONE or an unknown value). */
+const char* expr_failure_text(expr_failure_t why);
+
 #endif

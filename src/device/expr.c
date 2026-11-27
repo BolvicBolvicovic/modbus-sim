@@ -8,6 +8,17 @@
 /** @brief Maximum nesting depth of an expression tree. */
 enum { EXPR_MAX_DEPTH = 512 };
 
+const char*
+expr_failure_text(expr_failure_t why)
+{
+	static const char* const names[] = {
+		"", "evaluation budget exhausted", "division by zero",
+		"point access failed", "invalid expression", "integer operand out of range",
+	};
+
+	return (u32)why < sizeof(names) / sizeof(names[0]) ? names[why] : "";
+}
+
 static bool
 fail(expr_ctx_t* ctx, expr_failure_t reason)
 {

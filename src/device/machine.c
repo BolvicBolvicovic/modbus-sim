@@ -19,12 +19,6 @@ static const char* const handler_names[MACHINE_ROLE_COUNT] = {
 	"on-enter", "on-tick", "on-exit", "transition condition", "on-write",
 };
 
-static const char* const failure_names[EXPR_FAIL_RANGE + 1] = {
-	"", "evaluation budget exhausted", "division by zero",
-	"point access failed", "invalid expression",
-	"integer operand out of range",
-};
-
 static char error_text[256];
 
 static const char*
@@ -734,7 +728,7 @@ warn_once(machine_system_t* sys, u16 machine_index, u16 state_index, u8 role,
 	LOG_WARN("machine '%s', state '%s', %s: %s",
 		 sys->defs[machine_index].name,
 		 sys->defs[machine_index].states[state_index].name,
-		 handler_names[role], failure_names[why]);
+		 handler_names[role], expr_failure_text(why));
 }
 
 bool

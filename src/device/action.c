@@ -7,11 +7,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char* const failure_names[EXPR_FAIL_TYPE + 1] = {
-	"", "evaluation budget exhausted", "division by zero",
-	"point access failed", "invalid expression",
-};
-
 static char error_text[256];
 
 static bool
@@ -145,7 +140,7 @@ run_instance(device_t* dev, action_instance_t* inst)
 				 space_name(inst->space), inst->address,
 				 inst->event == ACTION_ON_READ ? "on-read" : "on-write",
 				 inst->name[0] ? " (action '" : "", inst->name,
-				 inst->name[0] ? "')" : "", failure_names[why]);
+				 inst->name[0] ? "')" : "", expr_failure_text(why));
 		}
 	}
 	return ok;

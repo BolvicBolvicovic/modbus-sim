@@ -303,6 +303,18 @@ TEST(ActionFailureAnswersException04)
 	ASSERT_EQ(host_u16(dev, SPACE_HOLDING, 1) == 8);
 }
 
+TEST(ActionRangeFailureAnswersException04)
+{
+	device_t*	dev = load_device(SERVER
+		"(device (unit-id 1)"
+		" (holding 0 (static 0) (on-read (set! self (bit-and 0.5 1))))"
+		" (holding 1 (static 0) (on-read (set! self (bit-and 6 3)))))");
+
+	ASSERT_EQ(read_first(dev, 1000, 3, 0, 1, NULL) == 4);
+	ASSERT_EQ(read_first(dev, 1001, 3, 1, 1, NULL) == 0);
+	ASSERT_EQ(host_u16(dev, SPACE_HOLDING, 1) == 2);
+}
+
 TEST(ActionNowAndElapsedMs)
 {
 	device_t*	dev = load_device(SERVER
