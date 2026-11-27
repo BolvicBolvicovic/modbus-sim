@@ -8,8 +8,8 @@
  *
  * Model: a mogbus_t context owns the devices and servers you create. Devices
  * come from a config file (mogbus_load_config) or are built in code
- * (mogbus_add_device + mogbus_device_add_point). A server exposes all devices
- * of the context over one transport (TCP, RTU, ASCII, ...), and the host drives
+ * (mogbus_add_device + mogbus_device_add_point). A server exposes the devices assigned to it (by
+ * default all devices of the context) over one transport (TCP, RTU, ASCII, ...), and the host drives
  * it with mogbus_server_step() from its own loop, or hands the thread over with
  * mogbus_server_run().
  *
@@ -326,10 +326,12 @@ struct mogbus_point_t
  * loaded devices can be mixed in one context, which holds up to MOGBUS_MAX_DEVICES devices.
  *
  * @param ctx Context.
- * @param unit_id Modbus unit id; must not be in use.
+ * @param unit_id Modbus unit id. Two devices may share one only when they are assigned to
+ *        different servers (mogbus_device_add_server()); mogbus_server_create() and
+ *        mogbus_device_add_server() fail when two devices of one server have the same id.
  * @param name Device name, copied, at most 63 bytes; NULL means "unnamed".
- * @return The device, or NULL on a duplicate unit id, a too long name or when MOGBUS_MAX_DEVICES
- *         is reached (mogbus_last_error_code() and mogbus_last_error() say why).
+ * @return The device, or NULL on a too long name or when MOGBUS_MAX_DEVICES is reached
+ *         (mogbus_last_error_code() and mogbus_last_error() say why).
  */
 MOGBUS_API mogbus_device_t*	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name);
 
@@ -337,9 +339,34 @@ MOGBUS_API mogbus_device_t*	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, co
  * @brief Finds a device by unit id, including devices loaded from config.
  * @param ctx Context.
  * @param unit_id Unit id to look up.
- * @return The device, or NULL.
+ * @return The first device with that unit id, or NULL (several may share it on different servers).
  */
 MOGBUS_API mogbus_device_t*	mogbus_find_device(mogbus_t* ctx, uint8_t unit_id);
+
+/**
+ * @brief Assigns the device to the server with the given id.
+ *
+ * A server created with that `id` serves the device; the device then no longer belongs to the
+ * servers without id. Call it again to serve the device from several servers. Only servers
+ * created afterwards are affected. Two devices with the same unit id cannot share a server.
+ *
+ * @param dev Device.
+ * @param id Server id, 1 to 31 bytes; copied. At most 8 servers per device.
+ * @return MOGBUS_OK (also when already assigned), or MOGBUS_ERR_INVALID for an empty or too long
+ *         id, too many servers or a unit id already used by a device of that server; the
+ *         message is in mogbus_last_error().
+ */
+MOGBUS_API mogbus_error_t	mogbus_device_add_server(mogbus_device_t* dev, const char* id);
+
+/**
+ * @brief Returns the id of a server the device is assigned to.
+ * @param dev Device.
+ * @param index Position in the order of mogbus_device_add_server() calls (or of the config's
+ *        `(servers ...)`; a config with one named server assigns it to every device that lists none).
+ * @return The id, borrowed from the device, or NULL when @p index is out of range, so index 0 is
+ *         NULL for a device served by the servers without id.
+ */
+MOGBUS_API const char*	mogbus_device_server_at(const mogbus_device_t* dev, size_t index);
 
 /**
  * @brief Returns the number of devices in the context.
@@ -907,8 +934,10 @@ enum mogbus_tls_version_t
  * broadcast_execute); the PTY and DEVICE modes use the serial line fields and RTU timing (`path`
  * for DEVICE); the FD modes use `fd`, a byte stream you already own (a socketpair or PTY master),
  * never closed by the library. All modes use `seed`. The HTTP fields are independent of the mode.
- * A server serves every device the context has when it is created; a context holds up to
- * MOGBUS_MAX_SERVERS servers.
+ * A server with an `id` serves the devices that list it (mogbus_device_add_server()); a server
+ * without one serves the devices that list no server, which is every device unless some were
+ * assigned. The devices are picked when the server is created. A context holds up to
+ * MOGBUS_MAX_SERVERS servers, which mogbus_step() and mogbus_run() drive together.
  */
 struct mogbus_server_options_t
 {
@@ -940,6 +969,7 @@ struct mogbus_server_options_t
 	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
 	bool		http_ui;		/**< serve the web UI on `/` (needs the endpoint; implies http_control) */
 	const char*	http_allowed_hosts;	/**< extra Host names /api/ and the UI accept (loopback and the bind address always pass): up to 8 comma-separated names; NULL = none */
+	const char*	id;			/**< names the server: unique among the live servers of the context, at most 31 bytes; prefixes its log lines; NULL = none */
 };
 
 /**
@@ -952,11 +982,13 @@ struct mogbus_server_options_t
 MOGBUS_API mogbus_server_options_t	mogbus_server_options_defaults(void);
 
 /**
- * @brief Starts a server for every device the context has now.
+ * @brief Starts a server for the devices assigned to it, which is every device of the context
+ *        unless mogbus_device_add_server() was used.
  *
- * Devices added later are not served.
+ * With `options->id` set the server serves the devices that list that id; without it, the
+ * devices that list none. Devices added or assigned later are not served by this server.
  *
- * @param ctx Context with at least one device.
+ * @param ctx Context with at least one device for this server.
  * @param options Server settings; strings are copied.
  * @return The server, or NULL if the options are invalid or the transport cannot start (port in
  *         use, serial device missing, TLS files unreadable, no devices, MOGBUS_MAX_SERVERS
@@ -975,12 +1007,43 @@ MOGBUS_API mogbus_server_t*	mogbus_server_create(mogbus_t* ctx, const mogbus_ser
 MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config(mogbus_t* ctx);
 
 /**
+ * @brief Returns how many (server ...) sections the last mogbus_load_config() read.
+ * @param ctx Context.
+ * @return The count (at least 1 after a successful load: a file without (server ...) has one
+ *         default server), or 0 if no config is loaded or the build has no config support.
+ */
+MOGBUS_API size_t	mogbus_config_server_count(const mogbus_t* ctx);
+
+/**
+ * @brief Starts the server number @p index of the last mogbus_load_config(), serving the devices
+ *        assigned to it.
+ *
+ * Index 0 is mogbus_server_create_from_config().
+ * @param ctx Context with a loaded config.
+ * @param index Position of the (server ...) section, below mogbus_config_server_count().
+ * @return The server, or NULL; see mogbus_server_create(). An index out of range fails with
+ *         MOGBUS_ERR_INVALID.
+ */
+MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config_at(mogbus_t* ctx, size_t index);
+
+/**
  * @brief Returns the (server ...) section of the last mogbus_load_config() as options.
  * @param ctx Context.
  * @param out Receives the options; strings are borrowed from the context.
  * @return false if no config is loaded or the build has no config support.
  */
 MOGBUS_API bool		mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out);
+
+/**
+ * @brief Returns the server section number @p index of the last mogbus_load_config() as options.
+ * @param ctx Context.
+ * @param index Position of the section, below mogbus_config_server_count(); 0 is
+ *        mogbus_config_server_options().
+ * @param out Receives the options; strings are borrowed from the context.
+ * @return false if no config is loaded, the build has no config support or @p index is out of range.
+ */
+MOGBUS_API bool		mogbus_config_server_options_at(const mogbus_t* ctx, size_t index,
+							mogbus_server_options_t* out);
 
 /**
  * @brief Validates options exactly as mogbus_server_create() would, without starting anything.
@@ -1076,6 +1139,51 @@ MOGBUS_API void		mogbus_server_stop(mogbus_server_t* server);
  * @param slot Host variable that holds the server to stop.
  */
 MOGBUS_API void		mogbus_stop_on_signals(mogbus_server_t* volatile* slot);
+
+/**
+ * @brief Runs one poll iteration of every server of the context with a single wait.
+ *
+ * Like mogbus_server_step(), but one call serves all live servers, so a host (or
+ * mogbus_run()) can drive TCP, UDP, serial and other servers from one thread. A server that
+ * stopped or whose byte-stream peer went away is skipped from then on. Everything said for
+ * mogbus_server_step() about threads applies to the whole context.
+ *
+ * @param ctx Context.
+ * @param max_wait_ms Longest time to block: 0 = do not block, -1 = until the nearest deadline of
+ *        any server (at most 1 s).
+ * @return MOGBUS_STEP_CONTINUE while some server is live, MOGBUS_STEP_DONE once every one has
+ *         stopped or finished (also with no server), MOGBUS_STEP_ERROR if a wait failed.
+ */
+MOGBUS_API int		mogbus_step(mogbus_t* ctx, int max_wait_ms);
+
+/**
+ * @brief Steps the whole context until every server stopped or finished, then closes the
+ *        transports.
+ *
+ * Still call mogbus_server_close() or mogbus_destroy() afterwards.
+ * @param ctx Context.
+ * @return 0 after a clean stop, 1 on a poll error.
+ */
+MOGBUS_API int		mogbus_run(mogbus_t* ctx);
+
+/**
+ * @brief Asks every server of the context to stop; the next mogbus_step() returns
+ *        MOGBUS_STEP_DONE.
+ *
+ * Async-signal-safe, like mogbus_server_stop().
+ * @param ctx Context.
+ */
+MOGBUS_API void		mogbus_stop(mogbus_t* ctx);
+
+/**
+ * @brief Makes SIGINT and SIGTERM (Ctrl-C on a console) call mogbus_stop() on the context held
+ *        in *slot, and ignores SIGPIPE.
+ *
+ * Does nothing while *slot is NULL. Process-wide, like mogbus_stop_on_signals(), which it may be
+ * combined with; the slot must stay valid for the life of the process.
+ * @param slot Host variable that holds the context to stop.
+ */
+MOGBUS_API void		mogbus_stop_context_on_signals(mogbus_t* volatile* slot);
 
 /**
  * @brief Steps until stopped or the byte-stream peer goes away, then closes the transport.

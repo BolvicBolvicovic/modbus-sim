@@ -91,6 +91,7 @@ done:
 ## Lifetimes
 
 - **No `malloc`.** Memory is an `mmap`-backed arena owned by the context. Devices live until `mogbus_destroy()` (there is no per-device removal), so a `mogbus_device_t*` stays valid until then. A `mogbus_server_t*` is valid until `mogbus_server_close()` or `mogbus_destroy()`.
+- **One arena for the context, its devices and all its servers.** Servers are not given arenas of their own: a device can be served by several servers, so it must outlive each of them, and one arena per context keeps that rule trivial. The cost is that a closed server's slot is reused but its arena memory only returns at `mogbus_destroy()`; for a host that needs memory back, create one context per independent group of servers and destroy it as a whole. Two running servers therefore share the devices' lifetime, and `mogbus_server_close()` on one never touches the other or the devices.
 - **Strings.** Strings you pass in (paths, bind address, TLS files, names, string-point text) are copied during the call; free them afterwards. Strings the library returns (@ref mogbus_version "mogbus_version()", @ref mogbus_server_pty_name "mogbus_server_pty_name()", the names in @ref mogbus_device_info "mogbus_device_info()", the options of @ref mogbus_config_server_options "mogbus_config_server_options()") are borrowed and must not be freed or modified.
 - **Errors.** A fallible call reports failure one way only: it returns NULL (constructors) or a @ref mogbus_error_t "mogbus_error_t" code. The text of the most recent failure is kept by the context: @ref mogbus_last_error "mogbus_last_error(ctx)" (valid until the next failing call on that context), and @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" gives the code after a NULL return. A successful call leaves it unchanged. @ref mogbus_probe "mogbus_probe()" has no context, so its text is kept per thread: `mogbus_last_error(NULL)`.
 - **Hooks and sinks.** The `user` pointers you register are yours: they must outlive the hook or sink.
@@ -98,7 +99,7 @@ done:
 ## Threading
 
 - **Not thread-safe.** One thread at a time uses a context. The thread that calls `mogbus_server_step()` is the thread that may touch the devices, including from the access hook, which runs inside the step. A harness that wants a background thread steps the server on it and does all device calls there, or serializes them with its own lock around both the step and the calls.
-- The only call that may come from another thread or a signal handler is `mogbus_server_stop()`.
+- The only calls that may come from another thread or a signal handler are `mogbus_server_stop()` and `mogbus_stop()` (all servers of the context).
 - @ref mogbus_probe "mogbus_probe()" blocks, so call it from another thread or process, as in step 2.
 - Logging is process-wide: a sink is called on whichever thread logs, so make it safe for the threads that step servers.
 

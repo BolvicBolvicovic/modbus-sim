@@ -44,6 +44,14 @@ typedef void (*log_sink_t)(void* ctx, log_level_t level, const char* message);
 void	log_set_sink(log_sink_t sink, void* ctx);
 void	log_set_level(log_level_t level);
 void	log_set_format(log_format_t format);
+
+/**
+ * @brief Prefixes every following message with "[prefix] " (NULL or "" = none).
+ *
+ * The pointer is borrowed: the caller clears it before the text goes away. Servers set it to
+ * their id while they run so that the lines of several servers can be told apart.
+ */
+void	log_set_prefix(const char* prefix);
 log_format_t	log_format(void);
 bool	log_enabled(log_level_t level);
 void	log_write(log_level_t level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));

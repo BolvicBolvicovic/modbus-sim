@@ -91,6 +91,7 @@ class ServerOptionsC(ctypes.Structure):
         ("http_control", ctypes.c_bool),
         ("http_ui", ctypes.c_bool),
         ("http_allowed_hosts", ctypes.c_char_p),
+        ("id", ctypes.c_char_p),
     ]
 
 
@@ -209,6 +210,7 @@ _sig("mogbus_device_get_value", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _p(_c.c_
 _sig("mogbus_device_set_value", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_double)
 _sig("mogbus_device_get_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_char_p, _c.c_size_t)
 _sig("mogbus_device_set_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_char_p)
+_sig("mogbus_device_add_server", _c.c_int, _ptr, _c.c_char_p)
 _sig("mogbus_device_set_any_unit", _c.c_bool, _ptr, _c.c_bool)
 _sig("mogbus_device_set_access_hook", _c.c_bool, _ptr, ACCESS_FN, _ptr)
 _sig("mogbus_device_set_written_hook", _c.c_bool, _ptr, WRITTEN_FN, _ptr)

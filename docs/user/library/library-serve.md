@@ -2,7 +2,11 @@
 
 > **Summary:** Pick a transport, create the server, and step it from the program's own loop instead of handing the thread over.
 
-A server (`mogbus_server_t*`, created below) exposes every device the context has at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [step 1](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
+A server (`mogbus_server_t*`, created below) exposes the devices of the context at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [step 1](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
+
+## Several servers
+
+Give each server an `id` in its options and assign devices with @ref mogbus_device_add_server "mogbus_device_add_server()" (call it again to put a device on several servers) before creating the servers. A server with an id serves the devices that list it; a server without one serves the devices that list none, which is every device unless some were assigned. Unit ids must be unique per server, so two devices of the context may share one when they are on different servers. All servers of the context live in the context's arena (see [lifetimes](library-lifetimes.md)) and are driven together by @ref mogbus_step "mogbus_step()" (one poll for all of them) or @ref mogbus_run "mogbus_run()"; @ref mogbus_stop "mogbus_stop()" stops them all. After @ref mogbus_load_config "mogbus_load_config()" of a file with several `(server ...)` forms, @ref mogbus_config_server_count "mogbus_config_server_count()" says how many there are and @ref mogbus_server_create_from_config_at "mogbus_server_create_from_config_at()" creates each one. `mogbus_server_create_from_config()` creates the first.
 
 ## Options
 

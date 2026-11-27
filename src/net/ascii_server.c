@@ -279,7 +279,7 @@ ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 	int		timeout = 0;
 	u64		now_ms = os_now_ms();
 
-	if (server->stop)
+	if (net_stop_requested(server->options.obs, server->stop))
 		return NET_STEP_DONE;
 
 	ascii_build_poll(server, &pfd, &timeout, now_ms);
@@ -287,7 +287,8 @@ ascii_server_step(ascii_server_t* server, s32 max_wait_ms)
 		timeout = MIN(timeout, max_wait_ms);
 	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 	{
-		if (os_interrupted())
+		if (os_interrupted() ||
+		    net_poll_gathering(server->options.obs))
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
 		LOG_WARN("ASCII poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;

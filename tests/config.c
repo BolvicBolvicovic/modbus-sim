@@ -1,4 +1,5 @@
 #include "vtest.h"
+#include "tests/tests_utils/test_case.h"
 #include "build_config.h"
 #include "config/config.h"
 #include "config/config_device.h"
@@ -167,8 +168,8 @@ TEST(ConfigLoadsServerAndDevice)
 		"  (input 0 (type float32) (static 1.0))\n"
 		"  (coil 3 (static on)))\n", &config, err, sizeof(err)));
 
-	ASSERT_EQ(config.port == 1600 && config.seed == 5);
-	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+	ASSERT_EQ(config.servers[0].port == 1600 && config.servers[0].seed == 5);
+	ASSERT_EQ(strcmp(config.servers[0].bind_address, "127.0.0.1") == 0);
 	ASSERT_EQ(config.device_count == 1);
 	ASSERT_EQ(config.devices[0]->unit_id == 4 && strcmp(config.devices[0]->name, "Test") == 0);
 	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 1, out));
@@ -204,7 +205,7 @@ TEST(ConfigErrorsAreReadable)
 		{ "(device (unit-id 1) (holding 0) (holding 0))", "already used" },
 		{ "(device (unit-id 1) (fault (kind drop)) (fault (kind drop)))", "only one is allowed" },
 		{ "(device (unit-id 1) (holding 0) (frobnicate 1))", "unknown item 'frobnicate'" },
-		{ "(server (port 1)) (server (port 2))" DEV, "more than one (server" },
+		{ "(server (port 1)) (server (port 2))" DEV, "server 1 has no (id" },
 		{ "(device (unit-id 1) (holding 0 (ramp (from 0) (to 1e30))))", "too large for the step" },
 		{ "(device (unit-id 1) (holding 0 (ramp (from 0) (to 9223372036854775808.0) (step 1) (mode bounce))))",
 		  "too large for the step" },
@@ -325,24 +326,24 @@ TEST(ConfigErrorsAreReadable)
 TEST(ConfigDefaults)
 {
 	config_t	config = load_ok("(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.port == SERVER_DEFAULT_PORT);
-	ASSERT_EQ(config.idle_timeout_ms == SERVER_DEFAULT_IDLE_TIMEOUT_MS);
-	ASSERT_EQ(config.frame_gap_ms == 0);
-	ASSERT_EQ(config.baud == 0);
-	ASSERT_EQ(config.strict_t15 == false);
-	ASSERT_EQ(config.broadcast_execute == false);
-	ASSERT_EQ(config.data_bits == 8);
-	ASSERT_EQ(config.parity == PARITY_NONE);
-	ASSERT_EQ(config.stop_bits == 1);
+	ASSERT_EQ(config.servers[0].port == SERVER_DEFAULT_PORT);
+	ASSERT_EQ(config.servers[0].idle_timeout_ms == SERVER_DEFAULT_IDLE_TIMEOUT_MS);
+	ASSERT_EQ(config.servers[0].frame_gap_ms == 0);
+	ASSERT_EQ(config.servers[0].baud == 0);
+	ASSERT_EQ(config.servers[0].strict_t15 == false);
+	ASSERT_EQ(config.servers[0].broadcast_execute == false);
+	ASSERT_EQ(config.servers[0].data_bits == 8);
+	ASSERT_EQ(config.servers[0].parity == PARITY_NONE);
+	ASSERT_EQ(config.servers[0].stop_bits == 1);
 	ASSERT_EQ(config.devices[0]->unit_id == 1);
 
 	config = load_ok("(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
-	ASSERT_EQ(config.path[0] == '\0');
+	ASSERT_EQ(config.servers[0].mode == SERVER_MODE_TCP);
+	ASSERT_EQ(config.servers[0].path[0] == '\0');
 
 	config = load_ok("(server (mode tcp))" DEV);
-	ASSERT_EQ(config.port == SERVER_DEFAULT_PORT);
-	ASSERT_EQ(config.tls_enabled == false);
+	ASSERT_EQ(config.servers[0].port == SERVER_DEFAULT_PORT);
+	ASSERT_EQ(config.servers[0].tls_enabled == false);
 }
 
 TEST(ConfigDeviceRequiresUnitId)
@@ -1018,9 +1019,9 @@ TEST(ConfigServerBind)
 	{
 		config_t	config = load_ok(loads[i].text);
 
-		if (strcmp(config.bind_address, loads[i].bind) != 0)
+		if (strcmp(config.servers[0].bind_address, loads[i].bind) != 0)
 			fprintf(stderr, "wrong bind for: %s\n", loads[i].text);
-		ASSERT_EQ(strcmp(config.bind_address, loads[i].bind) == 0);
+		ASSERT_EQ(strcmp(config.servers[0].bind_address, loads[i].bind) == 0);
 	}
 	EXPECT_ERROR("(server (mode tcp) (bind \"localhost\"))" DEV, "not a valid IPv4 or IPv6 address");
 
@@ -1091,11 +1092,11 @@ TEST(ConfigServerLineKeys)
 	for (u32 i = 0; i < ARRAY_COUNT(loads); i++)
 	{
 		config_t	config = load_ok(loads[i].text);
-		u32		got[] = { [IDLE] = config.idle_timeout_ms, [GAP] = config.frame_gap_ms,
-					  [BAUD] = config.baud, [SEED] = (u32)config.seed,
-					  [BROADCAST] = config.broadcast_execute,
-					  [DATA_BITS] = config.data_bits, [PARITY] = (u32)config.parity,
-					  [STOP_BITS] = config.stop_bits };
+		u32		got[] = { [IDLE] = config.servers[0].idle_timeout_ms, [GAP] = config.servers[0].frame_gap_ms,
+					  [BAUD] = config.servers[0].baud, [SEED] = (u32)config.servers[0].seed,
+					  [BROADCAST] = config.servers[0].broadcast_execute,
+					  [DATA_BITS] = config.servers[0].data_bits, [PARITY] = (u32)config.servers[0].parity,
+					  [STOP_BITS] = config.servers[0].stop_bits };
 
 		if (got[loads[i].key] != loads[i].value)
 			fprintf(stderr, "wrong value for: %s\n", loads[i].text);
@@ -1127,26 +1128,26 @@ TEST(ConfigServerModeAndPath)
 		snprintf(text, sizeof(text), "(server (mode %s)%s)" DEV,
 			 SERVER_MODES[i].name, SERVER_MODES[i].path_option);
 		config = load_ok(text);
-		ASSERT_EQ(config.mode == SERVER_MODES[i].mode);
+		ASSERT_EQ(config.servers[0].mode == SERVER_MODES[i].mode);
 		if (*SERVER_MODES[i].path_option)
-			ASSERT_EQ(strcmp(config.path, "/dev/ttyS0") == 0);
+			ASSERT_EQ(strcmp(config.servers[0].path, "/dev/ttyS0") == 0);
 		else
-			ASSERT_EQ(config.path[0] == '\0');
+			ASSERT_EQ(config.servers[0].path[0] == '\0');
 	}
 
 	config = load_ok("(server (mode rtu-device) (path \"/dev/ttyUSB0\"))" DEV);
-	ASSERT_EQ(config.mode == SERVER_MODE_RTU_DEVICE);
-	ASSERT_EQ(strcmp(config.path, "/dev/ttyUSB0") == 0);
+	ASSERT_EQ(config.servers[0].mode == SERVER_MODE_RTU_DEVICE);
+	ASSERT_EQ(strcmp(config.servers[0].path, "/dev/ttyUSB0") == 0);
 	config = load_ok("(server (mode ascii-device) (path \"/dev/ttyUSB1\"))" DEV);
-	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_DEVICE);
-	ASSERT_EQ(strcmp(config.path, "/dev/ttyUSB1") == 0);
+	ASSERT_EQ(config.servers[0].mode == SERVER_MODE_ASCII_DEVICE);
+	ASSERT_EQ(strcmp(config.servers[0].path, "/dev/ttyUSB1") == 0);
 	run_cases(cases, ARRAY_COUNT(cases));
 
 	memset(path, 'x', SERVER_PATH_MAX - 1);
 	path[SERVER_PATH_MAX - 1] = '\0';
 	snprintf(text, sizeof(text), "(server (mode rtu-device) (path \"%s\"))" DEV, path);
 	config = load_ok(text);
-	ASSERT_EQ(strlen(config.path) == SERVER_PATH_MAX - 1);
+	ASSERT_EQ(strlen(config.servers[0].path) == SERVER_PATH_MAX - 1);
 
 	memset(path, 'x', SERVER_PATH_MAX);
 	path[SERVER_PATH_MAX] = '\0';
@@ -1168,17 +1169,17 @@ TEST(ConfigTlsFullFormIsParsed)
 		     "       (tls1-2-ciphers \"ECDHE-RSA-AES128-GCM-SHA256\")\n"
 		     "       (tls1-3-ciphersuites \"TLS_AES_128_GCM_SHA256\")))\n"
 		     "(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.mode == SERVER_MODE_TCP);
-	ASSERT_EQ(config.port == CONFIG_DEFAULT_TLS_PORT);
-	ASSERT_EQ(config.tls_enabled);
-	ASSERT_EQ(strcmp(config.tls_certificate, "/tmp/server.pem") == 0);
-	ASSERT_EQ(strcmp(config.tls_private_key, "/tmp/server.key") == 0);
-	ASSERT_EQ(strcmp(config.tls_ca_certificate, "/tmp/ca.pem") == 0);
-	ASSERT_EQ(config.tls_require_client_certificate == false);
-	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_3);
-	ASSERT_EQ(config.tls_handshake_timeout_ms == 250);
-	ASSERT_EQ(strcmp(config.tls1_2_ciphers, "ECDHE-RSA-AES128-GCM-SHA256") == 0);
-	ASSERT_EQ(strcmp(config.tls1_3_ciphersuites, "TLS_AES_128_GCM_SHA256") == 0);
+	ASSERT_EQ(config.servers[0].mode == SERVER_MODE_TCP);
+	ASSERT_EQ(config.servers[0].port == CONFIG_DEFAULT_TLS_PORT);
+	ASSERT_EQ(config.servers[0].tls_enabled);
+	ASSERT_EQ(strcmp(config.servers[0].tls_certificate, "/tmp/server.pem") == 0);
+	ASSERT_EQ(strcmp(config.servers[0].tls_private_key, "/tmp/server.key") == 0);
+	ASSERT_EQ(strcmp(config.servers[0].tls_ca_certificate, "/tmp/ca.pem") == 0);
+	ASSERT_EQ(config.servers[0].tls_require_client_certificate == false);
+	ASSERT_EQ(config.servers[0].tls_min_version == CONFIG_TLS_VERSION_1_3);
+	ASSERT_EQ(config.servers[0].tls_handshake_timeout_ms == 250);
+	ASSERT_EQ(strcmp(config.servers[0].tls1_2_ciphers, "ECDHE-RSA-AES128-GCM-SHA256") == 0);
+	ASSERT_EQ(strcmp(config.servers[0].tls1_3_ciphersuites, "TLS_AES_128_GCM_SHA256") == 0);
 }
 
 TEST(ConfigTlsDefaultsAndExplicitPort)
@@ -1186,21 +1187,21 @@ TEST(ConfigTlsDefaultsAndExplicitPort)
 	config_t	config = load_ok("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\")\n"
 		     "             (ca-certificate \"ca.pem\")))\n"
 		     "(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.port == CONFIG_DEFAULT_TLS_PORT);
-	ASSERT_EQ(config.tls_enabled);
-	ASSERT_EQ(config.tls_require_client_certificate == true);
-	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
-	ASSERT_EQ(config.tls_handshake_timeout_ms == SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS);
-	ASSERT_EQ(config.tls1_2_ciphers[0] == '\0');
-	ASSERT_EQ(config.tls1_3_ciphersuites[0] == '\0');
+	ASSERT_EQ(config.servers[0].port == CONFIG_DEFAULT_TLS_PORT);
+	ASSERT_EQ(config.servers[0].tls_enabled);
+	ASSERT_EQ(config.servers[0].tls_require_client_certificate == true);
+	ASSERT_EQ(config.servers[0].tls_min_version == CONFIG_TLS_VERSION_1_2);
+	ASSERT_EQ(config.servers[0].tls_handshake_timeout_ms == SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS);
+	ASSERT_EQ(config.servers[0].tls1_2_ciphers[0] == '\0');
+	ASSERT_EQ(config.servers[0].tls1_3_ciphersuites[0] == '\0');
 
 	config = load_ok("(server (mode tcp) (port 1802)\n"
 		     "        (tls (certificate \"cert.pem\") (private-key \"key.pem\")\n"
 		     "             (require-client-certificate off)))\n"
 		     "(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.port == 1802);
-	ASSERT_EQ(config.tls_ca_certificate[0] == '\0');
-	ASSERT_EQ(config.tls_require_client_certificate == false);
+	ASSERT_EQ(config.servers[0].port == 1802);
+	ASSERT_EQ(config.servers[0].tls_ca_certificate[0] == '\0');
+	ASSERT_EQ(config.servers[0].tls_require_client_certificate == false);
 }
 
 TEST(ConfigTlsOptions)
@@ -1208,22 +1209,22 @@ TEST(ConfigTlsOptions)
 	config_t	config = load_ok("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 	     "             (ca-certificate \"ca.pem\") "
 	     "             (handshake-timeout-ms 250)))" DEV);
-	ASSERT_EQ(config.tls_handshake_timeout_ms == 250);
+	ASSERT_EQ(config.servers[0].tls_handshake_timeout_ms == 250);
 
 	config = load_ok("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 	     "             (ca-certificate \"ca.pem\") "
 	     "             (handshake-timeout-ms 1)))" DEV);
-	ASSERT_EQ(config.tls_handshake_timeout_ms == 1);
+	ASSERT_EQ(config.servers[0].tls_handshake_timeout_ms == 1);
 
 	config = load_ok("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 	     "             (ca-certificate \"ca.pem\") "
 	     "             (handshake-timeout-ms 86400000)))" DEV);
-	ASSERT_EQ(config.tls_handshake_timeout_ms == 86400000);
+	ASSERT_EQ(config.servers[0].tls_handshake_timeout_ms == 86400000);
 
 	config = load_ok("(server (tls (certificate \"cert.pem\") (private-key \"key.pem\") "
 		     "(require-client-certificate off) (min-version tls1.2))) "
 		     "(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.tls_min_version == CONFIG_TLS_VERSION_1_2);
+	ASSERT_EQ(config.servers[0].tls_min_version == CONFIG_TLS_VERSION_1_2);
 
 	char	path[SERVER_TLS_PATH_MAX + 2];
 	char	text[SERVER_TLS_PATH_MAX + 160];
@@ -1374,7 +1375,7 @@ TEST(ConfigTcpModeAcceptsFullUnitIdRange)
 	{
 		snprintf(text, sizeof(text), "(server (mode tcp)) (device (unit-id %u) (holding 0))", ids[i]);
 		config = load_ok(text);
-		ASSERT_EQ(config.mode == SERVER_MODE_TCP);
+		ASSERT_EQ(config.servers[0].mode == SERVER_MODE_TCP);
 		ASSERT_EQ(config.devices[0]->unit_id == ids[i]);
 	}
 }
@@ -1425,13 +1426,13 @@ TEST(ConfigRtuTcpAcceptsListenAndTimingOptions)
 	config_t	config = load_ok("(server (mode rtu-tcp) (port 1503) (bind \"127.0.0.1\") (seed 4)"
 		     " (idle-timeout-ms 500) (baud 9600) (frame-gap-ms 20) (broadcast-execute on))"
 		     " (device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.port == 1503);
-	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
-	ASSERT_EQ(config.seed == 4);
-	ASSERT_EQ(config.idle_timeout_ms == 500);
-	ASSERT_EQ(config.baud == 9600);
-	ASSERT_EQ(config.frame_gap_ms == 20);
-	ASSERT_EQ(config.broadcast_execute == true);
+	ASSERT_EQ(config.servers[0].port == 1503);
+	ASSERT_EQ(strcmp(config.servers[0].bind_address, "127.0.0.1") == 0);
+	ASSERT_EQ(config.servers[0].seed == 4);
+	ASSERT_EQ(config.servers[0].idle_timeout_ms == 500);
+	ASSERT_EQ(config.servers[0].baud == 9600);
+	ASSERT_EQ(config.servers[0].frame_gap_ms == 20);
+	ASSERT_EQ(config.servers[0].broadcast_execute == true);
 }
 
 TEST(ConfigSerialModesRejectTcpListenOptions)
@@ -1461,42 +1462,42 @@ TEST(ConfigAsciiModeAcceptsLineSettings)
 {
 	config_t	config = load_ok("(server (mode ascii-pty) (seed 3) (baud 115200)"
 		     " (data-bits 7) (parity even) (stop-bits 1))" DEV);
-	ASSERT_EQ(config.baud == 115200);
-	ASSERT_EQ(config.seed == 3);
-	ASSERT_EQ(config.data_bits == 7);
-	ASSERT_EQ(config.parity == PARITY_EVEN);
-	ASSERT_EQ(config.stop_bits == 1);
+	ASSERT_EQ(config.servers[0].baud == 115200);
+	ASSERT_EQ(config.servers[0].seed == 3);
+	ASSERT_EQ(config.servers[0].data_bits == 7);
+	ASSERT_EQ(config.servers[0].parity == PARITY_EVEN);
+	ASSERT_EQ(config.servers[0].stop_bits == 1);
 
 	config = load_ok("(server (mode ascii-device) (path \"/dev/ttyS0\") (data-bits 8)"
 		     " (parity odd) (stop-bits 2))" DEV);
-	ASSERT_EQ(config.data_bits == 8);
-	ASSERT_EQ(config.parity == PARITY_ODD);
-	ASSERT_EQ(config.stop_bits == 2);
+	ASSERT_EQ(config.servers[0].data_bits == 8);
+	ASSERT_EQ(config.servers[0].parity == PARITY_ODD);
+	ASSERT_EQ(config.servers[0].stop_bits == 2);
 }
 
 TEST(ConfigAsciiTcpAcceptsListenOptions)
 {
 	config_t	config = load_ok("(server (mode ascii-tcp))" DEV);
-	ASSERT_EQ(config.mode == SERVER_MODE_ASCII_TCP);
-	ASSERT_EQ(config.port == SERVER_DEFAULT_PORT);
-	ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
+	ASSERT_EQ(config.servers[0].mode == SERVER_MODE_ASCII_TCP);
+	ASSERT_EQ(config.servers[0].port == SERVER_DEFAULT_PORT);
+	ASSERT_EQ(strcmp(config.servers[0].bind_address, "127.0.0.1") == 0);
 
 	config = load_ok("(server (mode ascii-tcp) (port 1503) (bind \"::1\") (seed 4) (idle-timeout-ms 500))"
 		     " (device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.port == 1503);
-	ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
-	ASSERT_EQ(config.seed == 4);
-	ASSERT_EQ(config.idle_timeout_ms == 500);
+	ASSERT_EQ(config.servers[0].port == 1503);
+	ASSERT_EQ(strcmp(config.servers[0].bind_address, "::1") == 0);
+	ASSERT_EQ(config.servers[0].seed == 4);
+	ASSERT_EQ(config.servers[0].idle_timeout_ms == 500);
 }
 
 TEST(ConfigSerialModesAcceptSerialOptions)
 {
 	config_t	config = load_ok("(server (mode rtu-pty) (strict-t15 on) (parity even) (stop-bits 2) (baud 9600))"
 		     " (device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.strict_t15 == true);
-	ASSERT_EQ(config.parity == PARITY_EVEN);
-	ASSERT_EQ(config.stop_bits == 2);
-	ASSERT_EQ(config.baud == 9600);
+	ASSERT_EQ(config.servers[0].strict_t15 == true);
+	ASSERT_EQ(config.servers[0].parity == PARITY_EVEN);
+	ASSERT_EQ(config.servers[0].stop_bits == 2);
+	ASSERT_EQ(config.servers[0].baud == 9600);
 }
 
 TEST(ConfigNonFiniteStatic)
@@ -1548,7 +1549,7 @@ load_random_deadline(u32 seed, bool server_first, config_t* config, char* err, u
 	else
 		snprintf(text, sizeof(text), "%s %s", RANDOM_MACHINE_DEVICE, server);
 	ASSERT_SUCCESS(load_text(text, config, err, err_size));
-	ASSERT_EQ(config->seed == seed);
+	ASSERT_EQ(config->servers[0].seed == seed);
 	ASSERT_SUCCESS(config->device_count == 1 &&
 		       config->devices[0]->machines != NULL &&
 		       config->devices[0]->machines->count == 1);
@@ -1904,7 +1905,7 @@ struct expr_case_t
 };
 
 static bool
-load_expr_case(const expr_case_t* test_case, config_t* config, char* err, u32 err_size)
+load_expr_case(const expr_case_t* ec, config_t* config, char* err, u32 err_size)
 {
 	char text[512];
 
@@ -1912,7 +1913,7 @@ load_expr_case(const expr_case_t* test_case, config_t* config, char* err, u32 er
 		 "(device (unit-id 1) (coil 0) (discrete 0) (input 0) (holding 0)"
 		 " (machine m (initial idle) (var n 0) (var b #f)"
 		 "  (state idle (on-enter (set! %s %s)))))",
-		 test_case->type == VAL_NUM ? "n" : "b", test_case->expr);
+		 ec->type == VAL_NUM ? "n" : "b", ec->expr);
 	return load_text(text, config, err, err_size);
 }
 
@@ -2148,20 +2149,20 @@ TEST(ConfigDatagramModes)
 
 		snprintf(text, sizeof(text), "(server (mode %s))" DEV, modes[m].name);
 		config = load_ok(text);
-		ASSERT_EQ(config.mode == modes[m].mode);
-		ASSERT_EQ(config.port == 1502);
-		ASSERT_EQ(strcmp(config.bind_address, "127.0.0.1") == 0);
-		ASSERT_EQ(config.broadcast_execute == false);
+		ASSERT_EQ(config.servers[0].mode == modes[m].mode);
+		ASSERT_EQ(config.servers[0].port == 1502);
+		ASSERT_EQ(strcmp(config.servers[0].bind_address, "127.0.0.1") == 0);
+		ASSERT_EQ(config.servers[0].broadcast_execute == false);
 
 		snprintf(text, sizeof(text),
 			 "(server (mode %s) (port 1503) (bind \"::1\") (seed 9)%s)"
 			 " (device (unit-id %u) (holding 0)) (device (unit-id %u) (holding 0))",
 			 modes[m].name, modes[m].extra_option, modes[m].first_unit, modes[m].last_unit);
 		config = load_ok(text);
-		ASSERT_EQ(config.mode == modes[m].mode && config.port == 1503 && config.seed == 9);
-		ASSERT_EQ(strcmp(config.bind_address, "::1") == 0);
+		ASSERT_EQ(config.servers[0].mode == modes[m].mode && config.servers[0].port == 1503 && config.servers[0].seed == 9);
+		ASSERT_EQ(strcmp(config.servers[0].bind_address, "::1") == 0);
 		ASSERT_EQ(config.device_count == 2);
-		ASSERT_EQ(config.broadcast_execute == (modes[m].extra_option[0] != '\0'));
+		ASSERT_EQ(config.servers[0].broadcast_execute == (modes[m].extra_option[0] != '\0'));
 
 		run_mode_cases(modes[m].name, common, ARRAY_COUNT(common));
 		if (modes[m].mode != SERVER_MODE_RTU_UDP)
@@ -2176,18 +2177,18 @@ TEST(ConfigDatagramModes)
 TEST(ConfigHttpEndpointDefaultsAndAllModes)
 {
 	config_t	config = load_ok("(device (unit-id 1) (holding 0))");
-	ASSERT_EQ(!config.http_enabled);
+	ASSERT_EQ(!config.servers[0].http_enabled);
 	config = load_ok("(server (http))" DEV);
-	ASSERT_EQ(config.http_enabled && config.http_port == 9102);
-	ASSERT_EQ(strcmp(config.http_bind_address, "127.0.0.1") == 0);
-	ASSERT_EQ(!config.http_control);
+	ASSERT_EQ(config.servers[0].http_enabled && config.servers[0].http_port == 9102);
+	ASSERT_EQ(strcmp(config.servers[0].http_bind_address, "127.0.0.1") == 0);
+	ASSERT_EQ(!config.servers[0].http_control);
 	config = load_ok("(server (http (control on)))" DEV);
-	ASSERT_EQ(config.http_enabled && config.http_control);
+	ASSERT_EQ(config.servers[0].http_enabled && config.servers[0].http_control);
 	config = load_ok("(server (http (control off)))" DEV);
-	ASSERT_EQ(config.http_enabled && !config.http_control);
+	ASSERT_EQ(config.servers[0].http_enabled && !config.servers[0].http_control);
 	config = load_ok("(server (mode rtu-pty) (http (port 9200) (bind \"::\")))"
 		     " (device (unit-id 1) (holding 0))");
-	ASSERT_EQ(config.http_enabled && config.http_port == 9200 && strcmp(config.http_bind_address, "::") == 0);
+	ASSERT_EQ(config.servers[0].http_enabled && config.servers[0].http_port == 9200 && strcmp(config.servers[0].http_bind_address, "::") == 0);
 	/* Different protocols may share a number. */
 	config = load_ok("(server (mode udp) (port 9102) (http))" DEV);
 }
@@ -2212,18 +2213,18 @@ TEST(ConfigHttpEndpointRejectsBadValues)
 TEST(ConfigHttpUiAndAllowedHosts)
 {
 	config_t	config = load_ok("(server (http))" DEV);
-	ASSERT_EQ(!config.http_ui && config.http_allowed_hosts[0] == '\0');
+	ASSERT_EQ(!config.servers[0].http_ui && config.servers[0].http_allowed_hosts[0] == '\0');
 	config = load_ok("(server (http (ui on)))" DEV);
-	ASSERT_EQ(config.http_ui && config.http_control);	/* the UI needs the control API */
+	ASSERT_EQ(config.servers[0].http_ui && config.servers[0].http_control);	/* the UI needs the control API */
 	config = load_ok("(server (http (ui off) (control off)))" DEV);
-	ASSERT_EQ(!config.http_ui && !config.http_control);
+	ASSERT_EQ(!config.servers[0].http_ui && !config.servers[0].http_control);
 	config = load_ok("(server (http (allowed-host \"sim.lab\") (allowed-host \"mogbus-1\")))"
 		     " (device (unit-id 1) (holding 0))");
-	ASSERT_EQ(strcmp(config.http_allowed_hosts, "sim.lab,mogbus-1") == 0);
+	ASSERT_EQ(strcmp(config.servers[0].http_allowed_hosts, "sim.lab,mogbus-1") == 0);
 	config = load_ok("(server (http (allowed-host \"a\") (allowed-host \"b\") (allowed-host \"c\")"
 		     " (allowed-host \"d\") (allowed-host \"e\") (allowed-host \"f\") (allowed-host \"g\")"
 		     " (allowed-host \"h\")))" DEV);
-	ASSERT_EQ(strcmp(config.http_allowed_hosts, "a,b,c,d,e,f,g,h") == 0);
+	ASSERT_EQ(strcmp(config.servers[0].http_allowed_hosts, "a,b,c,d,e,f,g,h") == 0);
 	static const struct cfg_case cases[] = {
 		{ "(server (http (allowed-host \"a\") (allowed-host \"b\") (allowed-host \"c\")"
 		    " (allowed-host \"d\") (allowed-host \"e\") (allowed-host \"f\") (allowed-host \"g\")"
@@ -2612,3 +2613,199 @@ TEST(ConfigClockLocalTimeFollowsTheTimeZone)
 }
 #endif
 
+
+/* One config text of the multi-server table and the error fragment it must fail with (NULL: it must load). */
+struct multi_case {
+	const char*	name;
+	const char*	text;
+	const char*	error;
+};
+
+#define S(id, extra)	"(server (id \"" id "\") " extra ")"
+#define D(unit, servers) "(device (unit-id " #unit ") " servers " (holding 0))"
+
+TEST(ConfigSeveralServersTable)
+{
+	static const struct multi_case cases[] = {
+		{ "two servers, devices assigned",
+		  S("a", "(port 1601)") S("b", "(mode udp) (port 1601)") D(1, "(servers \"a\" \"b\")") D(2, "(servers \"b\")"),
+		  NULL },
+		{ "same unit id on servers that share no device",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers \"a\")") D(1, "(servers \"b\")"),
+		  NULL },
+		{ "same unit id on a shared server",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers \"a\" \"b\")") D(1, "(servers \"b\")"),
+		  "both use unit-id 1" },
+		{ "any-unit once per server",
+		  S("a", "(port 1601)") S("b", "(port 1602)")
+		  "(device (unit-id 1) (any-unit on) (servers \"a\") (holding 0))"
+		  "(device (unit-id 2) (any-unit on) (servers \"b\") (holding 0))",
+		  NULL },
+		{ "any-unit twice on one server",
+		  S("a", "(port 1601)") S("b", "(port 1602)")
+		  "(device (unit-id 1) (any-unit on) (servers \"a\") (holding 0))"
+		  "(device (unit-id 2) (any-unit on) (servers \"a\" \"b\") (holding 0))",
+		  "both set any-unit" },
+		{ "unit 0 is fine on tcp, not on the rtu server of the same file",
+		  S("a", "(port 1601)") S("b", "(mode rtu-tcp) (port 1602)") D(0, "(servers \"a\")") D(3, "(servers \"b\")"),
+		  NULL },
+		{ "unit 0 on an rtu server",
+		  S("a", "(port 1601)") S("b", "(mode rtu-tcp) (port 1602)") D(0, "(servers \"a\" \"b\")"),
+		  "not valid for RTU/ASCII" },
+		{ "checksum corruption is checked per server",
+		  S("a", "(mode rtu-tcp) (port 1601)") S("b", "(port 1602)")
+		  "(device (unit-id 1) (servers \"a\") (fault (kind corrupt) (percent 10) (mode checksum)) (holding 0))"
+		  D(2, "(servers \"b\")"),
+		  NULL },
+		{ "checksum corruption on a server without checksum",
+		  S("a", "(mode rtu-tcp) (port 1601)") S("b", "(port 1602)")
+		  "(device (unit-id 1) (servers \"a\" \"b\") (fault (kind corrupt) (percent 10) (mode checksum)) (holding 0))",
+		  "not valid in tcp mode" },
+		{ "several servers need ids",
+		  S("a", "(port 1601)") "(server (port 1602))" D(1, "(servers \"a\")"),
+		  "server 2 has no (id" },
+		{ "duplicate ids",
+		  S("a", "(port 1601)") S("a", "(port 1602)") D(1, "(servers \"a\")"),
+		  "both use id 'a'" },
+		{ "bad id characters",
+		  S("a b", "(port 1601)") D(1, ""),
+		  "must be 1 to 31 letters" },
+		{ "a device must name its server",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers \"a\")") D(2, ""),
+		  "is not assigned to a server" },
+		{ "unknown server",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers \"a\" \"c\")"),
+		  "names 'c'" },
+		{ "a server without devices",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers \"a\")"),
+		  "server 'b' serves no device" },
+		{ "servers given twice",
+		  S("a", "(port 1601)") S("b", "(port 1602)") "(device (unit-id 1) (servers \"a\") (servers \"b\") (holding 0))",
+		  "servers is given more than once" },
+		{ "server listed twice",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers \"a\" \"a\")"),
+		  "listed twice" },
+		{ "empty servers list",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers)"),
+		  "at least one server id" },
+		{ "servers are strings",
+		  S("a", "(port 1601)") S("b", "(port 1602)") D(1, "(servers a)"),
+		  "server ids are strings" },
+		{ "servers without any (server (id ...))",
+		  "(server (port 1601))" D(1, "(servers \"a\")"),
+		  "names 'a'" },
+		{ "one named server serves every device",
+		  S("a", "(port 1601)") D(1, "") D(2, ""),
+		  NULL },
+		{ "same tcp port",
+		  S("a", "(port 1601)") S("b", "(mode rtu-tcp) (port 1601)") D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  "both listen on TCP port 1601" },
+		{ "same port, tcp and udp",
+		  S("a", "(port 1601)") S("b", "(mode udp) (port 1601)") D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  NULL },
+		{ "same port, different loopback addresses",
+		  S("a", "(port 1601) (bind \"127.0.0.1\")") S("b", "(port 1601) (bind \"127.0.0.2\")")
+		  D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  NULL },
+		{ "same port, wildcard and an address",
+		  S("a", "(port 1601) (bind \"0.0.0.0\")") S("b", "(port 1601) (bind \"127.0.0.2\")")
+		  D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  "both listen on TCP port 1601" },
+		{ "same udp port",
+		  S("a", "(mode udp) (port 1601)") S("b", "(mode ascii-udp) (port 1601)")
+		  D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  "both listen on UDP port 1601" },
+		{ "http endpoint against a tcp port",
+		  S("a", "(port 1601) (http (port 1700))") S("b", "(port 1700)") D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  "both listen on TCP port 1700" },
+		{ "http endpoint against a udp port",
+		  S("a", "(port 1601) (http (port 1700))") S("b", "(mode udp) (port 1700)") D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  NULL },
+		{ "two http endpoints",
+		  S("a", "(port 1601) (http (port 1700))") S("b", "(port 1602) (http (port 1700))")
+		  D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  "both listen on TCP port 1700" },
+		{ "same serial device",
+		  S("a", "(mode rtu-device) (path \"/dev/ttyS9\")") S("b", "(mode ascii-device) (path \"/dev/ttyS9\")")
+		  D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  "both use the serial device /dev/ttyS9" },
+		{ "two ptys",
+		  S("a", "(mode rtu-pty)") S("b", "(mode ascii-pty)") D(1, "(servers \"a\")") D(2, "(servers \"b\")"),
+		  NULL },
+	};
+
+	for (u32 i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+	{
+		config_t	c = { 0 };
+		char		e[512] = "";
+		bool		ok;
+
+		test_case = cases[i].name;
+		ok = load_text(cases[i].text, &c, e, sizeof(e));
+		if (cases[i].error)
+		{
+			ASSERT_EQ(!ok);
+			if (!strstr(e, cases[i].error))
+				fprintf(stderr, "got: %s\n", e);
+			ASSERT_EQ(strstr(e, cases[i].error) != NULL);
+		}
+		else
+		{
+			if (!ok)
+				fprintf(stderr, "got: %s\n", e);
+			ASSERT_EQ(ok);
+		}
+	}
+	test_case = 0;
+}
+
+TEST(ConfigServersListsAndDefaults)
+{
+	config_t	c;
+
+	/* No (server ...): one default server, and devices need no assignment. */
+	c = load_ok(DEV);
+	ASSERT_EQ(c.server_count == 1 && c.servers[0].id[0] == '\0' && c.servers[0].port == SERVER_DEFAULT_PORT);
+	ASSERT_EQ(c.devices[0]->server_count == 0);
+
+	/* One named server is assigned to every device that lists none. */
+	c = load_ok("(server (id \"main\") (port 1601))" DEV " (device (unit-id 2) (holding 0))");
+	ASSERT_EQ(c.server_count == 1 && strcmp(c.servers[0].id, "main") == 0);
+	ASSERT_EQ(c.devices[0]->server_count == 1 && device_serves(c.devices[0], "main") &&
+		  device_serves(c.devices[1], "main") && !device_serves(c.devices[0], NULL));
+
+	/* Several servers keep their own settings, in file order. */
+	c = load_ok(S("x", "(mode udp) (port 1701) (seed 3)") S("y", "(port 1702) (idle-timeout-ms 500)")
+		    D(1, "(servers \"x\" \"y\")"));
+	ASSERT_EQ(c.server_count == 2 && c.servers[0].mode == SERVER_MODE_UDP && c.servers[0].port == 1701 &&
+		  c.servers[1].mode == SERVER_MODE_TCP && c.servers[1].idle_timeout_ms == 500);
+	ASSERT_EQ(device_serves(c.devices[0], "x") && device_serves(c.devices[0], "y") && !device_serves(c.devices[0], "z"));
+
+	/* A device is seeded by the first server (in file order) that serves it. */
+	c = load_ok(S("x", "(port 1701) (seed 5)") S("y", "(port 1702) (seed 9)")
+		    "(device (unit-id 1) (servers \"y\" \"x\") (holding 0) (machine m (initial idle) (state idle)))"
+		    "(device (unit-id 2) (servers \"y\") (holding 0) (machine m (initial idle) (state idle)))");
+	ASSERT_EQ(c.devices[0]->machines->seed == 5 && c.devices[1]->machines->seed == 9);
+}
+
+TEST(ConfigAtMostEightServers)
+{
+	char		text[4096] = "";
+	char		e[256]     = "";
+	config_t	c          = { 0 };
+	size_t		n          = 0;
+
+	for (int i = 0; i < 9; i++)
+	{
+		n += (size_t)snprintf(text + n, sizeof(text) - n, "(server (id \"s%d\") (port %d)) ", i, 1800 + i);
+		if (i == 7)
+		{
+			(void)snprintf(text + n, sizeof(text) - n,
+				       "(device (unit-id 1) (servers \"s0\" \"s1\" \"s2\" \"s3\" \"s4\" \"s5\" \"s6\" \"s7\") (holding 0))");
+			ASSERT_EQ(load_text(text, &c, e, sizeof(e)));
+			ASSERT_EQ(c.server_count == 8);
+		}
+	}
+	snprintf(text + n, sizeof(text) - n, "(device (unit-id 1) (servers \"s0\") (holding 0))");
+	ASSERT_EQ(!load_text(text, &c, e, sizeof(e)) && strstr(e, "too many (server") != NULL);
+}

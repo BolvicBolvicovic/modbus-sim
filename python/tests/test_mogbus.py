@@ -174,7 +174,7 @@ class DeviceTest(unittest.TestCase):
         self.assertEqual([d.unit_id for d in self.ctx], [1, 2])
         self.assertEqual(self.dev.name, "unit one")
         with self.assertRaises(MogbusError):
-            self.ctx.add_device(1)
+            self.ctx.add_device(3, "x" * 64)
 
     def test_any_unit(self):
         other = self.ctx.add_device(2)
@@ -495,6 +495,23 @@ class ServerTest(unittest.TestCase):
         self.assertFalse(mogbus.probe(options, 1, timeout_ms=300))
         with self.assertRaises(MogbusError):
             mogbus.probe_or_raise(options, 1, timeout_ms=300)
+
+    def test_two_servers_with_ids(self):
+        p1, p2 = free_port(), free_port()
+        with mogbus.Context() as ctx:
+            d1 = ctx.add_device(1)
+            d1.add_point("holding", 0, "u16", 11)
+            d1.add_server("a")
+            d2 = ctx.add_device(1)
+            d2.add_point("holding", 0, "u16", 22)
+            d2.add_server("b")
+            with self.assertRaisesRegex(MogbusError, "unit id"):
+                ctx.add_device(1).add_server("a")
+            with ctx.serve(ServerOptions(port=p1, id="a")).start(), \
+                    ctx.serve(ServerOptions(port=p2, id="b")).start():
+                for port, value in ((p1, 11), (p2, 22)):
+                    with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                        self.assertEqual(mbap_read(sock, 1, 0), [value])
 
     def test_rtu_timing(self):
         t35, gap = mogbus.rtu_timing(9600)

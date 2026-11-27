@@ -562,6 +562,7 @@ class ServerOptions:
     @param http_control Serve the runtime control API under `/api/` (needs the endpoint; no authentication, keep it on loopback).
     @param http_ui Serve the web UI on `/` (needs the endpoint; implies `http_control`).
     @param http_allowed_hosts Extra Host names `/api/` and the UI accept (loopback and the bind address always pass): a comma-separated string or a list of at most 8 names.
+    @param id Names the server (at most 31 bytes, unique in the context); it serves the devices that list it with `Device.add_server`, a server without one the devices that list none.
     """
     mode: Union[str, int, Mode] = Mode.TCP
     bind_address: Optional[str] = "127.0.0.1"
@@ -591,6 +592,7 @@ class ServerOptions:
     http_control: bool = False
     http_ui: bool = False
     http_allowed_hosts: Union[None, str, Sequence[str]] = None
+    id: Optional[str] = None
 
     def _to_c(self):
         """Returns (struct, keepalive). The struct points into the bytes objects in keepalive."""
@@ -613,7 +615,7 @@ class ServerOptions:
                 keep.append(value)
             elif f.name in ("bind_address", "path", "tls_certificate", "tls_private_key",
                             "tls_ca_certificate", "tls_ciphers_1_2", "tls_ciphersuites_1_3",
-                            "http_bind_address"):
+                            "http_bind_address", "id"):
                 if value is not None and not isinstance(value, (str, os.PathLike)):
                     raise MogbusError(f"{f.name} must be a string or None, got {value!r}")
                 value = _text(None if value is None else os.fspath(value))
@@ -851,6 +853,20 @@ class Device:
         """
         if not lib.mogbus_device_set_any_unit(self._live(), bool(on)):
             raise MogbusError("another device of the context already answers any unit id")
+
+    @_locked
+    def add_server(self, server_id: str) -> None:
+        """@brief Assigns this device to the server created with `ServerOptions(id=server_id)`.
+
+        Call it again to serve the device from several servers. Once a device lists a server, the
+        servers without an id no longer serve it. Only servers created afterwards are affected.
+        @param server_id The server id, 1 to 31 bytes; at most 8 servers per device.
+        @throws MogbusError If the id is empty or too long, the device has too many servers, or its
+            unit id is already used by a device of that server.
+        """
+        code = lib.mogbus_device_add_server(self._live(), _text(server_id))
+        if code:
+            raise _fail(self._ctx._h, code, "cannot assign the server")
 
     @_locked
     def set_access_hook(self, hook: Optional[Callable[[Access], Optional[int]]]) -> None:
@@ -1549,7 +1565,7 @@ class Context:
                 raise _fail(self._h, code, "invalid server options")
 
     def serve(self, options: Optional[ServerOptions] = None, **overrides) -> Server:
-        """@brief Creates a server for every device the context has now.
+        """@brief Creates a server for the devices assigned to it (every device unless Device.add_server() was used).
 
         Not started: call Server.start(), Server.run() or Server.step(). A device added later is not
         served by this server.

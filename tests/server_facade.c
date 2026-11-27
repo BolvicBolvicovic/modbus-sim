@@ -224,7 +224,7 @@ TEST(ServerOptionsFromConfigMapsEachTransport)
 	ASSERT_EQ(load_text("(server (mode tcp) (bind \"0.0.0.0\") (port 1777) (seed 9) "
 			    "(idle-timeout-ms 500)) (device (unit-id 4) (holding 0))",
 			    &c, err, sizeof(err)));
-	o = server_options_from_config(&c);
+	o = server_options_from_config(&c, 0);
 	ASSERT_EQ(o.mode == SERVER_MODE_TCP && o.port == 1777 && o.seed == 9);
 	ASSERT_EQ(strcmp(o.bind_address, "0.0.0.0") == 0 && o.idle_timeout_ms == 500);
 	ASSERT_EQ(!o.tls_enabled && o.fd == -1);
@@ -234,7 +234,7 @@ TEST(ServerOptionsFromConfigMapsEachTransport)
 	ASSERT_EQ(load_text("(server (mode rtu-tcp) (port 1888) (baud 19200) (frame-gap-ms 7) "
 			    "(broadcast-execute on)) (device (unit-id 1) (holding 0))",
 			    &c, err, sizeof(err)));
-	o = server_options_from_config(&c);
+	o = server_options_from_config(&c, 0);
 	ASSERT_EQ(o.mode == SERVER_MODE_RTU_TCP && o.port == 1888 && o.baud == 19200);
 	ASSERT_EQ(o.frame_gap_ms == 7 && o.broadcast_execute);
 
@@ -242,20 +242,20 @@ TEST(ServerOptionsFromConfigMapsEachTransport)
 	ASSERT_EQ(load_text("(server (mode rtu-device) (path \"/dev/ttyS9\") (baud 9600) "
 			    "(parity even) (stop-bits 2) (strict-t15 on)) "
 			    "(device (unit-id 1) (holding 0))", &c, err, sizeof(err)));
-	o = server_options_from_config(&c);
+	o = server_options_from_config(&c, 0);
 	ASSERT_EQ(o.mode == SERVER_MODE_RTU_DEVICE && strcmp(o.path, "/dev/ttyS9") == 0);
 	ASSERT_EQ(o.baud == 9600 && o.parity == PARITY_EVEN && o.stop_bits == 2 && o.strict_t15);
 
 	memset(&c, 0, sizeof(c));
 	ASSERT_EQ(load_text("(server (mode ascii-device) (path \"/dev/ttyS8\") (data-bits 7) "
 			    "(parity even)) (device (unit-id 1) (holding 0))", &c, err, sizeof(err)));
-	o = server_options_from_config(&c);
+	o = server_options_from_config(&c, 0);
 	ASSERT_EQ(o.mode == SERVER_MODE_ASCII_DEVICE && o.data_bits == 7 && o.parity == PARITY_EVEN);
 
 	memset(&c, 0, sizeof(c));
 	ASSERT_EQ(load_text("(server (mode ascii-tcp) (port 1999)) (device (unit-id 1) (holding 0))",
 			    &c, err, sizeof(err)));
-	o = server_options_from_config(&c);
+	o = server_options_from_config(&c, 0);
 	ASSERT_EQ(o.mode == SERVER_MODE_ASCII_TCP && o.port == 1999);
 }
 #endif
