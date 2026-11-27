@@ -35,7 +35,6 @@ free_port(void)
 int
 main(void)
 {
-	char		err[256]  = "";
 	mogbus_t*	ctx       = mogbus_create();
 	mogbus_device_t* dev      = NULL;
 	mogbus_server_t* server   = NULL;
@@ -47,18 +46,18 @@ main(void)
 	printf("mogbus %s\n", mogbus_version());
 	if (!ctx)
 		return 1;
-	dev = mogbus_add_device(ctx, 1, "embedded", err, sizeof(err));
-	if (!dev || !mogbus_device_add_point(dev, &point, err, sizeof(err)))
+	dev = mogbus_add_device(ctx, 1, "embedded");
+	if (!dev || mogbus_device_add_point(dev, &point) != MOGBUS_OK)
 	{
-		fprintf(stderr, "device: %s\n", err);
+		fprintf(stderr, "device: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
 
 	options.port = free_port();
-	server = mogbus_server_create(ctx, &options, err, sizeof(err), NULL);
+	server = mogbus_server_create(ctx, &options);
 	if (!server)
 	{
-		fprintf(stderr, "server: %s\n", err);
+		fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
 

@@ -88,7 +88,7 @@ done:
 
 - **No `malloc`.** Memory is an `mmap`-backed arena owned by the context. Devices live until `mogbus_destroy()` (there is no per-device removal), so a `mogbus_device_t*` stays valid until then. A `mogbus_server_t*` is valid until `mogbus_server_close()` or `mogbus_destroy()`.
 - **Strings.** Strings you pass in (paths, bind address, TLS files, names, string-point text) are copied during the call; free them afterwards. Strings the library returns (@ref mogbus_version "mogbus_version()", @ref mogbus_server_pty_name "mogbus_server_pty_name()", the names in @ref mogbus_device_info "mogbus_device_info()", the options of @ref mogbus_config_server_options "mogbus_config_server_options()") are borrowed and must not be freed or modified.
-- **Errors.** The `err` and `err_size` arguments are optional; the message is always NUL-terminated when given.
+- **Errors.** A fallible call reports failure one way only: it returns NULL (constructors) or a @ref mogbus_error_t "mogbus_error_t" code. The text of the most recent failure is kept by the context: @ref mogbus_last_error "mogbus_last_error(ctx)" (valid until the next failing call on that context), and @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" gives the code after a NULL return. A successful call leaves it unchanged. @ref mogbus_probe "mogbus_probe()" has no context, so its text is kept per thread: `mogbus_last_error(NULL)`.
 - **Hooks and sinks.** The `user` pointers you register are yours: they must outlive the hook or sink.
 
 ## Threading

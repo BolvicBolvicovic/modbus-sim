@@ -14,7 +14,7 @@ form_fail(form_ctx_t* ctx, const char* fmt, ...)
 	va_list	ap;
 
 	va_start(ap, fmt);
-	vsnprintf(ctx->err, ctx->err_size, fmt, ap);
+	vsnprintf(ctx->err, sizeof(ctx->err), fmt, ap);
 	va_end(ap);
 	return false;
 }

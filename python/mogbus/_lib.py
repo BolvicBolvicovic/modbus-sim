@@ -166,7 +166,6 @@ lib = _load()
 _c = ctypes
 _p = ctypes.POINTER
 _ptr = _c.c_void_p
-_err = [_c.c_char_p, _c.c_size_t]
 
 
 def _sig(name, restype, *argtypes):
@@ -178,14 +177,16 @@ def _sig(name, restype, *argtypes):
 _sig("mogbus_version", _c.c_char_p)
 _sig("mogbus_create", _ptr)
 _sig("mogbus_destroy", None, _ptr)
-_sig("mogbus_load_config", _c.c_bool, _ptr, _c.c_char_p, *_err)
-_sig("mogbus_add_device", _ptr, _ptr, _c.c_uint8, _c.c_char_p, *_err)
+_sig("mogbus_last_error", _c.c_char_p, _ptr)
+_sig("mogbus_last_error_code", _c.c_int, _ptr)
+_sig("mogbus_load_config", _c.c_int, _ptr, _c.c_char_p)
+_sig("mogbus_add_device", _ptr, _ptr, _c.c_uint8, _c.c_char_p)
 _sig("mogbus_find_device", _ptr, _ptr, _c.c_uint8)
 _sig("mogbus_device_count", _c.c_size_t, _ptr)
 _sig("mogbus_device_at", _ptr, _ptr, _c.c_size_t)
 _sig("mogbus_device_info", _c.c_bool, _ptr, _p(DeviceInfoC))
 _sig("mogbus_device_point_at", _c.c_bool, _ptr, _c.c_uint32, _p(PointC))
-_sig("mogbus_device_add_point", _c.c_bool, _ptr, _p(PointC), *_err)
+_sig("mogbus_device_add_point", _c.c_int, _ptr, _p(PointC))
 _sig("mogbus_device_read", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_uint32, _p(_c.c_uint16))
 _sig("mogbus_device_write", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_uint32, _p(_c.c_uint16))
 _sig("mogbus_device_get_value", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _p(_c.c_double))
@@ -196,26 +197,26 @@ _sig("mogbus_device_set_any_unit", _c.c_bool, _ptr, _c.c_bool)
 _sig("mogbus_device_set_access_hook", _c.c_bool, _ptr, ACCESS_FN, _ptr)
 _sig("mogbus_device_set_written_hook", _c.c_bool, _ptr, WRITTEN_FN, _ptr)
 _sig("mogbus_device_add_function_code", _c.c_bool, _ptr, _c.c_uint8, FUNCTION_FN, _ptr)
-_sig("mogbus_device_add_file_record", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
-     _p(_c.c_uint16), *_err)
+_sig("mogbus_device_add_file_record", _c.c_int, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16))
 _sig("mogbus_device_read_file_records", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
      _p(_c.c_uint16))
 _sig("mogbus_device_write_file_records", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
      _p(_c.c_uint16))
-_sig("mogbus_device_add_fifo", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _p(_c.c_uint16), *_err)
+_sig("mogbus_device_add_fifo", _c.c_int, _ptr, _c.c_uint16, _c.c_uint16, _p(_c.c_uint16))
 _sig("mogbus_device_set_fifo", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _p(_c.c_uint16))
-_sig("mogbus_device_add_canopen_object", _c.c_bool, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
-     _c.c_uint16, _p(_c.c_uint8), *_err)
+_sig("mogbus_device_add_canopen_object", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
+     _c.c_uint16, _p(_c.c_uint8))
 _sig("mogbus_device_read_canopen", _c.c_bool, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
      _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
 _sig("mogbus_device_write_canopen", _c.c_bool, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
      _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
 _sig("mogbus_server_options_defaults", ServerOptionsC)
-_sig("mogbus_server_create", _ptr, _ptr, _p(ServerOptionsC), *_err, _p(_c.c_int))
-_sig("mogbus_server_create_from_config", _ptr, _ptr, *_err, _p(_c.c_int))
+_sig("mogbus_server_create", _ptr, _ptr, _p(ServerOptionsC))
+_sig("mogbus_server_create_from_config", _ptr, _ptr)
 _sig("mogbus_config_server_options", _c.c_bool, _ptr, _p(ServerOptionsC))
-_sig("mogbus_server_check", _c.c_bool, _ptr, _p(ServerOptionsC), *_err)
-_sig("mogbus_probe", _c.c_bool, _p(ServerOptionsC), _c.c_uint8, _c.c_uint32, *_err)
+_sig("mogbus_server_check", _c.c_int, _ptr, _p(ServerOptionsC))
+_sig("mogbus_probe", _c.c_int, _p(ServerOptionsC), _c.c_uint8, _c.c_uint32)
 _sig("mogbus_rtu_timing", None, _c.c_uint32, _c.c_uint32, _p(_c.c_uint32), _p(_c.c_uint32))
 _sig("mogbus_now_ms", _c.c_uint64)
 _sig("mogbus_server_step", _c.c_int, _ptr, _c.c_int)

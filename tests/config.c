@@ -35,7 +35,9 @@ load_text(const char* text, config_t* config, char* err, u32 err_size)
 
 	fputs(text, f);
 	fclose(f);
-	ok = config_load(persist, scratch, path, config, err, err_size);
+	ok = config_load(persist, scratch, path, config);
+	if (!ok)
+		snprintf(err, err_size, "%s", config->error);
 	unlink(path);
 	arena_release(scratch);
 	return ok;
@@ -844,12 +846,11 @@ TEST(ConfigDeviceIdObject)
 TEST(ConfigMissingFileIsAnError)
 {
 	config_t	config = { 0 };
-	char		err[256] = "";
 	arena_t*	persist = ARENA_ALLOC();
 	arena_t*	scratch = ARENA_ALLOC();
 
-	ASSERT_FAILURE(config_load(persist, scratch, "/nonexistent/file.scm", &config, err, sizeof(err)));
-	ASSERT_EQ(strstr(err, "cannot read") != NULL);
+	ASSERT_FAILURE(config_load(persist, scratch, "/nonexistent/file.scm", &config));
+	ASSERT_EQ(strstr(config.error, "cannot read") != NULL);
 	arena_release(persist);
 	arena_release(scratch);
 }

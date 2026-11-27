@@ -34,6 +34,7 @@ enum config_tls_version_t
  */
 struct config_t
 {
+	char		error[1024];		/**< why the last config_load() failed; "" otherwise */
 	server_mode_t	mode;
 	char		bind_address[SERVER_BIND_MAX];
 	char		path[SERVER_PATH_MAX];
@@ -74,9 +75,8 @@ bool		config_parity_from_name(const char* name, parity_t* out);
  *
  * - persistent: arena that keeps the devices (must outlive the config)
  * - scratch   : arena for temporary data; may be cleared afterwards
- * On failure returns false and fills `err` with a message a human can act on.
+ * On failure returns false and leaves a message a human can act on in out->error.
  */
-bool	config_load(arena_t* persistent, arena_t* scratch, const char* path,
-		    config_t* out, char* err, u32 err_size);
+bool	config_load(arena_t* persistent, arena_t* scratch, const char* path, config_t* out);
 
 #endif

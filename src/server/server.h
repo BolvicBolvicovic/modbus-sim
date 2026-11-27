@@ -120,8 +120,8 @@ s32	server_run(server_t* server, const server_options_t* options);
 
 /**
  * @brief True when TLS is off or a TLS context can be created from the options (creates and
- *        destroys one); otherwise fills err.
+ *        destroys one in `tls`); otherwise tls->error says why.
  */
-bool	server_check_tls(const server_options_t* options, char* err, u32 err_size);
+bool	server_check_tls(const server_options_t* options, net_tls_ctx_t* tls);
 
 #endif

@@ -117,9 +117,9 @@ log_event(struct station* st, uint16_t code)
 	mogbus_device_write_file_records(st->dev, LOG_FILE, 1, 1, &count);
 }
 
-/** @brief Builds the device of the scenario. Returns false and fills err on failure. */
-static bool
-build_device(mogbus_t* ctx, struct station* st, uint8_t unit, char* err, size_t err_size)
+/** @brief Builds the device of the scenario. The failure text is in mogbus_last_error(ctx). */
+static mogbus_error_t
+build_device(mogbus_t* ctx, struct station* st, uint8_t unit)
 {
 	const mogbus_point_t points[] = {
 		{ .space = MOGBUS_HOLDING, .address = HOLD_SETPOINT, .type = MOGBUS_TYPE_F32, .value = 2.5 },
@@ -142,15 +142,20 @@ build_device(mogbus_t* ctx, struct station* st, uint8_t unit, char* err, size_t 
 	};
 	uint16_t zeros[LOG_RECORDS] = { 0 };
 
-	st->dev = mogbus_add_device(ctx, unit, "Pump station", err, err_size);
+	mogbus_error_t error;
+
+	st->dev = mogbus_add_device(ctx, unit, "Pump station");
 	if (!st->dev)
-		return false;
+		return mogbus_last_error_code(ctx);
 	for (size_t i = 0; i < sizeof(points) / sizeof(points[0]); i++)
-		if (!mogbus_device_add_point(st->dev, &points[i], err, err_size))
-			return false;
+	{
+		error = mogbus_device_add_point(st->dev, &points[i]);
+		if (error != MOGBUS_OK)
+			return error;
+	}
 	st->level = 2.4;
-	return mogbus_device_add_file_record(st->dev, LOG_FILE, 1, LOG_RECORDS, zeros, err, err_size) &&
-	       mogbus_device_add_fifo(st->dev, FIFO_ADDRESS, 0, NULL, err, err_size);
+	error = mogbus_device_add_file_record(st->dev, LOG_FILE, 1, LOG_RECORDS, zeros);
+	return error != MOGBUS_OK ? error : mogbus_device_add_fifo(st->dev, FIFO_ADDRESS, 0, NULL);
 }
 
 /**
@@ -342,7 +347,6 @@ free_port(void)
 static bool
 probe_self(mogbus_server_t* server, const mogbus_server_options_t* options, uint8_t unit)
 {
-	char	err[128] = "";
 	pid_t	pid = fork();
 	int	status = 0;
 
@@ -350,10 +354,10 @@ probe_self(mogbus_server_t* server, const mogbus_server_options_t* options, uint
 		return false;
 	if (pid == 0)
 	{
-		bool ok = mogbus_probe(options, unit, 2000, err, sizeof(err));
+		bool ok = mogbus_probe(options, unit, 2000) == MOGBUS_OK;
 
 		if (!ok)
-			fprintf(stderr, "probe: %s\n", err);
+			fprintf(stderr, "probe: %s\n", mogbus_last_error(NULL));
 		_exit(ok ? 0 : 1);
 	}
 	for (int i = 0; i < 1000; i++)
@@ -600,12 +604,10 @@ usage(void)
 int
 main(int argc, char** argv)
 {
-	char			err[256] = "";
 	struct station		st = { 0 };
 	mogbus_t*		ctx = mogbus_create();
 	mogbus_server_t*	server = NULL;
 	mogbus_server_options_t	options = mogbus_server_options_defaults();
-	mogbus_error_t		status = MOGBUS_OK;
 	const char*		config = NULL;
 	bool			test = false;
 	uint8_t			unit = 1;
@@ -651,9 +653,9 @@ main(int argc, char** argv)
 	{
 		mogbus_server_options_t from_config;
 
-		if (!mogbus_load_config(ctx, config, err, sizeof(err)))
+		if (mogbus_load_config(ctx, config) != MOGBUS_OK)
 		{
-			fprintf(stderr, "config %s: %s\n", config, err);
+			fprintf(stderr, "config %s: %s\n", config, mogbus_last_error(ctx));
 			goto done;
 		}
 		printf("loaded %s: %zu device(s)\n", config, mogbus_device_count(ctx));
@@ -666,9 +668,9 @@ main(int argc, char** argv)
 				options.port = port;
 		}
 	}
-	if (!build_device(ctx, &st, unit, err, sizeof(err)))
+	if (build_device(ctx, &st, unit) != MOGBUS_OK)
 	{
-		fprintf(stderr, "device: %s\n", err);
+		fprintf(stderr, "device: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
 	{
@@ -700,15 +702,16 @@ main(int argc, char** argv)
 		options.http_port = http_port;
 		options.http_ui = true;
 	}
-	if (!mogbus_server_check(ctx, &options, err, sizeof(err)))
+	if (mogbus_server_check(ctx, &options) != MOGBUS_OK)
 	{
-		fprintf(stderr, "options: %s\n", err);
+		fprintf(stderr, "options: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
-	server = mogbus_server_create(ctx, &options, err, sizeof(err), &status);
+	server = mogbus_server_create(ctx, &options);
 	if (!server)
 	{
-		fprintf(stderr, "server (status %d): %s\n", (int)status, err);
+		fprintf(stderr, "server (status %d): %s\n", (int)mogbus_last_error_code(ctx),
+			mogbus_last_error(ctx));
 		goto done;
 	}
 	g_server = server;

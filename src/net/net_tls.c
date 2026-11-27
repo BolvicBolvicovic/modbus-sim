@@ -27,19 +27,19 @@ copy_last_error(char* out, u32 size)
 }
 
 static bool
-tls_fail(SSL_CTX* ctx, char* err, u32 err_size, const char* what)
+tls_fail(SSL_CTX* ctx, net_tls_ctx_t* out, const char* what)
 {
-	char detail[256];
+	char detail[NET_TLS_ERROR_MAX];
 
 	copy_last_error(detail, sizeof(detail));
-	snprintf(err, err_size, "%s: %s", what, detail);
+	snprintf(out->error, sizeof(out->error), "%s: %s", what, detail);
 	if (ctx)
 		SSL_CTX_free(ctx);
 	return false;
 }
 
 bool
-net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config, char* err, u32 err_size)
+net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config)
 {
 	char			cipher_list[1024];
 	int			len;
@@ -51,18 +51,18 @@ net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config, char* err, 
 
 	if (config->require_client_certificate && !config->ca_certificate)
 	{
-		snprintf(err, err_size, "client certificates are required but no CA certificate is configured");
+		snprintf(out->error, sizeof(out->error), "client certificates are required but no CA certificate is configured");
 		return false;
 	}
 
 	ctx = SSL_CTX_new(TLS_server_method());
 	if (!ctx)
-		return tls_fail(NULL, err, err_size, "cannot create TLS context");
+		return tls_fail(NULL, out, "cannot create TLS context");
 
 	if (SSL_CTX_set_min_proto_version(ctx,
 					  config->min_version == NET_TLS_VERSION_1_3 ?
 					  TLS1_3_VERSION : TLS1_2_VERSION) != 1)
-		return tls_fail(ctx, err, err_size, "cannot set minimum TLS version");
+		return tls_fail(ctx, out, "cannot set minimum TLS version");
 
 #ifdef SSL_OP_NO_SSLv2
 	options |= SSL_OP_NO_SSLv2;
@@ -86,33 +86,33 @@ net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config, char* err, 
 		       config->tls1_2_ciphers ? config->tls1_2_ciphers : "DEFAULT");
 	if (len < 0 || (size_t)len >= sizeof(cipher_list))
 	{
-		snprintf(err, err_size, "TLS 1.2 cipher list is too long");
+		snprintf(out->error, sizeof(out->error), "TLS 1.2 cipher list is too long");
 		SSL_CTX_free(ctx);
 		return false;
 	}
 	if (SSL_CTX_set_cipher_list(ctx, cipher_list) != 1)
-		return tls_fail(ctx, err, err_size, "invalid TLS 1.2 cipher list");
+		return tls_fail(ctx, out, "invalid TLS 1.2 cipher list");
 
 	if (config->tls1_3_ciphersuites &&
 	    SSL_CTX_set_ciphersuites(ctx, config->tls1_3_ciphersuites) != 1)
-		return tls_fail(ctx, err, err_size, "invalid TLS 1.3 cipher suites");
+		return tls_fail(ctx, out, "invalid TLS 1.3 cipher suites");
 
 	if (SSL_CTX_use_certificate_chain_file(ctx, config->certificate) != 1)
-		return tls_fail(ctx, err, err_size, "cannot load server certificate");
+		return tls_fail(ctx, out, "cannot load server certificate");
 	if (SSL_CTX_use_PrivateKey_file(ctx, config->private_key, SSL_FILETYPE_PEM) != 1)
-		return tls_fail(ctx, err, err_size, "cannot load server private key");
+		return tls_fail(ctx, out, "cannot load server private key");
 	if (SSL_CTX_check_private_key(ctx) != 1)
-		return tls_fail(ctx, err, err_size, "server certificate and private key do not match");
+		return tls_fail(ctx, out, "server certificate and private key do not match");
 
 	if (config->ca_certificate)
 	{
 		STACK_OF(X509_NAME)* ca_names;
 
 		if (SSL_CTX_load_verify_locations(ctx, config->ca_certificate, NULL) != 1)
-			return tls_fail(ctx, err, err_size, "cannot load CA certificate");
+			return tls_fail(ctx, out, "cannot load CA certificate");
 		ca_names = SSL_load_client_CA_file(config->ca_certificate);
 		if (!ca_names)
-			return tls_fail(ctx, err, err_size, "cannot load client CA names");
+			return tls_fail(ctx, out, "cannot load client CA names");
 		SSL_CTX_set_client_CA_list(ctx, ca_names);
 		verify = SSL_VERIFY_PEER;
 		if (config->require_client_certificate)
@@ -125,7 +125,7 @@ net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config, char* err, 
 }
 
 net_tls_conn_t*
-net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, char* err, u32 err_size)
+net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms)
 {
 	net_tls_conn_t* conn = NULL;
 	SSL*		ssl;
@@ -140,18 +140,18 @@ net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, char* er
 	}
 	if (!conn)
 	{
-		snprintf(err, err_size, "too many TLS sessions");
+		snprintf(ctx->error, sizeof(ctx->error), "too many TLS sessions");
 		return NULL;
 	}
 	ssl = SSL_new(ctx->ssl_ctx);
 	if (!ssl)
 	{
-		copy_last_error(err, err_size);
+		copy_last_error(ctx->error, sizeof(ctx->error));
 		return NULL;
 	}
 	if (SSL_set_fd(ssl, fd) != 1)
 	{
-		copy_last_error(err, err_size);
+		copy_last_error(ctx->error, sizeof(ctx->error));
 		SSL_free(ssl);
 		return NULL;
 	}
@@ -288,7 +288,7 @@ set_wants(net_tls_conn_t* conn, net_tls_status_t status)
 }
 
 net_tls_status_t
-net_tls_conn_handshake(net_tls_conn_t* conn, char* err, u32 err_size)
+net_tls_conn_handshake(net_tls_conn_t* conn)
 {
 	int rc;
 	net_tls_status_t status;
@@ -301,13 +301,13 @@ net_tls_conn_handshake(net_tls_conn_t* conn, char* err, u32 err_size)
 	if (status == NET_TLS_OK)
 		conn->handshake_done = true;
 	if (status == NET_TLS_ERROR)
-		copy_last_error(err, err_size);
+		copy_last_error(conn->error, sizeof(conn->error));
 	set_wants(conn, status);
 	return status;
 }
 
 net_tls_status_t
-net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len, char* err, u32 err_size)
+net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len)
 {
 	int rc;
 	net_tls_status_t status;
@@ -319,13 +319,13 @@ net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len, char* err
 	status = io_status(conn->ssl, rc);
 	*len = rc > 0 ? rc : 0;
 	if (status == NET_TLS_ERROR)
-		copy_last_error(err, err_size);
+		copy_last_error(conn->error, sizeof(conn->error));
 	set_wants(conn, status);
 	return status;
 }
 
 net_tls_status_t
-net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len, char* err, u32 err_size)
+net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len)
 {
 	int rc;
 	net_tls_status_t status;
@@ -337,7 +337,7 @@ net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len, ch
 	status = io_status(conn->ssl, rc);
 	*len = rc > 0 ? rc : 0;
 	if (status == NET_TLS_ERROR)
-		copy_last_error(err, err_size);
+		copy_last_error(conn->error, sizeof(conn->error));
 	set_wants(conn, status);
 	return status;
 }

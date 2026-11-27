@@ -29,6 +29,7 @@ typedef struct net_tls_ctx_t net_tls_ctx_t;
 enum
 {
 	NET_TLS_MAX_SESSIONS = 32,	/**< matches the TCP servers' connection slots */
+	NET_TLS_ERROR_MAX    = 192,	/**< size of the error text kept by a context or session */
 };
 
 /** @brief Minimum TLS protocol version. */
@@ -73,6 +74,7 @@ struct net_tls_conn_t
 	bool	want_read;
 	bool	want_write;
 	u64	handshake_deadline_ms;
+	char	error[NET_TLS_ERROR_MAX];	/**< text of the last NET_TLS_ERROR of this session */
 };
 
 /**
@@ -85,11 +87,11 @@ struct net_tls_ctx_t
 {
 	SSL_CTX*	ssl_ctx;
 	net_tls_conn_t	conns[NET_TLS_MAX_SESSIONS];
+	char		error[NET_TLS_ERROR_MAX];	/**< why the last init or conn_new failed */
 };
 
-/** @brief Returns false and fills `err` when OpenSSL cannot set up the server context. */
-bool		net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config,
-				 char* err, u32 err_size);
+/** @brief Returns false and sets ctx->error when OpenSSL cannot set up the server context. */
+bool		net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config);
 /**
  * @brief Closes any live sessions and frees the OpenSSL context.
  *
@@ -100,10 +102,9 @@ void		net_tls_ctx_close(net_tls_ctx_t* ctx);
 /**
  * @brief Creates an accept-side session on a nonblocking socket.
  *
- * The handshake deadline is measured from accept; 0 disables it. NULL and `err` on failure.
+ * The handshake deadline is measured from accept; 0 disables it. NULL and ctx->error on failure.
  */
-net_tls_conn_t*	net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms,
-				 char* err, u32 err_size);
+net_tls_conn_t*	net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms);
 /** @brief Sends a best-effort close_notify, then frees the session. */
 void		net_tls_conn_close(net_tls_conn_t* conn);
 
@@ -119,12 +120,10 @@ bool		net_tls_conn_peer_subject(const net_tls_conn_t* conn, char* buf, u32 size)
  * @brief Nonblocking TLS operations.
  *
  * Read/write update the want flags and place the byte count in `len`; callers never touch the
- * flags directly.
+ * flags directly. NET_TLS_ERROR leaves its text in conn->error.
  */
-net_tls_status_t net_tls_conn_handshake(net_tls_conn_t* conn, char* err, u32 err_size);
-net_tls_status_t net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len,
-				   char* err, u32 err_size);
-net_tls_status_t net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len,
-				    char* err, u32 err_size);
+net_tls_status_t net_tls_conn_handshake(net_tls_conn_t* conn);
+net_tls_status_t net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len);
+net_tls_status_t net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len);
 
 #endif

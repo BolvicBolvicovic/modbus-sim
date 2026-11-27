@@ -65,24 +65,23 @@ TEST(ApiDevicesPointsAndValues)
 	mogbus_point_t	p;
 	uint16_t	words[2] = { 0, 0 };
 	double		v = 0;
-	char		err[128];
 
 	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 7, "pump", err, sizeof(err));
+	dev = mogbus_add_device(ctx, 7, "pump");
 	ASSERT_EQ(dev != NULL && mogbus_find_device(ctx, 7) == dev);
 	ASSERT_EQ(mogbus_find_device(ctx, 8) == NULL);
 
 	p = holding(0, 42);
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_INPUT, .address = 10, .type = MOGBUS_TYPE_F32, .value = 1.5,
 			      .word_order = MOGBUS_WORDS_LOW_FIRST };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_COIL, .address = 3, .type = MOGBUS_TYPE_BOOL, .value = 1 };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 20, .type = MOGBUS_TYPE_U16,
 			      .kind = MOGBUS_POINT_RAMP,
 			      .ramp = { .from = 5, .to = 5, .step = 1, .every_ms = 1000, .mode = MOGBUS_RAMP_HOLD } };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 
 	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 0, 1, words) && words[0] == 42);
 	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_INPUT, 10, &v) && v == 1.5);
@@ -112,16 +111,15 @@ TEST(ApiDevicesPointsAndValues)
 TEST(ApiReadOnlyPointsRefuseClientsButNotTheHost)
 {
 	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "ro", NULL, 0);
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "ro");
 	mogbus_point_t	p = holding(0, 5);
 	uint16_t	words[1] = { 77 };
 	double		v = 0;
-	char		err[128];
 
 	p.read_only = true;
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_INPUT, .address = 0, .type = MOGBUS_TYPE_U16, .read_only = true };
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 
 	ASSERT_EQ(mogbus_device_write(dev, MOGBUS_HOLDING, 0, 1, words));
 	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v == 77);
@@ -133,18 +131,17 @@ TEST(ApiReadOnlyPointsRefuseClientsButNotTheHost)
 TEST(ApiClockPointsShowTheWallClock)
 {
 	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "clock", NULL, 0);
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "clock");
 	mogbus_point_t	p = { .space = MOGBUS_HOLDING, .type = MOGBUS_TYPE_U16, .kind = MOGBUS_POINT_CLOCK,
 			      .clock_field = MOGBUS_CLOCK_YEAR, .clock_utc = true };
 	double		v = 0;
-	char		err[128];
 
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v >= 2024);
 	p.address     = 1;
 	p.clock_field = MOGBUS_CLOCK_UNIX;
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	ASSERT_EQ(strstr(err, "32-bit") != NULL);
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "32-bit") != NULL);
 	mogbus_destroy(ctx);
 }
 
@@ -195,20 +192,19 @@ hook_device(mogbus_t** ctx)
 {
 	mogbus_device_t*	dev = NULL;
 	mogbus_point_t		p   = holding(0, 1);
-	char			err[128];
 
 	*ctx = mogbus_create();
-	dev  = mogbus_add_device(*ctx, 1, "hook", NULL, 0);
+	dev  = mogbus_add_device(*ctx, 1, "hook");
 	for (uint32_t i = 0; i < 4; i++)
 	{
 		p = holding(i, 1);
-		(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+		(void)mogbus_device_add_point(dev, &p);
 	}
 	p = holding(10, 5);
 	p.read_only = true;
-	(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	(void)mogbus_device_add_point(dev, &p);
 	p = (mogbus_point_t){ .space = MOGBUS_COIL, .address = 0, .type = MOGBUS_TYPE_BOOL };
-	(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	(void)mogbus_device_add_point(dev, &p);
 	memset(&hook_log, 0, sizeof(hook_log));
 	ASSERT_EQ(mogbus_device_set_access_hook(dev, test_hook, NULL));
 	return dev;
@@ -419,10 +415,9 @@ TEST(ApiWrittenHookRunsOncePerFileRecordSubRequest)
 	uint16_t	file1[] = { 1, 2, 3 };
 	uint16_t	file2[] = { 4 };
 	uint16_t	out[3];
-	char		err[128];
 
-	ASSERT_EQ(mogbus_device_add_file_record(dev, 1, 0, 3, file1, err, sizeof(err)));
-	ASSERT_EQ(mogbus_device_add_file_record(dev, 2, 5, 1, file2, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 1, 0, 3, file1) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 2, 5, 1, file2) == MOGBUS_OK);
 	written_log.calls = 0;
 	written_log.reentrant = 0;
 	ASSERT_EQ(mogbus_device_set_written_hook(dev, test_written, NULL));
@@ -479,10 +474,9 @@ TEST(ApiWrittenHookIsSkippedForVetoesExceptionsAndHostWrites)
 TEST(ApiWrittenHookRunsOncePerDeviceOnBroadcastExecute)
 {
 	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* a = mogbus_add_device(ctx, 1, "a", NULL, 0);
-	mogbus_device_t* b = mogbus_add_device(ctx, 2, "b", NULL, 0);
+	mogbus_device_t* a = mogbus_add_device(ctx, 1, "a");
+	mogbus_device_t* b = mogbus_add_device(ctx, 2, "b");
 	mogbus_point_t	p = holding(0, 0);
-	char		err[128];
 	device_t*	devices[2] = { (device_t*)a, (device_t*)b };
 	rtu_framer_t	framer;
 	rng_t		rng;
@@ -491,8 +485,8 @@ TEST(ApiWrittenHookRunsOncePerDeviceOnBroadcastExecute)
 	u8		frame[MODBUS_RTU_MAX_FRAME];
 	u32		len = modbus_rtu_encode(frame, 0, pdu, sizeof(pdu));
 
-	ASSERT_EQ(mogbus_device_add_point(a, &p, err, sizeof(err)));
-	ASSERT_EQ(mogbus_device_add_point(b, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(a, &p) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_point(b, &p) == MOGBUS_OK);
 	written_log.calls = 0;
 	written_log.reentrant = 0;
 	ASSERT_EQ(mogbus_device_set_written_hook(a, test_written, NULL));
@@ -505,51 +499,73 @@ TEST(ApiWrittenHookRunsOncePerDeviceOnBroadcastExecute)
 	mogbus_destroy(ctx);
 }
 
+TEST(ApiLastErrorKeepsTheMostRecentFailure)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_point_t	p = holding(0, 1);
+	mogbus_device_t* dev;
+
+	ASSERT_EQ(ctx != NULL);
+	ASSERT_EQ(mogbus_last_error(ctx)[0] == '\0' && mogbus_last_error_code(ctx) == MOGBUS_OK);
+	dev = mogbus_add_device(ctx, 1, "a");
+	ASSERT_EQ(dev != NULL);
+	ASSERT_EQ(mogbus_add_device(ctx, 1, "b") == NULL);
+	ASSERT_EQ(mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID && strstr(mogbus_last_error(ctx), "unit id 1"));
+	/* A call that returns the code reports it itself, and its text replaces the previous one. */
+	ASSERT_EQ(mogbus_load_config(ctx, "/nonexistent/mogbus.scm") != MOGBUS_OK);
+	ASSERT_EQ(mogbus_last_error(ctx)[0] != '\0');
+	/* Success leaves the last error alone. */
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_last_error(ctx)[0] != '\0');
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_ERR_INVALID && strstr(mogbus_last_error(ctx), "already used"));
+	ASSERT_EQ(mogbus_probe(NULL, 1, 100) == MOGBUS_ERR_INVALID && mogbus_last_error(NULL)[0] != '\0');
+	mogbus_destroy(ctx);
+}
+
 TEST(ApiRejectsBadInput)
 {
 	mogbus_t*	ctx = mogbus_create();
 	mogbus_device_t* dev;
 	mogbus_point_t	p;
-	char		err[128];
 	char		name[100];
 
 	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 1, NULL, err, sizeof(err));
+	dev = mogbus_add_device(ctx, 1, NULL);
 	ASSERT_EQ(dev != NULL);
 
-	ASSERT_EQ(mogbus_add_device(ctx, 1, "again", err, sizeof(err)) == NULL);
-	ASSERT_EQ(strstr(err, "unit id 1") != NULL);
+	ASSERT_EQ(mogbus_add_device(ctx, 1, "again") == NULL);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "unit id 1") != NULL);
 	memset(name, 'x', sizeof(name) - 1);
 	name[sizeof(name) - 1] = '\0';
-	ASSERT_EQ(mogbus_add_device(ctx, 2, name, err, sizeof(err)) == NULL && strstr(err, "too long"));
-	ASSERT_EQ(mogbus_add_device(ctx, 2, "ok", NULL, 0) != NULL);	/* err is optional */
+	ASSERT_EQ(mogbus_add_device(ctx, 2, name) == NULL && strstr(mogbus_last_error(ctx), "too long"));
+	ASSERT_EQ(mogbus_add_device(ctx, 2, "ok") != NULL);
 
 	p = holding(0, 1);
 	p.type = MOGBUS_TYPE_BOOL;					/* bool in a register table */
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)) && err[0]);
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK && mogbus_last_error(ctx)[0]);
 	p = holding(65535, 1);
 	p.type = MOGBUS_TYPE_U32;					/* does not fit */
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	p = holding(5, 1);
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)) && strstr(err, "already used"));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "already used"));
 	p = holding(6, 0);
 	p.kind = MOGBUS_POINT_RAMP;					/* step 0 */
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	p = holding(6, 0);
 	p.value = 1.0 / 0.0;						/* infinity needs float32 */
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_COIL, .address = 1, .type = MOGBUS_TYPE_BOOL,
 			      .kind = MOGBUS_POINT_RAMP, .ramp = { .step = 1, .every_ms = 1 } };
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));	/* ramping coil */
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);	/* ramping coil */
 	p = holding(7, 0);
 	p.space = (mogbus_space_t)9;
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 
 	for (int unit = 3; unit < MOGBUS_MAX_DEVICES + 1; unit++)
-		ASSERT_EQ(mogbus_add_device(ctx, (uint8_t)unit, NULL, err, sizeof(err)) != NULL);
-	ASSERT_EQ(mogbus_add_device(ctx, 100, NULL, err, sizeof(err)) == NULL);
-	ASSERT_EQ(strstr(err, "too many devices") != NULL);
+		ASSERT_EQ(mogbus_add_device(ctx, (uint8_t)unit, NULL) != NULL);
+	ASSERT_EQ(mogbus_add_device(ctx, 100, NULL) == NULL);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "too many devices") != NULL);
 	mogbus_destroy(ctx);
 }
 
@@ -561,22 +577,21 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 	mogbus_server_t* server;
 	mogbus_server_t* other;
-	char		err[256];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
 	int		fd;
 
 	ASSERT_EQ(ctx != NULL);
 	o.port = ts_free_port();
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL);	/* no devices yet */
-	ASSERT_EQ(strstr(err, "no devices") != NULL);
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL);	/* no devices yet */
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "no devices") != NULL);
 
-	dev = mogbus_add_device(ctx, 1, "tcp", err, sizeof(err));
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	dev = mogbus_add_device(ctx, 1, "tcp");
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+	server = mogbus_server_create(ctx, &o);
 	ASSERT_EQ(server != NULL);
 	ASSERT_EQ(mogbus_server_pty_name(server) == NULL);
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);	/* port in use */
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && mogbus_last_error(ctx)[0]);	/* port in use */
 
 	fd = ts_connect_loopback(o.port, AF_INET, 1000);
 	ASSERT_EQ(fd >= 0);
@@ -599,36 +614,35 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 	mogbus_server_close(NULL);
 
 	/* The slot and the port are free again. */
-	other = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	other = mogbus_server_create(ctx, &o);
 	ASSERT_EQ(other != NULL);
 	o.mode = MOGBUS_MODE_RTU_DEVICE;
 	o.path = NULL;
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "path"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && strstr(mogbus_last_error(ctx), "path"));
 	o.mode = MOGBUS_MODE_ASCII_FD;
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "fd"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && strstr(mogbus_last_error(ctx), "fd"));
 	o = mogbus_server_options_defaults();
 	o.tls_enabled = true;	/* unreadable files, or a build without TLS */
 	o.tls_certificate = "/nonexistent/cert.pem";
 	o.tls_private_key = "/nonexistent/key.pem";
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && mogbus_last_error(ctx)[0]);
 	o = mogbus_server_options_defaults();
 	o.bind_address = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
 			 "01234567890123456789012345678901234567890123456789";
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && strstr(err, "too long"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && strstr(mogbus_last_error(ctx), "too long"));
 	mogbus_destroy(ctx);	/* closes `other` */
 }
 
-/* Runs mogbus_probe() in a child (it blocks) while this process steps the server. */
+/* Runs mogbus_probe() == MOGBUS_OK in a child (it blocks) while this process steps the server. */
 static bool
 probe_child(mogbus_server_t* server, const mogbus_server_options_t* o, uint8_t unit)
 {
-	char	err[128];
 	u64	deadline = os_now_ms() + 5000;
 	int	status   = 0;
 	pid_t	pid      = fork();
 
 	if (pid == 0)
-		_exit(mogbus_probe(o, unit, 2000, err, sizeof(err)) ? 0 : 1);
+		_exit(mogbus_probe(o, unit, 2000) == MOGBUS_OK ? 0 : 1);
 	if (pid < 0)
 		return false;
 	while (waitpid(pid, &status, WNOHANG) == 0)
@@ -659,12 +673,11 @@ TEST(ApiProbeAnswersOnEveryNetworkMode)
 		mogbus_t*	ctx = mogbus_create();
 		mogbus_server_options_t o = mogbus_server_options_defaults();
 		mogbus_server_t* server;
-		char		err[128];
 
-		ASSERT_EQ(ctx != NULL && mogbus_add_device(ctx, 9, "probe", err, sizeof(err)) != NULL);
+		ASSERT_EQ(ctx != NULL && mogbus_add_device(ctx, 9, "probe") != NULL);
 		o.mode = modes[i];
 		o.port = ts_free_port();
-		server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+		server = mogbus_server_create(ctx, &o);
 		ASSERT_EQ(server != NULL);
 		ASSERT_EQ(probe_child(server, &o, 9));
 		o.bind_address = "0.0.0.0";	/* a wildcard bind is probed through loopback */
@@ -676,17 +689,16 @@ TEST(ApiProbeAnswersOnEveryNetworkMode)
 TEST(ApiProbeFailsWithoutAServer)
 {
 	mogbus_server_options_t o = mogbus_server_options_defaults();
-	char err[128];
 
 	o.port = ts_free_port();
-	ASSERT_EQ(!mogbus_probe(&o, 1, 500, err, sizeof(err)) && strstr(err, "connect") != NULL);
+	ASSERT_EQ(mogbus_probe(&o, 1, 500) != MOGBUS_OK && strstr(mogbus_last_error(NULL), "connect") != NULL);
 	o.mode = MOGBUS_MODE_UDP;
-	ASSERT_EQ(!mogbus_probe(&o, 1, 500, err, sizeof(err)) && err[0]);
+	ASSERT_EQ(mogbus_probe(&o, 1, 500) != MOGBUS_OK && mogbus_last_error(NULL)[0]);
 	o.mode = MOGBUS_MODE_RTU_PTY;
-	ASSERT_EQ(!mogbus_probe(&o, 1, 500, err, sizeof(err)) && strstr(err, "network mode") != NULL);
+	ASSERT_EQ(mogbus_probe(&o, 1, 500) != MOGBUS_OK && strstr(mogbus_last_error(NULL), "network mode") != NULL);
 	o.mode = MOGBUS_MODE_TCP;
-	ASSERT_EQ(!mogbus_probe(&o, 0, 500, err, sizeof(err)) && strstr(err, "broadcast") != NULL);
-	ASSERT_EQ(!mogbus_probe(NULL, 1, 500, err, sizeof(err)));
+	ASSERT_EQ(mogbus_probe(&o, 0, 500) != MOGBUS_OK && strstr(mogbus_last_error(NULL), "broadcast") != NULL);
+	ASSERT_EQ(mogbus_probe(NULL, 1, 500) != MOGBUS_OK);
 }
 
 TEST(ApiProbeFailsWhenTheUnitIsUnknownOrSilent)
@@ -694,12 +706,11 @@ TEST(ApiProbeFailsWhenTheUnitIsUnknownOrSilent)
 	mogbus_t*	ctx = mogbus_create();
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 	mogbus_server_t* server;
-	char		err[128];
 
-	ASSERT_EQ(ctx != NULL && mogbus_add_device(ctx, 9, "probe", err, sizeof(err)) != NULL);
+	ASSERT_EQ(ctx != NULL && mogbus_add_device(ctx, 9, "probe") != NULL);
 	o.mode = MOGBUS_MODE_RTU_TCP;	/* an unknown RTU unit gets no reply */
 	o.port = ts_free_port();
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	server = mogbus_server_create(ctx, &o);
 	ASSERT_EQ(server != NULL);
 	ASSERT_EQ(!probe_child(server, &o, 10));
 	ASSERT_EQ(probe_child(server, &o, 9));
@@ -749,22 +760,20 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 	mogbus_server_options_t clash;
 	mogbus_server_t* server;
-	mogbus_error_t	status = MOGBUS_OK;
-	char		err[256];
 	static char	text[40000];
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
 	int		fd;
 
 	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 1, "http", err, sizeof(err));
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	dev = mogbus_add_device(ctx, 1, "http");
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	ASSERT_EQ(o.http_bind_address == NULL && o.http_port == 9102);
 	ASSERT_EQ(!o.http_ui && o.http_allowed_hosts == NULL);
 	o.port              = ts_free_port();
 	o.http_bind_address = "127.0.0.1";
 	o.http_port         = ts_free_port();
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+	server = mogbus_server_create(ctx, &o);
 	ASSERT_EQ(server != NULL);
 
 	fd = ts_connect_loopback(o.port, AF_INET, 1000);
@@ -788,16 +797,16 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	/* The endpoint port is taken now: a second server fails like a busy listener. */
 	clash                   = o;
 	clash.port              = ts_free_port();
-	ASSERT_EQ(mogbus_server_create(ctx, &clash, err, sizeof(err), &status) == NULL);
-	ASSERT_EQ(status == MOGBUS_ERR_LISTEN);
+	ASSERT_EQ(mogbus_server_create(ctx, &clash) == NULL);
+	ASSERT_EQ(mogbus_last_error_code(ctx) == MOGBUS_ERR_LISTEN);
 	clash.http_bind_address = "localhost";
-	ASSERT_EQ(mogbus_server_create(ctx, &clash, err, sizeof(err), &status) == NULL);
-	ASSERT_EQ(status == MOGBUS_ERR_INVALID && strstr(err, "HTTP bind address") != NULL);
+	ASSERT_EQ(mogbus_server_create(ctx, &clash) == NULL);
+	ASSERT_EQ(mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID && strstr(mogbus_last_error(ctx), "HTTP bind address") != NULL);
 	clash.http_bind_address = "127.0.0.1";
 	clash.http_allowed_hosts = "a b";
-	ASSERT_EQ(!mogbus_server_check(ctx, &clash, err, sizeof(err)) && strstr(err, "allowed hosts") != NULL);
+	ASSERT_EQ(mogbus_server_check(ctx, &clash) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "allowed hosts") != NULL);
 	clash.http_allowed_hosts = "sim.lab,mogbus";
-	ASSERT_EQ(mogbus_server_check(ctx, &clash, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &clash) == MOGBUS_OK);
 
 	mogbus_server_stop(server);
 	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
@@ -816,7 +825,6 @@ TEST(ApiServesDevicesOverDatagramModes)
 		mogbus_point_t	p = holding(0, 0x1234);
 		mogbus_server_options_t o = mogbus_server_options_defaults();
 		mogbus_server_t* server;
-		char		err[256];
 		u8		raw[MODBUS_ASCII_MAX_FRAME];
 		u8		decoded[MODBUS_MAX_PDU + 2];
 		u8		addr = 1;
@@ -826,11 +834,11 @@ TEST(ApiServesDevicesOverDatagramModes)
 		int		fd;
 
 		ASSERT_EQ(ctx != NULL);
-		dev = mogbus_add_device(ctx, 1, "datagram", err, sizeof(err));
-		ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+		dev = mogbus_add_device(ctx, 1, "datagram");
+		ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 		o.mode = modes[c];
 		o.port = ts_free_port();
-		server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+		server = mogbus_server_create(ctx, &o);
 		ASSERT_EQ(server != NULL);
 
 		fd = ts_udp_loopback(o.port, AF_INET, 1000);
@@ -864,9 +872,9 @@ TEST(ApiServesDevicesOverDatagramModes)
 		mogbus_server_close(server);
 
 		o.mode = (mogbus_mode_t)(MOGBUS_MODE_RTU_UDP + 1);
-		ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
+		ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && mogbus_last_error(ctx)[0]);
 		o.mode = (mogbus_mode_t)99;
-		ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
+		ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && mogbus_last_error(ctx)[0]);
 		mogbus_destroy(ctx);
 	}
 }
@@ -874,8 +882,8 @@ TEST(ApiServesDevicesOverDatagramModes)
 TEST(ApiAnyUnitAllowsOnlyOneDeviceAndShowsInInfo)
 {
 	mogbus_t*		ctx = mogbus_create();
-	mogbus_device_t*	a = mogbus_add_device(ctx, 1, "a", NULL, 0);
-	mogbus_device_t*	b = mogbus_add_device(ctx, 2, "b", NULL, 0);
+	mogbus_device_t*	a = mogbus_add_device(ctx, 1, "a");
+	mogbus_device_t*	b = mogbus_add_device(ctx, 2, "b");
 	mogbus_device_info_t	info;
 
 	ASSERT_EQ(a != NULL && b != NULL);
@@ -903,7 +911,6 @@ TEST(ApiLoadsConfigAndServesFromIt)
 	mogbus_device_t* dev;
 	mogbus_server_t* server;
 	u16		port = ts_free_port();
-	char		err[256] = "";
 	u8		resp[MODBUS_MAX_PDU];
 	u32		len = 0;
 	double		v = 0;
@@ -916,25 +923,25 @@ TEST(ApiLoadsConfigAndServesFromIt)
 	ASSERT_EQ(write(cfd, text, strlen(text)) == (ssize_t)strlen(text));
 	close(cfd);
 
-	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err), NULL) == NULL);	/* nothing loaded */
-	ASSERT_EQ(strstr(err, "no config") != NULL);
-	ASSERT_EQ(!mogbus_load_config(ctx, "/nonexistent/mogbus.scm", err, sizeof(err)) && err[0]);
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_create_from_config(ctx) == NULL);	/* nothing loaded */
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "no config") != NULL);
+	ASSERT_EQ(mogbus_load_config(ctx, "/nonexistent/mogbus.scm") != MOGBUS_OK && mogbus_last_error(ctx)[0]);
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	dev = mogbus_find_device(ctx, 4);
 	ASSERT_EQ(dev != NULL && mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v == 77);
 
 	/* Loading again would duplicate unit 4: rejected, context unchanged. */
-	ASSERT_EQ(!mogbus_load_config(ctx, path, err, sizeof(err)) && strstr(err, "unit id 4"));
+	ASSERT_EQ(mogbus_load_config(ctx, path) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "unit id 4"));
 	ASSERT_EQ(mogbus_find_device(ctx, 4) == dev);
 
 	/* Devices built in code are served together with the loaded ones. */
 	{
-		mogbus_device_t* extra = mogbus_add_device(ctx, 5, "extra", err, sizeof(err));
+		mogbus_device_t* extra = mogbus_add_device(ctx, 5, "extra");
 		mogbus_point_t p = holding(0, 5);
 
-		ASSERT_EQ(extra != NULL && mogbus_device_add_point(extra, &p, err, sizeof(err)));
+		ASSERT_EQ(extra != NULL && mogbus_device_add_point(extra, &p) == MOGBUS_OK);
 	}
-	server = mogbus_server_create_from_config(ctx, err, sizeof(err), NULL);
+	server = mogbus_server_create_from_config(ctx);
 	ASSERT_EQ(server != NULL);
 	fd = ts_connect_loopback(port, AF_INET, 1000);
 	ASSERT_EQ(fd >= 0);
@@ -954,14 +961,12 @@ TEST(ApiLoadsConfigAndServesFromIt)
 TEST(ApiConfigFunctionsFailWithoutConfigSupport)
 {
 	mogbus_t*	ctx = mogbus_create();
-	char		err[256] = "";
 
 	ASSERT_EQ(ctx != NULL);
-	ASSERT_EQ(!mogbus_load_config(ctx, "/nonexistent/mogbus.scm", err, sizeof(err)));
-	ASSERT_EQ(strcmp(err, "built without config support") == 0);
-	err[0] = '\0';
-	ASSERT_EQ(mogbus_server_create_from_config(ctx, err, sizeof(err), NULL) == NULL);
-	ASSERT_EQ(strcmp(err, "built without config support") == 0);
+	ASSERT_EQ(mogbus_load_config(ctx, "/nonexistent/mogbus.scm") != MOGBUS_OK);
+	ASSERT_EQ(strcmp(mogbus_last_error(ctx), "built without config support") == 0);
+	ASSERT_EQ(mogbus_server_create_from_config(ctx) == NULL);
+	ASSERT_EQ(strcmp(mogbus_last_error(ctx), "built without config support") == 0);
 	mogbus_destroy(ctx);
 }
 #endif
@@ -974,7 +979,7 @@ TEST(ApiServesAnExistingFdInRtuAndAsciiModes)
 	{
 		bool		ascii = modes[i] == MOGBUS_MODE_ASCII_FD;
 		mogbus_t*	ctx = mogbus_create();
-		mogbus_device_t* dev = mogbus_add_device(ctx, 3, "fd", NULL, 0);
+		mogbus_device_t* dev = mogbus_add_device(ctx, 3, "fd");
 		mogbus_point_t	p = holding(0, 0xABCD);
 		mogbus_server_options_t o = mogbus_server_options_defaults();
 		mogbus_server_t* server;
@@ -984,12 +989,12 @@ TEST(ApiServesAnExistingFdInRtuAndAsciiModes)
 		u32		len = 0;
 		bool		sent;
 
-		ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, NULL, 0));
+		ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 		ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
 		o.mode = modes[i];
 		o.fd = pair[1];
 		o.frame_gap_ms = 2;
-		server = mogbus_server_create(ctx, &o, NULL, 0, NULL);
+		server = mogbus_server_create(ctx, &o);
 		ASSERT_EQ(server != NULL);
 		sent = ascii ? ts_ascii_send(pair[0], 3, READ_HOLDING, sizeof(READ_HOLDING), true) :
 			       ts_rtu_send(pair[0], 3, READ_HOLDING, sizeof(READ_HOLDING), true);
@@ -1033,15 +1038,15 @@ TEST(ApiLogSinkReceivesServerLogs)
 {
 	sink_t		sink = { 0 };
 	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev = mogbus_add_device(ctx, 1, NULL, NULL, 0);
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, NULL);
 	mogbus_point_t	p = holding(0, 1);
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 	mogbus_server_t* server;
 
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, NULL, 0));
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	o.port = ts_free_port();
 	mogbus_set_log_sink(sink_fn, &sink);
-	server = mogbus_server_create(ctx, &o, NULL, 0, NULL);
+	server = mogbus_server_create(ctx, &o);
 	ASSERT_EQ(server != NULL);
 	ASSERT_EQ(sink.count >= 1 && sink.level == MOGBUS_LOG_INFO);
 	ASSERT_EQ(strstr(sink.last, "listening") != NULL);
@@ -1086,64 +1091,62 @@ TEST(ApiServerCheckValidatesWithoutOpeningAnything)
 	mogbus_point_t	p = holding(0, 1);
 	mogbus_server_options_t o = mogbus_server_options_defaults();
 	mogbus_server_t* server;
-	mogbus_error_t	status = MOGBUS_OK;
-	char		err[256] = "";
 
 	ASSERT_EQ(ctx != NULL);
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "no devices"));
-	ASSERT_EQ(mogbus_server_create(ctx, &o, NULL, 0, &status) == NULL && status == MOGBUS_ERR_INVALID);
-	dev = mogbus_add_device(ctx, 1, "chk", err, sizeof(err));
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "no devices"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL && mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID);
+	dev = mogbus_add_device(ctx, 1, "chk");
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 
 	/* A port that is already in use passes the check, but not the create. */
 	o.port = ts_free_port();
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), &status);
-	ASSERT_EQ(server != NULL && status == MOGBUS_OK);
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
-		  status == MOGBUS_ERR_LISTEN);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
+	server = mogbus_server_create(ctx, &o);
+	ASSERT_EQ(server != NULL);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL &&
+		  mogbus_last_error_code(ctx) == MOGBUS_ERR_LISTEN);
 
 	/* A missing serial device passes the check (nothing is opened) and fails on create. */
 	o = mogbus_server_options_defaults();
 	o.mode = MOGBUS_MODE_RTU_DEVICE;
 	o.path = "/nonexistent/ttyMOGBUS";
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
-		  status == MOGBUS_ERR_SERIAL && strstr(err, "serial") != NULL);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL &&
+		  mogbus_last_error_code(ctx) == MOGBUS_ERR_SERIAL && strstr(mogbus_last_error(ctx), "serial") != NULL);
 	o.path = NULL;
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "path"));
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
-		  status == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "path"));
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL &&
+		  mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID);
 	o = mogbus_server_options_defaults();
 	o.stop_bits = 3;
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "serial line"));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "serial line"));
 	o = mogbus_server_options_defaults();
 	o.bind_address = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
 			 "01234567890123456789012345678901234567890123456789";
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "too long"));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "too long"));
 	o = mogbus_server_options_defaults();
 	o.mode = (mogbus_mode_t)99;
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && err[0]);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && mogbus_last_error(ctx)[0]);
 
 	/* TLS files are loaded for the check (unreadable here, or a build without TLS). */
 	o = mogbus_server_options_defaults();
 	o.tls_enabled = true;
 	o.tls_certificate = "/nonexistent/cert.pem";
 	o.tls_private_key = "/nonexistent/key.pem";
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && err[0]);
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, NULL, 0));
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), &status) == NULL &&
-		  status == MOGBUS_ERR_LISTEN);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && mogbus_last_error(ctx)[0]);
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL &&
+		  mogbus_last_error_code(ctx) == MOGBUS_ERR_LISTEN);
 #if WITH_TLS
 	o.tls_certificate = "tests/tls/server.pem";
 	o.tls_private_key = "tests/tls/server.key";
 	o.tls_ca_certificate = "tests/tls/ca.pem";
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
 	o.tls_ca_certificate = NULL;	/* client certificates are required by default */
-	ASSERT_EQ(!mogbus_server_check(ctx, &o, err, sizeof(err)) && strstr(err, "CA"));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "CA"));
 	o.tls_require_client_certificate = false;
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
 #endif
 	mogbus_destroy(ctx);
 }
@@ -1165,7 +1168,6 @@ TEST(ApiConfigServerOptionsRoundTrip)
 	char		path[] = "/tmp/mogbus-api-XXXXXX";
 	mogbus_t*	ctx = mogbus_create();
 	mogbus_server_options_t o;
-	char		err[256] = "";
 
 	ASSERT_EQ(ctx != NULL && !mogbus_config_server_options(ctx, &o));	/* nothing loaded */
 	ASSERT_EQ(write_config(path,
@@ -1173,7 +1175,7 @@ TEST(ApiConfigServerOptionsRoundTrip)
 		"        (parity even) (stop-bits 2) (strict-t15 on) (broadcast-execute on)\n"
 		"        (seed 42))\n"
 		"(device (unit-id 1) (holding 0))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
 	ASSERT_EQ(o.mode == MOGBUS_MODE_RTU_DEVICE && strcmp(o.path, "/dev/ttyUSB9") == 0);
 	ASSERT_EQ(o.baud == 19200 && o.frame_gap_ms == 0 && o.seed == 42);
@@ -1187,7 +1189,7 @@ TEST(ApiConfigServerOptionsRoundTrip)
 	ASSERT_EQ(write_config(path,
 		"(server (mode ascii-device) (path \"/dev/ttyUSB8\") (data-bits 7) (parity even))\n"
 		"(device (unit-id 1) (holding 0))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
 	ASSERT_EQ(o.mode == MOGBUS_MODE_ASCII_DEVICE && o.data_bits == 7 && o.stop_bits == 1);
 	mogbus_destroy(ctx);
@@ -1198,11 +1200,11 @@ TEST(ApiConfigServerOptionsRoundTrip)
 	ASSERT_EQ(write_config(path,
 		"(server (mode ascii-tcp) (port 4321) (bind \"0.0.0.0\") (idle-timeout-ms 1500))\n"
 		"(device (unit-id 1) (holding 0))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
 	ASSERT_EQ(o.mode == MOGBUS_MODE_ASCII_TCP && o.port == 4321 && o.idle_timeout_ms == 1500);
 	ASSERT_EQ(strcmp(o.bind_address, "0.0.0.0") == 0 && o.path == NULL);
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
 	mogbus_destroy(ctx);
 	unlink(path);
 
@@ -1214,7 +1216,7 @@ TEST(ApiConfigServerOptionsRoundTrip)
 		"  (private-key \"tests/tls/server.key\") (ca-certificate \"tests/tls/ca.pem\")\n"
 		"  (handshake-timeout-ms 777) (min-version tls1.3)))\n"
 		"(device (unit-id 1) (holding 0))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_config_server_options(ctx, &o));
 	ASSERT_EQ(o.mode == MOGBUS_MODE_TCP && o.port == 4802 && o.tls_enabled);
 	ASSERT_EQ(strcmp(o.tls_certificate, "tests/tls/server.pem") == 0);
@@ -1222,7 +1224,7 @@ TEST(ApiConfigServerOptionsRoundTrip)
 	ASSERT_EQ(strcmp(o.tls_ca_certificate, "tests/tls/ca.pem") == 0);
 	ASSERT_EQ(o.tls_handshake_timeout_ms == 777 && o.tls_require_client_certificate);
 	ASSERT_EQ(o.tls_min_version == MOGBUS_TLS_1_3 && o.tls_ciphers_1_2 == NULL);
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
 	mogbus_destroy(ctx);
 	unlink(path);
 
@@ -1233,9 +1235,9 @@ TEST(ApiConfigServerOptionsRoundTrip)
 		"(server (mode tcp) (tls (certificate \"tests/tls/server.pem\")\n"
 		"  (private-key \"tests/tls/server.key\") (require-client-certificate off)))\n"
 		"(device (unit-id 1) (holding 0))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_config_server_options(ctx, &o) && o.tls_ca_certificate == NULL);
-	ASSERT_EQ(mogbus_server_check(ctx, &o, err, sizeof(err)));
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
 	mogbus_destroy(ctx);
 	unlink(path);
 #endif
@@ -1247,7 +1249,6 @@ TEST(ApiEnumeratesDevicesAndDescribesThem)
 	mogbus_t*	ctx = mogbus_create();
 	mogbus_device_info_t info;
 	mogbus_point_t	p = holding(0, 1);
-	char		err[256] = "";
 
 	ASSERT_EQ(mogbus_device_count(ctx) == 0 && mogbus_device_at(ctx, 0) == NULL);
 	ASSERT_EQ(write_config(path,
@@ -1259,11 +1260,11 @@ TEST(ApiEnumeratesDevicesAndDescribesThem)
 		"  (fault (kind drop) (schedule (step (after-ms 100) (count 2))))\n"
 		"  (fault (kind sensor-disconnect) (percent 100)))\n"
 		"(device (unit-id 9) (holding 0) (input 0 (sine (offset 5) (amplitude 1) (period-ms 1000))))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	{
-		mogbus_device_t* extra = mogbus_add_device(ctx, 11, "code", err, sizeof(err));
+		mogbus_device_t* extra = mogbus_add_device(ctx, 11, "code");
 
-		ASSERT_EQ(extra != NULL && mogbus_device_add_point(extra, &p, err, sizeof(err)));
+		ASSERT_EQ(extra != NULL && mogbus_device_add_point(extra, &p) == MOGBUS_OK);
 	}
 	ASSERT_EQ(mogbus_device_count(ctx) == 3);
 	ASSERT_EQ(mogbus_device_at(ctx, 3) == NULL);
@@ -1312,15 +1313,14 @@ TEST(ApiLoadConfigRejectsSecondAnyUnitDevice)
 {
 	char		path[] = "/tmp/mogbus-api-XXXXXX";
 	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* a = mogbus_add_device(ctx, 1, "a", NULL, 0);
-	char		err[256] = "";
+	mogbus_device_t* a = mogbus_add_device(ctx, 1, "a");
 
 	ASSERT_EQ(write_config(path, "(device (name \"b\") (unit-id 2) (any-unit on) (holding 0))\n"));
 	ASSERT_EQ(a != NULL && mogbus_device_set_any_unit(a, true));
-	ASSERT_EQ(!mogbus_load_config(ctx, path, err, sizeof(err)));
-	ASSERT_EQ(strstr(err, "both set any-unit") != NULL && mogbus_device_count(ctx) == 1);
+	ASSERT_EQ(mogbus_load_config(ctx, path) != MOGBUS_OK);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "both set any-unit") != NULL && mogbus_device_count(ctx) == 1);
 	ASSERT_EQ(mogbus_device_set_any_unit(a, false));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	ASSERT_EQ(!mogbus_device_set_any_unit(a, true));
 	mogbus_destroy(ctx);
 	unlink(path);
@@ -1343,31 +1343,30 @@ TEST(ApiSixtyFourBitByteOrderAndStringPoints)
 	mogbus_point_t	p;
 	uint16_t	w[4] = { 0 };
 	double		v = 0;
-	char		err[128];
 	char		text[16];
 
 	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 1, NULL, err, sizeof(err));
+	dev = mogbus_add_device(ctx, 1, NULL);
 	ASSERT_EQ(dev != NULL);
 
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U64,
 			      .value = 4294967296.0, .byte_order = MOGBUS_BYTES_LITTLE };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 0, 4, w));
 	ASSERT_EQ(w[0] == 0 && w[1] == 0x0100 && w[2] == 0 && w[3] == 0);
 	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v == 4294967296.0);
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 4, .type = MOGBUS_TYPE_F64,
 			      .value = -2.5, .word_order = MOGBUS_WORDS_LOW_FIRST };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_read(dev, MOGBUS_HOLDING, 4, 4, w));
 	ASSERT_EQ(w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 0xC004);
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 8, .type = MOGBUS_TYPE_S64, .value = -1 };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 8, &v) && v == -1);
 
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 20, .type = MOGBUS_TYPE_STRING,
 			      .length = 4, .text = "SN-1234" };
-	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_get_string(dev, MOGBUS_HOLDING, 20, text, sizeof(text)));
 	ASSERT_EQ(strcmp(text, "SN-1234") == 0);
 	ASSERT_EQ(!mogbus_device_get_value(dev, MOGBUS_HOLDING, 20, &v));	/* a string has no number */
@@ -1388,17 +1387,17 @@ TEST(ApiSixtyFourBitByteOrderAndStringPoints)
 
 	/* strings are limited to 1..123 registers and need a register table */
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 100, .type = MOGBUS_TYPE_STRING };
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)) && strstr(err, "between 1 and 123"));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "between 1 and 123"));
 	p.length = 124;
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 100, .type = MOGBUS_TYPE_STRING,
 			      .length = 1, .text = "TOO LONG" };
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_COIL, .address = 0, .type = MOGBUS_TYPE_STRING, .length = 1 };
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	p = (mogbus_point_t){ .space = MOGBUS_HOLDING, .address = 100, .type = MOGBUS_TYPE_U16,
 			      .byte_order = (mogbus_byte_order_t)7 };
-	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 	mogbus_destroy(ctx);
 }
 
@@ -1458,14 +1457,13 @@ target_device(mogbus_t** ctx)
 	uint16_t		file2[] = { 40 };
 	uint16_t		fifo[]  = { 1, 2, 3 };
 	uint8_t			obj[]   = { 1, 2, 3, 4 };
-	char			err[128];
 
 	*ctx = mogbus_create();
-	dev  = mogbus_add_device(*ctx, 1, "targets", NULL, 0);
-	ASSERT_EQ(mogbus_device_add_file_record(dev, 1, 0, 3, file1, err, sizeof(err)));
-	ASSERT_EQ(mogbus_device_add_file_record(dev, 2, 5, 1, file2, err, sizeof(err)));
-	ASSERT_EQ(mogbus_device_add_fifo(dev, 0x0100, 3, fifo, err, sizeof(err)));
-	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 0, 4, obj, err, sizeof(err)));
+	dev  = mogbus_add_device(*ctx, 1, "targets");
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 1, 0, 3, file1) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 2, 5, 1, file2) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_fifo(dev, 0x0100, 3, fifo) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 0, 4, obj) == MOGBUS_OK);
 	memset(&target_log, 0, sizeof(target_log));
 	ASSERT_EQ(mogbus_device_set_access_hook(dev, target_hook, NULL));
 	return dev;
@@ -1474,25 +1472,24 @@ target_device(mogbus_t** ctx)
 TEST(ApiHostFileRecordFifoAndCanopenFunctions)
 {
 	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "host", NULL, 0);
-	char		err[128] = "";
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "host");
 	uint16_t	in[3]  = { 1, 2, 3 };
 	uint16_t	out[3] = { 0 };
 	uint8_t		bin[4] = { 9, 8, 7, 6 };
 	uint8_t		bout[4] = { 0 };
 
 	/* file records */
-	ASSERT_EQ(mogbus_device_add_file_record(dev, 3, 10, 3, in, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 3, 10, 3, in) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_read_file_records(dev, 3, 11, 2, out) && out[0] == 2 && out[1] == 3);
 	ASSERT_EQ(mogbus_device_write_file_records(dev, 3, 10, 2, in + 1));
 	ASSERT_EQ(mogbus_device_read_file_records(dev, 3, 10, 3, out) && out[0] == 2 && out[1] == 3 && out[2] == 3);
-	ASSERT_EQ(!mogbus_device_add_file_record(dev, 3, 12, 2, in, err, sizeof(err)));	/* overlap */
-	ASSERT_EQ(strstr(err, "overlaps") != NULL);
-	ASSERT_EQ(!mogbus_device_add_file_record(dev, 0, 0, 1, in, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_file_record(dev, 4, 9999, 2, in, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_file_record(dev, 4, 0, 0, in, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_file_record(dev, 4, 0, 1, NULL, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_file_record(NULL, 4, 0, 1, in, NULL, 0));
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 3, 12, 2, in) != MOGBUS_OK);	/* overlap */
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "overlaps") != NULL);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 0, 0, 1, in) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 4, 9999, 2, in) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 4, 0, 0, in) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 4, 0, 1, NULL) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_file_record(NULL, 4, 0, 1, in) != MOGBUS_OK);
 	ASSERT_EQ(!mogbus_device_read_file_records(dev, 3, 12, 2, out));	/* record 13 is undefined */
 	ASSERT_EQ(!mogbus_device_read_file_records(dev, 9, 0, 1, out));
 	ASSERT_EQ(!mogbus_device_write_file_records(dev, 3, 12, 2, in));
@@ -1500,17 +1497,17 @@ TEST(ApiHostFileRecordFifoAndCanopenFunctions)
 	ASSERT_EQ(!mogbus_device_read_file_records(dev, 3, 10, 0, out));
 
 	/* FIFO */
-	ASSERT_EQ(mogbus_device_add_fifo(dev, 7, 0, NULL, err, sizeof(err)));	/* empty queue */
+	ASSERT_EQ(mogbus_device_add_fifo(dev, 7, 0, NULL) == MOGBUS_OK);	/* empty queue */
 	ASSERT_EQ(mogbus_device_set_fifo(dev, 7, 3, in));
-	ASSERT_EQ(!mogbus_device_add_fifo(dev, 7, 1, in, err, sizeof(err)));	/* duplicate */
-	ASSERT_EQ(strstr(err, "already defined") != NULL);
+	ASSERT_EQ(mogbus_device_add_fifo(dev, 7, 1, in) != MOGBUS_OK);	/* duplicate */
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "already defined") != NULL);
 	ASSERT_EQ(!mogbus_device_set_fifo(dev, 8, 1, in));
 	ASSERT_EQ(!mogbus_device_set_fifo(dev, 7, 32, in));
-	ASSERT_EQ(!mogbus_device_add_fifo(dev, 9, 32, in, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_fifo(dev, 9, 32, in) != MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_set_fifo(dev, 7, 0, NULL));
 
 	/* CANopen */
-	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 1, 4, bin, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 1, 4, bin) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 1, 1, 2, bout) && bout[0] == 8 && bout[1] == 7);
 	ASSERT_EQ(mogbus_device_write_canopen(dev, 5, 0x6041, 1, 2, 2, bin));
 	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 1, 0, 4, bout));
@@ -1518,11 +1515,11 @@ TEST(ApiHostFileRecordFifoAndCanopenFunctions)
 	ASSERT_EQ(!mogbus_device_write_canopen(dev, 5, 0x6041, 1, 3, 2, bin));	/* past the length */
 	ASSERT_EQ(!mogbus_device_read_canopen(dev, 5, 0x6041, 1, 0, 5, bout));
 	ASSERT_EQ(!mogbus_device_read_canopen(dev, 5, 0x6041, 2, 0, 1, bout));
-	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 5, 0x6041, 1, 4, bin, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 0, 0x6041, 2, 4, bin, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 128, 0x6041, 2, 4, bin, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 5, 0x6041, 2, 0, bin, err, sizeof(err)));
-	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 5, 0x6041, 2, 239, bin, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 1, 4, bin) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 0, 0x6041, 2, 4, bin) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 128, 0x6041, 2, 4, bin) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 2, 0, bin) != MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 2, 239, bin) != MOGBUS_OK);
 	mogbus_destroy(ctx);
 }
 
@@ -1768,11 +1765,10 @@ function_device(mogbus_t** ctx, int* user)
 {
 	mogbus_device_t* dev = NULL;
 	mogbus_point_t	p = holding(0, 7);
-	char		err[128];
 
 	*ctx = mogbus_create();
-	dev  = mogbus_add_device(*ctx, 1, "fn", NULL, 0);
-	(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	dev  = mogbus_add_device(*ctx, 1, "fn");
+	(void)mogbus_device_add_point(dev, &p);
 	memset(&fn_log, 0, sizeof(fn_log));
 	ASSERT_EQ(mogbus_device_add_function_code(dev, 0x41, station_fn, user));
 	return dev;
@@ -1859,7 +1855,6 @@ TEST(ApiFunctionCodeConflictsWithConfigAndSharesFaultsAndListenOnly)
 	mogbus_t*	ctx = mogbus_create();
 	mogbus_device_t* dev = NULL;
 	mogbus_device_info_t info;
-	char		err[256] = "";
 	u8		resp[MODBUS_MAX_PDU];
 	const u8	req[] = { 0x41, 5 };
 	const u8	cfg[] = { 0x42, 1 };
@@ -1870,7 +1865,7 @@ TEST(ApiFunctionCodeConflictsWithConfigAndSharesFaultsAndListenOnly)
 		"(device (unit-id 1) (holding 0 (static 7))\n"
 		"  (function-code 66 (name \"cfg\") (on \"01\" (reply \"AA\")))\n"
 		"  (fault (kind exception) (code 6) (percent 100)))\n"));
-	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
 	dev = mogbus_find_device(ctx, 1);
 	ASSERT_EQ(!mogbus_device_add_function_code(dev, 66, noop_fn, NULL));	/* defined by config */
 	ASSERT_EQ(mogbus_device_add_function_code(dev, 0x41, station_fn, NULL));
@@ -2122,7 +2117,7 @@ TEST(ApiFrameHookSeesRewritesAndDropsFramesOnEveryTransport)
 		for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 		{
 			mogbus_t*	ctx = mogbus_create();
-			mogbus_device_t* dev = mogbus_add_device(ctx, 1, "frames", NULL, 0);
+			mogbus_device_t* dev = mogbus_add_device(ctx, 1, "frames");
 			mogbus_point_t	p0 = holding(0, 0x1111);
 			mogbus_point_t	p1 = holding(1, 0x2222);
 			mogbus_server_options_t o = mogbus_server_options_defaults();
@@ -2137,8 +2132,8 @@ TEST(ApiFrameHookSeesRewritesAndDropsFramesOnEveryTransport)
 			test_case = name;
 			memset(&frame_log, 0, sizeof(frame_log));
 			memcpy(frame_log.rule, cases[c].rule, sizeof(frame_log.rule));
-			ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p0, NULL, 0) &&
-				  mogbus_device_add_point(dev, &p1, NULL, 0));
+			ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p0) == MOGBUS_OK &&
+				  mogbus_device_add_point(dev, &p1) == MOGBUS_OK);
 			o.mode = modes[m].mode;
 			o.frame_gap_ms = 2;
 			if (modes[m].fd)
@@ -2149,7 +2144,7 @@ TEST(ApiFrameHookSeesRewritesAndDropsFramesOnEveryTransport)
 			}
 			else
 				o.port = ts_free_port();
-			server = mogbus_server_create(ctx, &o, NULL, 0, NULL);
+			server = mogbus_server_create(ctx, &o);
 			ASSERT_EQ(server != NULL);
 			if (!modes[m].fd)
 			{

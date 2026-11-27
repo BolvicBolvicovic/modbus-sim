@@ -7,10 +7,10 @@ Everything the library allocates belongs to a context (@ref mogbus_t "mogbus_t")
 ```c
 mogbus_t* ctx = mogbus_create();
 ...
-st->dev = mogbus_add_device(ctx, unit, "Pump station", err, err_size);
+st->dev = mogbus_add_device(ctx, unit, "Pump station");
 ```
 
-@ref mogbus_add_device "mogbus_add_device()" fails on a duplicate unit id and fills the optional `err` buffer. Every function that can fail for a reason you must report takes such a buffer (NULL or size 0 discards the message).
+@ref mogbus_add_device "mogbus_add_device()" returns NULL on a duplicate unit id. The reason is kept by the context: @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" and @ref mogbus_last_error "mogbus_last_error(ctx)". Calls that return a @ref mogbus_error_t "mogbus_error_t" (`mogbus_load_config`, `mogbus_device_add_point`, ...) return the code directly and leave only the text in `mogbus_last_error()`.
 
 ## Points
 
@@ -64,8 +64,8 @@ Not everything needs the host to move it. A point of `kind = MOGBUS_POINT_RAMP` 
 Two more stores serve function codes that are not tables. The event log is file 1, records 1 to 100, added with @ref mogbus_device_add_file_record "mogbus_device_add_file_record()" (clients read it with FC 14 and write it with FC 15); the level history is a FIFO queue at pointer address 0 added with @ref mogbus_device_add_fifo "mogbus_device_add_fifo()" (clients read it with FC 18):
 
 ```c
-return mogbus_device_add_file_record(st->dev, LOG_FILE, 1, LOG_RECORDS, zeros, err, err_size) &&
-       mogbus_device_add_fifo(st->dev, FIFO_ADDRESS, 0, NULL, err, err_size);
+error = mogbus_device_add_file_record(st->dev, LOG_FILE, 1, LOG_RECORDS, zeros);
+return error != MOGBUS_OK ? error : mogbus_device_add_fifo(st->dev, FIFO_ADDRESS, 0, NULL);
 ```
 
 A file holds records numbered up to 9999, added in ranges of 1 to 126 records that must not overlap (at most 16 files and 64 ranges per file); a FIFO holds up to 31 values, and storage always has room for all 31 so it can grow later. CANopen objects for FC 2B/0D work the same way with @ref mogbus_device_add_canopen_object "mogbus_device_add_canopen_object()". [Step 4](library-hooks.md) fills and guards these.
@@ -82,10 +82,10 @@ Holding counts three points (setpoint, mode, site name), input six, coil one and
 
 ## Loading a config instead, or as well
 
-The same station can be written as a config file (see [the app tutorial](../tutorial-app.md)); @ref mogbus_load_config "mogbus_load_config()" adds the devices of a file and remembers its `(server ...)` section. On failure the context is unchanged and `err` says why. The example takes `--config FILE`, loads it first and then builds the station next to it:
+The same station can be written as a config file (see [the app tutorial](../tutorial-app.md)); @ref mogbus_load_config "mogbus_load_config()" adds the devices of a file and remembers its `(server ...)` section. On failure the context is unchanged and `mogbus_last_error(ctx)` says why. The example takes `--config FILE`, loads it first and then builds the station next to it:
 
 ```c
-if (!mogbus_load_config(ctx, config, err, sizeof(err))) { ... }
+if (mogbus_load_config(ctx, config) != MOGBUS_OK) { ... }
 printf("loaded %s: %zu device(s)\n", config, mogbus_device_count(ctx));
 if (mogbus_config_server_options(ctx, &from_config))
     options = from_config;       /* the file's (server ...) section as options */

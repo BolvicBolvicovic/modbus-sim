@@ -614,26 +614,24 @@ read_forms(form_ctx_t* ctx, const char* text, s7_pointer* forms)
 }
 
 bool
-config_load(arena_t* persistent, arena_t* scratch, const char* path,
-	    config_t* out, char* err, u32 err_size)
+config_load(arena_t* persistent, arena_t* scratch, const char* path, config_t* out)
 {
-	form_ctx_t	ctx    = {
-		.sc = NULL, .err = err, .err_size = err_size,
-		.scratch = scratch, .machine_state = NULL,
-	};
+	form_ctx_t	ctx    = { .sc = NULL, .scratch = scratch, .machine_state = NULL };
 	s7_pointer	forms  = NULL;
 	char*		text   = readfile(scratch, path);
 	bool		ok     = false;
 
 	config_set_defaults(out);
 	if (!text)
-		return form_fail(&ctx, "cannot read file '%s'", path);
-
-	ctx.sc = s7_init();
-	if (!ctx.sc)
-		return form_fail(&ctx, "cannot start the Scheme reader");
-
-	ok = read_forms(&ctx, text, &forms) && parse_forms(&ctx, forms, persistent, out);
-	s7_free(ctx.sc);
+		form_fail(&ctx, "cannot read file '%s'", path);
+	else if (!(ctx.sc = s7_init()))
+		form_fail(&ctx, "cannot start the Scheme reader");
+	else
+	{
+		ok = read_forms(&ctx, text, &forms) && parse_forms(&ctx, forms, persistent, out);
+		s7_free(ctx.sc);
+	}
+	if (!ok)
+		memcpy(out->error, ctx.err, sizeof(out->error));
 	return ok;
 }

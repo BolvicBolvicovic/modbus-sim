@@ -24,11 +24,10 @@ conn_close(tcp_server_t* server, tcp_conn_t* conn)
 static bool
 conn_tls_handshake(tcp_server_t* server, tcp_conn_t* conn)
 {
-	char			tls_err[256];
 	char			subject[512];
 	net_tls_status_t	status;
 
-	status = net_tls_conn_handshake(conn->tls, tls_err, sizeof(tls_err));
+	status = net_tls_conn_handshake(conn->tls);
 	if (status == NET_TLS_OK)
 	{
 		conn->base.last_activity_ms = os_now_ms();
@@ -40,7 +39,7 @@ conn_tls_handshake(tcp_server_t* server, tcp_conn_t* conn)
 	if (status == NET_TLS_WANT_READ || status == NET_TLS_WANT_WRITE)
 		return true;
 	if (status == NET_TLS_ERROR)
-		LOG_WARN("client %s TLS handshake failed: %s", conn->base.peer, tls_err);
+		LOG_WARN("client %s TLS handshake failed: %s", conn->base.peer, conn->tls->error);
 	conn_close(server, conn);
 	return false;
 }
@@ -65,18 +64,16 @@ conn_on_accept(void* ctx, net_tcp_conn_t* base, u64 now_ms)
 {
 	tcp_server_t*	server = ctx;
 	tcp_conn_t*		conn   = (tcp_conn_t*)base;
-	char		tls_err[256];
 	u64		deadline_ms = 0;
 
 	if (server->options.tls_handshake_timeout_ms > 0)
 		deadline_ms = now_ms + server->options.tls_handshake_timeout_ms;
 	if (server->tls.ssl_ctx)
 	{
-		conn->tls = net_tls_conn_new(&server->tls, base->fd, deadline_ms,
-					     tls_err, sizeof(tls_err));
+		conn->tls = net_tls_conn_new(&server->tls, base->fd, deadline_ms);
 		if (!conn->tls)
 		{
-			LOG_WARN("client %s TLS setup failed: %s", base->peer, tls_err);
+			LOG_WARN("client %s TLS setup failed: %s", base->peer, server->tls.error);
 			conn_close(server, conn);
 			return;
 		}
@@ -192,7 +189,6 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 
 	if (conn->tls)
 	{
-		char			tls_err[256];
 		int			len      = 0;
 		net_tls_status_t	status;
 
@@ -204,8 +200,7 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 		}
 
 		status = net_tls_conn_read(conn->tls, conn->rx + conn->rx_len,
-					   (int)(sizeof(conn->rx) - conn->rx_len), &len,
-					   tls_err, sizeof(tls_err));
+					   (int)(sizeof(conn->rx) - conn->rx_len), &len);
 		if (status == NET_TLS_OK && len > 0)
 		{
 			conn->rx_len          += (u32)len;
@@ -216,7 +211,7 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 		if (status == NET_TLS_WANT_READ || status == NET_TLS_WANT_WRITE)
 			return;
 		if (status == NET_TLS_ERROR && len == 0)
-			LOG_WARN("client %s TLS read failed: %s", conn->base.peer, tls_err);
+			LOG_WARN("client %s TLS read failed: %s", conn->base.peer, conn->tls->error);
 		conn_close(server, conn);
 		return;
 	}
@@ -242,13 +237,11 @@ conn_write(tcp_server_t* server, tcp_conn_t* conn)
 
 	if (conn->tls)
 	{
-		char			tls_err[256];
 		int			len      = 0;
 		net_tls_status_t	status;
 
 		status = net_tls_conn_write(conn->tls, conn->tx + conn->tx_sent,
-					    (int)(conn->tx_len - conn->tx_sent), &len,
-					    tls_err, sizeof(tls_err));
+					    (int)(conn->tx_len - conn->tx_sent), &len);
 		if (status == NET_TLS_OK && len > 0)
 		{
 			conn_tx_advance(server, conn, (u32)len);
@@ -257,7 +250,7 @@ conn_write(tcp_server_t* server, tcp_conn_t* conn)
 		if (status == NET_TLS_WANT_READ || status == NET_TLS_WANT_WRITE)
 			return;
 		if (status == NET_TLS_ERROR && len == 0)
-			LOG_WARN("client %s TLS write failed: %s", conn->base.peer, tls_err);
+			LOG_WARN("client %s TLS write failed: %s", conn->base.peer, conn->tls->error);
 		conn_close(server, conn);
 		return;
 	}
@@ -489,8 +482,6 @@ tcp_server_stop(tcp_server_t* server)
 s32
 tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 {
-	char			tls_err[256];
-
 	memset(server, 0, sizeof(*server));
 	server->options = *options;
 	server->pool.conns = (net_tcp_conn_t*)server->conns;
@@ -509,9 +500,9 @@ tcp_server_init(tcp_server_t* server, const tcp_server_options_t* options)
 
 	if (options->tls_enabled)
 	{
-		if (!net_tls_ctx_init(&server->tls, &options->tls, tls_err, sizeof(tls_err)))
+		if (!net_tls_ctx_init(&server->tls, &options->tls))
 		{
-			LOG_WARN("cannot configure TLS: %s", tls_err);
+			LOG_WARN("cannot configure TLS: %s", server->tls.error);
 			return 2;
 		}
 	}

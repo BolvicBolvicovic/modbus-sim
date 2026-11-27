@@ -183,14 +183,15 @@ TEST(ServerFacadeOpensPtyAndReportsSlaveName)
 TEST(ServerFacadeCheckTlsOnlyValidatesWhenEnabled)
 {
 	server_options_t o = { .mode = SERVER_MODE_TCP };
-	char		err[256] = "";
+	net_tls_ctx_t	tls;
 
-	ASSERT_EQ(server_check_tls(&o, err, sizeof(err)));
+	memset(&tls, 0, sizeof(tls));
+	ASSERT_EQ(server_check_tls(&o, &tls));
 	o.tls_enabled = true;
 	o.tls.certificate = "/nonexistent/cert.pem";
 	o.tls.private_key = "/nonexistent/key.pem";
-	ASSERT_EQ(!server_check_tls(&o, err, sizeof(err)));
-	ASSERT_EQ(err[0] != '\0');
+	ASSERT_EQ(!server_check_tls(&o, &tls));
+	ASSERT_EQ(tls.error[0] != '\0');
 }
 
 #if WITH_CONFIG
@@ -206,7 +207,9 @@ load_text(const char* text, config_t* config, char* err, u32 err_size)
 	if (fd < 0 || write(fd, text, strlen(text)) < 0)
 		return false;
 	close(fd);
-	ok = config_load(persist, scratch, path, config, err, err_size);
+	ok = config_load(persist, scratch, path, config);
+	if (!ok)
+		snprintf(err, err_size, "%s", config->error);
 	unlink(path);
 	arena_release(scratch);
 	return ok;
