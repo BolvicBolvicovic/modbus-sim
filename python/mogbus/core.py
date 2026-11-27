@@ -42,7 +42,7 @@ The classes mirror `mogbus.h`: Context is `mogbus_create`/`mogbus_destroy`, Cont
 Device.add_point `mogbus_device_add_point`, Device.read/write `mogbus_device_read/write` (raw
 registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (decoded),
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
-`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Context.serve
+`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
 `mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, probe `mogbus_probe`,
 rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
@@ -473,6 +473,26 @@ class CustomFunctionCode:
     """
     code: int
     name: str
+
+
+@dataclass
+class PointInfo:
+    """@brief The layout of one point, from Device.points().
+    @param space The table.
+    @param address First address.
+    @param type How the registers are decoded.
+    @param word_order Word order of a 32 or 64-bit point.
+    @param byte_order Byte order inside every register.
+    @param length Registers of a string point, else 0.
+    @param read_only True when Modbus writes to the point are refused.
+    """
+    space: Space
+    address: int
+    type: ValueType
+    word_order: WordOrder
+    byte_order: ByteOrder
+    length: int
+    read_only: bool
 
 
 @dataclass
@@ -1173,6 +1193,18 @@ class Device:
             point_counts={Space(i).name.lower(): c.point_count[i] for i in range(4)},
             faults=faults,
             custom_function_codes=fcs)
+
+    @_locked
+    def points(self) -> List[PointInfo]:
+        """@brief Describes every point of the device in definition order; read values with get_value() or get_string().
+        @return A list of PointInfo.
+        """
+        out = []
+        c = _lib.PointC()
+        while lib.mogbus_device_point_at(self._live(), len(out), ctypes.byref(c)):
+            out.append(PointInfo(Space(c.space), c.address, ValueType(c.type), WordOrder(c.word_order),
+                                 ByteOrder(c.byte_order), c.length, bool(c.read_only)))
+        return out
 
 
 class Server:
