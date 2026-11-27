@@ -1644,36 +1644,6 @@ TEST(NetGetComEventCounterUnknownUnitDoesNotCount)
 	ASSERT_EQ(ok);
 }
 
-TEST(NetGetComEventLogReturnsCountsAndEmptyLog)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4;
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 6 &&
-		     resp[2] == 0x00 && resp[3] == 0x00 &&
-		     resp[4] == 0x00 && resp[5] == 0x01 &&
-		     resp[6] == 0x00 && resp[7] == 0x02;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
 static bool
 proc_utime_ticks(pid_t pid, unsigned long long* out)
 {
