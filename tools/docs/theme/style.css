@@ -286,12 +286,12 @@ a code { color: inherit; }
 .tabs { margin: 1.25rem 0 1.5rem; background: var(--code-bg); border-radius: 10px; border: 1px solid var(--code-line); overflow: hidden; }
 .tabbar { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem 0 .5rem; background: var(--code-bar); border-bottom: 1px solid var(--code-line); }
 .tablist { display: flex; gap: .1rem; flex: 1 1 auto; min-width: 0; overflow-x: auto; }
-.tabbar button {
+.tablist button {
   font: 600 .78rem var(--font); color: #8ea2c1; background: none; border: 0; border-bottom: 2px solid transparent;
   padding: .55rem .8rem; cursor: pointer; white-space: nowrap;
 }
-.tabbar button:hover { color: #fff; }
-.tabbar button[aria-selected="true"] { color: #fff; border-bottom-color: var(--amber); }
+.tablist button:hover { color: #fff; }
+.tablist button[aria-selected="true"] { color: #fff; border-bottom-color: var(--amber); }
 .tabs .copy { position: static; flex: none; margin-bottom: .3rem; }
 .tabpanel[hidden] { display: none; }
 
