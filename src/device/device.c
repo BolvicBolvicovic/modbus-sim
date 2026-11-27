@@ -25,7 +25,7 @@ space_name(space_kind_t space)
 device_t*
 device_new(arena_t* arena, u64 start_ms)
 {
-	device_t*	dev = ARENA_PUSH_STRUCT(arena, device_t);
+	device_t*	dev = ARENA_PUSH_ARRAY_ALIGNED(arena, device_t, 1, _Alignof(device_t));
 
 	if (!dev)
 		return NULL;
@@ -33,20 +33,20 @@ device_new(arena_t* arena, u64 start_ms)
 	dev->arena = arena;
 	dev->machines = NULL;
 
-	dev->points = ARENA_PUSH_ARRAY(arena, point_t, DEVICE_MAX_POINTS);
+	dev->points = ARENA_PUSH_ARRAY_ALIGNED(arena, point_t, DEVICE_MAX_POINTS, _Alignof(point_t));
 	if (!dev->points)
 		return NULL;
 
-	dev->files = ARENA_PUSH_ARRAY(arena, device_file_t, DEVICE_MAX_FILES);
+	dev->files = ARENA_PUSH_ARRAY_ALIGNED(arena, device_file_t, DEVICE_MAX_FILES, _Alignof(device_file_t));
 	if (!dev->files)
 		return NULL;
 
-	dev->fifos = ARENA_PUSH_ARRAY(arena, device_fifo_t, DEVICE_MAX_FIFOS);
+	dev->fifos = ARENA_PUSH_ARRAY_ALIGNED(arena, device_fifo_t, DEVICE_MAX_FIFOS, _Alignof(device_fifo_t));
 	if (!dev->fifos)
 		return NULL;
 
-	dev->canopen_objects = ARENA_PUSH_ARRAY(arena, device_canopen_object_t,
-						DEVICE_MAX_CANOPEN_OBJECTS);
+	dev->canopen_objects = ARENA_PUSH_ARRAY_ALIGNED(arena, device_canopen_object_t,
+						DEVICE_MAX_CANOPEN_OBJECTS, _Alignof(device_canopen_object_t));
 	if (!dev->canopen_objects)
 		return NULL;
 
@@ -801,7 +801,7 @@ device_add_custom_fc(device_t* dev, const device_custom_fc_t* fc)
 		return "too many user-defined function codes on one device (max 8)";
 	if (!dev->custom_fcs)
 	{
-		dev->custom_fcs = ARENA_PUSH_ARRAY(dev->arena, device_custom_fc_t, DEVICE_MAX_CUSTOM_FCS);
+		dev->custom_fcs = ARENA_PUSH_ARRAY_ALIGNED(dev->arena, device_custom_fc_t, DEVICE_MAX_CUSTOM_FCS, _Alignof(device_custom_fc_t));
 		if (!dev->custom_fcs)
 			return "out of memory while storing a user-defined function code";
 	}

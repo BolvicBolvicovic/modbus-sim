@@ -1075,7 +1075,7 @@ device_machines_prepare(device_t* dev)
 		return NULL;
 	if (!dev->arena)
 		return "device has no arena for machine storage";
-	dev->machines = ARENA_PUSH_STRUCT(dev->arena, machine_system_t);
+	dev->machines = ARENA_PUSH_ARRAY_ALIGNED(dev->arena, machine_system_t, 1, _Alignof(machine_system_t));
 	if (!dev->machines)
 		return "out of memory while creating machine storage";
 	return NULL;
