@@ -25,7 +25,7 @@ main(void)
 	SIZE(P);
 	F(P, space); F(P, address); F(P, type); F(P, word_order); F(P, kind); F(P, value); F(P, ramp);
 	F(P, ramp.from); F(P, ramp.to); F(P, ramp.step); F(P, ramp.every_ms); F(P, ramp.mode);
-	F(P, byte_order); F(P, length); F(P, text); F(P, read_only);
+	F(P, byte_order); F(P, length); F(P, text); F(P, read_only); F(P, clock_field); F(P, clock_utc);
 
 	SIZE(I);
 	F(I, name); F(I, unit_id); F(I, any_unit); F(I, point_count); F(I, faults); F(I, custom_fc_count);

@@ -72,6 +72,17 @@ class RampMode(enum.IntEnum):
     HOLD = 2
 
 
+class ClockField(enum.IntEnum):
+    YEAR = 0
+    MONTH = 1
+    DAY = 2
+    WEEKDAY = 3
+    HOUR = 4
+    MINUTE = 5
+    SECOND = 6
+    UNIX = 7
+
+
 class Mode(enum.IntEnum):
     TCP = 0
     RTU_PTY = 1
@@ -353,11 +364,14 @@ class Device:
 
     @_locked
     def add_point(self, space, address, type="u16", value=0, word_order="high-first", ramp=None,
-                  byte_order="big", length=0, text=None, read_only=False):
+                  byte_order="big", length=0, text=None, read_only=False, clock=None,
+                  clock_utc=False):
         """Adds a point. `byte_order` swaps the bytes inside every register; for type "string",
         `length` is the number of registers (1-123) and `text` the initial text. `read_only`
         (coils and holding registers) makes Modbus writes fail with exception 02; `Device.write`
-        and `set_value` still work."""
+        and `set_value` still work. `clock` ("year", "month", "day", "weekday", "hour", "minute",
+        "second" or "unix") makes an integer register show that wall-clock field, in local time or,
+        with `clock_utc`, UTC ("unix" is always UTC); it excludes `ramp`."""
         p = _lib.PointC()
         p.space = int(_coerce(Space, space, "space"))
         p.address = _u(address, "address", 65536)
@@ -370,7 +384,13 @@ class Device:
             if p.type != ValueType.STRING:
                 raise MogbusError("text only applies to type \"string\"")
             p.text = text.encode("latin-1")
-        if ramp is None:
+        if clock is not None:
+            if ramp is not None:
+                raise MogbusError("a point cannot have both a ramp and a clock")
+            p.kind = 2
+            p.clock_field = int(_coerce(ClockField, clock, "clock field"))
+            p.clock_utc = bool(clock_utc)
+        elif ramp is None:
             p.kind = 0
             p.value = float(value)
         else:

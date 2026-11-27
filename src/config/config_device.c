@@ -20,6 +20,7 @@ static const char* const ORDER_NAMES[] = { "high-first", "low-first" };
 static const char* const BYTE_NAMES[]  = { "big", "little" };
 static const char* const PADDING_NAMES[] = { "nul", "space" };
 static const char* const ACCESS_NAMES[]  = { "read-write", "read-only" };
+static const char* const CLOCK_NAMES[] = { "year", "month", "day", "weekday", "hour", "minute", "second", "unix" };
 static const char* const MODE_NAMES[]  = { "wrap", "bounce", "hold" };
 static const char* const DIST_NAMES[]  = { "uniform", "gaussian" };
 static const char* const SPACE_NAMES[] = { "coil", "discrete", "input", "holding" };
@@ -374,6 +375,36 @@ parse_ramp(form_ctx_t* ctx, s7_pointer item, point_t* point)
 	return true;
 }
 
+/** @brief Reads (clock FIELD) or (clock FIELD (utc on)). */
+static bool
+parse_clock(form_ctx_t* ctx, s7_pointer item, point_t* point)
+{
+	static const char* const keys[] = { "utc" };
+	s7_pointer	field = s7_is_pair(s7_cdr(item)) ? s7_cadr(item) : s7_nil(ctx->sc);
+	s7_pointer	options = s7_is_pair(s7_cdr(item)) ? s7_cddr(item) : s7_nil(ctx->sc);
+	bool		utc = false;
+
+	if (!s7_is_symbol(field))
+		return form_fail(ctx, "%s: expected (clock FIELD) with FIELD one of year, month, day, weekday, hour, minute, second, unix",
+				 form_text(ctx, item));
+	for (u32 i = 0; i < ARRAY_COUNT(CLOCK_NAMES); i++)
+	{
+		if (strcmp(s7_symbol_name(field), CLOCK_NAMES[i]) != 0)
+			continue;
+		point->clock_field = (clock_field_t)i;
+		break;
+	}
+	if (strcmp(s7_symbol_name(field), CLOCK_NAMES[point->clock_field]) != 0)
+		return form_fail(ctx, "%s: unknown clock field '%s' (use year, month, day, weekday, hour, minute, second or unix)",
+				 form_text(ctx, item), s7_symbol_name(field));
+	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "clock") ||
+	    !form_opt_bool(ctx, options, "utc", &utc))
+		return false;
+	point->kind      = POINT_CLOCK;
+	point->clock_utc = utc;
+	return true;
+}
+
 static bool
 parse_static(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
 {
@@ -623,7 +654,7 @@ parse_degradation(form_ctx_t* ctx, s7_pointer item, bool is_bit, point_t* point)
 static bool
 parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 {
-	static const char* const names[] = { "static", "ramp", "sine", "lag" };
+	static const char* const names[] = { "static", "ramp", "sine", "lag", "clock" };
 	s7_pointer	found[ARRAY_COUNT(names)];
 	s7_pointer	noise = form_find(ctx, options, "noise");
 	s7_pointer	degradation = form_find(ctx, options, "degradation");
@@ -637,7 +668,7 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	}
 
 	if (present > 1)
-		return form_fail(ctx, "a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)");
+		return form_fail(ctx, "a point can have only one of (static ...), (ramp ...), (sine ...), (lag ...) and (clock ...)");
 
 	if (point->type == VT_STRING)
 	{
@@ -666,6 +697,11 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 					 form_text(ctx, noise));
 	}
 
+	if (!form_is_absent(ctx, found[4]) &&
+	    (!form_is_absent(ctx, noise) || !form_is_absent(ctx, degradation)))
+		return form_fail(ctx, "%s: a (clock ...) point cannot have (noise ...) or (degradation ...)",
+				 form_text(ctx, form_is_absent(ctx, noise) ? degradation : noise));
+
 	if (!form_is_absent(ctx, noise) && present == 0)
 		return form_fail(ctx, "%s: (noise ...) needs a (static ...), (ramp ...), (sine ...) or (lag ...) to disturb",
 				 form_text(ctx, noise));
@@ -680,6 +716,8 @@ parse_behaviour(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point
 	if (!form_is_absent(ctx, found[2]) && !parse_sine(ctx, found[2], point))
 		return false;
 	if (!form_is_absent(ctx, found[3]) && !parse_lag(ctx, found[3], point))
+		return false;
+	if (!form_is_absent(ctx, found[4]) && !parse_clock(ctx, found[4], point))
 		return false;
 	if (!form_is_absent(ctx, found[0]) && !parse_static(ctx, found[0], is_bit, point))
 		return false;
@@ -751,7 +789,7 @@ parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 static bool
 parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 {
-	static const char* const keys[] = { "type", "word-order", "byte-order", "length", "padding", "static", "ramp", "sine", "lag",
+	static const char* const keys[] = { "type", "word-order", "byte-order", "length", "padding", "static", "ramp", "sine", "lag", "clock",
 		"noise", "degradation", "count", "note", "access" };
 	const char*	head    = form_head_name(item);
 	bool		is_bit  = space_is_bit(space);

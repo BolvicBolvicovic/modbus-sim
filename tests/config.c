@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Writes `text` to a temp file, loads it, and returns the load result. */
@@ -3074,4 +3075,92 @@ TEST(ConfigRejectsBadPointAccess)
 	EXPECT_ERROR("(device (unit-id 1) (input 0 (access read-only)))", "input registers are always read-only");
 	EXPECT_ERROR("(device (unit-id 1) (input 0 (access read-write)))", "remove (access");
 	EXPECT_ERROR("(device (unit-id 1) (discrete 0 (access read-only)))", "discrete inputs are always read-only");
+}
+
+TEST(ConfigClockPointsShowTheWallClock)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev    = NULL;
+	u16		out[4];
+	u16		nine   = 9;
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1)\n"
+		"  (holding 0 (clock year (utc on)))\n"
+		"  (holding 1 (clock month (utc on)))\n"
+		"  (holding 2 (clock day (utc on)))\n"
+		"  (holding 3 (clock weekday (utc on)))\n"
+		"  (holding 4 (clock hour (utc on)))\n"
+		"  (holding 5 (clock minute (utc on)))\n"
+		"  (holding 6 (clock second (utc on)))\n"
+		"  (input 10 (type u32) (clock unix))\n"
+		"  (input 12 (type s64) (clock unix (utc off))))",
+		&config, err, sizeof(err)));
+	dev = config.devices[0];
+	ASSERT_EQ(dev->points[0].kind == POINT_CLOCK && dev->points[0].clock_utc);
+	dev->wall_fixed_ms = 1735685156789LL; /* Tue 2024-12-31 22:45:56 UTC */
+	device_tick(dev, dev->start_ms + 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 4, out));
+	ASSERT_EQ(out[0] == 2024 && out[1] == 12 && out[2] == 31 && out[3] == 2);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 4, 3, out));
+	ASSERT_EQ(out[0] == 22 && out[1] == 45 && out[2] == 56);
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 10, 2, out));
+	ASSERT_EQ(out[0] == (u16)(1735685156u >> 16) && out[1] == (u16)(1735685156u & 0xFFFF));
+	ASSERT_SUCCESS(device_read(dev, SPACE_INPUT, 12, 4, out));
+	ASSERT_EQ(out[0] == 0 && out[1] == 0 && out[2] == (u16)(1735685156u >> 16));
+
+	dev->wall_fixed_ms += 2 * 3600 * 1000 + 3000;
+	device_tick(dev, dev->start_ms + 2);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 1, out));
+	ASSERT_EQ(out[0] == 2025);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 6, 1, out));
+	ASSERT_EQ(out[0] == 59); /* 2025-01-01 00:45:59 */
+
+	/* A client write freezes the point; a restart makes it live again. */
+	ASSERT_SUCCESS(device_client_write(dev, SPACE_HOLDING, 6, 1, &nine));
+	dev->wall_fixed_ms += 1000;
+	device_tick(dev, dev->start_ms + 3);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 6, 1, out));
+	ASSERT_EQ(out[0] == 9);
+	device_restart(dev, dev->start_ms + 4);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 6, 1, out));
+	ASSERT_EQ(out[0] == 0);
+}
+
+#ifndef _WIN32
+TEST(ConfigClockLocalTimeFollowsTheTimeZone)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+	device_t*	dev    = NULL;
+	u16		out[2];
+
+	ASSERT_SUCCESS(load_text(
+		"(device (unit-id 1) (holding 0 (clock hour)) (holding 1 (clock day)))",
+		&config, err, sizeof(err)));
+	dev = config.devices[0];
+	dev->wall_fixed_ms = 1735685156789LL; /* 2024-12-31 22:45:56 UTC */
+	setenv("TZ", "UTC-3", 1);
+	tzset();
+	device_tick(dev, dev->start_ms + 1);
+	ASSERT_SUCCESS(device_read(dev, SPACE_HOLDING, 0, 2, out));
+	ASSERT_EQ(out[0] == 1 && out[1] == 1);
+	unsetenv("TZ");
+	tzset();
+}
+#endif
+
+TEST(ConfigRejectsBadClockPoints)
+{
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock fortnight)))", "unknown clock field");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock)))", "expected (clock FIELD)");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock unix)))", "clock unix needs a 32-bit or 64-bit type");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (type float32) (clock year)))", "clock points need an integer register type");
+	EXPECT_ERROR("(device (unit-id 1) (coil 0 (clock year)))", "coils and discrete inputs can only be (static on/off)");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock year) (static 1)))", "only one of");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock year) (noise (amplitude 1))))", "cannot have (noise");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock year (tz 1))))", "tz");
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (clock year)) (machine m (initial idle)"
+		     " (state idle (on-enter (set! (holding 0) 3)))))", "machine cannot drive");
 }

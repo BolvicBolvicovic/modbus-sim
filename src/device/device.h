@@ -16,6 +16,7 @@
 
 typedef enum space_kind_t space_kind_t;
 typedef enum point_kind_t point_kind_t;
+typedef enum clock_field_t clock_field_t;
 typedef struct point_t point_t;
 typedef struct space_t space_t;
 typedef struct file_segment_t file_segment_t;
@@ -53,6 +54,20 @@ enum point_kind_t
 	POINT_RAMP,	/**< value follows a ramp over time */
 	POINT_MODEL,	/**< value follows a sine or lag model, or a static value plus noise */
 	POINT_MACHINE,	/**< value is driven by a scripted device machine */
+	POINT_CLOCK,	/**< value is a field of the wall clock (see clock_field_t) */
+};
+
+/** @brief Which wall-clock value a POINT_CLOCK point shows. */
+enum clock_field_t
+{
+	CLOCK_YEAR,
+	CLOCK_MONTH,
+	CLOCK_DAY,
+	CLOCK_WEEKDAY,	/**< ISO: Monday 1 ... Sunday 7 */
+	CLOCK_HOUR,
+	CLOCK_MINUTE,
+	CLOCK_SECOND,
+	CLOCK_UNIX,	/**< seconds since the epoch, always UTC */
 };
 
 /**
@@ -82,6 +97,8 @@ struct point_t
 	 */
 	const char*	text;
 	ramp_params_t	ramp;
+	clock_field_t	clock_field;		/**< POINT_CLOCK */
+	bool		clock_utc;		/**< POINT_CLOCK: UTC instead of local time */
 	model_t		model;			/**< POINT_MODEL shape; noise modifier of POINT_RAMP */
 };
 
@@ -252,6 +269,8 @@ struct device_t
 	u16		diag_overrun_count;	/**< FC 08 subfunction 0x0012 */
 	bool		listen_only;		/**< FC 08 subfunction 0x0004 */
 	u64		start_ms;		/**< ramps count their time from here */
+	s64		wall_fixed_ms;		/**< nonzero pins the wall clock of clock points (tests) */
+	s64		wall_ms;		/**< wall clock read by the last tick, restart or add */
 	u64		now_ms;			/**< last device_tick, or start_ms before the first tick */
 	fault_set_t	faults;
 	fault_runtime_t	fault_runtime;
@@ -327,7 +346,7 @@ void		device_reset_models(device_t* dev, u64 now_ms);
  */
 bool		device_range_failed(const device_t* dev, space_kind_t space, u32 address, u32 count);
 
-/** @brief True for points whose value changes with time: ramps and models. */
+/** @brief True for points whose value changes with time: ramps, models and clocks. */
 bool		point_is_timed(const point_t* point);
 
 /**

@@ -4,6 +4,7 @@
  */
 #include "device/device.h"
 #include "device/machine.h"
+#include "os/os_time.h"
 #include <math.h>
 #include <string.h>
 
@@ -79,13 +80,43 @@ device_new(arena_t* arena, u64 start_ms)
 bool
 point_is_timed(const point_t* point)
 {
-	return point->kind == POINT_RAMP || point->kind == POINT_MODEL;
+	return point->kind == POINT_RAMP || point->kind == POINT_MODEL || point->kind == POINT_CLOCK;
 }
 
 u32
 point_width(const point_t* point)
 {
 	return point->type == VT_STRING ? point->length : value_width(point->type);
+}
+
+static void
+wall_refresh(device_t* dev)
+{
+	dev->wall_ms = dev->wall_fixed_ms != 0 ? dev->wall_fixed_ms : os_wall_ms();
+}
+
+/** @brief The clock field of `point` at `wall_ms`; 0 if the calendar cannot be read. */
+static f64
+clock_value(const point_t* point, s64 wall_ms)
+{
+	s64		secs = wall_ms >= 0 ? wall_ms / 1000 : -((-wall_ms + 999) / 1000);
+	os_civil_t	c;
+
+	if (point->clock_field == CLOCK_UNIX)
+		return (f64)secs;
+	if (!os_civil_from_unix(secs, point->clock_utc, &c))
+		return 0;
+	switch (point->clock_field)
+	{
+	case CLOCK_YEAR:	return c.year;
+	case CLOCK_MONTH:	return c.month;
+	case CLOCK_DAY:		return c.day;
+	case CLOCK_WEEKDAY:	return c.weekday;
+	case CLOCK_HOUR:	return c.hour;
+	case CLOCK_MINUTE:	return c.min;
+	case CLOCK_SECOND:	return c.sec;
+	default:		return 0;
+	}
 }
 
 /** @brief Computes the point's current value and stores it in its address(es). */
@@ -109,7 +140,9 @@ point_apply(device_t* dev, u32 index, u64 now_ms)
 	if (point->kind == POINT_RAMP)
 		value = ramp_value(&point->ramp, dev->start_ms, now_ms);
 
-	if (point_is_timed(point))
+	if (point->kind == POINT_CLOCK)
+		value = clock_value(point, dev->wall_ms);
+	else if (point_is_timed(point))
 	{
 		if (model_needs_target(&point->model))
 		{
@@ -181,6 +214,26 @@ validate_point(const device_t* dev, const point_t* point)
 	{
 		if (space->owner[point->address + i] != 0)
 			return "address is already used by another point";
+	}
+
+	if (point->kind == POINT_CLOCK)
+	{
+		if (space_is_bit(point->space) ||
+		    point->type == VT_F32 ||
+		    point->type == VT_F64 ||
+		    point->type == VT_STRING)
+			return "clock points need an integer register type (u16, s16, u32, s32, u64 or s64)";
+
+		if ((unsigned)point->clock_field > CLOCK_UNIX)
+			return "invalid clock field";
+
+		if (point->clock_field == CLOCK_UNIX &&
+		    (point->type == VT_U16 || point->type == VT_S16))
+			return "clock unix needs a 32-bit or 64-bit type (u32, s32, u64 or s64)";
+
+		if (point->model.noise.amplitude != 0 ||
+		    model_has_degradation(&point->model))
+			return "clock points cannot have noise or degradation";
 	}
 
 	if (point->kind == POINT_MODEL ||
@@ -268,6 +321,7 @@ device_add_point(device_t* dev, const point_t* point)
 			memcpy(text, point->text, len);
 	}
 
+	wall_refresh(dev);
 	dev->points[index] = *point;
 	dev->points[index].text = text;
 	dev->points[index].configured_kind = point->kind;
@@ -284,6 +338,7 @@ void
 device_tick(device_t* dev, u64 now_ms)
 {
 	dev->now_ms = now_ms;
+	wall_refresh(dev);
 	for (u32 i = 0; i < dev->point_count; i++)
 	{
 		if (!point_is_timed(&dev->points[i]))
@@ -336,6 +391,7 @@ device_restart(device_t* dev, u64 now_ms)
 {
 	dev->start_ms = now_ms;
 	dev->now_ms   = now_ms;
+	wall_refresh(dev);
 	for (u32 i = 0; i < dev->point_count; i++)
 	{
 		point_t*	point = &dev->points[i];

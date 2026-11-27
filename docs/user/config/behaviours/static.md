@@ -26,7 +26,7 @@ non-finite values, and [strings](../points/string.md) for text).
 
 ## Errors
 
-- `a point can have only one of (static ...), (ramp ...), (sine ...) and (lag ...)`: choose one.
+- `a point can have only one of (static ...), (ramp ...), (sine ...), (lag ...) and (clock ...)`: choose one.
 
 ## Examples
 

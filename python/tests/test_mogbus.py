@@ -221,6 +221,16 @@ class DeviceTest(unittest.TestCase):
         with self.assertRaisesRegex(MogbusError, "invalid ramp"):
             self.dev.add_point("holding", 2, "u16", ramp={"bogus": 1})
 
+    def test_clock(self):
+        self.dev.add_point("holding", 0, "u16", clock="year", clock_utc=True)
+        self.dev.add_point("holding", 1, "u32", clock="unix")
+        self.assertGreaterEqual(self.dev.get_value("holding", 0), 2024)
+        self.assertGreater(self.dev.get_value("holding", 1), 1_700_000_000)
+        with self.assertRaisesRegex(MogbusError, "32-bit"):
+            self.dev.add_point("holding", 5, "u16", clock="unix")
+        with self.assertRaises(MogbusError):
+            self.dev.add_point("holding", 6, "float32", clock="hour")
+
     def test_errors(self):
         d = self.dev
         d.add_point("holding", 0)

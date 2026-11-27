@@ -23,6 +23,36 @@ os_now_us(void)
 	return (u64)ts.tv_sec * 1000000 + (u64)ts.tv_nsec / 1000;
 }
 
+s64
+os_wall_ms(void)
+{
+	struct timespec	ts;
+
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (s64)ts.tv_sec * 1000 + (s64)ts.tv_nsec / 1000000;
+}
+
+bool
+os_civil_from_unix(s64 unix_s, bool utc, os_civil_t* out)
+{
+	time_t		t = (time_t)unix_s;
+	struct tm	tm;
+
+	if ((s64)t != unix_s ||
+	    !(utc ? gmtime_r(&t, &tm) : localtime_r(&t, &tm)))
+		return false;
+	*out = (os_civil_t){
+		.year    = (u32)(tm.tm_year + 1900),
+		.month   = (u32)tm.tm_mon + 1,
+		.day     = (u32)tm.tm_mday,
+		.weekday = tm.tm_wday == 0 ? 7u : (u32)tm.tm_wday,
+		.hour    = (u32)tm.tm_hour,
+		.min     = (u32)tm.tm_min,
+		.sec     = (u32)tm.tm_sec,
+	};
+	return true;
+}
+
 bool
 os_utc_now(os_utc_t* out)
 {

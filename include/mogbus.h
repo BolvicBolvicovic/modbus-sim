@@ -47,6 +47,7 @@ typedef enum mogbus_word_order_t mogbus_word_order_t;
 typedef enum mogbus_byte_order_t mogbus_byte_order_t;
 typedef enum mogbus_point_kind_t mogbus_point_kind_t;
 typedef enum mogbus_ramp_mode_t mogbus_ramp_mode_t;
+typedef enum mogbus_clock_field_t mogbus_clock_field_t;
 typedef struct mogbus_point_t mogbus_point_t;
 typedef enum mogbus_fault_kind_t mogbus_fault_kind_t;
 typedef struct mogbus_device_info_t mogbus_device_info_t;
@@ -182,6 +183,20 @@ enum mogbus_point_kind_t
 {
 	MOGBUS_POINT_STATIC,	/**< `value` until a client writes another one */
 	MOGBUS_POINT_RAMP,	/**< follows `ramp` over time (registers only) */
+	MOGBUS_POINT_CLOCK,	/**< shows `clock_field` of the wall clock (integer registers only) */
+};
+
+/** @brief Which wall-clock value a MOGBUS_POINT_CLOCK point shows. */
+enum mogbus_clock_field_t
+{
+	MOGBUS_CLOCK_YEAR,
+	MOGBUS_CLOCK_MONTH,	/**< 1-12 */
+	MOGBUS_CLOCK_DAY,	/**< 1-31 */
+	MOGBUS_CLOCK_WEEKDAY,	/**< ISO: Monday 1 ... Sunday 7 */
+	MOGBUS_CLOCK_HOUR,
+	MOGBUS_CLOCK_MINUTE,
+	MOGBUS_CLOCK_SECOND,
+	MOGBUS_CLOCK_UNIX,	/**< seconds since the epoch, always UTC; needs a 32-bit or wider type */
 };
 
 /** @brief What a ramp does when it reaches its end. */
@@ -206,7 +221,7 @@ struct mogbus_point_t
 	uint32_t		address;	/**< first address, below 65536 */
 	mogbus_value_type_t	type;		/**< register encoding */
 	mogbus_word_order_t	word_order;	/**< 32- and 64-bit types only */
-	mogbus_point_kind_t	kind;		/**< static or ramp */
+	mogbus_point_kind_t	kind;		/**< static, ramp or clock */
 	double			value;		/**< MOGBUS_POINT_STATIC; bits: nonzero = on */
 	/** @brief Ramp parameters, used when `kind` is MOGBUS_POINT_RAMP. */
 	struct
@@ -223,6 +238,8 @@ struct mogbus_point_t
 	bool			read_only;	/**< coils and holding registers only: Modbus writes are
 						     refused with exception 02; mogbus_device_write() and
 						     the set_value calls still work */
+	mogbus_clock_field_t	clock_field;	/**< MOGBUS_POINT_CLOCK: the wall-clock value shown */
+	bool			clock_utc;	/**< MOGBUS_POINT_CLOCK: UTC instead of local time */
 };
 
 /**
