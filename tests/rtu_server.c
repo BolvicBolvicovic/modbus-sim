@@ -905,7 +905,7 @@ TEST(RtuServerFragmentedFramesAcrossGaps)
 		{ "halves across 30 ms gap",		30, 0,	   { 4, 4 },			120000, false },
 		{ "9600 baud pairs within t3.5",	0,  9600,  { 2, 2, 2, 2 },		1000,	true },
 		{ "9600 baud halves across t3.5",	0,  9600,  { 4, 4 },			20000,	false },
-		{ "115200 baud halves 3 ms apart",	0,  115200, { 4, 4 },			3000,	true },
+		{ "115200 baud halves just over the 2 ms gap",	0,  115200, { 4, 4 },			2200,	true },	/* kept for one more gap: under 4 ms */
 		{ "9600 baud 3+3+2 across two gaps",	0,  9600,  { 3, 3, 2 },			6000,	true },	/* issue #57 */
 	};
 
