@@ -786,11 +786,14 @@ parse_encoding(form_ctx_t* ctx, s7_pointer options, bool is_bit, point_t* point)
 	return true;
 }
 
+/** @brief Point options that attach an action, indexed by action_event_t. */
+static const char* const ACTION_KEYS[] = { "on-read", "on-write" };
+
 static bool
 parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 {
 	static const char* const keys[] = { "type", "word-order", "byte-order", "length", "padding", "static", "ramp", "sine", "lag", "clock",
-		"noise", "degradation", "count", "note", "access" };
+		"noise", "degradation", "count", "note", "access", "on-read", "on-write" };
 	const char*	head    = form_head_name(item);
 	bool		is_bit  = space_is_bit(space);
 	s7_pointer	options = s7_cddr(item);
@@ -837,6 +840,31 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 		return form_fail(ctx, "%s: count %lld does not fit before address 65535",
 				 form_text(ctx, item), (long long)count);
 
+	for (u32 e = 0; e < ARRAY_COUNT(ACTION_KEYS); e++)
+	{
+		s7_pointer found = form_find(ctx, options, ACTION_KEYS[e]);
+
+		if (form_is_absent(ctx, found))
+			continue;
+		if (count != 1)
+			return form_fail(ctx, "%s: %s needs a single point (remove (count %lld))",
+					 form_text(ctx, item), ACTION_KEYS[e], (long long)count);
+		if (point.type == VT_STRING)
+			return form_fail(ctx, "%s: %s is not valid on a string point",
+					 form_text(ctx, item), ACTION_KEYS[e]);
+		if (e == ACTION_ON_WRITE &&
+		    space != SPACE_COIL &&
+		    space != SPACE_HOLDING)
+			return form_fail(ctx, "%s: on-write is only valid on coil and holding points",
+					 form_text(ctx, item));
+		if (e == ACTION_ON_WRITE &&
+		    point.read_only)
+			return form_fail(ctx, "%s: on-write is not valid on a read-only point",
+					 form_text(ctx, item));
+		if (!s7_is_pair(s7_cdr(found)))
+			return form_fail(ctx, "%s: %s needs a body", form_text(ctx, item), ACTION_KEYS[e]);
+	}
+
 	for (s64 i = 0; i < count; i++)
 	{
 		const char*	error = NULL;
@@ -845,6 +873,14 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 		error = device_add_point(dev, &point);
 		if (error)
 			return form_fail(ctx, "%s %u: %s", head, point.address, error);
+	}
+	for (u32 e = 0; e < ARRAY_COUNT(ACTION_KEYS); e++)
+	{
+		s7_pointer found = form_find(ctx, options, ACTION_KEYS[e]);
+
+		if (!form_is_absent(ctx, found) &&
+		    !config_action_defer(ctx, space, (u32)address, (action_event_t)e, s7_cdr(found)))
+			return false;
 	}
 	return true;
 }
@@ -1330,7 +1366,8 @@ config_parse_device(form_ctx_t* ctx, s7_pointer form, arena_t* arena,
 	}
 	device_reset_models(dev, dev->start_ms);
 
-	if (!config_machine_check_points(ctx, dev))
+	if (!config_machine_check_points(ctx, dev) ||
+	    !config_action_compile(ctx, dev))
 		return false;
 
 	*out = dev;

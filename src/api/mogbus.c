@@ -9,6 +9,7 @@
 #include "mogbus.h"
 #include "build_config.h"
 #include "api/probe.h"
+#include "device/action.h"
 #include "device/device.h"
 #include "modbus/pdu.h"
 #include "net/net_obs.h"
@@ -20,6 +21,7 @@
 #include "server/server_limits.h"
 #include "util/log.h"
 #include "vlib/arena.h"
+#include "vlib/macros.h"
 #if WITH_CONFIG
 #include "config/config.h"
 #include "server/server_config.h"
@@ -390,6 +392,29 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 	out->read_only   = point->read_only;
 	out->clock_field = (mogbus_clock_field_t)point->clock_field;
 	out->clock_utc   = point->clock_utc;
+	return true;
+}
+
+bool
+mogbus_device_action_at(const mogbus_device_t* handle, uint32_t index, mogbus_action_t* out)
+{
+	const action_instance_t* inst = device_action_at((const device_t*)handle, index);
+
+	if (!inst || !out)
+		return false;
+	memset(out, 0, sizeof(*out));
+	out->space       = (mogbus_space_t)inst->space;
+	out->address     = inst->address;
+	out->on_write    = inst->event == ACTION_ON_WRITE;
+	out->name        = inst->name;
+	out->param_count = inst->param_count;
+	for (u32 i = 0; i < inst->param_count && i < ARRAY_COUNT(out->params); i++)
+	{
+		out->params[i].name    = inst->defs[i].name;
+		out->params[i].is_bool = inst->vars[i].type == VAL_BOOL;
+		out->params[i].flag    = inst->vars[i].b;
+		out->params[i].number  = inst->vars[i].n;
+	}
 	return true;
 }
 

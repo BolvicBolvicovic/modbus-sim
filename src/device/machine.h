@@ -173,6 +173,17 @@ struct machine_system_t
 };
 
 /**
+ * @brief Runs `count` statements starting at `first`, recursing into when/unless bodies.
+ *
+ * Shared by machines and point actions. Variables live in ctx->vars. Returns false on the first
+ * failure with ctx->failure set (a failed point write is EXPR_FAIL_POINT). With `host_writes`
+ * a set! of a point freezes it like a client write instead of claiming it for a machine.
+ */
+bool		machine_exec_statements(device_t* dev, const machine_stmt_t* statements,
+					const expr_node_t* nodes, u16 first, u16 count,
+					expr_ctx_t* ctx, bool host_writes, u16 depth);
+
+/**
  * @brief Checks one set! point target, rejecting ramps and points already claimed by another
  *        machine.
  *

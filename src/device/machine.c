@@ -737,31 +737,31 @@ warn_once(machine_system_t* sys, u16 machine_index, u16 state_index, u8 role,
 		 handler_names[role], failure_names[why]);
 }
 
-static bool
-exec_statements(device_t* dev, machine_system_t* sys, u16 machine_index, u16 state_index,
-		u8 role, u16 first, u16 count, expr_ctx_t* ctx, u16 depth)
+bool
+machine_exec_statements(device_t* dev, const machine_stmt_t* statements, const expr_node_t* nodes,
+			u16 first, u16 count, expr_ctx_t* ctx, bool host_writes, u16 depth)
 {
-	const machine_def_t* def = &sys->defs[machine_index];
-
 	if (depth >= MACHINE_MAX_STATEMENTS)
+	{
+		ctx->failure = EXPR_FAIL_BUDGET;
 		return false;
+	}
 	for (u32 i = 0; i < count; i++)
 	{
-		const machine_stmt_t* stmt = &def->statements[first + i];
+		const machine_stmt_t* stmt = &statements[first + i];
 		val_t value = { 0 };
 
-		if (!expr_eval(def->nodes, stmt->expr_root, ctx, &value))
-		{
-			warn_once(sys, machine_index, state_index, role, ctx->failure);
+		if (!expr_eval(nodes, stmt->expr_root, ctx, &value))
 			return false;
-		}
 		if (stmt->kind == STMT_SET)
 		{
 			if (stmt->target_kind == TARGET_VAR)
-				sys->vars[machine_index][stmt->var_index] = value;
-			else if (!device_set_point(dev, (space_kind_t)stmt->space, stmt->address, &value))
+				ctx->vars[stmt->var_index] = value;
+			else if (!(host_writes ?
+				   device_set_point_host(dev, (space_kind_t)stmt->space, stmt->address, &value) :
+				   device_set_point(dev, (space_kind_t)stmt->space, stmt->address, &value)))
 			{
-				warn_once(sys, machine_index, state_index, role, EXPR_FAIL_POINT);
+				ctx->failure = EXPR_FAIL_POINT;
 				return false;
 			}
 			continue;
@@ -773,13 +773,25 @@ exec_statements(device_t* dev, machine_system_t* sys, u16 machine_index, u16 sta
 
 			if (stmt->kind == STMT_UNLESS)
 				take = !take;
-			if (take && !exec_statements(dev, sys, machine_index, state_index, role,
-						     stmt->first_child, stmt->child_count, ctx,
-						     (u16)(depth + 1)))
+			if (take && !machine_exec_statements(dev, statements, nodes, stmt->first_child,
+							     stmt->child_count, ctx, host_writes,
+							     (u16)(depth + 1)))
 				return false;
 		}
 	}
 	return true;
+}
+
+static bool
+exec_statements(device_t* dev, machine_system_t* sys, u16 machine_index, u16 state_index,
+		u8 role, u16 first, u16 count, expr_ctx_t* ctx)
+{
+	const machine_def_t* def = &sys->defs[machine_index];
+
+	if (machine_exec_statements(dev, def->statements, def->nodes, first, count, ctx, false, 0))
+		return true;
+	warn_once(sys, machine_index, state_index, role, ctx->failure);
+	return false;
 }
 
 static void
@@ -812,7 +824,7 @@ run_handler(device_t* dev, machine_system_t* sys, u16 machine_index, u16 state_i
 		first = state->on_exit_first;
 		count = state->on_exit_count;
 	}
-	exec_statements(dev, sys, machine_index, state_index, role, first, count, &ctx, 0);
+	exec_statements(dev, sys, machine_index, state_index, role, first, count, &ctx);
 }
 
 static u64
@@ -1001,7 +1013,7 @@ device_machines_on_write(device_t* dev, space_kind_t space, u32 address,
 			    (u64)address >= watched_end)
 				continue;
 			exec_statements(dev, sys, m, state, MACHINE_ROLE_WRITE,
-					h->first, h->count, &ctx, 0);
+					h->first, h->count, &ctx);
 		}
 	}
 }

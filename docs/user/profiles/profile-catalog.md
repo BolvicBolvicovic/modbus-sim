@@ -22,6 +22,7 @@ The ready-made profiles, what each device is and what it shows. Each profile sta
 | [`two-devices.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/two-devices.scm) | 1, 2 | Two devices, one port: unit ids | two devices on one port |
 | [`http-endpoint.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/http-endpoint.scm) | 1 | Process rig with the HTTP endpoint: health, metrics, control API and web UI on 127.0.0.1:9102 | writable setpoint, input that lags it with noise, bouncing ramp, sine wave; open the web UI and plot them |
 | [`vendor-function-codes.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/vendor-function-codes.scm) | 1 | Vendor-style device: user-defined function codes 0x41 and 0x64 | status, serial number, setpoint, 2 live inputs; user-defined function codes 0x41 (fixed reply, live registers, echo) and 0x64 (acknowledge, exception, no response) |
+| [`read-actions.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/read-actions.scm) | 1 | Point actions: registers that change when a client reads or writes them | wrapping read counter, a register derived from another on every read, time since last read, a coil that resets the counter |
 
 ## See also
 
