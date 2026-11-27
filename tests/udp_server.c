@@ -100,21 +100,6 @@ PRE_TEST()
 	server_stop();
 }
 
-TEST(UdpServesReadHoldingRegisters)
-{
-	u8  resp[MODBUS_MAX_PDU];
-	u32 len = 0;
-	int fd;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 4660)))\n");
-	fd = client_open();
-	ASSERT(fd >= 0);
-	ASSERT_EQ(exchange(fd, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && len == 4 && get_be16(resp + 2) == 4660);
-	close(fd);
-	server_stop();
-}
-
 TEST(UdpWriteThenRead)
 {
 	u8  write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x04, 0xD2 };

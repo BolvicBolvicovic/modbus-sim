@@ -281,6 +281,31 @@ make_device(arena_t* arena, u8 unit, space_kind_t space, u32 address, u16 value)
 	return dev;
 }
 
+/* Unit 1 with `count` static holding registers 0..count-1 holding base+address. */
+static device_t*
+make_holding_device(arena_t* arena, const char* name, u32 count, u16 base)
+{
+	device_t* dev = device_new(arena, 0);
+
+	if (!dev)
+		return NULL;
+	dev->unit_id = 1;
+	strcpy(dev->name, name);
+	for (u32 i = 0; i < count; i++)
+	{
+		point_t p = { 0 };
+
+		p.space = SPACE_HOLDING;
+		p.address = i;
+		p.type = VT_U16;
+		p.kind = POINT_STATIC;
+		p.static_value = (f64)(base + i);
+		if (device_add_point(dev, &p) != NULL)
+			return NULL;
+	}
+	return dev;
+}
+
 TEST(RtuGapElapsedHandlesStaleClockSample)
 {
 	/* The loop samples the clock before read_available(), so last_rx_ms can be
@@ -290,33 +315,6 @@ TEST(RtuGapElapsedHandlesStaleClockSample)
 	ASSERT_EQ(rtu_gap_elapsed(1000, 1000, 20) == false);
 	ASSERT_EQ(rtu_gap_elapsed(1019, 1000, 20) == false);
 	ASSERT_EQ(rtu_gap_elapsed(1020, 1000, 20) == true);
-}
-
-TEST(RtuServerReadHoldingRegisters)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	bool		ok = false;
-
-	ASSERT_EQ(dev != NULL);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 5));
-	}
-
-	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
-	ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 500);
-	ok = ok && addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
-	     resp[1] == 2 && get_be16(resp + 2) == 0x1234;
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
 }
 
 TEST(RtuServerWriteAndReadBack)
@@ -736,100 +734,61 @@ TEST(RtuServerValidRequestFollowedByPartialFrame)
 	ASSERT_EQ(ok);
 }
 
-TEST(RtuServerPendingDelayedResponsePeerCloseNoSpin)
+TEST(RtuServerPendingDelayedResponseHangupNoSpin)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-#if defined(__linux__)
-	u64		cpu_before = 0;
-	u64		cpu_after = 0;
-#endif
-	bool		ok = false;
+	/* Issue #19: peer closes while a delayed response is queued. Issue #40: the
+	 * request and POLLHUP arrive in the same poll. Neither may busy-loop. */
+	static const struct { u32 gap_ms; bool close_with_request; } cases[] = {
+		{ 5, false },
+		{ 20, true },
+	};
 
-	ASSERT_EQ(dev != NULL);
-	set_fault(dev, FAULT_DELAY, 500, 100);
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 5));
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
+		device_t*	devices[] = { dev };
+		rtu_child_t	child = { 0 };
+		u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+		u64		cpu_before = 0;
+		u64		cpu_after = 0;
+		bool		ok;
+
+		ASSERT_EQ(dev != NULL);
+		set_fault(dev, FAULT_DELAY, 500, 100);
+		ASSERT_EQ(rtu_child_start(&child, devices, 1, cases[c].gap_ms));
+
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		if (ok && cases[c].close_with_request)
+		{
+			close(child.fd);
+			child.fd = -1;
+		}
+		if (ok) usleep(120000); /* let the server queue the delayed response */
+		if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
+		if (ok && child.fd >= 0)
+		{
+			close(child.fd);
+			child.fd = -1;
+		}
+		if (ok) usleep(350000);
+		if (ok && !rtu_child_cpu_ms(child.pid, &cpu_after))
+			cpu_after = cpu_before; /* process already exited; no spin */
+		/* Tolerant for ASan/CI scheduling noise. */
+		if (ok) ok = (cpu_after - cpu_before) < 200;
+		if (!ok)
+			fprintf(stderr, "hangup case %u spun\n", c);
+
+		ASSERT_EQ(rtu_child_stop(&child));
+		arena_release(arena);
+		ASSERT_EQ(ok);
 	}
-
-	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
-	/* Let the server observe frame gap and queue the delayed response. */
-	if (ok) usleep(120000);
-#if defined(__linux__)
-	if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
-#endif
-	if (ok)
-	{
-		close(child.fd);
-		child.fd = -1;
-	}
-	/* Before issue #19 fix, poll() on a hung-up fd with pending response
-	 * returned immediately and burned CPU until the delay elapsed. */
-	if (ok) usleep(350000);
-#if defined(__linux__)
-	if (ok && !rtu_child_cpu_ms(child.pid, &cpu_after))
-		cpu_after = cpu_before; /* process already exited; no spin */
-	/* Tolerant for ASan/CI scheduling noise. */
-	if (ok) ok = (cpu_after - cpu_before) < 200;
-#endif
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
-}
-
-TEST(RtuServerPendingDelayedResponseHangupWithRequestNoSpin)
-{
-	/* Issue #40: request and POLLHUP seen in the same poll; the queued delayed
-	 * response cannot be delivered and must not cause a busy loop. */
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x3344);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u32		flen;
-#if defined(__linux__)
-	u64		cpu_before = 0;
-	u64		cpu_after = 0;
-#endif
-	bool		ok = false;
-
-	ASSERT_EQ(dev != NULL);
-	set_fault(dev, FAULT_DELAY, 500, 100);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
-	}
-
-	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	ok = send_all_fd(child.fd, frame, flen);
-	if (ok)
-	{
-		close(child.fd);
-		child.fd = -1;
-	}
-	if (ok) usleep(120000);
-#if defined(__linux__)
-	if (ok) ok = rtu_child_cpu_ms(child.pid, &cpu_before);
-#endif
-	if (ok) usleep(350000);
-#if defined(__linux__)
-	if (ok && !rtu_child_cpu_ms(child.pid, &cpu_after))
-		cpu_after = cpu_before;
-	if (ok) ok = (cpu_after - cpu_before) < 200;
-#endif
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
 }
 
 TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 {
 	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
+	device_t*	dev   = make_holding_device(arena, "rtu-fc16", 123, 0x2000);
 	rtu_child_t	child = { 0 };
 	u8		pdu[6 + 123 * 2];
 	u8		frame[MODBUS_RTU_MAX_FRAME];
@@ -842,20 +801,6 @@ TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 	bool		found = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->unit_id = 1;
-	strcpy(dev->name, "rtu-fc16");
-
-	for (u32 i = 0; i < 123; i++)
-	{
-		point_t p = { 0 };
-
-		p.space = SPACE_HOLDING;
-		p.address = i;
-		p.type = VT_U16;
-		p.kind = POINT_STATIC;
-		p.static_value = (f64)(0x2000 + i);
-		ASSERT_EQ(device_add_point(dev, &p) == NULL);
-	}
 
 	pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
 	put_be16(pdu + 1, 0);   /* start address */
@@ -904,14 +849,6 @@ TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 		if (!found)
 			req[data_idx] = saved;
 	}
-	if (!found)
-	{
-		u16 crc = modbus_crc16(frame, frame_len - 2);
-
-		frame[frame_len - 2] = (u8)(crc & 0xFF);
-		frame[frame_len - 1] = (u8)(crc >> 8);
-		memcpy(req, frame, frame_len);
-	}
 	ASSERT_EQ(found);
 
 	{
@@ -919,7 +856,6 @@ TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
 	}
 
-	(void)prefix_len;
 	ASSERT_EQ(send_all_fd(child.fd, req, frame_len));
 	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 800));
 	ASSERT_EQ(addr == 1);
@@ -952,200 +888,72 @@ TEST(RtuServerPrefixValidCrcDoesNotSplitLongFc16)
 	arena_release(arena);
 }
 
-TEST(RtuServerFragmentedByteByByteWithinGap)
+TEST(RtuServerFragmentedFramesAcrossGaps)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x99AA);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u32		flen = 0;
-	bool		ok = true;
+	/* An 8-byte FC03 frame is written in chunks with a pause between them. A
+	 * pause below the inter-frame gap keeps the frame whole; a longer one
+	 * discards the first part, so nothing is answered and the server recovers. */
+	static const struct {
+		const char* name;
+		u32	    frame_gap_ms;	/* 0: derive t3.5 from baud */
+		u32	    baud;
+		u8	    chunks[9];		/* sizes, 0-terminated */
+		u32	    pause_us;
+		bool	    answered;
+	} cases[] = {
+		{ "byte by byte within 80 ms gap",	80, 0,	   { 1, 1, 1, 1, 1, 1, 1, 1 }, 5000,	true },
+		{ "halves across 30 ms gap",		30, 0,	   { 4, 4 },			120000, false },
+		{ "9600 baud pairs within t3.5",	0,  9600,  { 2, 2, 2, 2 },		1000,	true },
+		{ "9600 baud halves across t3.5",	0,  9600,  { 4, 4 },			20000,	false },
+		{ "115200 baud halves 3 ms apart",	0,  115200, { 4, 4 },			3000,	true },
+		{ "9600 baud 3+3+2 across two gaps",	0,  9600,  { 3, 3, 2 },			6000,	true },	/* issue #57 */
+	};
 
-	ASSERT_EQ(dev != NULL);
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 80));
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x55AA);
+		device_t*	devices[] = { dev };
+		rtu_child_t	child = { 0 };
+		u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+		u8		frame[MODBUS_RTU_MAX_FRAME];
+		u8		resp[MODBUS_MAX_PDU];
+		u8		addr = 0;
+		u32		len = 0;
+		u32		flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+		u32		off = 0;
+		bool		ok = true;
+
+		ASSERT_EQ(dev != NULL);
+		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, cases[c].frame_gap_ms, cases[c].baud));
+		for (u32 i = 0; cases[c].chunks[i] != 0 && ok; i++)
+		{
+			ok = send_all_fd(child.fd, frame + off, cases[c].chunks[i]);
+			off += cases[c].chunks[i];
+			if (cases[c].chunks[i + 1] != 0)
+				usleep(cases[c].pause_us);
+		}
+		ok = ok && off == flen;
+		if (cases[c].answered)
+		{
+			ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 1500);
+			ok = ok && addr == 1 && len == 4 && get_be16(resp + 2) == 0x55AA;
+			ok = ok && recv_none_fd(child.fd, 100);
+		}
+		else
+		{
+			ok = ok && recv_none_fd(child.fd, 150);
+			ok = ok && send_rtu_req(child.fd, 1, req, sizeof(req));
+			ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 800);
+			ok = ok && addr == 1 && get_be16(resp + 2) == 0x55AA;
+		}
+		if (!ok)
+			fprintf(stderr, "fragment case failed: %s\n", cases[c].name);
+
+		ASSERT_EQ(rtu_child_stop(&child));
+		arena_release(arena);
+		ASSERT_EQ(ok);
 	}
-
-	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	for (u32 i = 0; i < flen && ok; i++)
-	{
-		ok = send_all_fd(child.fd, frame + i, 1);
-		if (ok && i + 1 < flen)
-			usleep(5000); /* well below 80ms gap */
-	}
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
-	if (ok)
-		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
-		     get_be16(resp + 2) == 0x99AA;
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
-}
-
-TEST(RtuServerFragmentedAcrossGapDoesNotFormValidFrame)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u32		flen = 0;
-	bool		ok = false;
-
-	ASSERT_EQ(dev != NULL);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 30));
-	}
-
-	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	ASSERT(flen > 4);
-	ok = send_all_fd(child.fd, frame, flen / 2);
-	if (ok) usleep(120000); /* longer than gap: first half discarded */
-	if (ok) ok = send_all_fd(child.fd, frame + flen / 2, flen - flen / 2);
-	/* Second half alone is not a valid frame; no response. */
-	if (ok) ok = recv_none_fd(child.fd, 150);
-	/* Server recovers on a clean frame. */
-	if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 800);
-	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x1234;
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
-}
-
-TEST(RtuServerBaudDerivedGapFragments)
-{
-	/* 9600 baud -> t3.5 ~4.01ms. Byte-stream read() boundaries cannot model true
-	 * UART char gaps; t1.5 discard is opt-in and off by default, so fragmented
-	 * delivery within t3.5 should be accepted while still exercising baud-derived
-	 * inter-frame timing. */
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x55AA);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u32		flen = 0;
-	bool		ok = true;
-
-	ASSERT_EQ(dev != NULL);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
-	}
-
-	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	for (u32 i = 0; i < flen && ok; i += 2)
-	{
-		u32 n = (i + 2 <= flen) ? 2 : (flen - i);
-
-		ok = send_all_fd(child.fd, frame + i, n);
-		if (ok && i + n < flen)
-			usleep(1000); /* well within t3.5 */
-	}
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
-	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x55AA;
-
-	/* Split across a gap larger than t3.5 should not produce a response. */
-	if (ok) ok = send_all_fd(child.fd, frame, flen / 2);
-	if (ok) usleep(20000);
-	if (ok) ok = send_all_fd(child.fd, frame + flen / 2, flen - flen / 2);
-	if (ok) ok = recv_none_fd(child.fd, 120);
-	if (ok) ok = send_rtu_req(child.fd, 1, req, sizeof(req));
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 800);
-	if (ok) ok = addr == 1 && get_be16(resp + 2) == 0x55AA;
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
-}
-
-TEST(RtuServerBaudSplitFrameThreeMsIsAnswered)
-{
-	/* Acceptance: a frame sent in two writes 3 ms apart at baud 115200 over a
-	 * byte stream/PTY-like fd must be answered. t1.5 discard is opt-in and must
-	 * not break valid frames at read() boundaries. */
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x66BB);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u32		flen = 0;
-
-	ASSERT_EQ(dev != NULL);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 115200));
-	}
-
-	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	ASSERT(flen > 4);
-	ASSERT_EQ(send_all_fd(child.fd, frame, flen / 2));
-	usleep(3000);
-	ASSERT_EQ(send_all_fd(child.fd, frame + flen / 2, flen - flen / 2));
-	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 2000));
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(get_be16(resp + 2) == 0x66BB);
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-}
-
-TEST(RtuServerBaudFrameSplitThreeWaysAcrossGapsIsAnswered)
-{
-	/* Issue #57: the deferred prefix must survive a second t3.5 gap when the
-	 * remaining bytes still do not form a complete frame. */
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x77AA);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u32		chunks[3] = { 3, 3, 2 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u32		flen = 0;
-	u32		offset = 0;
-
-	ASSERT_EQ(dev != NULL);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
-	}
-
-	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
-	ASSERT_EQ(flen == chunks[0] + chunks[1] + chunks[2]);
-	for (u32 i = 0; i < 3; i++)
-	{
-		ASSERT_EQ(send_all_fd(child.fd, frame + offset, chunks[i]));
-		offset += chunks[i];
-		if (i + 1 < 3)
-			usleep(6000); /* cross one t3.5 gap (~4 ms at 9600 baud) */
-	}
-	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(len == 4);
-	ASSERT_EQ(get_be16(resp + 2) == 0x77AA);
-	ASSERT_EQ(recv_none_fd(child.fd, 100));
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
 }
 
 TEST(RtuServerBaudT15GapDiscardsPartialFrame)
@@ -1229,7 +1037,7 @@ TEST(RtuServerFrameGapOverrideBeatsBaud)
 TEST(RtuServerMaxSizeFc16AndFc03)
 {
 	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
+	device_t*	dev   = make_holding_device(arena, "rtu-max", 125, 0);
 	rtu_child_t	child = { 0 };
 	u8		pdu[6 + 123 * 2];
 	u8		read_req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 125 };
@@ -1239,19 +1047,6 @@ TEST(RtuServerMaxSizeFc16AndFc03)
 	bool		ok = false;
 
 	ASSERT_EQ(dev != NULL);
-	dev->unit_id = 1;
-	strcpy(dev->name, "rtu-max");
-	for (u32 i = 0; i < 125; i++)
-	{
-		point_t p = { 0 };
-
-		p.space = SPACE_HOLDING;
-		p.address = i;
-		p.type = VT_U16;
-		p.kind = POINT_STATIC;
-		p.static_value = (f64)i;
-		ASSERT_EQ(device_add_point(dev, &p) == NULL);
-	}
 
 	{
 		device_t* devices[] = { dev };
@@ -1385,16 +1180,61 @@ rtu_expect_fc03(rtu_child_t* child, u8 unit, u16 reg, u16 value)
 
 TEST(RtuServerSupportedFunctionCodesFraming)
 {
+	/* One request per supported function code over the same connection. exp_len
+	 * is the response PDU length, cmp_len how many leading bytes are compared with
+	 * exp (or with req when exp is empty, i.e. an echo); check_reg >= 0 reads that
+	 * holding register back and expects check_val. */
+	static const struct {
+		const char* name;
+		u8	    req[12];
+		u32	    req_len;
+		u8	    exp[12];
+		u32	    exp_len;
+		u32	    cmp_len;
+		int	    check_reg;
+		u16	    check_val;
+	} cases[] = {
+		{ "FC01", { FC_READ_COILS, 0, 0, 0, 2 }, 5,
+		  { FC_READ_COILS, 1, 0x01 }, 3, 3, -1, 0 },
+		{ "FC02", { FC_READ_DISCRETE_INPUTS, 0, 0, 0, 1 }, 5,
+		  { FC_READ_DISCRETE_INPUTS, 1, 0x01 }, 3, 3, -1, 0 },
+		{ "FC03", { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 }, 5,
+		  { FC_READ_HOLDING_REGISTERS, 2, 0, 1 }, 4, 4, -1, 0 },
+		{ "FC04", { FC_READ_INPUT_REGISTERS, 0, 0, 0, 2 }, 5,
+		  { FC_READ_INPUT_REGISTERS, 4, 0x11, 0x22, 0x33, 0x44 }, 6, 6, -1, 0 },
+		{ "FC05", { FC_WRITE_SINGLE_COIL, 0, 1, 0xFF, 0 }, 5, { 0 }, 5, 5, -1, 0 },
+		{ "FC06", { FC_WRITE_SINGLE_REGISTER, 0, 2, 0, 0x2A }, 5, { 0 }, 5, 5, 2, 0x002A },
+		{ "FC07", { FC_READ_EXCEPTION_STATUS }, 1,
+		  { FC_READ_EXCEPTION_STATUS, 0 }, 2, 2, -1, 0 },
+		{ "FC08", { FC_DIAGNOSTICS, 0, 0, 0x12, 0x34 }, 5, { 0 }, 5, 5, -1, 0 },
+		{ "FC0B", { FC_GET_COM_EVENT_COUNTER }, 1,
+		  { FC_GET_COM_EVENT_COUNTER, 0, 0 }, 5, 3, -1, 0 },
+		{ "FC0C", { FC_GET_COM_EVENT_LOG }, 1,
+		  { FC_GET_COM_EVENT_LOG, 6, 0, 0 }, 8, 4, -1, 0 },
+		{ "FC0F", { FC_WRITE_MULTIPLE_COILS, 0, 0, 0, 2, 1, 2 }, 7, { 0 }, 5, 5, -1, 0 },
+		{ "FC10", { FC_WRITE_MULTIPLE_REGISTERS, 0, 3, 0, 1, 2, 0, 0x99 }, 8, { 0 }, 5, 5, 3, 0x0099 },
+		{ "FC11", { FC_REPORT_SERVER_ID }, 1,
+		  { FC_REPORT_SERVER_ID, 2, 0x2A, 0xFF }, 4, 4, -1, 0 },
+		{ "FC14", { FC_READ_FILE_RECORD, 7, 6, 0, 1, 0, 0, 0, 1 }, 9,
+		  { FC_READ_FILE_RECORD, 4, 3, 6, 0xBE, 0xEF }, 6, 6, -1, 0 },
+		{ "FC15", { FC_WRITE_FILE_RECORD, 9, 6, 0, 1, 0, 0, 0, 1, 0x12, 0x34 }, 11,
+		  { 0 }, 11, 11, -1, 0 },
+		{ "FC16", { FC_MASK_WRITE_REGISTER, 0, 8, 0, 0x0F, 0, 0xF0 }, 7, { 0 }, 7, 7, 8, 0x00FF },
+		{ "FC17", { FC_READ_WRITE_MULTIPLE_REGISTERS, 0, 0, 0, 1, 0, 1, 0, 1, 2, 0, 0x77 }, 12,
+		  { FC_READ_WRITE_MULTIPLE_REGISTERS, 2, 0, 1 }, 4, 4, 1, 0x0077 },
+		{ "FC18 no fifo", { FC_READ_FIFO_QUEUE, 0, 0 }, 3,
+		  { FC_READ_FIFO_QUEUE | 0x80, EXC_ILLEGAL_DATA_ADDRESS }, 2, 2, -1, 0 },
+	};
 	arena_t*	arena = ARENA_ALLOC();
 	device_t*	dev = device_new(arena, 0);
 	rtu_child_t	child = { 0 };
+	u16		rec = 0xBEEF;
 
 	ASSERT_EQ(dev != NULL);
 	dev->unit_id = 1;
 	strcpy(dev->name, "rtu-fc-all");
 	dev->server_id = 0x2A;
 	dev->run_indicator = 0xFF;
-
 	{
 		static const struct { space_kind_t s; u32 a; value_type_t t; u16 v; } seeds[] = {
 			{ SPACE_COIL, 0, VT_BOOL, 1 }, { SPACE_COIL, 1, VT_BOOL, 0 },
@@ -1411,183 +1251,32 @@ TEST(RtuServerSupportedFunctionCodesFraming)
 			p.kind = POINT_STATIC; p.static_value = seeds[i].v;
 			ASSERT_EQ(device_add_point(dev, &p) == NULL);
 		}
-		{
-			u16 rec = 0xBEEF;
-			ASSERT_EQ(device_add_file_record(dev, 1, 0, 1, &rec) == NULL);
-		}
+		ASSERT_EQ(device_add_file_record(dev, 1, 0, 1, &rec) == NULL);
 	}
 	{
 		device_t* devices[] = { dev };
 		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
 	}
 
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 	{
-		u8 req[] = { FC_READ_COILS, 0x00, 0x00, 0x00, 0x02 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 3);
-		ASSERT_EQ(resp[0] == FC_READ_COILS && resp[1] == 1 && resp[2] == 0x01);
+		u8	resp[MODBUS_MAX_PDU], addr = 0;
+		u32	len = 0;
+		bool	echo = cases[c].exp[0] == 0;
+		bool	ok = send_rtu_req(child.fd, 1, cases[c].req, cases[c].req_len) &&
+			     recv_rtu_resp(child.fd, &addr, resp, &len, 1200) &&
+			     addr == 1 && len == cases[c].exp_len &&
+			     memcmp(resp, echo ? cases[c].req : cases[c].exp, cases[c].cmp_len) == 0;
+
+		if (ok && cases[c].check_reg >= 0)
+			ok = rtu_expect_fc03(&child, 1, (u16)cases[c].check_reg, cases[c].check_val);
+		if (!ok)
+			fprintf(stderr, "function code case failed: %s\n", cases[c].name);
+		ASSERT_EQ(ok);
 	}
+
 	{
-		u8 req[] = { FC_READ_DISCRETE_INPUTS, 0x00, 0x00, 0x00, 0x01 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 3);
-		ASSERT_EQ(resp[0] == FC_READ_DISCRETE_INPUTS && resp[1] == 1 && resp[2] == 0x01);
-	}
-	ASSERT_EQ(rtu_expect_fc03(&child, 1, 0, 0x0001));
-	{
-		u8 req[] = { FC_READ_INPUT_REGISTERS, 0x00, 0x00, 0x00, 0x02 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 6);
-		ASSERT_EQ(resp[0] == FC_READ_INPUT_REGISTERS && resp[1] == 4);
-		ASSERT_EQ(get_be16(resp + 2) == 0x1122 && get_be16(resp + 4) == 0x3344);
-	}
-	{
-		u8 req[] = { FC_WRITE_SINGLE_COIL, 0x00, 0x01, 0xFF, 0x00 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 5);
-		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	}
-	{
-		u8 req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x02, 0x00, 0x2A };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 5);
-		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-		ASSERT_EQ(rtu_expect_fc03(&child, 1, 2, 0x002A));
-	}
-	{
-		u8 req[] = { FC_READ_EXCEPTION_STATUS };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 2);
-		ASSERT_EQ(resp[0] == FC_READ_EXCEPTION_STATUS && resp[1] == 0);
-	}
-	{
-		u8 req[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == sizeof(req));
-		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	}
-	{
-		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 5);
-		ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_COUNTER);
-		ASSERT_EQ(get_be16(resp + 1) == 0x0000);
-	}
-	{
-		u8 req[] = { FC_GET_COM_EVENT_LOG };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 8);
-		ASSERT_EQ(resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 6);
-		ASSERT_EQ(get_be16(resp + 2) == 0x0000);
-	}
-	{
-		u8 req[] = { FC_WRITE_MULTIPLE_COILS, 0x00, 0x00, 0x00, 0x02, 0x01, 0x02 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 5);
-		ASSERT_EQ(memcmp(resp, req, 5) == 0);
-	}
-	{
-		u8 req[] = { FC_WRITE_MULTIPLE_REGISTERS, 0x00, 0x03, 0x00, 0x01, 0x02, 0x00, 0x99 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 5);
-		ASSERT_EQ(memcmp(resp, req, 5) == 0);
-		ASSERT_EQ(rtu_expect_fc03(&child, 1, 3, 0x0099));
-	}
-	{
-		u8 req[] = { FC_REPORT_SERVER_ID };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 4);
-		ASSERT_EQ(resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2);
-		ASSERT_EQ(resp[2] == 0x2A && resp[3] == 0xFF);
-	}
-	{
-		u8 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 6);
-		ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[1] == 4);
-		ASSERT_EQ(resp[2] == 3 && resp[3] == 0x06);
-		ASSERT_EQ(get_be16(resp + 4) == 0xBEEF);
-	}
-	{
-		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x12, 0x34 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == sizeof(req));
-		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-	}
-	{
-		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x08, 0x00, 0x0F, 0x00, 0xF0 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 7);
-		ASSERT_EQ(memcmp(resp, req, sizeof(req)) == 0);
-		ASSERT_EQ(rtu_expect_fc03(&child, 1, 8, 0x00FF));
-	}
-	{
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x77 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 4);
-		ASSERT_EQ(resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 2);
-		ASSERT_EQ(get_be16(resp + 2) == 0x0001);
-		ASSERT_EQ(rtu_expect_fc03(&child, 1, 1, 0x0077));
-	}
-	{
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x00 };
-		u8 resp[MODBUS_MAX_PDU], addr = 0;
-		u32 len = 0;
-		ASSERT_EQ(send_rtu_req(child.fd, 1, req, sizeof(req)));
-		ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1200));
-		ASSERT_EQ(addr == 1 && len == 2);
-		ASSERT_EQ(resp[0] == (u8)(FC_READ_FIFO_QUEUE | 0x80));
-		ASSERT_EQ(resp[1] == EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	{
+		/* MEI 0x0E basic identification: three objects, exact framing. */
 		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
 		u8 resp[MODBUS_MAX_PDU], addr = 0;
 		u32 len = 0;
@@ -2016,137 +1705,99 @@ TEST(RtuServerReadWriteMultipleRegistersSingleAndCoalesced)
 
 TEST(RtuServerEofAfterRequestSendsResponse)
 {
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x1234);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	bool		ok = false;
+	/* The peer half-closes right after the request: the immediate and the
+	 * delayed (fault) response must both still be delivered. */
+	static const struct { u32 delay_ms; u16 value; u32 min_elapsed_ms; } cases[] = {
+		{ 0, 0x1234, 0 },
+		{ 200, 0x5678, 180 },
+	};
 
-	ASSERT_EQ(dev != NULL);
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, cases[c].value);
+		rtu_child_t	child = { 0 };
+		u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+		u8		resp[MODBUS_MAX_PDU];
+		u8		addr = 0;
+		u32		len = 0;
+		u64		start = 0;
+		bool		ok = false;
+
+		ASSERT_EQ(dev != NULL);
+		if (cases[c].delay_ms > 0)
+			set_fault(dev, FAULT_DELAY, cases[c].delay_ms, 100);
+		{
+			device_t* devices[] = { dev };
+			ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
+		}
+
+		start = os_now_ms();
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
+		if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1500);
+		if (ok) ok = (os_now_ms() - start) >= cases[c].min_elapsed_ms;
+		if (ok)
+			ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
+			     resp[1] == 2 && get_be16(resp + 2) == cases[c].value;
+		if (!ok)
+			fprintf(stderr, "EOF case with delay %u ms failed\n", cases[c].delay_ms);
+
+		ASSERT_EQ(rtu_child_stop(&child));
+		arena_release(arena);
+		ASSERT_EQ(ok);
 	}
-
-	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
-	if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1000);
-	if (ok)
-		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
-		     resp[1] == 2 && get_be16(resp + 2) == 0x1234;
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
 }
 
-TEST(RtuServerEofAfterDelayedRequestSendsResponse)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x5678);
-	rtu_child_t	child = { 0 };
-	u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u64		start = 0;
-	bool		ok = false;
-
-	ASSERT_EQ(dev != NULL);
-	set_fault(dev, FAULT_DELAY, 200, 100);
-	{
-		device_t* devices[] = { dev };
-		ASSERT_EQ(rtu_child_start(&child, devices, 1, 20));
-	}
-
-	start = os_now_ms();
-	ok = send_rtu_req(child.fd, 1, req, sizeof(req));
-	if (ok) ok = shutdown(child.fd, SHUT_WR) == 0;
-	if (ok) ok = recv_rtu_resp(child.fd, &addr, resp, &len, 1500);
-	if (ok) ok = (os_now_ms() - start) >= 180;
-	if (ok)
-		ok = addr == 1 && len == 4 && resp[0] == FC_READ_HOLDING_REGISTERS &&
-		     resp[1] == 2 && get_be16(resp + 2) == 0x5678;
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-	ASSERT_EQ(ok);
-}
-
-static void
-assert_fc16_split_answered(u32 split_after)
-{
-	arena_t*	arena = ARENA_ALLOC();
-	device_t*	dev   = device_new(arena, 0);
-	rtu_child_t	child = { 0 };
-	u8		pdu[6 + 8 * 2];
-	u8		frame[MODBUS_RTU_MAX_FRAME];
-	u8		resp[MODBUS_MAX_PDU];
-	u8		addr = 0;
-	u32		len = 0;
-	u32		frame_len = 0;
-
-	ASSERT_EQ(dev != NULL);
-	dev->unit_id = 1;
-	strcpy(dev->name, "rtu-fc16-split");
-	for (u32 i = 0; i < 8; i++)
-	{
-		point_t p = { 0 };
-		p.space = SPACE_HOLDING;
-		p.address = i;
-		p.type = VT_U16;
-		p.kind = POINT_STATIC;
-		p.static_value = (f64)i;
-		ASSERT_EQ(device_add_point(dev, &p) == NULL);
-	}
-
-	pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
-	put_be16(pdu + 1, 0);
-	put_be16(pdu + 3, 8);
-	pdu[5] = 16;
-	for (u32 i = 0; i < 8; i++)
-		put_be16(pdu + 6 + i * 2, (u16)(0x5000 + i));
-
-	{
-		device_t* devices[] = { dev };
-		/* baud-derived auto mode; t3.5 at 9600 is ~4ms. */
-		ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
-	}
-
-	frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
-	ASSERT(frame_len > split_after);
-	ASSERT_EQ(send_all_fd(child.fd, frame, split_after));
-	usleep(6000); /* cross one t3.5 gap, within two-gap window */
-	ASSERT_EQ(send_all_fd(child.fd, frame + split_after, frame_len - split_after));
-	ASSERT_EQ(recv_rtu_resp(child.fd, &addr, resp, &len, 1500));
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(len == 5);
-	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
-	ASSERT_EQ(get_be16(resp + 1) == 0);
-	ASSERT_EQ(get_be16(resp + 3) == 8);
-
-	ASSERT_EQ(rtu_child_stop(&child));
-	arena_release(arena);
-}
-
-TEST(RtuServerBaudIncompleteFc16SplitAfter5Answered)
+TEST(RtuServerBaudIncompleteFc16SplitIsAnswered)
 {
 	/* Issue #49: FC16 needs 7 bytes before length is known; a 5-byte first
 	 * chunk must still be kept in baud-derived auto mode. */
-	assert_fc16_split_answered(5);
-}
+	static const u32 splits[] = { 5, 7, 20 };
 
-TEST(RtuServerBaudIncompleteFc16SplitAfter7Answered)
-{
-	assert_fc16_split_answered(7);
-}
+	for (u32 c = 0; c < sizeof(splits) / sizeof(splits[0]); c++)
+	{
+		u32		split_after = splits[c];
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_holding_device(arena, "rtu-fc16-split", 8, 0);
+		rtu_child_t	child = { 0 };
+		u8		pdu[6 + 8 * 2];
+		u8		frame[MODBUS_RTU_MAX_FRAME];
+		u8		resp[MODBUS_MAX_PDU];
+		u8		addr = 0;
+		u32		len = 0;
+		u32		frame_len = 0;
+		bool		ok;
 
-TEST(RtuServerBaudIncompleteFc16SplitAfter20Answered)
-{
-	assert_fc16_split_answered(20);
+		ASSERT_EQ(dev != NULL);
+		pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+		put_be16(pdu + 1, 0);
+		put_be16(pdu + 3, 8);
+		pdu[5] = 16;
+		for (u32 i = 0; i < 8; i++)
+			put_be16(pdu + 6 + i * 2, (u16)(0x5000 + i));
+
+		{
+			device_t* devices[] = { dev };
+			/* baud-derived auto mode; t3.5 at 9600 is ~4ms. */
+			ASSERT_EQ(rtu_child_start_opts(&child, devices, 1, 0, 9600));
+		}
+
+		frame_len = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+		ASSERT(frame_len > split_after);
+		ok = send_all_fd(child.fd, frame, split_after);
+		usleep(6000); /* cross one t3.5 gap, within two-gap window */
+		ok = ok && send_all_fd(child.fd, frame + split_after, frame_len - split_after);
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 1500);
+		ok = ok && addr == 1 && len == 5 && resp[0] == FC_WRITE_MULTIPLE_REGISTERS &&
+		     get_be16(resp + 1) == 0 && get_be16(resp + 3) == 8;
+		if (!ok)
+			fprintf(stderr, "FC16 split after %u bytes failed\n", split_after);
+
+		ASSERT_EQ(rtu_child_stop(&child));
+		arena_release(arena);
+		ASSERT_EQ(ok);
+	}
 }
 
 TEST(RtuServerBaudIncompleteFc08SplitAnswered)

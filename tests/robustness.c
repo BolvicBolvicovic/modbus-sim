@@ -285,12 +285,31 @@ survives_datagram_garbage(mogbus_mode_t mode)
 	return ok;
 }
 
-TEST(RobustTcpAnswersAByteAtATimeRequest)	{ ASSERT_EQ(fragmented_request_is_answered(MOGBUS_MODE_TCP)); }
-TEST(RobustRtuTcpAnswersAByteAtATimeRequest)	{ ASSERT_EQ(fragmented_request_is_answered(MOGBUS_MODE_RTU_TCP)); }
-TEST(RobustAsciiTcpAnswersAByteAtATimeRequest)	{ ASSERT_EQ(fragmented_request_is_answered(MOGBUS_MODE_ASCII_TCP)); }
-TEST(RobustTcpSurvivesGarbage)			{ ASSERT_EQ(survives_stream_garbage(MOGBUS_MODE_TCP)); }
-TEST(RobustRtuTcpSurvivesGarbage)		{ ASSERT_EQ(survives_stream_garbage(MOGBUS_MODE_RTU_TCP)); }
-TEST(RobustAsciiTcpSurvivesGarbage)		{ ASSERT_EQ(survives_stream_garbage(MOGBUS_MODE_ASCII_TCP)); }
-TEST(RobustUdpSurvivesGarbage)			{ ASSERT_EQ(survives_datagram_garbage(MOGBUS_MODE_UDP)); }
-TEST(RobustRtuUdpSurvivesGarbage)		{ ASSERT_EQ(survives_datagram_garbage(MOGBUS_MODE_RTU_UDP)); }
-TEST(RobustAsciiUdpSurvivesGarbage)		{ ASSERT_EQ(survives_datagram_garbage(MOGBUS_MODE_ASCII_UDP)); }
+static const mogbus_mode_t STREAM_MODES[] = { MOGBUS_MODE_TCP, MOGBUS_MODE_RTU_TCP, MOGBUS_MODE_ASCII_TCP };
+static const mogbus_mode_t DATAGRAM_MODES[] = { MOGBUS_MODE_UDP, MOGBUS_MODE_RTU_UDP, MOGBUS_MODE_ASCII_UDP };
+
+TEST(RobustStreamTransportsAnswerAByteAtATimeRequest)
+{
+	for (u32 i = 0; i < sizeof(STREAM_MODES) / sizeof(STREAM_MODES[0]); i++)
+	{
+		bool ok = fragmented_request_is_answered(STREAM_MODES[i]);
+
+		if (!ok)
+			fprintf(stderr, "mode %d failed\n", (int)STREAM_MODES[i]);
+		ASSERT_EQ(ok);
+	}
+}
+
+TEST(RobustEveryTransportSurvivesGarbage)
+{
+	for (u32 i = 0; i < 6; i++)
+	{
+		bool stream = i < 3;
+		mogbus_mode_t mode = stream ? STREAM_MODES[i] : DATAGRAM_MODES[i - 3];
+		bool ok = stream ? survives_stream_garbage(mode) : survives_datagram_garbage(mode);
+
+		if (!ok)
+			fprintf(stderr, "mode %d failed\n", (int)mode);
+		ASSERT_EQ(ok);
+	}
+}

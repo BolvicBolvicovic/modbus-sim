@@ -289,110 +289,75 @@ TEST(CliLogFormatRejectsUnknownValues)
 	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+static bool
+rtu_cli_start_real_pty(const char* options)
+{
+	rtu_cli_t* fx = &g_rtu_cli;
+	char* argv[8];
+	int argc = 0;
+	const char* bin = getenv("MOGBUS_BIN");
+
+	if (!bin)
+		bin = "./mogbus";
+	if (!rtu_cli_write_server_config("rtu-pty", NULL, options,
+					 "(device (unit-id 1) (holding 0 (static 4660)))\n"))
+		return false;
+	argv[argc++] = (char*)bin;
+	argv[argc++] = fx->config;
+	argv[argc] = NULL;
+	return rtu_cli_start_with_args_capture_stdout(argv);
+}
+
+/* Opens the slave path the rtu-pty server printed on stdout; -1 when it never did. */
+static int
+rtu_cli_open_printed_slave(void)
+{
+	FILE* out = fopen(g_rtu_cli.stdout_path, "r");
+	char line[512];
+	char slave_path[128] = "";
+
+	for (u32 tries = 0; out && tries < 40 && !slave_path[0]; tries++)
+	{
+		rewind(out);
+		while (fgets(line, sizeof(line), out))
+		{
+			char* p = strstr(line, "RTU PTY slave: ");
+
+			if (!p)
+				continue;
+			p += strlen("RTU PTY slave: ");
+			snprintf(slave_path, sizeof(slave_path), "%.*s", (int)strcspn(p, "\r\n"), p);
+			break;
+		}
+		if (!slave_path[0])
+			usleep(50000);
+	}
+	if (out)
+		fclose(out);
+	return slave_path[0] ? open(slave_path, O_RDWR | O_NOCTTY | O_CLOEXEC) : -1;
+}
+
 TEST(RtuCliPtyModePrintsSlavePathAndServesRequests)
 {
-	const char* bin = getenv("MOGBUS_BIN");
-	int outpipe[2] = { -1, -1 };
-	pid_t pid;
-	int status = 0;
-	char line[256];
-	ssize_t n;
-	char slave_path[128] = "";
 	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 resp[MODBUS_MAX_PDU];
 	u8 addr = 0;
 	u32 len = 0;
-	bool ok = false;
-	int slave_fd = -1;
+	bool ok;
+	struct termios tio;
 
-	if (!bin)
-		bin = "./mogbus";
-	ASSERT_EQ(rtu_cli_write_server_config("rtu-pty", NULL, "(frame-gap-ms 5)",
-					      "(device (unit-id 1) (holding 0 (static 4660)))\n"));
-	ASSERT_EQ(pipe(outpipe) == 0);
-
-	pid = fork();
-	if (pid == 0)
+	ASSERT_EQ(rtu_cli_start_real_pty("(frame-gap-ms 5)"));
+	g_rtu_cli.master_fd = rtu_cli_open_printed_slave();
+	ASSERT(g_rtu_cli.master_fd >= 0);
+	if (tcgetattr(g_rtu_cli.master_fd, &tio) == 0)
 	{
-		char* argv[] = { (char*)bin, g_rtu_cli.config, NULL };
-		close(outpipe[0]);
-		dup2(outpipe[1], STDOUT_FILENO);
-		close(outpipe[1]);
-		if (!freopen("/dev/null", "r", stdin))
-			_exit(127);
-		if (!freopen("/dev/null", "w", stderr))
-			_exit(127);
-		execv(argv[0], argv);
-		_exit(127);
+		cfmakeraw(&tio);
+		(void)tcsetattr(g_rtu_cli.master_fd, TCSANOW, &tio);
 	}
-	close(outpipe[1]);
-	outpipe[1] = -1;
-	ASSERT_EQ(pid > 0);
-
-	{
-		u32 got = 0;
-		u64 deadline = os_now_ms() + 2000;
-		while (os_now_ms() < deadline && got < sizeof(line) - 1)
-		{
-			struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
-			int rc = poll(&pfd, 1, 50);
-			if (rc > 0 && (pfd.revents & POLLIN))
-			{
-				n = read(outpipe[0], line + got, sizeof(line) - 1 - got);
-				if (n > 0)
-				{
-					char* nl;
-					got += (u32)n;
-					line[got] = '\0';
-					nl = strchr(line, '\n');
-					while (nl)
-					{
-						*nl = '\0';
-						if (sscanf(line, "RTU PTY slave: %127s", slave_path) == 1)
-							goto got_path;
-						{
-							u32 rest = got - (u32)(nl - line + 1);
-							memmove(line, nl + 1, rest + 1);
-							got = rest;
-						}
-						nl = strchr(line, '\n');
-					}
-				}
-			}
-		}
-got_path:
-		;
-	}
-
-	if (slave_path[0])
-	{
-		slave_fd = open(slave_path, O_RDWR | O_NOCTTY);
-		if (slave_fd >= 0)
-		{
-			struct termios tio;
-			if (tcgetattr(slave_fd, &tio) == 0)
-			{
-				cfmakeraw(&tio);
-				(void)tcsetattr(slave_fd, TCSANOW, &tio);
-			}
-			ok = send_rtu_req_fd(slave_fd, 1, req, sizeof(req));
-			ok = ok && recv_rtu_resp_fd(slave_fd, &addr, resp, &len, 1500);
-			ok = ok && addr == 1 && len == 4 && get_be16(resp + 2) == 0x1234;
-		}
-	}
-
-	if (slave_fd >= 0)
-		close(slave_fd);
-	close(outpipe[0]);
-	kill(pid, SIGTERM);
-	wait_for_process_exit(pid, &status, 2000);
-	if (waitpid(pid, &status, WNOHANG) != pid)
-	{
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
-	}
-	rtu_cli_stop(); /* cleans config/stderr paths; pid/master already handled */
-	ASSERT_EQ(slave_path[0] != '\0');
+	ok = send_rtu_req_fd(g_rtu_cli.master_fd, 1, req, sizeof(req));
+	ok = ok && recv_rtu_resp_fd(g_rtu_cli.master_fd, &addr, resp, &len, 1500);
+	ok = ok && addr == 1 && len == 4 && get_be16(resp + 2) == 0x1234;
+	rtu_cli_stop();
 	ASSERT_EQ(ok);
 }
 
@@ -671,58 +636,30 @@ done:
 	return ok;
 }
 
-TEST(RtuCliDefaultLineFlagsAre8N1)
+TEST(RtuCliLineFlagsFromConfig)
 {
-	struct termios after;
-
-	ASSERT_EQ(rtu_cli_pty_line_flags("", "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, 0));
-}
-
-TEST(RtuCliEvenParityFromConfig)
-{
-	struct termios after;
-
-	ASSERT_EQ(rtu_cli_pty_line_flags("(parity even)",
-					 "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB));
-}
-
-TEST(RtuCliOddParityFromConfig)
-{
-	struct termios after;
-
-	ASSERT_EQ(rtu_cli_pty_line_flags("(parity odd)",
-					 "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB | PARODD));
-}
-
+	static const struct { const char* options; tcflag_t flags; } cases[] = {
+		{ "", 0 },
+		{ "(parity even)", PARENB },
+		{ "(parity odd)", PARENB | PARODD },
 #ifdef CMSPAR
-TEST(RtuCliMarkAndSpaceParityFlags)
-{
-	struct termios after;
-
-	ASSERT_EQ(rtu_cli_pty_line_flags("(parity mark)",
-					 "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB | PARODD | CMSPAR));
-
-	ASSERT_EQ(rtu_cli_pty_line_flags("(parity space)",
-					 "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, PARENB | CMSPAR));
-}
+		{ "(parity mark)", PARENB | PARODD | CMSPAR },
+		{ "(parity space)", PARENB | CMSPAR },
 #endif
+		{ "(stop-bits 2)", CSTOPB },
+		{ "(stop-bits 1)", 0 },
+	};
 
-TEST(RtuCliStopBitsFromConfig)
-{
-	struct termios after;
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+	{
+		struct termios after;
+		bool ok = rtu_cli_pty_line_flags(cases[c].options, "(device (unit-id 1) (holding 0))\n", &after) &&
+			  rtu_cli_line_flags_match(&after, cases[c].flags);
 
-	ASSERT_EQ(rtu_cli_pty_line_flags("(stop-bits 2)",
-					 "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, CSTOPB));
-
-	ASSERT_EQ(rtu_cli_pty_line_flags("(stop-bits 1)",
-					 "(device (unit-id 1) (holding 0))\n", &after));
-	ASSERT_EQ(rtu_cli_line_flags_match(&after, 0));
+		if (!ok)
+			fprintf(stderr, "line flags case failed: \"%s\"\n", cases[c].options);
+		ASSERT_EQ(ok);
+	}
 }
 
 TEST(RtuCliConfigBaudAffectsRtuTiming)
@@ -799,25 +736,6 @@ TEST(RtuCliConfigFrameGapBeatsBaud)
 	ASSERT_EQ(ok);
 }
 
-static bool
-rtu_cli_start_real_pty(const char* options)
-{
-	rtu_cli_t* fx = &g_rtu_cli;
-	char* argv[8];
-	int argc = 0;
-	const char* bin = getenv("MOGBUS_BIN");
-
-	if (!bin)
-		bin = "./mogbus";
-	if (!rtu_cli_write_server_config("rtu-pty", NULL, options,
-					 "(device (unit-id 1) (holding 0 (static 4660)))\n"))
-		return false;
-	argv[argc++] = (char*)bin;
-	argv[argc++] = fx->config;
-	argv[argc] = NULL;
-	return rtu_cli_start_with_args_capture_stdout(argv);
-}
-
 TEST(RtuCliPtyDefaultUsesUnknownBaudFallback)
 {
 	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
@@ -826,31 +744,12 @@ TEST(RtuCliPtyDefaultUsesUnknownBaudFallback)
 	u8 addr = 0;
 	u32 len = 0;
 	u32 flen = 0;
-	char slave_path[128];
 	bool ok = false;
 
 	/* Real rtu-pty config path: #42 regression (master fd must not auto-detect 38400). */
 	ASSERT_EQ(rtu_cli_start_real_pty(""));
 	ASSERT_EQ(rtu_cli_stderr_contains("frame gap 20 ms (default; baud unknown)"));
-	{
-		FILE* out = fopen(g_rtu_cli.stdout_path, "r");
-		char line[512];
-		bool found = false;
-		slave_path[0] = '\0';
-		ASSERT(out != NULL);
-		while (fgets(line, sizeof(line), out))
-		{
-			char* p = strstr(line, "RTU PTY slave: ");
-			if (!p) continue;
-			p += strlen("RTU PTY slave: ");
-			snprintf(slave_path, sizeof(slave_path), "%.*s", (int)strcspn(p, "\r\n"), p);
-			found = slave_path[0] != '\0';
-			break;
-		}
-		fclose(out);
-		ASSERT_EQ(found);
-	}
-	g_rtu_cli.master_fd = open(slave_path, O_RDWR | O_NOCTTY | O_CLOEXEC);
+	g_rtu_cli.master_fd = rtu_cli_open_printed_slave();
 	ASSERT(g_rtu_cli.master_fd >= 0);
 
 	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
@@ -879,27 +778,6 @@ TEST(RtuCliConfigBaudOnPtyLogsDerivedTiming)
 	rtu_cli_stop();
 }
 
-TEST(RtuCliCheckRtuTcpPrintsTimingSummary)
-{
-	const char* bin = getenv("MOGBUS_BIN");
-	char* argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
-	int status = 0;
-	bool ok;
-
-	ASSERT_EQ(rtu_cli_write_server_config("rtu-tcp", NULL, "(baud 9600)",
-					      "(device (unit-id 1) (holding 0))\n"));
-	ok = rtu_cli_start_with_args_capture_stdout(argv);
-	ASSERT_EQ(ok);
-	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "RTU-over-TCP"));
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path,
-					"baud 9600, t3.5 4011 us (frame-gap 5 ms)"));
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "config OK"));
-	g_rtu_cli.pid = -1;
-	rtu_cli_stop();
-}
-
 TEST(RtuCliBroadcastExecuteFromConfigEnablesExecution)
 {
 	u8		write_req[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x00, 0x2A };
@@ -924,23 +802,6 @@ TEST(RtuCliBroadcastExecuteFromConfigEnablesExecution)
 
 	rtu_cli_stop();
 	ASSERT_EQ(ok);
-}
-
-TEST(RtuCliCheckRtuTcpBroadcastExecutePrintsSummary)
-{
-	const char* bin = getenv("MOGBUS_BIN");
-	char* argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
-	int status = 0;
-
-	ASSERT_EQ(rtu_cli_write_server_config("rtu-tcp", NULL, "(broadcast-execute on)",
-					      "(device (unit-id 1) (holding 0))\n"));
-	ASSERT_EQ(rtu_cli_start_with_args_capture_stdout(argv));
-	ASSERT_EQ(wait_for_process_exit(g_rtu_cli.pid, &status, 2000));
-	ASSERT_EQ(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "RTU-over-TCP"));
-	ASSERT_EQ(rtu_cli_file_contains(g_rtu_cli.stdout_path, "broadcast-execute on"));
-	g_rtu_cli.pid = -1;
-	rtu_cli_stop();
 }
 
 TEST(RtuCliCheckTcpRejectsSerialLineConfig)
@@ -974,14 +835,15 @@ rtu_cli_expect_cli_error(char* const argv[], const char* message)
 }
 
 static bool
-rtu_cli_expect_cli_success(char* const argv[], const char* stdout_needle)
+rtu_cli_expect_cli_success(char* const argv[], const char* const* needles)
 {
 	int status = 0;
 	bool ok = rtu_cli_start_with_args_capture_stdout(argv);
 
 	ok = ok && wait_for_process_exit(g_rtu_cli.pid, &status, 2000);
 	ok = ok && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-	ok = ok && (!stdout_needle || rtu_cli_file_contains(g_rtu_cli.stdout_path, stdout_needle));
+	for (u32 i = 0; ok && needles && needles[i]; i++)
+		ok = rtu_cli_file_contains(g_rtu_cli.stdout_path, needles[i]);
 	g_rtu_cli.pid = -1;
 	rtu_cli_stop();
 	return ok;
@@ -991,30 +853,31 @@ TEST(RtuCliCheckSummarizesConfiguredModes)
 {
 	const char* bin = getenv("MOGBUS_BIN");
 	const char devices[] = "(device (unit-id 1) (holding 0 (static 1)))\n";
-	bool ok = true;
+	static const struct {
+		const char* mode;
+		const char* target;
+		const char* options;
+		const char* needles[4];
+	} cases[] = {
+		{ "rtu-device", "/dev/ttyS0", "", { "RTU /dev/ttyS0" } },
+		{ "ascii-device", "/dev/ttyUSB0", "", { "ASCII /dev/ttyUSB0" } },
+		{ "rtu-pty", NULL, "", { "RTU pty" } },
+		{ "rtu-tcp", NULL, "(baud 9600)", { "RTU-over-TCP", "baud 9600, t3.5 4011 us (frame-gap 5 ms)", "config OK" } },
+		{ "rtu-tcp", NULL, "(broadcast-execute on)", { "RTU-over-TCP", "broadcast-execute on" } },
+	};
 
 	if (!bin)
 		bin = "./mogbus";
-
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 	{
 		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
+		bool ok = rtu_cli_write_server_config(cases[c].mode, cases[c].target, cases[c].options, devices) &&
+			  rtu_cli_expect_cli_success(argv, cases[c].needles);
 
-		ASSERT_EQ(rtu_cli_write_server_config("rtu-device", "/dev/ttyS0", "", devices));
-		ok = ok && rtu_cli_expect_cli_success(argv, "RTU /dev/ttyS0");
+		if (!ok)
+			fprintf(stderr, "check summary case failed: %s %s\n", cases[c].mode, cases[c].options);
+		ASSERT_EQ(ok);
 	}
-	{
-		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
-
-		ASSERT_EQ(rtu_cli_write_server_config("ascii-device", "/dev/ttyUSB0", "", devices));
-		ok = ok && rtu_cli_expect_cli_success(argv, "ASCII /dev/ttyUSB0");
-	}
-	{
-		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
-
-		ASSERT_EQ(rtu_cli_write_server_config("rtu-pty", NULL, "", devices));
-		ok = ok && rtu_cli_expect_cli_success(argv, "RTU pty");
-	}
-	ASSERT_EQ(ok);
 }
 
 TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
@@ -1044,30 +907,30 @@ TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
 	{
 		char* argv[] = { (char*)bin, "--help", NULL };
 
-		ok = ok && rtu_cli_expect_cli_success(argv, "defined in (server ...)");
+		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "defined in (server ...)", NULL });
 	}
 	{
 		char* argv[] = { (char*)bin, "-h", NULL };
 
-		ok = ok && rtu_cli_expect_cli_success(argv, "Usage: mogbus");
+		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "Usage: mogbus", NULL });
 	}
 	{
 		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
 
 		ASSERT_EQ(rtu_cli_write_config(valid));
-		ok = ok && rtu_cli_expect_cli_success(argv, "config OK");
+		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "config OK", NULL });
 	}
 	{
 		char* argv[] = { (char*)bin, "--verbose", "-c", g_rtu_cli.config, NULL };
 
 		ASSERT_EQ(rtu_cli_write_config(valid));
-		ok = ok && rtu_cli_expect_cli_success(argv, "config OK");
+		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "config OK", NULL });
 	}
 	{
 		char* argv[] = { (char*)bin, "-v", "--check", g_rtu_cli.config, NULL };
 
 		ASSERT_EQ(rtu_cli_write_config(valid));
-		ok = ok && rtu_cli_expect_cli_success(argv, "config OK");
+		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "config OK", NULL });
 	}
 	ASSERT_EQ(ok);
 }

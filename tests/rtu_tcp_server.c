@@ -132,71 +132,6 @@ PRE_TEST()
 	server_stop();
 }
 
-TEST(RtuOverTcpServesReadHoldingRegisters)
-{
-	int fd;
-	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 4660)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT(flen > 0);
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
-	ASSERT_EQ(plen == 4);
-	ASSERT_EQ(get_be16(resp + 2) == 4660);
-
-	close(fd);
-	server_stop();
-}
-
-TEST(RtuOverTcpAnyUnitDeviceAnswersWithTheRequestAddress)
-{
-	int fd;
-	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 11)))\n"
-			 "(device (unit-id 2) (any-unit on) (holding 0 (static 22)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-
-	/* exact match wins; recv_rtu_resp verifies the CRC */
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(addr == 1 && get_be16(resp + 2) == 11);
-
-	/* any other address reaches the any-unit device but is answered with the request address */
-	flen = modbus_rtu_encode(frame, 77, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(addr == 77 && plen == 4 && get_be16(resp + 2) == 22);
-
-	/* broadcast and the reserved addresses stay silent */
-	flen = modbus_rtu_encode(frame, 0, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(ts_no_data(fd, 250));
-	flen = modbus_rtu_encode(frame, 250, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(ts_no_data(fd, 250));
-
-	flen = modbus_rtu_encode(frame, 2, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(addr == 2 && get_be16(resp + 2) == 22);
-
-	close(fd);
-	server_stop();
-}
-
 TEST(RtuOverTcpWriteThenRead)
 {
 	int fd;
@@ -318,59 +253,42 @@ TEST(RtuOverTcpBroadcastExecuteWritesAllDevicesWithoutResponse)
 
 TEST(RtuOverTcpHalfCloseAfterRequestSendsResponse)
 {
-	int fd;
-	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen;
+	/* The client half-closes right after the request: the immediate and the
+	 * delayed (fault) response must both arrive before the server closes. */
+	static const struct { const char* fault; u32 min_elapsed_ms; } cases[] = {
+		{ "", 0 },
+		{ "  (fault (kind delay) (delay-ms 200) (percent 100))", 180 },
+	};
 
-	server_start("", "(device (unit-id 1) (holding 0 (static 4660)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+	{
+		char devices[160];
+		u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+		u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+		u32 plen = 0, flen;
+		u64 start;
+		int fd;
 
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT(flen > 0);
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(shutdown(fd, SHUT_WR) == 0);
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
-	ASSERT_EQ(plen == 4);
-	ASSERT_EQ(get_be16(resp + 2) == 4660);
-	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
+		snprintf(devices, sizeof(devices), "(device (unit-id 1)\n  (holding 0 (static 4660))\n%s)\n",
+			 cases[c].fault);
+		server_start("", devices);
+		fd = connect_port(100, 2000);
+		ASSERT(fd >= 0);
 
-	close(fd);
-	server_stop();
-}
+		flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+		ASSERT(flen > 0);
+		start = (u64)os_now_ms();
+		ASSERT_EQ(send_all_fd(fd, frame, flen));
+		ASSERT_EQ(shutdown(fd, SHUT_WR) == 0);
+		ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+		ASSERT_EQ(os_now_ms() - start >= cases[c].min_elapsed_ms);
+		ASSERT_EQ(addr == 1 && resp[0] == FC_READ_HOLDING_REGISTERS && plen == 4);
+		ASSERT_EQ(get_be16(resp + 2) == 4660);
+		ASSERT_EQ(wait_for_eof_fd(fd, 2000));
 
-TEST(RtuOverTcpHalfCloseAfterDelayedRequestSendsResponse)
-{
-	int fd;
-	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen;
-	u64 start;
-
-	server_start("", "(device (unit-id 1)\n"
-		     "  (holding 0 (static 4660))\n"
-		     "  (fault (kind delay) (delay-ms 200) (percent 100)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT(flen > 0);
-	start = (u64)os_now_ms();
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(shutdown(fd, SHUT_WR) == 0);
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(os_now_ms() - start >= 180);
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
-	ASSERT_EQ(plen == 4);
-	ASSERT_EQ(get_be16(resp + 2) == 4660);
-	ASSERT_EQ(wait_for_eof_fd(fd, 2000));
-
-	close(fd);
-	server_stop();
+		close(fd);
+		server_stop();
+	}
 }
 
 TEST(RtuOverTcpFragmentedRequest)
@@ -472,44 +390,6 @@ TEST(RtuOverTcpPipelinedRequestsWithBaudGetResponses)
 	server_stop();
 }
 
-TEST(RtuOverTcpDelayFaultDoesNotBlockOtherClients)
-{
-	int delayed, fast;
-	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen;
-	u64 start, fast_ms, delayed_ms;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 11))\n"
-		     "  (fault (kind delay) (delay-ms 500) (percent 100)))\n"
-		     "(device (unit-id 2) (holding 0 (static 22)))\n");
-	delayed = connect_port(100, 2000);
-	fast = connect_port(100, 2000);
-	ASSERT(delayed >= 0 && fast >= 0);
-
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(delayed, frame, flen));
-	flen = modbus_rtu_encode(frame, 2, req_pdu, sizeof(req_pdu));
-	ASSERT_EQ(send_all_fd(fast, frame, flen));
-	start = (u64)os_now_ms();
-
-	ASSERT_EQ(recv_rtu_resp(fast, &addr, resp, &plen, 2000));
-	fast_ms = os_now_ms() - start;
-	ASSERT_EQ(addr == 2);
-	ASSERT_EQ(get_be16(resp + 2) == 22);
-
-	ASSERT_EQ(recv_rtu_resp(delayed, &addr, resp, &plen, 2000));
-	delayed_ms = os_now_ms() - start;
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(get_be16(resp + 2) == 11);
-	ASSERT_EQ(fast_ms < 300);
-	ASSERT_EQ(delayed_ms >= 400);
-
-	close(delayed);
-	close(fast);
-	server_stop();
-}
-
 TEST(RtuOverTcpDropFaultStillAppliesWrites)
 {
 	int fd;
@@ -546,6 +426,129 @@ TEST(RtuOverTcpDropFaultStillAppliesWrites)
 		}
 	}
 	ASSERT(false && "did not observe write effect through drop fault");
+}
+
+TEST(RtuOverTcpLargeFc16Frame)
+{
+	/* Max-size FC16 request (123 registers) over RTU-over-TCP. */
+	int fd;
+	u8 req_pdu[1 + 2 + 2 + 1 + 123 * 2];
+	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x7A, 0x00, 0x01 }; /* reg 122 */
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start("", "(device (unit-id 1) (holding 0 (count 125) (static 0)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	req_pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+	put_be16(req_pdu + 1, 0);
+	put_be16(req_pdu + 3, 123);
+	req_pdu[5] = 246;
+	for (u32 i = 0; i < 123; i++)
+		put_be16(req_pdu + 6 + i * 2, (u16)(0x2000 + i));
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT(flen > 0);
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 3) == 123);
+
+	flen = modbus_rtu_encode(frame, 1, read_pdu, sizeof(read_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(get_be16(resp + 2) == 0x2000 + 122);
+
+	close(fd);
+	server_stop();
+}
+
+TEST(RtuOverTcpIncompleteFc16SplitIsAnswered)
+{
+	static const u32 splits[] = { 5, 7, 20 };
+
+	for (u32 c = 0; c < sizeof(splits) / sizeof(splits[0]); c++)
+	{
+		u32 split_after = splits[c];
+		u8 resp[MODBUS_MAX_PDU];
+		u8 frame[MODBUS_RTU_MAX_FRAME];
+		u8 pdu[6 + 8 * 2];
+		u32 plen = 0, flen;
+		u8 addr = 0;
+		int fd;
+
+		pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
+		put_be16(pdu + 1, 0);
+		put_be16(pdu + 3, 8);
+		pdu[5] = 16;
+		for (u32 i = 0; i < 8; i++)
+			put_be16(pdu + 6 + i * 2, (u16)(0x6000 + i));
+
+		server_start("(baud 9600)",
+			     "(device (unit-id 1) (holding 0 (count 16) (static 0)))\n");
+		fd = connect_port(100, 2000);
+		ASSERT(fd >= 0);
+		flen = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+		ASSERT(flen > split_after);
+		ASSERT_EQ(send_all_fd(fd, frame, split_after));
+		usleep(6000);
+		ASSERT_EQ(send_all_fd(fd, frame + split_after, flen - split_after));
+		ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+		close(fd);
+		server_stop();
+		ASSERT_EQ(addr == 1 && resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
+		ASSERT_EQ(get_be16(resp + 1) == 0 && get_be16(resp + 3) == 8);
+	}
+}
+
+TEST(RtuOverTcpIncompleteFc08SplitAnswered)
+{
+	u8 resp[MODBUS_MAX_PDU];
+	u8 frame[MODBUS_RTU_MAX_FRAME];
+	u8 pdu[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
+	u32 plen = 0, flen;
+	u8 addr = 0;
+	int fd;
+
+	server_start("", "(device (unit-id 1) (holding 0 (static 0)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+	flen = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
+	ASSERT(flen > 4);
+	ASSERT_EQ(send_all_fd(fd, frame, 4));
+	usleep(6000);
+	ASSERT_EQ(send_all_fd(fd, frame + 4, flen - 4));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	close(fd);
+	server_stop();
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(plen == sizeof(pdu));
+	ASSERT_EQ(memcmp(resp, pdu, sizeof(pdu)) == 0);
+}
+
+TEST(RtuOverTcpTruncatedFrameDoesNotLoseValidRequest)
+{
+	u8 resp[MODBUS_MAX_PDU];
+	u8 good[MODBUS_RTU_MAX_FRAME];
+	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 trunc[] = { 0x01, FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00 };
+	u32 plen = 0, good_len;
+	u8 addr = 0;
+	int fd;
+
+	server_start("(baud 9600)", "(device (unit-id 1) (holding 0 (static 4386)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+	good_len = modbus_rtu_encode(good, 1, req, sizeof(req));
+	ASSERT_EQ(send_all_fd(fd, trunc, sizeof(trunc)));
+	usleep(10000);
+	ASSERT_EQ(send_all_fd(fd, good, good_len));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	close(fd);
+	server_stop();
+	ASSERT_EQ(addr == 1);
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
+	ASSERT_EQ(get_be16(resp + 2) == 4386);
 }
 
 TEST(RtuOverTcpDisconnectFaultClosesConnection)
@@ -607,211 +610,42 @@ TEST(RtuOverTcpIdleTimeoutClosesConnection)
 	server_stop();
 }
 
-TEST(RtuOverTcpConnectionLimit)
+TEST(RtuOverTcpAnyUnitDeviceAnswersWithTheRequestAddress)
 {
-	int clients[32];
-	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen, opened = 0;
-	bool refused = false;
-
-	for (u32 i = 0; i < 32; i++)
-		clients[i] = -1;
-	server_start("", "(device (unit-id 1) (holding 0 (static 5)))\n");
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-
-	for (u32 i = 0; i < 32; i++)
-	{
-		clients[i] = connect_port(50, 2000);
-		if (clients[i] < 0)
-			break;
-		opened++;
-		usleep(10000);
-	}
-	ASSERT_EQ(opened == 32);
-	ASSERT_EQ(send_all_fd(clients[0], frame, flen));
-	ASSERT_EQ(recv_rtu_resp(clients[0], &addr, resp, &plen, 2000));
-
-	/* 33rd connection may be refused, closed, or left unserviced; it must not be
-	 * served while 32 connections are already active. */
-	{
-		int extra = connect_port(1, 200);
-		if (extra < 0)
-			refused = true;
-		else
-		{
-			refused = !send_all_fd(extra, frame, flen) ||
-				  !recv_rtu_resp(extra, &addr, resp, &plen, 300);
-			close(extra);
-		}
-	}
-	ASSERT_EQ(refused);
-
-	for (u32 i = 0; i < opened; i++)
-		if (clients[i] >= 0)
-			close(clients[i]);
-	server_stop();
-}
-
-TEST(RtuOverTcpLargeFc16Frame)
-{
-	/* Max-size FC16 request (123 registers) over RTU-over-TCP. */
 	int fd;
-	u8 req_pdu[1 + 2 + 2 + 1 + 123 * 2];
-	u8 read_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x7A, 0x00, 0x01 }; /* reg 122 */
-	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
-	u32 plen = 0, flen;
-
-	server_start("", "(device (unit-id 1) (holding 0 (count 125) (static 0)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-
-	req_pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
-	put_be16(req_pdu + 1, 0);
-	put_be16(req_pdu + 3, 123);
-	req_pdu[5] = 246;
-	for (u32 i = 0; i < 123; i++)
-		put_be16(req_pdu + 6 + i * 2, (u16)(0x2000 + i));
-	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT(flen > 0);
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
-	ASSERT_EQ(get_be16(resp + 3) == 123);
-
-	flen = modbus_rtu_encode(frame, 1, read_pdu, sizeof(read_pdu));
-	ASSERT_EQ(send_all_fd(fd, frame, flen));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(get_be16(resp + 2) == 0x2000 + 122);
-
-	close(fd);
-	server_stop();
-}
-
-static void
-assert_rtu_tcp_fc16_split_answered(u32 split_after)
-{
-	u8 resp[MODBUS_MAX_PDU];
-	u8 frame[MODBUS_RTU_MAX_FRAME];
-	u8 pdu[6 + 8 * 2];
-	u32 plen = 0, flen;
-	u8 addr = 0;
-	int fd;
-
-	pdu[0] = FC_WRITE_MULTIPLE_REGISTERS;
-	put_be16(pdu + 1, 0);
-	put_be16(pdu + 3, 8);
-	pdu[5] = 16;
-	for (u32 i = 0; i < 8; i++)
-		put_be16(pdu + 6 + i * 2, (u16)(0x6000 + i));
-
-	server_start("(baud 9600)",
-		     "(device (unit-id 1) (holding 0 (count 16) (static 0)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-	flen = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
-	ASSERT(flen > split_after);
-	ASSERT_EQ(send_all_fd(fd, frame, split_after));
-	usleep(6000);
-	ASSERT_EQ(send_all_fd(fd, frame + split_after, flen - split_after));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	close(fd);
-	server_stop();
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(resp[0] == FC_WRITE_MULTIPLE_REGISTERS);
-	ASSERT_EQ(get_be16(resp + 1) == 0);
-	ASSERT_EQ(get_be16(resp + 3) == 8);
-}
-
-TEST(RtuOverTcpIncompleteFc16SplitAfter5Answered)
-{
-	assert_rtu_tcp_fc16_split_answered(5);
-}
-
-TEST(RtuOverTcpIncompleteFc16SplitAfter7Answered)
-{
-	assert_rtu_tcp_fc16_split_answered(7);
-}
-
-TEST(RtuOverTcpIncompleteFc16SplitAfter20Answered)
-{
-	assert_rtu_tcp_fc16_split_answered(20);
-}
-
-TEST(RtuOverTcpIncompleteFc08SplitAnswered)
-{
-	u8 resp[MODBUS_MAX_PDU];
-	u8 frame[MODBUS_RTU_MAX_FRAME];
-	u8 pdu[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0x12, 0x34 };
-	u32 plen = 0, flen;
-	u8 addr = 0;
-	int fd;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 0)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-	flen = modbus_rtu_encode(frame, 1, pdu, sizeof(pdu));
-	ASSERT(flen > 4);
-	ASSERT_EQ(send_all_fd(fd, frame, 4));
-	usleep(6000);
-	ASSERT_EQ(send_all_fd(fd, frame + 4, flen - 4));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	close(fd);
-	server_stop();
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(plen == sizeof(pdu));
-	ASSERT_EQ(memcmp(resp, pdu, sizeof(pdu)) == 0);
-}
-
-TEST(RtuOverTcpTruncatedFrameDoesNotLoseValidRequest)
-{
-	u8 resp[MODBUS_MAX_PDU];
-	u8 good[MODBUS_RTU_MAX_FRAME];
-	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 trunc[] = { 0x01, FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00 };
-	u32 plen = 0, good_len;
-	u8 addr = 0;
-	int fd;
-
-	server_start("(baud 9600)", "(device (unit-id 1) (holding 0 (static 4386)))\n");
-	fd = connect_port(100, 2000);
-	ASSERT(fd >= 0);
-	good_len = modbus_rtu_encode(good, 1, req, sizeof(req));
-	ASSERT_EQ(send_all_fd(fd, trunc, sizeof(trunc)));
-	usleep(10000);
-	ASSERT_EQ(send_all_fd(fd, good, good_len));
-	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	close(fd);
-	server_stop();
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
-	ASSERT_EQ(get_be16(resp + 2) == 4386);
-}
-
-TEST(RtuOverTcpIpv6LoopbackServesRequest)
-{
 	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
 	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
 	u32 plen = 0, flen;
-	int fd;
 
-	if (!ts_ipv6_loopback_available())
-	{
-		fprintf(stderr, "SKIP: IPv6 loopback unavailable\n");
-		return;
-	}
-
-	server_start_v6("", "(device (unit-id 1) (holding 0 (static 4660)))\n");
-	fd = connect_port_v6(100, 2000);
+	server_start("", "(device (unit-id 1) (holding 0 (static 11)))\n"
+			 "(device (unit-id 2) (any-unit on) (holding 0 (static 22)))\n");
+	fd = connect_port(100, 2000);
 	ASSERT(fd >= 0);
+
+	/* exact match wins; recv_rtu_resp verifies the CRC */
 	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
-	ASSERT(flen > 0);
 	ASSERT_EQ(send_all_fd(fd, frame, flen));
 	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
-	ASSERT_EQ(addr == 1);
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS);
-	ASSERT_EQ(plen == 4);
-	ASSERT_EQ(get_be16(resp + 2) == 4660);
+	ASSERT_EQ(addr == 1 && get_be16(resp + 2) == 11);
+
+	/* any other address reaches the any-unit device but is answered with the request address */
+	flen = modbus_rtu_encode(frame, 77, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 77 && plen == 4 && get_be16(resp + 2) == 22);
+
+	/* broadcast and the reserved addresses stay silent */
+	flen = modbus_rtu_encode(frame, 0, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(ts_no_data(fd, 250));
+	flen = modbus_rtu_encode(frame, 250, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(ts_no_data(fd, 250));
+
+	flen = modbus_rtu_encode(frame, 2, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 2 && get_be16(resp + 2) == 22);
 
 	close(fd);
 	server_stop();

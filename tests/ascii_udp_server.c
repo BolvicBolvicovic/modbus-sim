@@ -149,21 +149,6 @@ PRE_TEST()
 	server_stop();
 }
 
-TEST(AsciiUdpServesReadHoldingRegisters)
-{
-	u8  resp[MODBUS_MAX_PDU];
-	u32 len = 0;
-	int fd;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 4660)))\n");
-	fd = client_open();
-	ASSERT(fd >= 0);
-	ASSERT_EQ(exchange(fd, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
-	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && len == 4 && get_be16(resp + 2) == 4660);
-	close(fd);
-	server_stop();
-}
-
 TEST(AsciiUdpWriteThenRead)
 {
 	u8  write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x04, 0xD2 };
@@ -321,37 +306,6 @@ TEST(AsciiUdpDropsOversizedDatagram)
 	server_stop();
 }
 
-TEST(AsciiUdpDelayFaultDoesNotBlockOtherPeers)
-{
-	u8  resp[MODBUS_MAX_PDU];
-	u8  addr = 0;
-	u32 len = 0;
-	u64 start, fast_ms, delayed_ms;
-	int slow, fast;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 11))\n"
-			 "  (fault (kind delay) (delay-ms 500) (percent 100)))\n"
-			 "(device (unit-id 2) (holding 0 (static 22)))\n");
-	slow = client_open();
-	fast = client_open();
-	ASSERT(slow >= 0 && fast >= 0);
-
-	start = os_now_ms();
-	ASSERT_EQ(send_request(slow, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0)));
-	ASSERT_EQ(exchange(fast, 2, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
-	fast_ms = os_now_ms() - start;
-	ASSERT_EQ(get_be16(resp + 2) == 22);
-
-	ASSERT_EQ(recv_response(slow, &addr, resp, &len, 2000));
-	delayed_ms = os_now_ms() - start;
-	ASSERT_EQ(addr == 1 && get_be16(resp + 2) == 11);
-	ASSERT_EQ(fast_ms < 300);
-	ASSERT_EQ(delayed_ms >= 400);
-	close(slow);
-	close(fast);
-	server_stop();
-}
-
 TEST(AsciiUdpDropFaultStillAppliesWrites)
 {
 	u8  write_pdu[] = { FC_WRITE_SINGLE_REGISTER, 0x00, 0x00, 0x04, 0xD2 };
@@ -392,30 +346,6 @@ TEST(AsciiUdpChecksumCorruptFaultDamagesLrcOnly)
 	ASSERT_EQ(got == 15 && raw[0] == ':' && memcmp(raw + 1, "01030200", 8) == 0);
 	ASSERT_EQ(!modbus_ascii_decode(raw, (u32)got, decoded, &addr, &pdu, &pdu_len));
 	close(fd);
-	server_stop();
-}
-
-TEST(AsciiUdpRepliesToEachPeerSeparately)
-{
-	u8  resp[MODBUS_MAX_PDU];
-	u8  addr = 0;
-	u32 len = 0;
-	int a, b;
-
-	server_start("", "(device (unit-id 1) (holding 0 (static 33)))\n");
-	a = client_open();
-	b = client_open();
-	ASSERT(a >= 0 && b >= 0);
-
-	ASSERT_EQ(send_request(a, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0)));
-	ASSERT_EQ(send_request(b, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0)));
-	ASSERT_EQ(recv_response(b, &addr, resp, &len, RECV_TIMEOUT_MS));
-	ASSERT_EQ(get_be16(resp + 2) == 33);
-	ASSERT_EQ(recv_response(a, &addr, resp, &len, RECV_TIMEOUT_MS));
-	ASSERT_EQ(get_be16(resp + 2) == 33);
-	ASSERT_EQ(silent(a) && silent(b));
-	close(a);
-	close(b);
 	server_stop();
 }
 

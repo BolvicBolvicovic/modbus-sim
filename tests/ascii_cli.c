@@ -201,50 +201,42 @@ TEST(AsciiCliServesOverPtyDevice)
 	ASSERT_EQ(ok);
 }
 
-TEST(AsciiCliDefaultLineFlagsAre8N1)
+TEST(AsciiCliLineFlagsAndServing)
 {
-	struct termios tio;
-
-	ASSERT_EQ(ascii_cli_start_device_with_options("",
-						      "(device (unit-id 1) (holding 0))\n", true));
-	ASSERT_EQ(tcgetattr(g_ascii_cli.master_fd, &tio) == 0);
-	ASSERT_EQ((tio.c_cflag & CSIZE) == CS8);
-	ASSERT_EQ((tio.c_cflag & (PARENB | PARODD | CSTOPB | CRTSCTS)) == 0);
-	ASSERT_EQ((tio.c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD));
-	ASSERT_EQ(cfgetispeed(&tio) == B19200 && cfgetospeed(&tio) == B19200);
-	ascii_cli_stop();
-}
-
-TEST(AsciiCliSevenE1LineFlagsFromConfig)
-{
-	struct termios tio;
-	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
-	u8 addrs[1] = { 0 };
-	u8 pdus[1][MODBUS_MAX_PDU] = { { 0 } };
-	u32 lens[1] = { 0 };
-	bool ok = false;
-
-	ASSERT_EQ(ascii_cli_start_device_with_options(
-		"(data-bits 7) (parity even) (stop-bits 1)",
-		"(device (unit-id 1) (holding 0 (static 4660)))\n", true));
-
 	/* Linux PTYs force CS8 and strip PARENB, so tests/serial.c checks CS7 and
-	 * PARENB directly; here verify the observable part of the 7E1 selection. */
-	ok = tcgetattr(g_ascii_cli.master_fd, &tio) == 0;
-	ok = ok && (tio.c_cflag & CSIZE) == CS8;
-	ok = ok && (tio.c_cflag & (PARODD | CSTOPB | CRTSCTS)) == 0;
-#ifdef CMSPAR
-	ok = ok && (tio.c_cflag & CMSPAR) == 0;
-#endif
-	ok = ok && (tio.c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD);
-	ok = ok && cfgetispeed(&tio) == B19200 && cfgetospeed(&tio) == B19200;
-	ok = ok && send_ascii_req_fd(g_ascii_cli.master_fd, 1, req, sizeof(req));
-	ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
-					ASCII_CLI_IO_TIMEOUT_MS);
-	ok = ok && addrs[0] == 1 && lens[0] == 4 && get_be16(pdus[0] + 2) == 0x1234;
+	 * PARENB directly; here verify the observable part of each selection and
+	 * that the configured line still serves. */
+	static const char* const options[] = { "", "(data-bits 7) (parity even) (stop-bits 1)" };
 
-	ascii_cli_stop();
-	ASSERT_EQ(ok);
+	for (u32 c = 0; c < sizeof(options) / sizeof(options[0]); c++)
+	{
+		struct termios tio;
+		u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+		u8 addrs[1] = { 0 };
+		u8 pdus[1][MODBUS_MAX_PDU] = { { 0 } };
+		u32 lens[1] = { 0 };
+		bool ok;
+
+		ASSERT_EQ(ascii_cli_start_device_with_options(
+			options[c], "(device (unit-id 1) (holding 0 (static 4660)))\n", true));
+		ok = tcgetattr(g_ascii_cli.master_fd, &tio) == 0;
+		ok = ok && (tio.c_cflag & CSIZE) == CS8;
+		ok = ok && (tio.c_cflag & (PARENB | PARODD | CSTOPB | CRTSCTS)) == 0;
+#ifdef CMSPAR
+		ok = ok && (tio.c_cflag & CMSPAR) == 0;
+#endif
+		ok = ok && (tio.c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD);
+		ok = ok && cfgetispeed(&tio) == B19200 && cfgetospeed(&tio) == B19200;
+		ok = ok && send_ascii_req_fd(g_ascii_cli.master_fd, 1, req, sizeof(req));
+		ok = ok && recv_ascii_frames_fd(g_ascii_cli.master_fd, 1, addrs, pdus, lens,
+						ASCII_CLI_IO_TIMEOUT_MS);
+		ok = ok && addrs[0] == 1 && lens[0] == 4 && get_be16(pdus[0] + 2) == 0x1234;
+		if (!ok)
+			fprintf(stderr, "ascii line flags case failed: \"%s\"\n", options[c]);
+
+		ascii_cli_stop();
+		ASSERT_EQ(ok);
+	}
 }
 
 TEST(AsciiCliChangeDelimiterRejectedAndCrlfFramingUnchanged)

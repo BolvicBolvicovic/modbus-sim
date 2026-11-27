@@ -804,126 +804,70 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	mogbus_destroy(ctx);
 }
 
-TEST(ApiServesDevicesOverUdp)
+TEST(ApiServesDevicesOverDatagramModes)
 {
-	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev;
-	mogbus_point_t	p = holding(0, 0x1234);
-	mogbus_server_options_t o = mogbus_server_options_defaults();
-	mogbus_server_t* server;
-	char		err[256];
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
-	int		fd;
+	static const mogbus_mode_t modes[] = { MOGBUS_MODE_UDP, MOGBUS_MODE_ASCII_UDP, MOGBUS_MODE_RTU_UDP };
 
-	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 1, "udp", err, sizeof(err));
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	o.mode = MOGBUS_MODE_UDP;
-	o.port = ts_free_port();
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
-	ASSERT_EQ(server != NULL);
+	for (u32 c = 0; c < sizeof(modes) / sizeof(modes[0]); c++)
+	{
+		mogbus_t*	ctx = mogbus_create();
+		mogbus_device_t* dev;
+		mogbus_point_t	p = holding(0, 0x1234);
+		mogbus_server_options_t o = mogbus_server_options_defaults();
+		mogbus_server_t* server;
+		char		err[256];
+		u8		raw[MODBUS_ASCII_MAX_FRAME];
+		u8		decoded[MODBUS_MAX_PDU + 2];
+		u8		addr = 1;
+		const u8*	pdu = NULL;
+		u32		pdu_len = 0;
+		s32		got;
+		int		fd;
 
-	fd = ts_udp_loopback(o.port, AF_INET, 1000);
-	ASSERT_EQ(fd >= 0);
-	ASSERT_EQ(ts_mbap_send(fd, 1, 7, READ_HOLDING, sizeof(READ_HOLDING)));
-	ASSERT_EQ(pump(server, fd));
-	ASSERT_EQ(ts_udp_mbap_recv(fd, 1, 7, resp, &len, 1000));
-	ASSERT_EQ(len == 4 && resp[2] == 0x12 && resp[3] == 0x34);
-	close(fd);
+		ASSERT_EQ(ctx != NULL);
+		dev = mogbus_add_device(ctx, 1, "datagram", err, sizeof(err));
+		ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
+		o.mode = modes[c];
+		o.port = ts_free_port();
+		server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
+		ASSERT_EQ(server != NULL);
 
-	mogbus_server_stop(server);
-	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
-	mogbus_server_close(server);
+		fd = ts_udp_loopback(o.port, AF_INET, 1000);
+		ASSERT_EQ(fd >= 0);
+		if (modes[c] == MOGBUS_MODE_UDP)
+		{
+			ASSERT_EQ(ts_mbap_send(fd, 1, 7, READ_HOLDING, sizeof(READ_HOLDING)));
+			ASSERT_EQ(pump(server, fd));
+			ASSERT_EQ(ts_udp_mbap_recv(fd, 1, 7, decoded, &pdu_len, 1000));
+			pdu = decoded;
+		}
+		else
+		{
+			got = (s32)(modes[c] == MOGBUS_MODE_ASCII_UDP
+				    ? modbus_ascii_encode(raw, 1, READ_HOLDING, sizeof(READ_HOLDING))
+				    : modbus_rtu_encode(raw, 1, READ_HOLDING, sizeof(READ_HOLDING)));
+			ASSERT_EQ(got > 0 && send(fd, raw, (size_t)got, 0) == got);
+			ASSERT_EQ(pump(server, fd));
+			got = ts_udp_recv(fd, raw, sizeof(raw), 1000);
+			ASSERT_EQ(got > 0);
+			if (modes[c] == MOGBUS_MODE_ASCII_UDP)
+				ASSERT_EQ(modbus_ascii_decode(raw, (u32)got, decoded, &addr, &pdu, &pdu_len));
+			else
+				ASSERT_EQ(modbus_rtu_decode(raw, (u32)got, &addr, &pdu, &pdu_len));
+		}
+		ASSERT_EQ(addr == 1 && pdu_len == 4 && pdu[2] == 0x12 && pdu[3] == 0x34);
+		close(fd);
 
-	o.mode = (mogbus_mode_t)(MOGBUS_MODE_RTU_UDP + 1);
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
-	mogbus_destroy(ctx);
-}
+		mogbus_server_stop(server);
+		ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
+		mogbus_server_close(server);
 
-TEST(ApiServesDevicesOverAsciiUdp)
-{
-	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev;
-	mogbus_point_t	p = holding(0, 0x1234);
-	mogbus_server_options_t o = mogbus_server_options_defaults();
-	mogbus_server_t* server;
-	char		err[256];
-	u8		raw[MODBUS_ASCII_MAX_FRAME];
-	u8		decoded[MODBUS_MAX_PDU + 2];
-	u8		addr = 0;
-	const u8*	pdu = NULL;
-	u32		pdu_len = 0;
-	s32		got;
-	int		fd;
-
-	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 1, "ascii-udp", err, sizeof(err));
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	o.mode = MOGBUS_MODE_ASCII_UDP;
-	o.port = ts_free_port();
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
-	ASSERT_EQ(server != NULL);
-
-	fd = ts_udp_loopback(o.port, AF_INET, 1000);
-	ASSERT_EQ(fd >= 0);
-	got = (s32)modbus_ascii_encode(raw, 1, READ_HOLDING, sizeof(READ_HOLDING));
-	ASSERT_EQ(got > 0 && send(fd, raw, (size_t)got, 0) == got);
-	ASSERT_EQ(pump(server, fd));
-	got = ts_udp_recv(fd, raw, sizeof(raw), 1000);
-	ASSERT_EQ(got > 0 && modbus_ascii_decode(raw, (u32)got, decoded, &addr, &pdu, &pdu_len));
-	ASSERT_EQ(addr == 1 && pdu_len == 4 && pdu[2] == 0x12 && pdu[3] == 0x34);
-	close(fd);
-
-	mogbus_server_stop(server);
-	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
-	mogbus_server_close(server);
-
-	o.mode = (mogbus_mode_t)(MOGBUS_MODE_RTU_UDP + 1);
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
-	mogbus_destroy(ctx);
-}
-
-TEST(ApiServesDevicesOverRtuUdp)
-{
-	mogbus_t*	ctx = mogbus_create();
-	mogbus_device_t* dev;
-	mogbus_point_t	p = holding(0, 0x1234);
-	mogbus_server_options_t o = mogbus_server_options_defaults();
-	mogbus_server_t* server;
-	char		err[256];
-	u8		raw[MODBUS_RTU_MAX_FRAME];
-	const u8*	pdu = NULL;
-	u8		addr = 0;
-	u32		len = 0;
-	s32		got;
-	int		fd;
-
-	ASSERT_EQ(ctx != NULL);
-	dev = mogbus_add_device(ctx, 1, "rtu-udp", err, sizeof(err));
-	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
-	o.mode = MOGBUS_MODE_RTU_UDP;
-	o.port = ts_free_port();
-	server = mogbus_server_create(ctx, &o, err, sizeof(err), NULL);
-	ASSERT_EQ(server != NULL);
-
-	fd = ts_udp_loopback(o.port, AF_INET, 1000);
-	ASSERT_EQ(fd >= 0);
-	len = modbus_rtu_encode(raw, 1, READ_HOLDING, sizeof(READ_HOLDING));
-	ASSERT_EQ(send(fd, raw, len, 0) == (ssize_t)len);
-	ASSERT_EQ(pump(server, fd));
-	got = ts_udp_recv(fd, raw, sizeof(raw), 1000);
-	ASSERT_EQ(got > 0 && modbus_rtu_decode(raw, (u32)got, &addr, &pdu, &len));
-	ASSERT_EQ(addr == 1 && len == 4 && pdu[2] == 0x12 && pdu[3] == 0x34);
-	close(fd);
-
-	mogbus_server_stop(server);
-	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
-	mogbus_server_close(server);
-
-	o.mode = (mogbus_mode_t)99;
-	ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
-	mogbus_destroy(ctx);
+		o.mode = (mogbus_mode_t)(MOGBUS_MODE_RTU_UDP + 1);
+		ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
+		o.mode = (mogbus_mode_t)99;
+		ASSERT_EQ(mogbus_server_create(ctx, &o, err, sizeof(err), NULL) == NULL && err[0]);
+		mogbus_destroy(ctx);
+	}
 }
 
 TEST(ApiAnyUnitAllowsOnlyOneDeviceAndShowsInInfo)
