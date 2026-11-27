@@ -379,9 +379,6 @@ input { width: 9rem; }
     });
   }
 
-  /* The plot is a strip chart: "now" is pinned at the right edge and a fixed window slides under it.
-     Drawing is decoupled from sampling: samples and zoom only mark the chart dirty, and one animation
-     frame draws it; while the plot is on screen and not paused it redraws every frame to keep sliding. */
   /* Add point: the plottable points of one table, fetched once per device and table. */
   var pcache = {};
   function tablePoints(space) {
@@ -450,18 +447,20 @@ input { width: 9rem; }
     if (t - rateAt >= 250) { rateAt = t; $("rate").textContent = "\u2248 " + ticks.length + " samples/s"; }
   }
 
-  var raf = null, dirty = false, frozenNow = 0, frames = 0;
+  /* The plot is a strip chart: "now" is pinned at the right edge and a fixed window slides under it.
+     Drawing is decoupled from sampling: samples and zoom only mark the chart dirty, and one animation
+     frame draws it; while the plot is on screen and not paused it redraws every frame to keep sliding. */
+  var raf = null, dirty = false, frozenNow = 0;
   function sliding() { return st.view === "plot" && !st.paused && !document.hidden && st.sel.length > 0; }
   function frame() {
     raf = null;
-    if (dirty || sliding()) { dirty = false; frames++; drawPlot(); }
+    if (dirty || sliding()) { dirty = false; drawPlot(); }
     if (sliding()) { raf = requestAnimationFrame(frame); }
   }
   function requestDraw() {
     dirty = true;
     if (raf === null) { raf = requestAnimationFrame(frame); }
   }
-  window.mogbusFrames = function () { return frames; };
 
   function drawPlot() {
     var host = $("plot"), W = Math.max(320, host.clientWidth || 720), H = 300, L = 56, R = 10, T = 10, B = 24;
