@@ -573,12 +573,60 @@ class Pymodbus(ImportCase):
         self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
         self.assertIn("action 'my_custom' has no mogbus equivalent", err)
 
-    def test_reset_warns_and_names_the_restart_fault(self):
-        pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "reset"}]}))
-        self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
-        self.assertIn("action 'reset' reboots the pymodbus server", err)
-        self.assertIn("(fault (kind restart)", err)
-        self.assertIn("not per register", err)
+    def test_reset_becomes_a_failing_read(self):
+        doc = pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "reset"}]})
+        pts, out, err = self.body(doc)
+        self.assertIn("(holding 1 (access read-only) (static 9) (degradation (fail-after-ms 0))",
+                      "\n".join(pts))
+        self.assertIn("(input 1 (static 9) (degradation (fail-after-ms 0))", "\n".join(pts))
+        self.assertIn("function code 0x00", err)
+        self.assertNotIn("reboots", err)
+        if mogbus_bin():
+            r = subprocess.run([mogbus_bin(), "--check", str(self.write("reset.scm", out))],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_reset_on_bits_applies_to_every_bit_of_the_cell(self):
+        doc = pm_doc({"bits": [{"addr": 0, "value": 5, "action": "reset"}]})
+        pts, out, err = self.body(doc)
+        joined = "\n".join(pts)
+        self.assertIn("(coil 0 (access read-only) (static on) (degradation (fail-after-ms 0))", joined)
+        self.assertIn("(discrete 3 (static off) (degradation (fail-after-ms 0)) (count 13)", joined)
+        self.assertNotIn("not supported", err)
+        if mogbus_bin():
+            r = subprocess.run([mogbus_bin(), "--check", str(self.write("resetbits.scm", out))],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    @unittest.skipUnless(mogbus_bin(), "mogbus binary not built")
+    def test_reset_read_answers_exception_04(self):
+        import socket
+        import time
+        doc = pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "reset"}, {"addr": 2, "value": 7}]})
+        code, out, _ = self.pm(doc)
+        self.assertEqual(code, 0)
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        out += "\n(server (mode tcp) (port %d))\n" % port
+        proc = subprocess.Popen([mogbus_bin(), str(self.write("srv.scm", out))],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+
+        def read(addr):
+            req = bytes([0, 1, 0, 0, 0, 6, 1, 3, 0, addr, 0, 1])
+            for _ in range(50):
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=2) as c:
+                        c.sendall(req)
+                        return c.recv(64)
+                except OSError:
+                    time.sleep(0.1)
+            self.fail("server did not start")
+
+        self.assertEqual(read(1)[7:], bytes([0x83, 0x04]))
+        self.assertEqual(read(2)[7:], bytes([0x03, 0x02, 0x00, 0x07]))
 
     def test_timestamp_becomes_seven_clock_points(self):
         doc = pm_doc({"uint16": [{"addr": [10, 16], "action": "timestamp"}], "write": [[10, 16]]})
@@ -724,7 +772,7 @@ class Pymodbus(ImportCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_strict(self):
-        code, _, _ = self.pm(pm_doc({"uint16": [{"addr": 1, "action": "reset"}]}), "--strict")
+        code, _, _ = self.pm(pm_doc({"uint16": [{"addr": 1, "action": "my_custom"}]}), "--strict")
         self.assertEqual(code, 1)
 
     def test_not_a_pymodbus_file(self):

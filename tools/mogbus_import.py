@@ -1066,6 +1066,15 @@ def pm_server(srv, sname, rep):
     return ""
 
 
+RESET_DEGRADATION = "(degradation (fail-after-ms 0))"
+
+
+def reset_note(rep):
+    """pymodbus answers a read of a reset cell with exception 04 under function code 0x00."""
+    rep.warn("action 'reset': pymodbus answers reads of the cell with exception 04 under function code "
+             "0x00 (a pymodbus quirk); mogbus uses the request's function code")
+
+
 def pm_behaviour(p, ctype, value, action, params, args, rep, where):
     """Sets p.value / p.extra from a pymodbus action. Registers only."""
     p.value = value
@@ -1100,10 +1109,8 @@ def pm_behaviour(p, ctype, value, action, params, args, rep, where):
         p.extra = [ramp_text(1, tmax, 1000, "hold")]
         p.value = None
     elif action == "reset":
-        rep.warn("%s: action 'reset' reboots the pymodbus server when the cell is read; mogbus has no "
-                 "register that restarts the device. The nearest feature is (fault (kind restart) "
-                 "(percent N)), which fires per request, not per register; the initial value is "
-                 "kept static" % where)
+        p.extra = [static_text(p), RESET_DEGRADATION]
+        reset_note(rep)
     else:
         rep.warn("%s: action %r has no mogbus equivalent; the initial value is kept static" %
                  (where, action))
@@ -1171,7 +1178,9 @@ def pm_points(cells, shared, sizes, args, rep):
             if not targets:
                 rep.warn("%s: not reachable by any function code in this layout; skipped" % where)
                 continue
-            if c.action:
+            if c.action == "reset":
+                reset_note(rep)
+            elif c.action:
                 rep.warn("%s: action %r on bits is not supported; the value is kept static" %
                          (where, c.action))
             if idx * 16 + 15 > 65535:
@@ -1179,10 +1188,14 @@ def pm_points(cells, shared, sizes, args, rep):
                 continue
             for table, base in targets:
                 for k in range(16):
-                    pts.append(Point(table=table, addr=base + k, value=bool(c.value >> k & 1),
-                                     src="pymodbus bits", noun="bit", first=base + k,
-                                     last=base + k, label=where,
-                                     read_only=table == "coil" and not c.access))
+                    p = Point(table=table, addr=base + k, value=bool(c.value >> k & 1),
+                              src="pymodbus bits", noun="bit", first=base + k,
+                              last=base + k, label=where,
+                              read_only=table == "coil" and not c.access)
+                    if c.action == "reset":
+                        p.extra = [static_text(p), RESET_DEGRADATION]
+                        p.src += ", action reset"
+                    pts.append(p)
             continue
         targets = reg_target(idx)
         if not targets:

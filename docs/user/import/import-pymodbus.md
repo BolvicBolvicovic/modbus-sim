@@ -33,7 +33,7 @@ file `pymodbus/server/simulator/setup.json` is the reference). It was checked ag
 | `action` `random` | `(static middle)` plus `(noise (amplitude half-range) (every-ms N))` over `minval`..`maxval` (default 1..65536) |
 | `action` `uptime` | a ramp from 1 that counts seconds and holds at the type maximum |
 | `action` `timestamp` | seven `u16` [`(clock FIELD)`](../config/behaviours/clock.md) points: cell A year, A+1 month, A+2 day, A+3 weekday (Monday 1), A+4 hour, A+5 minute, A+6 second, local time; see below |
-| `action` `reset` | a warning, the initial value stays static; see below |
+| `action` `reset` | the value plus [`(degradation (fail-after-ms 0))`](../config/behaviours/degradation.md): every read covering the point answers exception 04; see below |
 | `repeat` | the copied cells |
 | `identity` of the server | `vendor-name`, `product-code`, `vendor-url`, `product-name`, `model-name`, `major-minor-revision` |
 | `server_list` entry | `(server ...)`, see [servers](import-pymodbus-servers.md) |
@@ -62,10 +62,16 @@ read.
 
 ## The reset action
 
-In pymodbus, reading a cell with `"action": "reset"` raises and reboots the server. mogbus has no
-register tied to a restart: the importer keeps the initial value static and warns. The nearest
-feature is `(fault (kind restart) (percent N))`, which resets the device state on a share of the
-requests rather than on access to one register; see [restart](../config/faults/restart.md).
+In pymodbus, reading a cell with `"action": "reset"` raises inside the datastore (actions run on reads
+only, never on writes), and the server answers exception 04 (slave failure); nothing restarts and the
+value is kept. The importer maps the cell to its value plus `(degradation (fail-after-ms 0))`: every
+read covering the point answers exception 04, writes do not change that, and it fails again right after
+a device restart. On a `bits` cell the same is applied to the 16 coil and discrete points of the cell,
+because pymodbus also runs the action on bit reads.
+
+One difference remains: pymodbus puts function code 0x00 in that reply (a pymodbus quirk, so the
+function byte is 0x80), while mogbus answers with the request's function code. The importer writes one
+warning about it.
 
 ## Several devices
 
