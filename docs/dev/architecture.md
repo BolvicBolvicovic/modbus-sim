@@ -44,7 +44,7 @@
 
 ```
 include/        mogbus.h, the public C API of the library
-examples/       embed_tcp.c (a host program using only mogbus.h), python/ (embed.py and a pytest example), interop/ (pymodbus interoperability check)
+examples/       embed_tcp.c (a host program using only mogbus.h), tutorial/ (pump_station.c, the C tutorial program), python/ (embed.py and a pytest example), interop/ (pymodbus interoperability check)
 src/            the program, one folder per module (headers next to their .c files)
   build_config.h  WITH_TLS and WITH_CONFIG compile-time fallbacks shared by sources and tests
   config/       reads the config file, checks it, builds devices
@@ -361,7 +361,7 @@ Robustness evidence beyond the unit tests:
 
 `make` builds `mogbus`; `make lib` builds `libmogbus.a` and `libmogbus.so` from the same
 objects (compiled `-fPIC -fvisibility=hidden`, so only `MOGBUS_API` symbols are exported), and
-`make lib-check` builds `examples/embed_tcp.c` against both and checks the exported symbols.
+`make lib-check` builds `examples/embed_tcp.c` and `examples/tutorial/pump_station.c` against both, runs them and checks the exported symbols.
 `make tests` builds both `mogbus` (used by integration tests)
 and `mogbus-tests`, and `lib-check`, and runs the tests through `tools/run_tests.sh`: vtest always exits 0
 for whole suites, so the script runs each test by

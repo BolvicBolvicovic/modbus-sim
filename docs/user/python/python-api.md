@@ -47,7 +47,7 @@ else raises `MogbusError` listing the valid names.
 - A ramp is a dict or `mogbus.Ramp`: `{"from": 0, "to": 100, "step": 10, "every_ms": 1000, "mode": "bounce"}`.
 - `dev.write()` is what a client write does (it also writes `read_only` points, and fails on a point
   claimed by `set_value()`); `dev.set_value()` is the host side and makes the point host-owned. See
-  [client write and host write](../library/library-api.md#client-write-and-host-write).
+  [client write and host write](../library/library-simulate.md).
 
 ## Options, info and errors
 
@@ -64,7 +64,7 @@ else raises `MogbusError` listing the valid names.
 ## Access hook
 
 `dev.set_access_hook(fn)` calls `fn(access)` on every Modbus client read or write of the device
-(function codes and ordering as in the [C access hook](../library/library-access-hook.md)); `None`
+(function codes and ordering as in the [C access hook](../library/library-hooks.md)); `None`
 removes it. `access` is a `mogbus.Access` with `kind` (`mogbus.AccessKind.READ` or `WRITE`), `space`
 (`mogbus.Space`), `address`, `count`, `values` (list of ints for writes, `None` for reads) and
 `function_code`, plus `target` (`mogbus.AccessTarget.TABLE`, `FILE_RECORD`, `FIFO` or `CANOPEN`) and the
@@ -98,4 +98,4 @@ printed with its traceback and answered with exception 04.
 ## See also
 
 - [Getting started with Python](python-start.md)
-- [C API overview](../library/library-api.md)
+- [C API overview](../library/library-start.md)

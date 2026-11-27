@@ -21,7 +21,7 @@ Same layout and limits as [Read Coils (0x01)](fc01-read-coils.md): quantity 1 to
 input in the least significant bit of the first byte, a 5-byte request, every address configured.
 
 Discrete inputs are read-only for Modbus clients: no function code writes them. A host can still
-change them through the [C library](../library/library-api.md) or the
+change them through the [C library](../library/library-simulate.md) or the
 [control API](../observability/api/control-api.md).
 
 A fired `(fault (kind sensor-disconnect))` turns a successful read into exception 04 and leaves the

@@ -37,6 +37,11 @@ endif
 EXAMPLE_SRC = examples/embed_tcp.c
 EXAMPLE_SO  = examples/embed_tcp_shared
 EXAMPLE_A   = examples/embed_tcp_static
+TUTORIAL_SRC = examples/tutorial/pump_station.c
+TUTORIAL_SO  = examples/tutorial/pump_station_shared
+TUTORIAL_A   = examples/tutorial/pump_station_static
+# The tutorial program also loads a profile when the build has the config loader.
+TUTORIAL_ARGS = --self-test $(if $(filter 1,$(WITH_CONFIG)),--unit 10 --config profiles/two-devices.scm)
 
 # Prefer clang, fall back to gcc then cc. ccache and mold are independent
 # speed-ups, each used only when installed.
@@ -370,13 +375,21 @@ $(EXAMPLE_A): $(EXAMPLE_SRC) include/mogbus.h $(LIB_STATIC)
 # Builds the libraries, requires the .so to export only mogbus_* symbols, and runs
 # the example against both.
 ifeq ($(PLATFORM),posix)
-lib-check: $(EXAMPLE_SO) $(EXAMPLE_A)
+$(TUTORIAL_SO): $(TUTORIAL_SRC) include/mogbus.h $(LIB_SHARED)
+	$(CC) $(CFLAGS) -Iinclude $< ./$(LIB_SHARED) $(LINK_FLAGS) -Wl,-rpath,'$$ORIGIN/../..' -o $@
+
+$(TUTORIAL_A): $(TUTORIAL_SRC) include/mogbus.h $(LIB_STATIC)
+	$(CC) $(CFLAGS) -Iinclude $< $(LIB_STATIC) $(LINK_FLAGS) -o $@ $(LIBS)
+
+lib-check: $(EXAMPLE_SO) $(EXAMPLE_A) $(TUTORIAL_SO) $(TUTORIAL_A)
 	@bad=$$(nm -D --defined-only $(LIB_SHARED) | awk '{print $$3}' | \
 		grep -vE '^(mogbus_|_init$$|_fini$$|_edata$$|_end$$|__bss_start$$)' || true); \
 	if [ -n "$$bad" ]; then echo "$(LIB_SHARED) exports non-API symbols:" $$bad >&2; exit 1; fi; \
 	nm -D --defined-only $(LIB_SHARED) | grep -q ' mogbus_create$$' || { echo "$(LIB_SHARED) lacks mogbus_create" >&2; exit 1; }
 	./$(EXAMPLE_SO)
 	./$(EXAMPLE_A)
+	./$(TUTORIAL_SO) $(TUTORIAL_ARGS) > /dev/null
+	./$(TUTORIAL_A) $(TUTORIAL_ARGS) > /dev/null
 endif
 
 $(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(CFG_S7_OBJ)
@@ -492,7 +505,7 @@ clean:
 	$(RM) -r $(DIST_DIR) build/docs build/docs-fixtures $(FUZZ_DIR)
 	rm -f $(REV_STAMP) $(WEBUI_DATA) $(WEBUI_DATA).tmp
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
-		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times \
+		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TUTORIAL_SO) $(TUTORIAL_A) $(TESTS).times $(ASAN_TESTS).times \
 		python/mogbus/libmogbus.so mogbus mogbus.exe mogbus-tests mogbus-tests.exe mogbus-tests.exe.times mogbus.dll libmogbus.dll.a
 
 distclean: clean

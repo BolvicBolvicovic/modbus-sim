@@ -120,9 +120,10 @@
       "title": "Embedding in C and Python",
       "items": [
         "docs/user/library/library-start.md",
-        "docs/user/library/library-api.md",
-        "docs/user/library/library-data.md",
-        "docs/user/library/library-access-hook.md",
+        "docs/user/library/library-device.md",
+        "docs/user/library/library-serve.md",
+        "docs/user/library/library-simulate.md",
+        "docs/user/library/library-hooks.md",
         "docs/user/library/library-lifetimes.md",
         "docs/user/python/python-start.md",
         "docs/user/python/python-api.md",

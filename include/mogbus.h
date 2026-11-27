@@ -214,7 +214,24 @@ enum mogbus_ramp_mode_t
  * Zero-initialise it, then set the fields you need: a zeroed point is a static 0 of type U16
  * in the coil table, so set `type` for any space but holding/input. A point occupies 1
  * address, 2 for 32-bit types, 4 for 64-bit types and `length` for strings. Addresses may not
- * overlap and must fit below 65536.
+ * overlap and must fit below 65536. Fields were appended over time (`byte_order`, `length`,
+ * `text`, `read_only`, `clock_*`), so code built against an older header keeps working when it
+ * zero-initialises the struct.
+ *
+ * Register layout of a 32-bit value 0x0A0B0C0D (64-bit types extend the same rule), by
+ * `word_order` and `byte_order`:
+ *
+ * | word_order | byte_order | registers (low address first) | name |
+ * |---|---|---|---|
+ * | MOGBUS_WORDS_HIGH_FIRST | MOGBUS_BYTES_BIG | 0x0A0B 0x0C0D | ABCD |
+ * | MOGBUS_WORDS_LOW_FIRST | MOGBUS_BYTES_BIG | 0x0C0D 0x0A0B | CDAB |
+ * | MOGBUS_WORDS_HIGH_FIRST | MOGBUS_BYTES_LITTLE | 0x0B0A 0x0D0C | BADC |
+ * | MOGBUS_WORDS_LOW_FIRST | MOGBUS_BYTES_LITTLE | 0x0D0C 0x0B0A | DCBA |
+ *
+ * A string point has `length` registers of two ASCII bytes each, holding or input table only;
+ * read and replace it with mogbus_device_get_string() and mogbus_device_set_string(). `read_only`
+ * makes every Modbus write that touches the point fail with exception 02, like
+ * `(access read-only)` in a config.
  */
 struct mogbus_point_t
 {
@@ -246,7 +263,9 @@ struct mogbus_point_t
 /**
  * @brief Adds an empty device to the context.
  *
- * Machines and faults are only available through config files.
+ * Points support static values, ramps and wall-clock fields. Machines, faults and user-defined
+ * function codes are only available through config files (mogbus_load_config()); code-built and
+ * loaded devices can be mixed in one context, which holds up to MOGBUS_MAX_DEVICES devices.
  *
  * @param ctx Context.
  * @param unit_id Modbus unit id; must not be in use.
@@ -303,7 +322,8 @@ enum mogbus_fault_kind_t
  * mogbus_fault_kind_t and only those configured on the device itself are listed. A fault fires
  * on `percent` of the responses, or by a fixed schedule when `scheduled` is set (percent is
  * then meaningless). delay_ms is set for MOGBUS_FAULT_DELAY and exception_code for
- * MOGBUS_FAULT_EXCEPTION.
+ * MOGBUS_FAULT_EXCEPTION. Faults and user-defined function codes come only from a config loaded
+ * with mogbus_load_config(); the C API cannot add them.
  */
 struct mogbus_device_info_t
 {
@@ -365,7 +385,8 @@ MOGBUS_API bool		mogbus_device_add_point(mogbus_device_t* dev, const mogbus_poin
 /**
  * @brief Reads consecutive raw 16-bit values of a table.
  *
- * Ramps are advanced to the current time first. Bit spaces read as 0 or 1.
+ * Ramps are advanced to the current time first. Bit spaces read as 0 or 1. Host side: it never
+ * calls the access hook.
  *
  * @param dev Device.
  * @param space Table.
@@ -380,8 +401,10 @@ MOGBUS_API bool		mogbus_device_read(mogbus_device_t* dev, mogbus_space_t space, 
  * @brief Writes consecutive raw 16-bit values, as a client write would.
  *
  * Works on every space, including the read-only ones and points configured with
- * `(access read-only)` (the host plays the physical side). A written ramp becomes static, and matching machine on-write handlers run. Bit spaces accept
- * only 0 or 1.
+ * `(access read-only)` or `read_only` (the host plays the physical side). A written ramp becomes
+ * static, and matching machine on-write handlers run. Bit spaces accept only 0 or 1. It works on
+ * raw register addresses (a float32 is two registers), unlike mogbus_device_set_value(), which
+ * addresses a point. It never calls the access hook.
  *
  * @param dev Device.
  * @param space Table.
@@ -414,7 +437,7 @@ MOGBUS_API bool		mogbus_device_get_value(mogbus_device_t* dev, mogbus_space_t sp
  *
  * Works on every space, including read-only ones. The point becomes host-owned: a ramp stops
  * and client writes to it get Modbus exception 02 until the device restarts. Use
- * mogbus_device_write() to change a value the way a client would.
+ * mogbus_device_write() to change a value the way a client would. It never calls the access hook.
  *
  * @param dev Device.
  * @param space Table.
@@ -500,6 +523,9 @@ struct mogbus_access_t
  *
  * It runs on the thread that steps the server and may call the other `mogbus_device_*` functions
  * on the same device (for example mogbus_device_set_value() to refresh a value before a read).
+ * The pointers in the access (`values`, `data`) are valid only during the call. Code that handles
+ * only tables must check `target == MOGBUS_TARGET_TABLE`, because the other targets also reach a
+ * hook that was written before they existed.
  *
  * @param user Pointer given to mogbus_device_set_access_hook().
  * @param dev Device being accessed.
@@ -514,13 +540,28 @@ typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogb
  *
  * Only Modbus client requests call it, after the range is known to be defined (reads) or
  * defined and writable (writes), never host calls (mogbus_device_write(), mogbus_device_set_value(),
- * the HTTP control API or machines). Covered (hex codes): FC 01-04 (before the table is read), 05, 06, 0F, 10,
+ * the HTTP control API or machines). An undefined address, a read-only point or a machine-driven
+ * point answers exception 02 without calling the hook. Covered (hex codes): FC 01-04 (before the table is read), 05, 06, 0F, 10,
  * 16 (the masked result) and 17 (write hook first, then the read hook once the write is applied),
  * the `registers` action of user-defined function codes, file records (FC 14 read hook once per
  * sub-request before the response is built; FC 15 write hook for every sub-request before anything is
  * written), FIFO (FC 18, before the queue is read) and CANopen objects (FC 2B/0D, before the object is read
- * or written; a veto is answered as the extended failure `CE 0x08000020`). Not covered: diagnostics and
- * identification. A device has one hook; a new one replaces it.
+ * or written; a veto is answered as the extended failure `CE 0x08000020`, whatever the nonzero
+ * return, because the CANopen response has no place for a Modbus exception code). Not covered:
+ * diagnostics and identification.
+ *
+ * Details per request: the hook sees the raw values about to be stored, so FC 16 reports the masked
+ * result. FC 17 runs the write hook first and the read hook once the write is applied (an exception
+ * from the read hook leaves the write applied). FC 14 runs the read hook once per sub-request, in
+ * order, after the whole request validated, and a nonzero return skips the later sub-requests;
+ * FC 15 runs the write hook for every sub-request before anything is written. FC 18 runs it after
+ * the FIFO address is known to exist, so the hook can refresh the queue with mogbus_device_set_fifo().
+ * A vetoed write changes nothing, so writes stay all-or-nothing. A returned exception counts like
+ * any other (diagnostic counter, metrics). With `broadcast-execute` on, the hook runs once per
+ * device. Faults still act on the response.
+ *
+ * A device has one hook; a new one replaces it. The hook is not part of a config and does not
+ * survive mogbus_destroy(). It runs on the thread that steps the server, so it must not block.
  *
  * @param dev Device.
  * @param fn Hook, or NULL to remove it.
@@ -533,6 +574,8 @@ MOGBUS_API bool		mogbus_device_set_access_hook(mogbus_device_t* dev, mogbus_acce
  * @brief Adds file records to a device, as `(file N (record R (values ...)))` does in a config.
  *
  * Clients read them with FC 14 and write them with FC 15. Records of one file must not overlap.
+ * The host reads and changes them with mogbus_device_read_file_records() and
+ * mogbus_device_write_file_records(); those never call the access hook. Values are 16-bit registers.
  *
  * @param dev Device.
  * @param file File number, 1-65535.
@@ -575,6 +618,9 @@ MOGBUS_API bool		mogbus_device_write_file_records(mogbus_device_t* dev, uint16_t
 
 /**
  * @brief Adds a FIFO queue that clients read with FC 18 at @p address.
+ *
+ * Storage always has capacity for 31 values (the Modbus maximum), so mogbus_device_set_fifo() can
+ * grow the queue later.
  * @param dev Device.
  * @param address FIFO pointer address.
  * @param count Initial number of values, 0-31.
@@ -688,6 +734,15 @@ enum mogbus_tls_version_t
 /**
  * @brief Server settings. Start from mogbus_server_options_defaults(); fields a mode does not use
  *        are ignored.
+ *
+ * Fields by mode: TCP uses bind_address, port, idle_timeout_ms and the tls_* fields; RTU_TCP and
+ * ASCII_TCP use bind_address, port and idle_timeout_ms (RTU_TCP also baud, frame_gap_ms,
+ * broadcast_execute); UDP, RTU_UDP and ASCII_UDP use bind_address and port (RTU_UDP also
+ * broadcast_execute); the PTY and DEVICE modes use the serial line fields and RTU timing (`path`
+ * for DEVICE); the FD modes use `fd`, a byte stream you already own (a socketpair or PTY master),
+ * never closed by the library. All modes use `seed`. The HTTP fields are independent of the mode.
+ * A server serves every device the context has when it is created; a context holds up to
+ * MOGBUS_MAX_SERVERS servers.
  */
 struct mogbus_server_options_t
 {
@@ -705,7 +760,7 @@ struct mogbus_server_options_t
 	uint32_t	data_bits;		/**< serial: 7 or 8 (RTU always uses 8) */
 	mogbus_parity_t	parity;			/**< serial */
 	uint32_t	stop_bits;		/**< serial: 1 or 2 */
-	bool		tls_enabled;		/**< MOGBUS_MODE_TCP only; needs a build with TLS */
+	bool		tls_enabled;		/**< MOGBUS_MODE_TCP only; needs a build with TLS (creation fails otherwise) */
 	uint32_t	tls_handshake_timeout_ms;	/**< close unfinished handshakes after this */
 	const char*	tls_certificate;	/**< server certificate chain, PEM file */
 	const char*	tls_private_key;	/**< server private key, PEM file */
@@ -730,7 +785,12 @@ struct mogbus_server_options_t
  */
 MOGBUS_API mogbus_server_options_t	mogbus_server_options_defaults(void);
 
-/** @brief Why a server could not be created (see mogbus_server_create()). */
+/**
+ * @brief Why a server could not be created (see mogbus_server_create()).
+ *
+ * The `mogbus` binary maps MOGBUS_ERR_SERIAL to exit status 1 and MOGBUS_ERR_LISTEN to 2. A TLS
+ * setup failure is also logged at WARN, like the transports log their own start-up errors.
+ */
 enum mogbus_error_t
 {
 	MOGBUS_OK,		/**< no error */
@@ -796,7 +856,9 @@ MOGBUS_API bool		mogbus_server_check(const mogbus_t* ctx, const mogbus_server_op
  * ASCII-over-TCP/UDP modes. A bind of 0.0.0.0 or :: is reached through loopback. A TLS server
  * is only connected to, since the probe has no client certificate. A fault that drops or delays
  * replies on @p unit_id makes the probe fail. It blocks the calling thread, so it cannot probe a
- * server stepped by the same thread.
+ * server stepped by the same thread: call it from another thread or process. It needs no context
+ * or config, uses blocking sockets with a deadline and does not allocate. It is the client side of
+ * `mogbus --health`.
  *
  * @param options Settings of the server to probe, e.g. from mogbus_config_server_options().
  * @param unit_id Unit to ask; not 0 (broadcast is never answered).
@@ -872,7 +934,8 @@ MOGBUS_API int		mogbus_server_run(mogbus_server_t* server);
 /**
  * @brief Closes the transport and releases the handle.
  *
- * Client connections are dropped; fds you passed in are left open.
+ * Client connections are dropped; fds you passed in are left open. The slot is reused by the next
+ * mogbus_server_create().
  * @param server Server; NULL is ignored.
  */
 MOGBUS_API void		mogbus_server_close(mogbus_server_t* server);

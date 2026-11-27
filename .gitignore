@@ -26,3 +26,5 @@ python/build/
 *.dll
 *.exe.times
 src/webui/page_data.h
+examples/tutorial/pump_station_shared
+examples/tutorial/pump_station_static

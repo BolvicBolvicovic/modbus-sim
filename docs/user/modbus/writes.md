@@ -33,7 +33,7 @@ or malformed request changes no record, and it can update only configured file-r
 - Values last until the simulator restarts. The config file is never changed.
 
 The host side (the C library, the control API, machines) writes with `device_write` semantics:
-read-only points can be written there. See [library API](../library/library-api.md) and the
+read-only points can be written there. See [host writes in the C tutorial](../library/library-simulate.md) and the
 [control API](../observability/api/control-api.md).
 
 ## See also
