@@ -136,7 +136,6 @@ input { width: 9rem; }
   try {
     var logo = document.getElementById("logo-icon").cloneNode(true);
     logo.removeAttribute("id");
-    if (!logo.getAttribute("xmlns")) logo.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     document.getElementById("favicon").href = "data:image/svg+xml," + encodeURIComponent(new XMLSerializer().serializeToString(logo));
   } catch (e) { /* favicon is cosmetic */ }
   var SPACES = ["coil", "discrete", "input", "holding"];
