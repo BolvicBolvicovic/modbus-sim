@@ -11,6 +11,7 @@
 #define OS_WAIT_H
 
 #include "os/os_socket.h"
+#include "vlib/bits.h"
 #include "vlib/c_types.h"
 
 typedef enum os_wait_kind_t os_wait_kind_t;
@@ -26,11 +27,11 @@ enum os_wait_kind_t
 /** @brief Event bits of os_wait_entry_t.events and .revents. */
 enum
 {
-	OS_WAIT_IN    = 1,
-	OS_WAIT_OUT   = 2,
-	OS_WAIT_ERR   = 4,
-	OS_WAIT_HUP   = 8,
-	OS_WAIT_INVAL = 16,
+	OS_WAIT_IN    = BIT0,
+	OS_WAIT_OUT   = BIT1,
+	OS_WAIT_ERR   = BIT2,
+	OS_WAIT_HUP   = BIT3,
+	OS_WAIT_INVAL = BIT4,
 	OS_WAIT_MAX   = 512,	/**< most entries one os_wait() call takes (8 servers of 38 entries each fit) */
 };
 

@@ -2,6 +2,7 @@
 #define TESTS_TESTS_UTILS_TEST_SUPPORT_H
 
 #include "modbus/mbap.h"
+#include "vlib/bits.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -20,13 +21,13 @@ enum
 
 enum
 {
-	TS_CAPTURE_STDERR	= 1u << 0,
-	TS_CAPTURE_STDOUT	= 1u << 1,
-	TS_NULL_STDIN		= 1u << 2,
-	TS_NULL_STDOUT		= 1u << 3,
-	TS_DEATH_SIGNAL		= 1u << 4,
-	TS_CLEAN_EXIT		= 1u << 5,
-	TS_EXIT_IS_READY	= 1u << 6
+	TS_CAPTURE_STDERR	= BIT0,
+	TS_CAPTURE_STDOUT	= BIT1,
+	TS_NULL_STDIN		= BIT2,
+	TS_NULL_STDOUT		= BIT3,
+	TS_DEATH_SIGNAL		= BIT4,
+	TS_CLEAN_EXIT		= BIT5,
+	TS_EXIT_IS_READY	= BIT6
 };
 
 typedef struct ts_server ts_server_t;

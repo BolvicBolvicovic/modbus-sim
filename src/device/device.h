@@ -5,6 +5,7 @@
 #ifndef DEVICE_H
 #define DEVICE_H
 
+#include "vlib/bits.h"
 #include "vlib/c_types.h"
 #include "vlib/arena.h"
 #include "device/behaviour.h"
@@ -185,7 +186,7 @@ struct device_canopen_object_t
  */
 enum diagnostic_register_bit
 {
-	DIAG_REG_CHARACTER_OVERRUN       = 1u << 0,
+	DIAG_REG_CHARACTER_OVERRUN       = BIT0,
 };
 
 /** @brief MEI 14 (Read Device Identification) object ids. */
