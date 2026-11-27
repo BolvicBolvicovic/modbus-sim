@@ -7,6 +7,7 @@
 
 #include "vlib/c_types.h"
 #include "device/device.h"
+#include "device/action.h"
 #include "device/fault.h"
 #include "util/rng.h"
 

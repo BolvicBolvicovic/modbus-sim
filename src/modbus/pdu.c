@@ -3,7 +3,6 @@
  * @brief PDU dispatch: every supported function code against a device.
  */
 #include "modbus/pdu.h"
-#include "device/action.h"
 #include "device/machine.h"
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"

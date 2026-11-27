@@ -4,7 +4,6 @@
  *        fault operations behind `/api/`.
  */
 #include "net/net_control.h"
-#include "device/action.h"
 #include "net/net_common.h"
 #include "os/os_time.h"
 #include "util/log.h"
