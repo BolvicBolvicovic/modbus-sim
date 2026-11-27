@@ -1,4 +1,5 @@
 #include "vtest.h"
+#include "tests/tests_utils/test_case.h"
 #include "device/machine.h"
 #include "modbus/pdu.h"
 #include "modbus/mbap.h"
@@ -712,7 +713,7 @@ TEST(DiagnosticsRestartCommunicationsClearsCountersAndEventLog)
 		u8		resp[MODBUS_MAX_PDU];
 		u32		log_len = cases[i].keeps_log ? sizeof(log) : 0;
 
-		fprintf(stderr, "restart %s\n", cases[i].name);
+		test_case = cases[i].name;
 		dev->diagnostic_register    = DIAG_REG_CHARACTER_OVERRUN;
 		dev->com_event_count        = 11;
 		dev->com_event_log_count    = (u16)sizeof(log);
@@ -1650,7 +1651,7 @@ TEST(ReadDeviceIdentificationStreamsAndSpecificObjects)
 			break;
 		}
 
-		fprintf(stderr, "device id case '%s'\n", cases[i].name);
+		test_case = cases[i].name;
 		len = run(dev, req, sizeof(req), resp);
 		if (cases[i].exc != 0)
 		{
@@ -1909,7 +1910,7 @@ TEST(InjectedExceptionsAreCountedByCode)
 		fault_decision_t	decision = { 0 };
 		u8			resp[MODBUS_MAX_PDU];
 
-		fprintf(stderr, "injected exception case '%s'\n", cases[i].name);
+		test_case = cases[i].name;
 		set_fault(dev, FAULT_EXCEPTION, 0, cases[i].code, 100);
 		if (cases[i].corrupt)
 			set_fault(dev, FAULT_CORRUPT, 0, 0, 100);

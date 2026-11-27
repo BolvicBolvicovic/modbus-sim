@@ -1,4 +1,5 @@
 #include "vtest.h"
+#include "tests/tests_utils/test_case.h"
 #include "device/device.h"
 #include "device/encode.h"
 #include "device/fault.h"
@@ -844,7 +845,7 @@ TEST(FaultPairsCombineInOneDecision)
 		rng_t		rng;
 		fault_set_t	set = { 0 };
 
-		fprintf(stderr, "fault pair '%s'\n", cases[c].name);
+		test_case = cases[c].name;
 		for (u32 k = 0; k < 2; k++)
 		{
 			fault_kind_t kind = k == 0 ? cases[c].a : cases[c].b;
@@ -863,6 +864,7 @@ TEST(FaultPairsCombineInOneDecision)
 			ASSERT_EQ(!d.disconnect);
 		}
 	}
+	test_case = 0;
 }
 
 TEST(EncodeFloat32PreservesNonFiniteAndMapsOutOfRange)

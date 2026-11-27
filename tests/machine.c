@@ -1,4 +1,5 @@
 #include "vtest.h"
+#include "tests/tests_utils/test_case.h"
 #include "device/machine.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
@@ -1115,6 +1116,7 @@ TEST(MachineValidatesExpressionTypesAndCycles)
 	{
 		arena_t*	arena = ARENA_ALLOC();
 		machine_def_t*	def   = simple_def(arena);
+		char		name[32];
 		u16		root  = 99;
 		u16		tick  = 0;
 
@@ -1174,10 +1176,12 @@ TEST(MachineValidatesExpressionTypesAndCycles)
 			set_var_stmt(def, 0, root);
 		def->states[0].on_tick_first = tick;
 		def->states[0].on_tick_count = 1;
-		fprintf(stderr, "invalid expression case %d\n", (int)bad);
+		snprintf(name, sizeof(name), "invalid expression %d", (int)bad);
+		test_case = name;
 		expect_def_error(arena, def);
 		arena_release(arena);
 	}
+	test_case = 0;
 }
 TEST(MachineRejectsDuplicateAndExcessMachines)
 {
