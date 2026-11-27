@@ -993,6 +993,15 @@ MOGBUS_API bool		mogbus_probe(const mogbus_server_options_t* options, uint8_t un
 				     uint32_t timeout_ms, char* err, size_t err_size);
 
 /**
+ * @brief Milliseconds of a monotonic clock, the one the servers use for timeouts and faults.
+ *
+ * Only differences are meaningful; it never jumps when the wall clock is changed.
+ *
+ * @return The current time in milliseconds.
+ */
+MOGBUS_API uint64_t	mogbus_now_ms(void);
+
+/**
  * @brief Computes the RTU timing a server would use.
  * @param baud Baud rate; 0 = unknown.
  * @param frame_gap_ms Explicit inter-frame gap; 0 = derive it.

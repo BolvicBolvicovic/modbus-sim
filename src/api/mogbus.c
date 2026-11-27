@@ -382,6 +382,12 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 	return true;
 }
 
+uint64_t
+mogbus_now_ms(void)
+{
+	return os_now_ms();
+}
+
 void
 mogbus_rtu_timing(uint32_t baud, uint32_t frame_gap_ms, uint32_t* t35_us, uint32_t* gap_ms)
 {

@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 typedef struct cli_t cli_t;
 
@@ -306,16 +305,6 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 	}
 }
 
-/** @brief Wall clock in milliseconds; only used to pace --show-registers. */
-static int64_t
-now_ms(void)
-{
-	struct timespec ts;
-
-	timespec_get(&ts, TIME_UTC);
-	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
 /** @brief Most points one device can have (DEVICE_MAX_POINTS in the library). */
 enum { SHOW_MAX_POINTS = 8192 };
 
@@ -509,21 +498,19 @@ main(int argc, char** argv)
 		status = mogbus_server_run(server);
 	else
 	{
-		int64_t	next = now_ms();
+		int64_t	next = (int64_t)mogbus_now_ms();
 		bool	all  = true;
 		int	rc;
 
 		do
 		{
-			int64_t	wait = next - now_ms();
+			int64_t	wait = next - (int64_t)mogbus_now_ms();
 
-			/* wall clock: a backwards jump must not postpone the next print */
-			if (wait <= 0 ||
-			    wait > cli.show_ms)
+			if (wait <= 0)
 			{
 				show_registers(ctx, all, cli.log_json);
 				all  = false;
-				next = now_ms() + cli.show_ms;
+				next = (int64_t)mogbus_now_ms() + cli.show_ms;
 				wait = cli.show_ms;
 			}
 			rc = mogbus_server_step(server, (int)wait);
