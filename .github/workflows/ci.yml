@@ -428,10 +428,12 @@ jobs:
 
       - name: Process is PID 1, unprivileged and without capabilities
         run: |
-          docker exec mogbus cat /proc/1/cmdline | tr '\0' ' '; echo
-          docker exec mogbus grep -E '^(Uid|Gid|CapEff|NoNewPrivs):' /proc/1/status
-          docker exec mogbus grep -qE '^Uid:[[:space:]]+10001[[:space:]]' /proc/1/status
-          docker exec mogbus grep -qE '^CapEff:[[:space:]]+0+$' /proc/1/status
+          # The image has no shell or coreutils: read /proc of the container's init from the host.
+          pid=$(docker inspect -f '{{.State.Pid}}' mogbus)
+          tr '\0' ' ' < "/proc/$pid/cmdline"; echo
+          grep -E '^(Uid|Gid|CapEff|NoNewPrivs):' "/proc/$pid/status"
+          grep -qE '^Uid:[[:space:]]+10001[[:space:]]' "/proc/$pid/status"
+          grep -qE '^CapEff:[[:space:]]+0+$' "/proc/$pid/status"
           docker top mogbus
 
       - name: SIGTERM stops the container promptly and cleanly
