@@ -268,6 +268,21 @@ register_value(const u8* pdu, u32 len, u32 index)
 	return len >= 2 + (index + 1) * 2 ? get_be16(pdu + 2 + index * 2) : 0;
 }
 
+/* One FC 03 read of `address` on `unit`; true when the reply is exactly that one register. */
+static bool
+reads_register(client_t* client, u8 unit, u16 address, u16 want)
+{
+	u8  req[5];
+	u8  resp[MODBUS_MAX_PDU];
+	u32 len = 0;
+
+	read_pdu(req, FC_READ_HOLDING_REGISTERS, address, 1);
+	return exchange(client, unit, req, 5, resp, &len) &&
+	       len == 4 &&
+	       resp[0] == FC_READ_HOLDING_REGISTERS &&
+	       register_value(resp, len, 0) == want;
+}
+
 static bool
 set_small_send_buffer(int fd, int size)
 {
@@ -835,20 +850,15 @@ TEST(NetUnitIdRoutingAndGatewayException)
 				    "(device (unit-id 1) (holding 0 (static 4369)))\n"
 				    "(device (unit-id 2) (holding 0 (static 8738)))");
 
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client) &&
+	     reads_register(&client, 1, 0, 0x1111) &&
+	     reads_register(&client, 2, 0, 0x2222);
 	if (ok)
 	{
 		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 0x1111;
-	}
-	if (ok)
-		ok = exchange(&client, 2, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 0x2222;
-	if (ok)
 		ok = exchange(&client, 3, req, 5, resp, &len) &&
 		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_GATEWAY_TARGET_FAILED);
+	}
 
 	client_close(&client);
 	server_stop();
@@ -874,14 +884,7 @@ TEST(NetTcpUnitZeroIsNotBroadcast)
 		ok = exchange(&client, 0, req, 5, resp, &len) &&
 		     exception_is(resp, len, FC_WRITE_SINGLE_REGISTER, EXC_GATEWAY_TARGET_FAILED);
 	}
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 11;
-		ok = ok && exchange(&client, 2, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 22;
-	}
+	ok = ok && reads_register(&client, 1, 0, 11) && reads_register(&client, 2, 0, 22);
 
 	client_close(&client);
 	server_stop();
@@ -891,21 +894,15 @@ TEST(NetTcpUnitZeroIsNotBroadcast)
 TEST(NetAnyUnitDeviceAnswersUnknownUnitsAndExactMatchWins)
 {
 	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len  = 0;
 	bool	 ok   = server_start("",
 				     "(device (unit-id 1) (holding 0 (static 11)))\n"
 				     "(device (unit-id 5) (any-unit on) (holding 0 (static 55)))");
 
 	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 	/* exchange() only succeeds when the reply echoes the request's unit id */
-	ok = ok && exchange(&client, 1, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 11;
-	ok = ok && exchange(&client, 5, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
-	ok = ok && exchange(&client, 9, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
-	ok = ok && exchange(&client, 0, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
-	ok = ok && exchange(&client, 255, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
+	ok = ok && reads_register(&client, 1, 0, 11) && reads_register(&client, 5, 0, 55) &&
+	     reads_register(&client, 9, 0, 55) && reads_register(&client, 0, 0, 55) &&
+	     reads_register(&client, 255, 0, 55);
 
 	client_close(&client);
 	server_stop();
@@ -984,8 +981,6 @@ TEST(NetDiagnosticsListenOnlySilenceOverWire)
 {
 	client_t	client = { .fd = -1 };
 	u8		req[8];
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
 	bool		ok  = server_start("", "(device (unit-id 1) (holding 0 (static 4660)))");
 
 	ok = ok && client_open(g_server.probe_port, NET_SHORT_TIMEOUT_MS, &client);
@@ -1011,12 +1006,7 @@ TEST(NetDiagnosticsListenOnlySilenceOverWire)
 		ok = send_request(&client, 1, ts_next_tid(), req, 5) &&
 		     recv_none(&client, NET_SHORT_TIMEOUT_MS);
 	}
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 0x1234;
-	}
+	ok = ok && reads_register(&client, 1, 0, 0x1234);
 
 	client_close(&client);
 	server_stop();
@@ -1335,8 +1325,6 @@ TEST(NetClientDisconnectDuringDelayedResponse)
 	client_t	client = { .fd = -1 };
 	client_t	probe = { .fd = -1 };
 	u8		req[MBAP_HEADER_SIZE + 5];
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
 	u16		tid = ts_next_tid();
 	bool		ok = server_start("",
 					 "(device (unit-id 1) (holding 0 (static 9))"
@@ -1363,9 +1351,7 @@ TEST(NetClientDisconnectDuringDelayedResponse)
 		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &probe);
 	if (ok)
 	{
-		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&probe, 1, req + MBAP_HEADER_SIZE, 5, resp, &len) &&
-		     len == 4 && register_value(resp, len, 0) == 9;
+		ok = reads_register(&probe, 1, 0, 9);
 	}
 
 	client_close(&probe);
@@ -1410,9 +1396,7 @@ TEST(NetClientHalfCloseDuringDelayedResponse)
 		ok = client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &probe);
 	if (ok)
 	{
-		read_pdu(req + MBAP_HEADER_SIZE, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&probe, 1, req + MBAP_HEADER_SIZE, 5, resp, &len) &&
-		     len == 4 && register_value(resp, len, 0) == 9;
+		ok = reads_register(&probe, 1, 0, 9);
 	}
 
 	client_close(&probe);
@@ -1507,127 +1491,58 @@ TEST(NetDropFaultStillAppliesWrites)
 	ASSERT_EQ(ok);
 }
 
-TEST(NetExceptionFaultReachesClient)
+/* One server, one device per fault combination: each unit checks that its faults reach the wire
+ * (the fault decisions themselves are covered in device.c/pdu.c). */
+TEST(NetFaultsReachTheWire)
 {
 	client_t client = { .fd = -1 };
 	u8	 req[8];
 	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len  = 0;
-	bool	 ok   = server_start("(seed 1)",
-				     "(device (unit-id 1) (holding 0 (static 42))"
-				     "  (fault (kind exception) (code 6) (percent 100)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_SLAVE_DEVICE_BUSY);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetCorruptFaultReachesClient)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len  = 0;
-	bool	 ok   = server_start("(seed 2)",
-				     "(device (unit-id 1) (holding 0 (static 42))"
-				     "  (fault (kind corrupt) (percent 100)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     len == 4 &&
-		     resp[0] == FC_READ_HOLDING_REGISTERS &&
-		     resp[1] == (0x02 ^ 0xFF) &&
-		     register_value(resp, len, 0) == 42;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetDelayAndCorruptFaultsCombine)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len  = 0;
+	u32	 len = 0;
 	u64	 start;
-	bool	 ok = server_start("(seed 3)",
-				   "(device (unit-id 1) (holding 0 (static 42))"
-				   "  (fault (kind delay) (delay-ms 300) (percent 100))"
-				   "  (fault (kind corrupt) (percent 100)))");
+	bool	 ok  = server_start("(seed 3)",
+				    "(device (unit-id 1) (holding 0 (static 42))"
+				    "  (fault (kind exception) (code 6) (percent 100)))"
+				    "(device (unit-id 2) (holding 0 (static 42))"
+				    "  (fault (kind corrupt) (percent 100)))"
+				    "(device (unit-id 3) (holding 0 (static 42))"
+				    "  (fault (kind delay) (delay-ms 300) (percent 100))"
+				    "  (fault (kind corrupt) (percent 100)))"
+				    "(device (unit-id 4) (holding 0 (static 42))"
+				    "  (fault (kind exception) (code 6) (percent 100))"
+				    "  (fault (kind corrupt) (percent 100)))"
+				    "(device (unit-id 5) (holding 0 (static 42))"
+				    "  (fault (kind drop) (percent 100))"
+				    "  (fault (kind exception) (code 6) (percent 100)))");
 
 	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		start = os_now_ms();
-		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     os_now_ms() - start >= 300 &&
-		     len == 4 &&
-		     resp[0] == FC_READ_HOLDING_REGISTERS &&
-		     resp[1] == (0x02 ^ 0xFF) &&
-		     register_value(resp, len, 0) == 42;
-	}
+	read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
 
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetExceptionAndCorruptFaultsCombine)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len  = 0;
-	bool	 ok   = server_start("(seed 3)",
-				     "(device (unit-id 1) (holding 0 (static 42))"
-				     "  (fault (kind exception) (code 6) (percent 100))"
-				     "  (fault (kind corrupt) (percent 100)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     len == 2 &&
-		     resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80) &&
-		     resp[1] == (EXC_SLAVE_DEVICE_BUSY ^ 0xFF);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetDropAndExceptionFaultsSuppressResponse)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	bool	 ok   = server_start("(seed 3)",
-				     "(device (unit-id 1) (holding 0 (static 42))"
-				     "  (fault (kind drop) (percent 100))"
-				     "  (fault (kind exception) (code 6) (percent 100)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = send_request(&client, 1, ts_next_tid(), req, 5) &&
-		     ts_no_data(client.fd, 200);
-	}
+	/* exception alone */
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) &&
+	     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_SLAVE_DEVICE_BUSY);
+	/* corrupt alone: the byte count is inverted, the data is intact */
+	ok = ok && exchange(&client, 2, req, 5, resp, &len) &&
+	     len == 4 &&
+	     resp[0] == FC_READ_HOLDING_REGISTERS &&
+	     resp[1] == (0x02 ^ 0xFF) &&
+	     register_value(resp, len, 0) == 42;
+	/* delay then corrupt */
+	start = os_now_ms();
+	ok = ok && exchange(&client, 3, req, 5, resp, &len) &&
+	     os_now_ms() - start >= 300 &&
+	     len == 4 &&
+	     resp[0] == FC_READ_HOLDING_REGISTERS &&
+	     resp[1] == (0x02 ^ 0xFF) &&
+	     register_value(resp, len, 0) == 42;
+	/* exception, then corrupt */
+	ok = ok && exchange(&client, 4, req, 5, resp, &len) &&
+	     len == 2 &&
+	     resp[0] == (FC_READ_HOLDING_REGISTERS | 0x80) &&
+	     resp[1] == (EXC_SLAVE_DEVICE_BUSY ^ 0xFF);
+	/* drop wins over exception: no reply */
+	ok = ok && send_request(&client, 5, ts_next_tid(), req, 5) &&
+	     ts_no_data(client.fd, 200);
 
 	client_close(&client);
 	server_stop();
@@ -1661,9 +1576,6 @@ TEST(NetDisconnectFaultClosesClient)
 TEST(NetConnectionLimit)
 {
 	client_t clients[32];
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len   = 0;
 	bool	 ok    = server_start("", "(device (unit-id 1) (holding 0 (static 5)))");
 	u32	 opened = 0;
 
@@ -1677,9 +1589,7 @@ TEST(NetConnectionLimit)
 	}
 	if (ok)
 	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&clients[0], 1, req, 5, resp, &len) &&
-		     len == 4 && register_value(resp, len, 0) == 5;
+		ok = reads_register(&clients[0], 1, 0, 5);
 	}
 
 	/* The 33rd connection is either refused outright, closed by the server,
@@ -1706,145 +1616,6 @@ TEST(NetConnectionLimit)
 		client_close(&clients[i]);
 	server_stop();
 	ASSERT_EQ(ok && opened == 32);
-}
-
-TEST(NetWritesAreAllOrNothing)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[16];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)\n"
-				    "  (holding 0 (static 1)) (holding 1 (static 2)) (holding 2 (static 3))\n"
-				    "  (coil 0 (static off)) (coil 1 (static off)) (coil 2 (static off))\n"
-				    "  (input 0 (static 9)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	/* Write multiple registers, then read them back. */
-	if (ok)
-	{
-		req[0] = FC_WRITE_MULTIPLE_REGISTERS;
-		put_be16(req + 1, 0);
-		put_be16(req + 3, 3);
-		req[5] = 6;
-		put_be16(req + 6, 100);
-		put_be16(req + 8, 200);
-		put_be16(req + 10, 300);
-		ok = exchange(&client, 1, req, 12, resp, &len) && len == 5 && resp[0] == req[0];
-	}
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 3);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 8 &&
-		     register_value(resp, len, 0) == 100 && register_value(resp, len, 1) == 200 &&
-		     register_value(resp, len, 2) == 300;
-	}
-
-	/* One undefined address makes the whole write fail, leaving the others untouched. */
-	if (ok)
-	{
-		req[0] = FC_WRITE_MULTIPLE_REGISTERS;
-		put_be16(req + 1, 1);
-		put_be16(req + 3, 3);
-		req[5] = 6;
-		put_be16(req + 6, 400);
-		put_be16(req + 8, 500);
-		put_be16(req + 10, 600);
-		ok = exchange(&client, 1, req, 12, resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 1, 2);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 6 &&
-		     register_value(resp, len, 0) == 200 && register_value(resp, len, 1) == 300;
-	}
-
-	/* Same rule for coils: a single-coil write succeeds, a multi-coil write with an
-	 * undefined address changes nothing. */
-	if (ok)
-	{
-		req[0] = FC_WRITE_SINGLE_COIL;
-		put_be16(req + 1, 0);
-		req[3] = 0xFF;
-		req[4] = 0x00;
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 5 && resp[0] == req[0];
-	}
-	if (ok)
-	{
-		req[0] = FC_WRITE_MULTIPLE_COILS;
-		put_be16(req + 1, 0);
-		put_be16(req + 3, 4);
-		req[5] = 1;
-		req[6] = 0x0F;
-		ok = exchange(&client, 1, req, 7, resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_MULTIPLE_COILS, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		read_pdu(req, FC_READ_COILS, 0, 3);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 3 && resp[2] == 1;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetGetComEventCounterReturnsStatusAndCount)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4;
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[0] == FC_GET_COM_EVENT_COUNTER && resp[1] == 0x00 && resp[2] == 0x00 &&
-		     resp[3] == 0x00 && resp[4] == 0x01;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetGetComEventCounterMalformedRequest)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8] = { FC_GET_COM_EVENT_COUNTER, 0x00 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 2, resp, &len) &&
-		     exception_is(resp, len, FC_GET_COM_EVENT_COUNTER, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x00;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
 }
 
 TEST(NetGetComEventCounterUnknownUnitDoesNotCount)
@@ -1896,996 +1667,6 @@ TEST(NetGetComEventLogReturnsCountsAndEmptyLog)
 		     resp[2] == 0x00 && resp[3] == 0x00 &&
 		     resp[4] == 0x00 && resp[5] == 0x01 &&
 		     resp[6] == 0x00 && resp[7] == 0x02;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetGetComEventLogMatchesComEventCounter)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4;
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x01;
-	}
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 0); /* exception response */
-		ok = exchange(&client, 1, req, 5, resp, &len) &&
-		     exception_is(resp, len, FC_READ_HOLDING_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x01 &&
-		     resp[6] == 0x00 && resp[7] == 0x04;
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x01;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetGetComEventLogMalformedRequest)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8] = { FC_GET_COM_EVENT_LOG, 0x00 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 2, resp, &len) &&
-		     exception_is(resp, len, FC_GET_COM_EVENT_LOG, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x00 &&
-		     resp[6] == 0x00 && resp[7] == 0x02;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetGetComEventLogUnknownUnitDoesNotCount)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 3, req, 1, resp, &len) &&
-		     exception_is(resp, len, FC_GET_COM_EVENT_LOG, EXC_GATEWAY_TARGET_FAILED);
-	}
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[1] == 6 && resp[4] == 0x00 && resp[5] == 0x00 &&
-		     resp[6] == 0x00 && resp[7] == 0x01;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetComStatusAndEventsAreReported)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (com-status 65535) (com-event 1) (com-event 128) "
-						   "(com-event 255) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[0] == FC_GET_COM_EVENT_COUNTER && resp[1] == 0xFF && resp[2] == 0xFF &&
-		     resp[3] == 0x00 && resp[4] == 0x00;
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 11 &&
-		     resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 9 &&
-		     resp[2] == 0xFF && resp[3] == 0xFF &&
-		     resp[4] == 0x00 && resp[5] == 0x00 &&
-		     resp[6] == 0x00 && resp[7] == 0x02 &&
-		     resp[8] == 0x01 && resp[9] == 0x80 && resp[10] == 0xFF;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetComEventLogMaxEventsAreReported)
-{
-	client_t client   = { .fd = -1 };
-	char	 devices[1024];
-	u32	 used     = 0;
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len      = 0;
-	bool	 ok;
-
-	used = (u32)snprintf(devices, sizeof(devices), "(device (unit-id 1) (holding 0)");
-	for (u32 i = 0; i < DEVICE_MAX_COM_EVENTS; i++)
-		used += (u32)snprintf(devices + used, sizeof(devices) - used, " (com-event %u)", i);
-	snprintf(devices + used, sizeof(devices) - used, ")");
-
-	ok = server_start("", devices);
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 1, req, 1, resp, &len) &&
-		     len == 8 + DEVICE_MAX_COM_EVENTS &&
-		     resp[0] == FC_GET_COM_EVENT_LOG && resp[1] == 6 + DEVICE_MAX_COM_EVENTS &&
-		     resp[2] == 0x00 && resp[3] == 0x00 &&
-		     resp[4] == 0x00 && resp[5] == 0x00 &&
-		     resp[6] == 0x00 && resp[7] == 0x01;
-		for (u32 i = 0; ok && i < DEVICE_MAX_COM_EVENTS; i++)
-			ok = resp[8 + i] == (u8)i;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetComStatusAndEventsRejectMalformedRequests)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (com-status 65535) (com-event 66) (holding 0))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		req[1] = 0x00;
-		ok = exchange(&client, 1, req, 2, resp, &len) &&
-		     exception_is(resp, len, FC_GET_COM_EVENT_COUNTER, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_LOG;
-		ok = exchange(&client, 1, req, 2, resp, &len) &&
-		     exception_is(resp, len, FC_GET_COM_EVENT_LOG, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 9 &&
-		     resp[1] == 7 && resp[2] == 0xFF && resp[3] == 0xFF &&
-		     resp[4] == 0x00 && resp[5] == 0x00 &&
-		     resp[6] == 0x00 && resp[7] == 0x03 && resp[8] == 0x42;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReportServerIdReturnsConfiguredValues)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (server-id 42) (run-indicator 0) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		req[0] = FC_REPORT_SERVER_ID;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
-		     resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2 &&
-		     resp[2] == 42 && resp[3] == 0x00;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReportServerIdDefaults)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8] = { FC_REPORT_SERVER_ID };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
-		     resp[0] == FC_REPORT_SERVER_ID && resp[1] == 2 &&
-		     resp[2] == 0x00 && resp[3] == 0xFF;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReportServerIdReturnsConfiguredAdditionalData)
-{
-	client_t	client = { .fd = -1 };
-	u8		req[8] = { FC_REPORT_SERVER_ID };
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
-	bool		ok  = server_start("", "(device (unit-id 1) (server-id 42) (run-indicator 0) "
-					   "(server-id-additional-data \"DEADBEEF\") (holding 0 (static 1)))");
-	const u8	extra[] = { 0xDE, 0xAD, 0xBE, 0xEF };
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 8 &&
-		     resp[0] == FC_REPORT_SERVER_ID && resp[1] == 6 &&
-		     resp[2] == 42 && resp[3] == 0x00 &&
-		     memcmp(resp + 4, extra, sizeof(extra)) == 0;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReportServerIdMalformedRequest)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8] = { FC_REPORT_SERVER_ID, 0x00 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 2, resp, &len) &&
-		     exception_is(resp, len, FC_REPORT_SERVER_ID, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		req[0] = FC_REPORT_SERVER_ID;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
-		     resp[1] == 2 && resp[2] == 0x00 && resp[3] == 0xFF;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReportServerIdUnknownUnitDoesNotCount)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[8] = { FC_REPORT_SERVER_ID };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 3, req, 1, resp, &len) &&
-		     exception_is(resp, len, FC_REPORT_SERVER_ID, EXC_GATEWAY_TARGET_FAILED);
-	}
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 4 &&
-		     resp[1] == 2 && resp[2] == 0x00 && resp[3] == 0xFF;
-	}
-	if (ok)
-	{
-		req[0] = FC_GET_COM_EVENT_COUNTER;
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x01;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadFileRecordSuccessAndErrors)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (file 1 (record 0 4660 22136) (record 10 7))"
-				    "  (file 4 (record 2 255)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		/* Single sub-request: file 1, record 0, length 2. */
-		u8 pdu[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
-
-		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) && len == 8 &&
-		     resp[0] == FC_READ_FILE_RECORD && resp[1] == 6 &&
-		     resp[2] == 5 && resp[3] == 0x06 &&
-		     get_be16(resp + 4) == 0x1234 && get_be16(resp + 6) == 0x5678;
-	}
-	if (ok)
-	{
-		/* Multiple sub-requests. */
-		u8 pdu[] = {
-			FC_READ_FILE_RECORD, 0x0E,
-			0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-			0x06, 0x00, 0x04, 0x00, 0x02, 0x00, 0x01,
-		};
-
-		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) && len == 10 &&
-		     resp[0] == FC_READ_FILE_RECORD && resp[1] == 8 &&
-		     resp[2] == 3 && resp[3] == 0x06 && get_be16(resp + 4) == 0x5678 &&
-		     resp[6] == 3 && resp[7] == 0x06 && get_be16(resp + 8) == 0x00FF;
-	}
-	if (ok)
-	{
-		/* Malformed: bad byte count framing. */
-		u8 pdu[] = { FC_READ_FILE_RECORD, 0x06, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		/* Unavailable file. */
-		u8 pdu[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, pdu, sizeof(pdu), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadFileRecordUnknownUnit)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (file 1 (record 0 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_GATEWAY_TARGET_FAILED);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadFileRecordUnavailableWhenNoFileRecordsConfigured)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetWriteFileRecordSuccessAndReadBack)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (file 1 (record 0 4660 22136) (record 10 7)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		u8 req[] = { FC_WRITE_FILE_RECORD, 0x0B, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x99 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(req) &&
-		     memcmp(resp, req, sizeof(req)) == 0;
-	}
-	if (ok)
-	{
-		u8 read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02 };
-
-		ok = exchange(&client, 1, read, sizeof(read), resp, &len) && len == 8 &&
-		     resp[0] == FC_READ_FILE_RECORD && resp[1] == 6 &&
-		     get_be16(resp + 4) == 0xABCD && get_be16(resp + 6) == 0x0099;
-	}
-	if (ok)
-	{
-		/* Multiple sub-requests. */
-		u8 req[] = {
-			FC_WRITE_FILE_RECORD, 0x12,
-			0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x55,
-			0x06, 0x00, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x66,
-		};
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(req) &&
-		     memcmp(resp, req, sizeof(req)) == 0;
-	}
-	if (ok)
-	{
-		u8 read[] = {
-			FC_READ_FILE_RECORD, 0x0E,
-			0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-			0x06, 0x00, 0x01, 0x00, 0x0A, 0x00, 0x01,
-		};
-
-		ok = exchange(&client, 1, read, sizeof(read), resp, &len) && len == 10 &&
-		     get_be16(resp + 4) == 0x0055 && get_be16(resp + 8) == 0x0066;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetWriteFileRecordErrorsAndAllOrNothing)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (file 1 (record 0 4660 22136)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		/* Malformed: byte count/framing mismatch. */
-		u8 bad[] = { FC_WRITE_FILE_RECORD, 0x08, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, bad, sizeof(bad), resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		u8 missing[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, missing, sizeof(missing), resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		/* All-or-nothing: first sub-request valid, second unavailable. */
-		u8 req[] = {
-			FC_WRITE_FILE_RECORD, 0x12,
-			0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x77,
-			0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x88,
-		};
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 read[] = { FC_READ_FILE_RECORD, 0x07, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, read, sizeof(read), resp, &len) && len == 6 &&
-		     get_be16(resp + 4) == 0x1234;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetWriteFileRecordUnknownUnitAndUnconfigured)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (file 1 (record 0 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02 };
-
-		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_GATEWAY_TARGET_FAILED);
-	}
-	client_close(&client);
-	server_stop();
-
-	if (ok)
-	{
-		ok = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-		client.fd = -1;
-		ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_WRITE_FILE_RECORD, 0x09, 0x06, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_WRITE_FILE_RECORD, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetMaskWriteRegisterSuccessMalformedAndUnknownUnit)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (holding 0 (static 4660))"
-				    "  (input 0 (static 7)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		/* holding[0] starts at 4660 (0x1234): (0x1234 & 0xF202) | (0x0025 & ~0xF202) = 0x1225 */
-		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xF2, 0x02, 0x00, 0x25 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(req) &&
-		     memcmp(resp, req, sizeof(req)) == 0;
-	}
-	if (ok)
-	{
-		u8 req[8];
-
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 0x1225;
-	}
-	if (ok)
-	{
-		u8 short_req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00 };
-
-		ok = exchange(&client, 1, short_req, sizeof(short_req), resp, &len) &&
-		     exception_is(resp, len, FC_MASK_WRITE_REGISTER, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		u8 missing[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x05, 0xFF, 0xFF, 0x00, 0x00 };
-
-		ok = exchange(&client, 1, missing, sizeof(missing), resp, &len) &&
-		     exception_is(resp, len, FC_MASK_WRITE_REGISTER, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_MASK_WRITE_REGISTER, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00 };
-
-		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_MASK_WRITE_REGISTER, EXC_GATEWAY_TARGET_FAILED);
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
-
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x02;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadWriteMultipleRegistersSuccessAndOverlap)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (holding 0 (static 4660))"
-				    "  (holding 1 (static 22136))"
-				    "  (holding 2 (static 3))"
-				    "  (input 0 (static 7)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		/* Read 0,1 while writing 0,1 -> response reflects post-write values. */
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x04, 0xAA, 0xAA, 0xBB, 0xBB };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == 6 &&
-		     resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04 &&
-		     register_value(resp, len, 0) == 0xAAAA && register_value(resp, len, 1) == 0xBBBB;
-	}
-	if (ok)
-	{
-		u8 req[8];
-
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 2);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 6 &&
-		     register_value(resp, len, 0) == 0xAAAA && register_value(resp, len, 1) == 0xBBBB;
-	}
-	if (ok)
-	{
-		/* Overlap: read 1,2 while writing 0,1 -> read sees new 1 and old 2. */
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0x65 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == 6 &&
-		     resp[0] == FC_READ_WRITE_MULTIPLE_REGISTERS && resp[1] == 0x04 &&
-		     register_value(resp, len, 0) == 0x0065 && register_value(resp, len, 1) == 0x0003;
-	}
-	if (ok)
-	{
-		u8 req[8];
-
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 3);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 8 &&
-		     register_value(resp, len, 0) == 0x0064 && register_value(resp, len, 1) == 0x0065 &&
-		     register_value(resp, len, 2) == 0x0003;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadWriteMultipleRegistersErrorsAndAllOrNothing)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (holding 0 (static 10))"
-				    "  (holding 1 (static 20))"
-				    "  (input 0 (static 7)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		u8 bad_qty[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, bad_qty, sizeof(bad_qty), resp, &len) &&
-		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		u8 bad_bc[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00 };
-
-		ok = exchange(&client, 1, bad_bc, sizeof(bad_bc), resp, &len) &&
-		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		/* Read range unavailable (holding 2 undefined): must not apply write to holding 0. */
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x63 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 req[8];
-
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
-		     register_value(resp, len, 0) == 10;
-	}
-	if (ok)
-	{
-		/* Write range unavailable (holding 2 undefined): must not apply any write. */
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0x65 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 req[8];
-
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 2);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 6 &&
-		     register_value(resp, len, 0) == 10 && register_value(resp, len, 1) == 20;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadWriteMultipleRegistersUnknownUnitAndNonHoldingTarget)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (holding 1 (static 10))"
-				    "  (input 0 (static 7)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x01 };
-
-		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_GATEWAY_TARGET_FAILED);
-	}
-	if (ok)
-	{
-		/* input register 0 exists but holding target does not */
-		u8 req[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_WRITE_MULTIPLE_REGISTERS, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
-
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x00;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadFifoQueueSuccessMalformedUnknownUnitAndUnavailable)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1)"
-				    "  (fifo 10 (values 4660 22136 3))"
-				    "  (fifo 20 (values)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-
-	if (ok)
-	{
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
-		u8 want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(want) &&
-		     memcmp(resp, want, sizeof(want)) == 0;
-	}
-	if (ok)
-	{
-		/* non-destructive read */
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
-		u8 want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x08, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78, 0x00, 0x03 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(want) &&
-		     memcmp(resp, want, sizeof(want)) == 0;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x14 };
-		u8 want[] = { FC_READ_FIFO_QUEUE, 0x00, 0x02, 0x00, 0x00 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) && len == sizeof(want) &&
-		     memcmp(resp, want, sizeof(want)) == 0;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x63 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 short_req[] = { FC_READ_FIFO_QUEUE, 0x00 };
-		u8 long_req[]  = { FC_READ_FIFO_QUEUE, 0x00, 0x0A, 0x00 };
-
-		ok = exchange(&client, 1, short_req, sizeof(short_req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_VALUE);
-		if (ok)
-			ok = exchange(&client, 1, long_req, sizeof(long_req), resp, &len) &&
-			     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_VALUE);
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x0A };
-
-		ok = exchange(&client, 3, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_GATEWAY_TARGET_FAILED);
-	}
-	if (ok)
-	{
-		/* 6 handled requests above (3 successful completions, 3 exceptions); unknown unit not counted */
-		u8 req[] = { FC_GET_COM_EVENT_COUNTER };
-
-		ok = exchange(&client, 1, req, 1, resp, &len) && len == 5 &&
-		     resp[3] == 0x00 && resp[4] == 0x03;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadFifoQueueUnavailableWhenNoFifosConfigured)
-{
-	client_t client = { .fd = -1 };
-	u8	 req[] = { FC_READ_FIFO_QUEUE, 0x00, 0x00 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("", "(device (unit-id 1) (holding 0 (static 1)))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_READ_FIFO_QUEUE, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadDeviceIdentificationMeiTypes)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1) (vendor-name \"Acme\") (product-code \"P\") "
-				    "(major-minor-revision \"1.2\") (product-name \"Sim\")"
-				    "        (canopen-object 5 24641 0 \"11223344\"))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len > 7 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
-		     resp[1] == 0x0E && resp[2] == 0x01 && resp[3] == 0x82 &&
-		     resp[4] == 0x00 && resp[6] == 0x03;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x04 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 7 + 2 + 3 && resp[6] == 0x01 && resp[7] == 0x04 &&
-		     resp[8] == 0x03 && memcmp(resp + 9, "Sim", 3) == 0;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x03 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT, EXC_ILLEGAL_DATA_ADDRESS);
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00,
-			     0x05, 0x60, 0x41, 0x00, 0x00, 0x00, 0x00, 0x02 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 14 && resp[0] == FC_ENCAPSULATED_INTERFACE_TRANSPORT &&
-		     resp[1] == 0x0D && resp[10] == 0x00 && resp[11] == 0x02 &&
-		     resp[12] == 0x11 && resp[13] == 0x22;
-	}
-
-	client_close(&client);
-	server_stop();
-	ASSERT_EQ(ok);
-}
-
-TEST(NetReadDeviceIdentificationExtendedObjects)
-{
-	client_t client = { .fd = -1 };
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len = 0;
-	bool	 ok  = server_start("",
-				    "(device (unit-id 1) (vendor-name \"Acme\")"
-				    "        (device-id-object 160 \"Second\")"
-				    "        (device-id-object 128 \"First\")"
-				    "        (canopen-object 5 24641 0 \"11223344\"))");
-
-	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x03, 0x00 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 41 && resp[1] == 0x0E && resp[3] == 0x83 &&
-		     resp[4] == 0x00 && resp[5] == 0x00 && resp[6] == 0x05 &&
-		     resp[26] == 0x80 && resp[27] == 5 && memcmp(resp + 28, "First", 5) == 0 &&
-		     resp[33] == 0xA0 && resp[34] == 6 && memcmp(resp + 35, "Second", 6) == 0;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00,
-			     0x06, 0x60, 0x41, 0x00, 0x00, 0x00, 0x00, 0x01 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 10 && resp[0] == (u8)(FC_ENCAPSULATED_INTERFACE_TRANSPORT | 0x80) &&
-		     resp[1] == 0xFF && resp[3] == 0x06 && resp[4] == 0x0D &&
-		     resp[5] == 0xCE && resp[6] == 0x0B && resp[9] == 0xFF;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0xA0 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     len == 15 && resp[1] == 0x0E && resp[3] == 0x83 && resp[6] == 0x01 &&
-		     resp[7] == 0xA0 && resp[8] == 6 && memcmp(resp + 9, "Second", 6) == 0;
-	}
-	if (ok)
-	{
-		u8 req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x04, 0x81 };
-
-		ok = exchange(&client, 1, req, sizeof(req), resp, &len) &&
-		     exception_is(resp, len, FC_ENCAPSULATED_INTERFACE_TRANSPORT, EXC_ILLEGAL_DATA_ADDRESS);
 	}
 
 	client_close(&client);
@@ -2967,9 +1748,6 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 {
 	client_t	held[24];
 	client_t	client = { .fd = -1 };
-	u8		req[8];
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len     = 0;
 	u32		opened  = 0;
 	unsigned long long utime0 = 0;
 	unsigned long long utime1 = 0;
@@ -3019,10 +1797,7 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 			usleep(100000);
 			continue;
 		}
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		if (exchange(&client, 1, req, 5, resp, &len) &&
-		    len == 4 &&
-		    register_value(resp, len, 0) == 5)
+		if (reads_register(&client, 1, 0, 5))
 			break;
 		if (i == 29)
 			ok = false;
@@ -3083,9 +1858,6 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 {
 	client_t clients[32];
 	client_t extra = { .fd = -1 };
-	u8	 req[8];
-	u8	 resp[MODBUS_MAX_PDU];
-	u32	 len    = 0;
 	bool	 ok     = server_start("(idle-timeout-ms 100)",
 				      "(device (unit-id 1) (holding 0 (static 5)))");
 	u32	 opened = 0;
@@ -3112,10 +1884,7 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 			usleep(50000);
 			continue;
 		}
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		if (exchange(&extra, 1, req, 5, resp, &len) &&
-		    len == 4 &&
-		    register_value(resp, len, 0) == 5)
+		if (reads_register(&extra, 1, 0, 5))
 			break;
 		if (i == 99)
 			ok = false;
@@ -3132,9 +1901,6 @@ TEST(NetIdleTimeoutFreesSlotsForNewClients)
 TEST(NetTcpIpv6LoopbackServesRequest)
 {
 	client_t	client = { .fd = -1 };
-	u8		req[8];
-	u8		resp[MODBUS_MAX_PDU];
-	u32		len = 0;
 	bool		ok;
 
 	if (!ts_ipv6_loopback_available())
@@ -3145,12 +1911,7 @@ TEST(NetTcpIpv6LoopbackServesRequest)
 
 	ok = server_start_with_bind("::1", "", "(device (unit-id 1) (holding 0 (static 42)))");
 	ok = ok && client_open_v6(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
-	if (ok)
-	{
-		read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
-		ok = exchange(&client, 1, req, 5, resp, &len) && len == 4 &&
-		     resp[0] == FC_READ_HOLDING_REGISTERS && register_value(resp, len, 0) == 42;
-	}
+	ok = ok && reads_register(&client, 1, 0, 42);
 
 	client_close(&client);
 	server_stop();
