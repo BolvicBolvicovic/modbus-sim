@@ -34,6 +34,7 @@ file `pymodbus/server/simulator/setup.json` is the reference). It was checked ag
 | `action` `uptime` | a ramp from 1 that counts seconds and holds at the type maximum |
 | `action` `timestamp` | seven `u16` [`(clock FIELD)`](../config/behaviours/clock.md) points: cell A year, A+1 month, A+2 day, A+3 weekday (Monday 1), A+4 hour, A+5 minute, A+6 second, local time; see below |
 | `action` `reset` | the value plus [`(degradation (fail-after-ms 0))`](../config/behaviours/degradation.md): every read covering the point answers exception 04; see below |
+| any other `action` (from `custom_actions_dict`) | the value plus an [`(on-read ...)`](../config/actions/on-read.md) that uses a stub [`define-action`](../config/actions/define-action.md); see below |
 | `repeat` | the copied cells |
 | `identity` of the server | `vendor-name`, `product-code`, `vendor-url`, `product-name`, `model-name`, `major-minor-revision` |
 | `server_list` entry | `(server ...)`, see [servers](import-pymodbus-servers.md) |
@@ -44,6 +45,34 @@ file `pymodbus/server/simulator/setup.json` is the reference). It was checked ag
 `increment` and `random` in pymodbus change the value on every read; mogbus values depend on time, so
 the importer approximates them with one step per `--action-ms`. An increment whose start value differs
 from `minval` starts at `minval`, with a warning.
+
+## Custom Python actions
+
+An action that is not one of the five above is Python code from `custom_actions_dict`, which the
+importer cannot translate. For each such action name it writes, once before the first `(device ...)`,
+a stub:
+
+```scheme
+; TODO: port the pymodbus action "valve_cycle" (Python) to statements
+(define-action valve-cycle
+  (param period 30)
+  (set! self self))
+```
+
+and every `uint16`, `uint32`, `float32` or `bits` cell that uses it gets `(on-read (valve-cycle))`.
+The point keeps its value, so the config loads and `--check` passes, but reading it changes nothing
+until you replace the body with [statements](../config/machines/statements.md) (`self` is the point).
+
+- The name is the action name lowercased, with other characters turned into `-`; names that would
+  not be valid (a leading digit, a statement or expression keyword, more than 63 characters) are
+  adjusted and repeated names get a number. The original name stays in the comment.
+- A `parameters` entry whose value is a number or a boolean becomes a `(param ...)` with the value of
+  the first cell using the action as default; other entries are listed in a comment and skipped. A
+  cell whose value differs gives an override such as `(on-read (valve-cycle (period 60)))`.
+- A cell never shares a point with its neighbours (no `(count N)`), because `on-read` needs a single
+  point. A `bits` cell becomes 16 coil and 16 discrete points that each carry the action.
+- A warning names every imported action, so it is not forgotten; `--strict` makes it an error.
+- Strings do not accept `on-read`: a custom action on a string keeps the static value and warns.
 
 ## The timestamp action
 

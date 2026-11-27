@@ -568,10 +568,59 @@ class Pymodbus(ImportCase):
         pts, _, _ = self.body(pm_doc({"uint32": [{"addr": [0, 1], "action": "uptime"}]}))
         self.assertIn("(ramp (from 1) (to 4294967295) (step 1) (every-ms 1000) (mode hold))", "\n".join(pts))
 
-    def test_unsupported_actions_warn_and_keep_the_value(self):
-        pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "my_custom"}]}))
-        self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
-        self.assertIn("action 'my_custom' has no mogbus equivalent", err)
+    def check_scm(self, name, out):
+        if mogbus_bin():
+            r = subprocess.run([mogbus_bin(), "--check", str(self.write(name, out))],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_custom_action_becomes_a_stub(self):
+        pts, out, err = self.body(pm_doc({"uint16": [
+            {"addr": 1, "value": 9, "action": "my_custom", "parameters": {"gain": 2, "on": True, "tag": "x"}},
+            {"addr": 2, "value": 4, "action": "my_custom", "parameters": {"gain": 5, "on": True}}]}))
+        self.assertIn('; TODO: port the pymodbus action "my_custom" (Python) to statements', out)
+        self.assertIn("(define-action my-custom\n  (param gain 2)\n  (param on #t)\n  (set! self self))", out)
+        self.assertLess(out.index("(define-action"), out.index("(device"))
+        self.assertEqual(out.count("(define-action"), 1)
+        self.assertIn('parameter "tag" not imported', out)
+        joined = "\n".join(pts)
+        self.assertIn("(holding 1 (access read-only) (static 9) (on-read (my-custom))", joined)
+        self.assertIn("(holding 2 (access read-only) (static 4) (on-read (my-custom (gain 5)))", joined)
+        self.assertIn("action 'my_custom' is a custom Python action; imported as the stub define-action my-custom to fill in", err)
+        self.check_scm("custom.scm", out)
+
+    def test_custom_action_on_a_range_is_split_and_on_wide_points(self):
+        pts, out, _ = self.body(pm_doc({
+            "uint16": [{"addr": [1, 3], "value": 1, "action": "tick"}],
+            "float32": [{"addr": [10, 11], "value": 1.5, "action": "tick"}]}))
+        joined = "\n".join(pts)
+        self.assertNotIn("(count", joined)
+        self.assertEqual(joined.count("(on-read (tick))"), 4 * len(re.findall(r"\(holding|\(input", joined)) // 4 if False else 8)
+        self.assertIn("(holding 10 (type float32)", joined)
+        self.check_scm("range.scm", out)
+
+    def test_custom_action_on_bits(self):
+        pts, out, _ = self.body(pm_doc({"bits": [{"addr": 0, "value": 5, "action": "blink"}]}))
+        self.assertEqual("\n".join(pts).count("(on-read (blink))"), 32)
+        self.assertEqual(out.count("(define-action blink"), 1)
+        self.check_scm("bits-custom.scm", out)
+
+    def test_custom_action_names_are_valid_and_unique(self):
+        _, out, _ = self.body(pm_doc({"uint16": [
+            {"addr": 1, "action": "set!"}, {"addr": 2, "action": "Set_!"},
+            {"addr": 3, "action": "1st action"}, {"addr": 4, "action": "x" * 80}]}))
+        names = re.findall(r"\(define-action (\S+)", out)
+        self.assertEqual(len(set(names)), 4, names)
+        self.assertIn("set", names)
+        self.assertIn("set-2", names)
+        self.assertIn("action-1st-action", names)
+        self.assertTrue(all(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", n) for n in names), names)
+        self.check_scm("names.scm", out)
+
+    def test_custom_action_on_a_string_stays_static(self):
+        pts, out, err = self.body(pm_doc({"string": [{"addr": [0, 1], "value": "abcd", "action": "my_custom"}]}))
+        self.assertNotIn("define-action", out)
+        self.assertIn("action 'my_custom' on a string is not supported", err)
 
     def test_reset_becomes_a_failing_read(self):
         doc = pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "reset"}]})

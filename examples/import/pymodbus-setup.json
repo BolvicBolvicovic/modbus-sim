@@ -48,7 +48,9 @@
                 {"addr": 11, "value": 50, "action": "increment", "parameters": {"minval": 0, "maxval": 100}},
                 {"addr": 12, "value": 50, "action": "random", "parameters": {"minval": 45, "maxval": 55}},
                 {"addr": [20, 21], "value": 7},
-                {"addr": 22, "action": "uptime"}
+                {"addr": 22, "action": "uptime"},
+                {"addr": 23, "value": 3, "action": "valve_cycle", "parameters": {"period": 30, "label": "A"}},
+                {"addr": 24, "value": 3, "action": "valve_cycle", "parameters": {"period": 60}}
             ],
             "uint32": [
                 {"addr": [30, 31], "value": 617001},

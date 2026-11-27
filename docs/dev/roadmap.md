@@ -17,9 +17,6 @@ outstanding work is listed here. When an item is done, document it there and rem
 
 ## Adoption (gaps compared with pymodbus as a server/simulator)
 
-- pymodbus importer coverage: custom Python actions (code, cannot be imported).
-  Why: each one turns into a warning and a manual edit after importing (see
-  `docs/user/import/import-pymodbus-servers.md`).
 - Windows (see [Windows build](architecture.md#windows-build) for what exists). Why: many PLC and SCADA engineers
   work on Windows. Remaining:
   - COM ports: the `os_wait` serial entry (overlapped COM I/O plus `WaitForMultipleObjects`, comm
