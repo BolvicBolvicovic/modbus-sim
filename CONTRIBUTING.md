@@ -18,6 +18,10 @@ for p in profiles/*.scm; do ./mogbus --check "$p"; done
 make asan
 ```
 
+Locally `make tests` runs only the scopes your changes touch (`WHAT=auto`, the default; it prints the choice).
+Use `WHAT=all` (or `c`, `python`, `docs`) to pick them yourself and `SUITES=obs,pdu` to limit the C tests to
+some suites; CI always runs the full C suite and has separate Python and docs jobs.
+
 `make tests` should be run through `tools/run_tests.sh` semantics as described in `AGENTS.md`; the Makefile target already does this.
 
 Every test runs in its own process, one per CPU in parallel (set `RUN_TESTS_JOBS=N` to change),

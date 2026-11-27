@@ -302,19 +302,40 @@ $(BIN): $(BUILD_STAMP) $(MAIN_OBJ) $(LIB_VARIANT)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 endif
 
+# `make tests` runs the scopes selected by WHAT (comma-separated: c, python, docs, all, auto;
+# tools/test_scope.sh explains its choice on stderr). auto picks scopes from the changed files;
+# when CI is set the default is c. SUITES (comma-separated vtest suite names, empty = all) limits
+# the c scope.
+ifdef CI
+WHAT ?= c
+else
+WHAT ?= auto
+endif
+SUITES ?=
+ifneq ($(filter tests,$(MAKECMDGOALS)),)
+TEST_SCOPES := $(shell ./tools/test_scope.sh '$(WHAT)')
+ifneq ($(.SHELLSTATUS),0)
+$(error invalid WHAT)
+endif
+endif
+tests: $(addprefix tests-,$(TEST_SCOPES))
+tests-python: python-tests python-examples $(PROGRAMS)
+tests-docs: docs $(PROGRAMS)
+	./tools/check_doc_examples.sh ./$(BIN)
+
 # Windows tests run under Wine; the toolchain shims and the nm export check are Linux-only.
 ifeq ($(PLATFORM),win32)
 WINE        ?= wine
-tests: $(TESTS) $(PROGRAMS)
-	WINEDEBUG=-all RUN_TESTS_WRAPPER='$(WINE)' MOGBUS_BIN=./$(BIN) ./tools/run_tests.sh ./$(TESTS)
+tests-c: $(TESTS) $(PROGRAMS)
+	WINEDEBUG=-all RUN_TESTS_WRAPPER='$(WINE)' RUN_TESTS_SUITES='$(SUITES)' MOGBUS_BIN=./$(BIN) ./tools/run_tests.sh ./$(TESTS)
 lib-check:
 	@echo "lib-check: skipped for PLATFORM=win32 (nm -D export check is Linux-only)"
 else
-tests: $(TESTS) $(PROGRAMS) lib-check
+tests-c: $(TESTS) $(PROGRAMS) lib-check
 ifeq ($(WITH_CONFIG),1)
 	./tools/check_toolchain.sh
 endif
-	./tools/run_tests.sh ./$(TESTS)
+	RUN_TESTS_SUITES='$(SUITES)' ./tools/run_tests.sh ./$(TESTS)
 endif
 
 # ar only adds members, so start from scratch to drop objects of another build mode.
@@ -483,4 +504,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib python python-tests python-examples lib-check tests asan dist docs docs-fixtures fuzz fuzz-run clean distclean re commands FORCE
+.PHONY: all dev lib python python-tests python-examples lib-check tests tests-c tests-python tests-docs asan dist docs docs-fixtures fuzz fuzz-run clean distclean re commands FORCE

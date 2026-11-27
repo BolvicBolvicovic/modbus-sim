@@ -371,6 +371,12 @@ faults, connection limit, malformed frames and datagrams); override the binary w
 `RUN_TESTS_JOBS` workers (default `nproc`) through `xargs -P`, one test per process; integration tests
 pick free ports, so no two tests share a resource. The queue is ordered slowest first from the
 durations of the previous run (`BIN.times`, or `RUN_TESTS_TIMES`); new tests go first.
+`make tests` is a dispatcher over the scopes in `WHAT` (`c`, `python`, `docs`, `all`, `auto`): `c` is the run
+described above, `python` runs `python-tests` and `python-examples`, `docs` runs `make docs` and
+`tools/check_doc_examples.sh`. `auto` (the local default) chooses the scopes from the files changed versus the
+merge base with `origin/main` plus uncommitted and untracked files (`tools/test_scope.sh`, which prints its
+choice); when the `CI` environment variable is set the default is `c`, and CI jobs for Python and docs keep their
+own targets. `SUITES=a,b` limits the `c` scope to those vtest suites (`RUN_TESTS_SUITES` for `run_tests.sh`).
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
 Compilations emit `.d` dependency files (`-MMD -MP`), so editing a header rebuilds every

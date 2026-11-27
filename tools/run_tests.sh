@@ -8,6 +8,8 @@
 # time go first. Results are collected by test index for stable output.
 # RUN_TESTS_WRAPPER runs the test binary through another program (e.g. "wine" for a Windows
 # binary); the CRs of its CRLF output are stripped from the test list.
+# RUN_TESTS_SUITES (comma-separated, empty = all) limits the run to those suites, named as in
+# --list ("tests/obs.c") or by file stem ("obs"); an unknown name is an error.
 set -u
 
 usage() {
@@ -206,6 +208,15 @@ while IFS= read -r line; do
 		suite=${line#For }
 		suite=${suite% suite:}
 		printf '%s\n' "$suite" >>"$tmp/suites"
+		want=1
+		if [ -n "${RUN_TESTS_SUITES:-}" ]; then
+			short=${suite#tests/}
+			short=${short%.c}
+			case ",$RUN_TESTS_SUITES," in
+			*",$suite,"*|*",$short,"*) ;;
+			*) want=0 ;;
+			esac
+		fi
 		printf '0\n' >"$tmp/count.$sidx"
 		;;
 	'setup-suite='*|'pre-test='*|'') : ;;
@@ -214,6 +225,7 @@ while IFS= read -r line; do
 			printf 'run_tests.sh: test line before any suite header: %s\n' "$line" >&2
 			exit 1
 		fi
+		[ "$want" -eq 1 ] || continue
 		total=$((total + 1))
 		printf '%s\t%s\t%s\n' "$total" "$sidx" "$line" >>"$tmp/all"
 		IFS= read -r count <"$tmp/count.$sidx"
@@ -223,6 +235,19 @@ while IFS= read -r line; do
 done <"$list"
 
 suites=$sidx
+if [ -n "${RUN_TESTS_SUITES:-}" ]; then
+	suites=0
+	oldifs=$IFS
+	IFS=,
+	for want_suite in $RUN_TESTS_SUITES; do
+		if ! grep -qxF -e "$want_suite" -e "tests/$want_suite.c" "$tmp/suites"; then
+			printf 'run_tests.sh: unknown suite "%s" (valid: %s)\n' "$want_suite" "$(sed 's|^tests/||; s|\.c$||' "$tmp/suites" | paste -sd, - | sed 's/,/, /g')" >&2
+			exit 1
+		fi
+		suites=$((suites + 1))
+	done
+	IFS=$oldifs
+fi
 if [ "$total" -eq 0 ]; then
 	printf 'run_tests.sh: no tests discovered in --list output from %s\n' "$bin" >&2
 	exit 1
@@ -267,8 +292,12 @@ while [ "$seq" -le "$total" ]; do
 	seq=$((seq + 1))
 done
 
-# Best effort: an unwritable cache only loses the ordering hint.
-cat "$tmp"/time.* >"$tmp/times" 2>/dev/null && cp "$tmp/times" "$cache" 2>/dev/null
+# Best effort: an unwritable cache only loses the ordering hint. Durations of tests that did not
+# run (RUN_TESTS_SUITES) are kept from the previous cache.
+cat "$tmp"/time.* >"$tmp/new_times" 2>/dev/null &&
+	awk -F "$tab" 'NR == FNR { seen[$2 FS $3] = 1; print; next } !(($2 FS $3) in seen)' \
+		"$tmp/new_times" "$times" >"$tmp/times" &&
+	cp "$tmp/times" "$cache" 2>/dev/null
 
 printf 'Suites: %u, tests: %u, failed: %u\n' "$suites" "$total" "$failed"
 [ "$failed" -eq 0 ]
