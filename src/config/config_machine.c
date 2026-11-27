@@ -137,6 +137,7 @@ static bool compile_point(compile_t*, s7_pointer, const expr_form_t*, val_type_t
 static bool compile_nullary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_binary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_logical(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_unary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_not(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_if(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 
@@ -157,6 +158,16 @@ static const expr_form_t EXPR_FORMS[] = {
 	{ "/",         EXPR_DIV,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
 	{ "min",       EXPR_MIN,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
 	{ "max",       EXPR_MAX,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "mod",       EXPR_MOD,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "abs",       EXPR_ABS,        compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "floor",     EXPR_FLOOR,      compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "round",     EXPR_ROUND,      compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "truncate",  EXPR_TRUNCATE,   compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "bit-and",   EXPR_BIT_AND,    compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "bit-or",    EXPR_BIT_OR,     compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "bit-xor",   EXPR_BIT_XOR,    compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "shift",     EXPR_SHIFT,      compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "bit-set?",  EXPR_BIT_SET,    compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
 	{ "<",         EXPR_LT,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
 	{ "<=",        EXPR_LE,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
 	{ ">",         EXPR_GT,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
@@ -502,6 +513,28 @@ compile_logical(compile_t* c, s7_pointer form, const expr_form_t* spec,
 	}
 	*type = form_type(spec, VAL_NUM);
 	return true;
+}
+
+static bool
+compile_unary(compile_t* c, s7_pointer form, const expr_form_t* spec,
+	      val_type_t* type, u16* root)
+{
+	val_type_t	first_type = VAL_NUM;
+	u16		first = 0;
+	expr_node_t	node = { 0 };
+
+	if (s7_list_length(c->ctx->sc, form) != spec->max_len)
+		return fail_at(c, form, "expected exactly one operand");
+	if (!compile_expr(c, s7_cadr(form), &first_type, &first))
+		return false;
+	if (first_type != VAL_NUM)
+		return fail_at(c, form, "operand must be a number");
+	node.kind = spec->kind;
+	node.a = first;
+	node.b = EXPR_NO_CHILD;
+	node.c = EXPR_NO_CHILD;
+	*type = form_type(spec, VAL_NUM);
+	return add_node(c, form, node, root);
 }
 
 static bool

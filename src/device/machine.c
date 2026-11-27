@@ -19,9 +19,10 @@ static const char* const handler_names[MACHINE_ROLE_COUNT] = {
 	"on-enter", "on-tick", "on-exit", "transition condition", "on-write",
 };
 
-static const char* const failure_names[EXPR_FAIL_TYPE + 1] = {
+static const char* const failure_names[EXPR_FAIL_RANGE + 1] = {
 	"", "evaluation budget exhausted", "division by zero",
 	"point access failed", "invalid expression",
+	"integer operand out of range",
 };
 
 static char error_text[256];
@@ -154,6 +155,38 @@ validate_expr(const machine_def_t* def, u16 root, const char* machine, const cha
 		if (error)
 			return error;
 		if (lhs != VAL_NUM || rhs != VAL_NUM)
+			return machine_error(machine, state, "arithmetic operands must be numbers");
+		*out = VAL_NUM;
+		break;
+	case EXPR_MOD:
+	case EXPR_BIT_AND:
+	case EXPR_BIT_OR:
+	case EXPR_BIT_XOR:
+	case EXPR_SHIFT:
+	case EXPR_BIT_SET:
+		if (node->a == EXPR_NO_CHILD || node->a >= def->node_count ||
+		    node->b == EXPR_NO_CHILD || node->b >= def->node_count)
+			return machine_error(machine, state, "expression child index out of range");
+		error = validate_expr(def, node->a, machine, state, v, &lhs);
+		if (error)
+			return error;
+		error = validate_expr(def, node->b, machine, state, v, &rhs);
+		if (error)
+			return error;
+		if (lhs != VAL_NUM || rhs != VAL_NUM)
+			return machine_error(machine, state, "arithmetic operands must be numbers");
+		*out = node->kind == EXPR_BIT_SET ? VAL_BOOL : VAL_NUM;
+		break;
+	case EXPR_ABS:
+	case EXPR_FLOOR:
+	case EXPR_ROUND:
+	case EXPR_TRUNCATE:
+		if (node->a == EXPR_NO_CHILD || node->a >= def->node_count)
+			return machine_error(machine, state, "expression child index out of range");
+		error = validate_expr(def, node->a, machine, state, v, &lhs);
+		if (error)
+			return error;
+		if (lhs != VAL_NUM)
 			return machine_error(machine, state, "arithmetic operands must be numbers");
 		*out = VAL_NUM;
 		break;

@@ -1932,6 +1932,16 @@ TEST(ConfigMachineExpressionHeadsCompileFromTable)
 		{ "(min 1 2)",      EXPR_MIN,        VAL_NUM,  3 },
 		{ "(max 1 2)",      EXPR_MAX,        VAL_NUM,  3 },
 		{ "(< 1 2)",        EXPR_LT,         VAL_BOOL, 3 },
+		{ "(mod 7 3)",      EXPR_MOD,        VAL_NUM,  3 },
+		{ "(abs -1)",       EXPR_ABS,        VAL_NUM,  2 },
+		{ "(floor 1.5)",    EXPR_FLOOR,      VAL_NUM,  2 },
+		{ "(round 1.5)",    EXPR_ROUND,      VAL_NUM,  2 },
+		{ "(truncate 1.5)", EXPR_TRUNCATE,   VAL_NUM,  2 },
+		{ "(bit-and 6 3)",  EXPR_BIT_AND,    VAL_NUM,  3 },
+		{ "(bit-or 6 3)",   EXPR_BIT_OR,     VAL_NUM,  3 },
+		{ "(bit-xor 6 3)",  EXPR_BIT_XOR,    VAL_NUM,  3 },
+		{ "(shift 1 3)",    EXPR_SHIFT,      VAL_NUM,  3 },
+		{ "(bit-set? 5 2)", EXPR_BIT_SET,    VAL_BOOL, 3 },
 		{ "(<= 1 2)",       EXPR_LE,         VAL_BOOL, 3 },
 		{ "(> 1 2)",        EXPR_GT,         VAL_BOOL, 3 },
 		{ "(>= 1 2)",       EXPR_GE,         VAL_BOOL, 3 },
@@ -1956,6 +1966,90 @@ TEST(ConfigMachineExpressionHeadsCompileFromTable)
 		ASSERT_EQ(def->node_count == CASES[i].nodes);
 		ASSERT_EQ(def->nodes[def->node_count - 1].kind == CASES[i].kind);
 	}
+}
+
+/* Compiles `(set! (holding 0) EXPR)` after a sentinel write of 7 and returns holding 0 after one tick. */
+static u16
+run_holding_expr(const char* expr)
+{
+	char		text[512];
+	config_t	config = { 0 };
+	u16		out[1] = { 0 };
+
+	snprintf(text, sizeof(text),
+		 "(device (unit-id 1) (holding 0) (machine m (initial idle)"
+		 " (state idle (on-enter (set! (holding 0) 7)"
+		 " (set! (holding 0) %s)))))", expr);
+	config = load_ok(text);
+	device_tick(config.devices[0], config.devices[0]->start_ms);
+	ASSERT_SUCCESS(device_read(config.devices[0], SPACE_HOLDING, 0, 1, out));
+	return out[0];
+}
+
+TEST(ConfigMachineNumberOperatorsEvaluate)
+{
+	static const struct { const char* expr; u16 want; } CASES[] = {
+		{ "(mod 7 3)", 1 },
+		{ "(mod 20 5)", 0 },
+		{ "(+ 10 (mod -1 3))", 12 },		/* floored: sign of the divisor */
+		{ "(+ 10 (mod 1 -3))", 8 },
+		{ "(+ 10 (mod -7 -3))", 9 },
+		{ "(abs -5)", 5 },
+		{ "(floor 2.9)", 2 },
+		{ "(+ 10 (floor -2.1))", 7 },
+		{ "(round 2.5)", 2 },			/* half to even */
+		{ "(round 3.5)", 4 },
+		{ "(round 2.6)", 3 },
+		{ "(+ 10 (round -2.5))", 8 },
+		{ "(truncate 2.9)", 2 },
+		{ "(+ 10 (truncate -2.9))", 8 },
+		{ "(bit-and 12 10)", 8 },
+		{ "(bit-or 12 10)", 14 },
+		{ "(bit-xor 12 10)", 6 },
+		{ "(shift 3 4)", 48 },
+		{ "(shift 48 -4)", 3 },
+		{ "(shift 1 -1)", 0 },
+		{ "(shift 0 53)", 0 },
+		{ "(if (bit-set? 5 2) 1 2)", 1 },
+		{ "(if (bit-set? 5 1) 1 2)", 2 },
+		{ "(if (bit-set? 5 52) 1 2)", 2 },
+		/* failures leave the earlier value of 7 in place */
+		{ "(mod 5 0)", 7 },
+		{ "(bit-and 1.5 3)", 7 },
+		{ "(bit-or -1 3)", 7 },
+		{ "(bit-xor 3 9007199254740992)", 7 },
+		{ "(shift 1 53)", 7 },
+		{ "(shift 4503599627370496 1)", 7 },
+		{ "(shift 1 54)", 7 },
+		{ "(shift 1 0.5)", 7 },
+		{ "(if (bit-set? 5 53) 1 2)", 7 },
+		{ "(if (bit-set? 5 -1) 1 2)", 7 },
+	};
+
+	for (u32 i = 0; i < ARRAY_COUNT(CASES); i++)
+		ASSERT_EQ(run_holding_expr(CASES[i].expr) == CASES[i].want);
+}
+
+TEST(ConfigMachineNumberOperatorsRejectBadOperands)
+{
+	static const struct cfg_case cases[] = {
+		{ MACHINE_DEVICE("m (initial idle) (var n 0)"
+		    " (state idle (on-enter (set! n (mod 1))))"),
+		  "expected exactly two operands" },
+		{ MACHINE_DEVICE("m (initial idle) (var n 0)"
+		    " (state idle (on-enter (set! n (abs 1 2))))"),
+		  "expected exactly one operand" },
+		{ MACHINE_DEVICE("m (initial idle) (var n 0)"
+		    " (state idle (on-enter (set! n (floor #t))))"),
+		  "operand must be a number" },
+		{ MACHINE_DEVICE("m (initial idle) (var n 0)"
+		    " (state idle (on-enter (set! n (bit-and 1 #t))))"),
+		  "operands must be numbers" },
+		{ MACHINE_DEVICE("m (initial idle) (var n 0)"
+		    " (state idle (on-enter (set! n (bit-set? 1 2))))"),
+		  "assignment value has the wrong type" },
+	};
+	run_cases(cases, ARRAY_COUNT(cases));
 }
 
 TEST(ConfigMachineRejectsLimitViolations)
