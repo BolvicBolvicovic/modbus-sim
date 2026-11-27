@@ -16,6 +16,7 @@ main(void)
 	typedef mogbus_access_t A;
 	typedef mogbus_frame_t FR;
 	typedef mogbus_action_t AC;
+	typedef mogbus_client_options_t CO;
 
 	SIZE(O);
 	F(O, mode); F(O, bind_address); F(O, port); F(O, path); F(O, fd); F(O, seed);
@@ -23,7 +24,7 @@ main(void)
 	F(O, broadcast_execute); F(O, data_bits); F(O, parity); F(O, stop_bits); F(O, tls_enabled);
 	F(O, tls_handshake_timeout_ms); F(O, tls_certificate); F(O, tls_private_key);
 	F(O, tls_ca_certificate); F(O, tls_require_client_certificate); F(O, tls_min_version);
-	F(O, tls_ciphers_1_2); F(O, tls_ciphersuites_1_3); F(O, http_bind_address); F(O, http_port); F(O, http_control); F(O, http_ui); F(O, http_allowed_hosts);
+	F(O, tls_ciphers_1_2); F(O, tls_ciphersuites_1_3); F(O, http_bind_address); F(O, http_port); F(O, http_control); F(O, http_ui); F(O, http_allowed_hosts); F(O, id);
 
 	SIZE(P);
 	F(P, space); F(P, address); F(P, type); F(P, word_order); F(P, kind); F(P, value); F(P, ramp);
@@ -44,6 +45,9 @@ main(void)
 	SIZE(AC);
 	F(AC, space); F(AC, address); F(AC, on_write); F(AC, name); F(AC, param_count); F(AC, params);
 	F(AC, params[0].name); F(AC, params[0].is_bool); F(AC, params[0].flag); F(AC, params[0].number);
+	SIZE(CO);
+	F(CO, mode); F(CO, host); F(CO, port); F(CO, path); F(CO, baud); F(CO, data_bits); F(CO, parity);
+	F(CO, stop_bits); F(CO, tls_enabled); F(CO, timeout_ms); F(CO, retries);
 	printf("faults_count %d\n", MOGBUS_FAULT_KIND_COUNT);
 	printf("space_count %d\n", MOGBUS_SPACE_COUNT);
 	return 0;

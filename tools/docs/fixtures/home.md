@@ -21,7 +21,8 @@ ctx = mogbus.Context()
 ```
 
 ```c
-mogbus_t* ctx = mogbus_create();
+mogbus_t* ctx = NULL;
+mogbus_create(&ctx);
 ```
 
 | Column | Meaning |

@@ -31,7 +31,7 @@ device's own. Logs show the requested unit; metrics are counted on the device.
   runs on every device exactly as before; the `any-unit` device is not an extra target. Addresses
   248-255 are reserved by the Modbus serial specification and stay unanswered.
 
-At most one device per config can set it.
+At most one device per config can set it, even with several servers.
 
 ## Errors
 

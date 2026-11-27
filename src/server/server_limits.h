@@ -14,6 +14,8 @@
 enum
 {
 	SERVER_MAX_DEVICES			= 16,
+	SERVER_MAX_SERVERS			= 8,	/**< servers per config and per API context */
+	SERVER_ID_MAX				= 32,	/**< longest server id plus the NUL */
 	SERVER_DEFAULT_PORT			= 1502,
 	SERVER_DEFAULT_HTTP_PORT		= 9102,
 	SERVER_DEFAULT_IDLE_TIMEOUT_MS		= 0,

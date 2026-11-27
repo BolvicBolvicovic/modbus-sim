@@ -637,7 +637,7 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 			extra = "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
 				"X-Frame-Options: DENY\r\n"
 				"Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; "
-				"style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'\r\n";
+				"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'\r\n";
 			body_len = page_len;
 		}
 		else
@@ -794,50 +794,115 @@ http_write(struct net_http_conn_t* conn)
 		http_close(conn);
 }
 
+bool
+net_poll_gathering(const net_obs_t* obs)
+{
+	return obs &&
+	       obs->group &&
+	       obs->group->phase == NET_POLL_GATHER;
+}
+
+bool
+net_stop_requested(const net_obs_t* obs, bool stop)
+{
+	return stop &&
+	       !(obs &&
+		 obs->group &&
+		 obs->group->phase == NET_POLL_REPLAY);
+}
+
 int
 net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 {
-	os_wait_entry_t			all[NET_OBS_POLL_MAX];
+	os_wait_entry_t			all_buf[NET_OBS_POLL_MAX];
 	struct net_http_conn_t*		owner[NET_OBS_POLL_MAX];
+	os_wait_entry_t*		all = fds;
 	struct net_http_t*		http = obs ? &obs->http : NULL;
+	net_poll_group_t*		group = obs ? obs->group : NULL;
 	u64				now_ms = os_now_ms();
 	u32				n = count;
 	bool				slot_free = false;
 	int				rc;
 
-	if (!http || !os_socket_valid(http->listen_fd))
-		return os_wait(fds, count, timeout_ms);
-	if (count)
-		memcpy(all, fds, count * sizeof(*fds));
-	for (u32 i = 0; i < NET_OBS_HTTP_CONNS && n < NET_OBS_POLL_MAX; i++)
+	if (http && os_socket_valid(http->listen_fd))
 	{
-		struct net_http_conn_t* conn = &http->conns[i];
+		all = all_buf;
+		if (count)
+			memcpy(all, fds, count * sizeof(*fds));
+		for (u32 i = 0; i < NET_OBS_HTTP_CONNS && n < NET_OBS_POLL_MAX; i++)
+		{
+			struct net_http_conn_t* conn = &http->conns[i];
 
-		if (!os_socket_valid(conn->fd))
-		{
-			slot_free = true;
-			continue;
+			if (!os_socket_valid(conn->fd))
+			{
+				slot_free = true;
+				continue;
+			}
+			if (conn->deadline_ms <= now_ms)
+			{
+				http_close(conn);
+				slot_free = true;
+				continue;
+			}
+			owner[n] = conn;
+			all[n++] = (os_wait_entry_t){ .fd = conn->fd, .events = conn->writing ? OS_WAIT_OUT : OS_WAIT_IN };
+			if (timeout_ms < 0 || (u64)timeout_ms > conn->deadline_ms - now_ms)
+				timeout_ms = (int)(conn->deadline_ms - now_ms);
 		}
-		if (conn->deadline_ms <= now_ms)
+		if (slot_free && n < NET_OBS_POLL_MAX)
 		{
-			http_close(conn);
-			slot_free = true;
-			continue;
+			owner[n] = NULL;
+			all[n++] = (os_wait_entry_t){ .fd = http->listen_fd, .events = OS_WAIT_IN };
 		}
-		owner[n] = conn;
-		all[n++] = (os_wait_entry_t){ .fd = conn->fd, .events = conn->writing ? OS_WAIT_OUT : OS_WAIT_IN };
-		if (timeout_ms < 0 || (u64)timeout_ms > conn->deadline_ms - now_ms)
-			timeout_ms = (int)(conn->deadline_ms - now_ms);
 	}
-	if (slot_free && n < NET_OBS_POLL_MAX)
+
+	if (group && group->phase == NET_POLL_GATHER)
 	{
-		owner[n] = NULL;
-		all[n++] = (os_wait_entry_t){ .fd = http->listen_fd, .events = OS_WAIT_IN };
+		for (u32 i = 0; i < n && group->count < OS_WAIT_MAX; i++)
+		{
+			group->entries[group->count] = all[i];
+			group->owner[group->count++] = obs;
+		}
+		if (timeout_ms >= 0 &&
+		    (group->timeout_ms < 0 || timeout_ms < group->timeout_ms))
+			group->timeout_ms = timeout_ms;
+		return -1;
 	}
-
-	rc = os_wait(all, n, timeout_ms);
-	for (u32 i = 0; i < count; i++)
-		fds[i].revents = rc > 0 ? all[i].revents : 0;
+	if (group)
+	{
+		/* Replay: the table may have lost entries since the gather (a sweep closed a connection),
+		 * so results are matched by fd among this server's own entries. */
+		rc = 0;
+		for (u32 i = 0; i < n; i++)
+		{
+			all[i].revents = 0;
+			for (u32 g = 0; g < group->count; g++)
+			{
+				if (group->owner[g] != obs ||
+				    group->entries[g].fd != all[i].fd)
+					continue;
+				all[i].revents = group->entries[g].revents;
+				break;
+			}
+			if (all[i].revents)
+				rc++;
+		}
+	}
+	else
+	{
+		if (obs &&
+		    obs->lock)
+			os_mutex_unlock(obs->lock);
+		rc = os_wait(all, n, timeout_ms);
+		if (obs &&
+		    obs->lock)
+			os_mutex_lock(obs->lock);
+	}
+	if (all != fds)
+	{
+		for (u32 i = 0; i < count; i++)
+			fds[i].revents = rc > 0 ? all[i].revents : 0;
+	}
 	if (rc <= 0)
 		return rc;
 

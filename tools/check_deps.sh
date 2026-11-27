@@ -6,7 +6,8 @@ set -eu
 #   net -> webui (a static page; webui includes only util and os)
 #   config -> device -> util
 #   server -> net, config -> server (server_mode.h, server_limits.h only)
-#   api -> config, device, modbus, net, server, util
+#   client -> modbus, util (a master over the wire; it knows no server, net or device)
+#   api -> client, config, device, modbus, net, server, util
 #   main.c -> mogbus.h only (the binary is a pure client of the public API)
 # Only src/server/server_config.{c,h} may use config/, and config/ may use only
 # server_mode.h and server_limits.h from server/, so WITH_CONFIG=0 leaves out
@@ -27,7 +28,7 @@ check_layer() {
 	[ -d "$dir" ] || return 0
 
 	bad=$(grep -rnE \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|util|os|webui)/[^">]+)[">]' \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|client|util|os|webui)/[^">]+)[">]' \
 		"$dir" 2>/dev/null || true)
 	[ -n "$bad" ] || return 0
 
@@ -39,7 +40,7 @@ check_layer() {
 		IFS=$old_ifs
 		[ -n "$line" ] || continue
 		include=$(printf '%s\n' "$line" | sed -nE \
-			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|util|os|webui)/[^">]+))[">].*!\1!p')
+			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|client|util|os|webui)/[^">]+))[">].*!\1!p')
 		target=$(printf '%s\n' "$include" | sed -E 's!^(\.\./)*!!; s!/.*!!')
 		case " $allowed " in
 		*" $target "*) ;;
@@ -129,7 +130,8 @@ check_tree() {
 	check_layer "$root" device "device util os"
 	check_layer "$root" config "config device server util os"
 	check_layer "$root" server "server net modbus device util config os"
-	check_layer "$root" api    "api config device modbus net server util os"
+	check_layer "$root" client "client modbus util os"
+	check_layer "$root" api    "api client config device modbus net server util os"
 	check_layer "$root" util   "util os"
 	check_layer "$root" os     "os"
 	check_extra_rules "$root"
@@ -160,6 +162,9 @@ self_test() {
 	printf '#include "vlib/c_types.h"\n'   >"$clean/src/webui/ok.c"
 	printf '#include "util/rng.h"\n'       >"$clean/src/util/ok.c"
 	printf '#include "net/rtu_framer.h"\n' >"$clean/src/api/ok-net.c"
+	mkdir -p "$clean/src/client"
+	printf '#include "modbus/mbap.h"\n#include "os/os_wait.h"\n#include "util/log.h"\n' >"$clean/src/client/ok.c"
+	printf '#include "client/client.h"\n' >>"$clean/src/api/ok-net.c"
 	printf '#include "mogbus.h"\n#include <stdio.h>\n' >"$clean/src/main.c"
 	printf '#include "os/os_socket.h"\n#include <poll.h>\n' >"$clean/src/os/ok.c" 2>/dev/null || true
 	check_tree "$clean"
@@ -206,6 +211,12 @@ self_test() {
 	expect_fail device-api      device "api/x.h"
 	expect_fail config-server   config "server/server.h"
 	expect_fail server-config   server "config/config.h"
+	expect_fail client-net      client "net/net_common.h"
+	expect_fail client-device   client "device/device.h"
+	expect_fail client-server   client "server/server.h"
+	expect_fail client-api      client "api/x.h"
+	expect_fail net-client      net    "client/client.h"
+	expect_fail server-client   server "client/client.h"
 
 	for hdr in poll.h errno.h signal.h unistd.h sys/socket.h termios.h arpa/inet.h; do
 		mkdir -p "$tmp/oshdr/src/device"

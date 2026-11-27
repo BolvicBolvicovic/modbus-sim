@@ -77,23 +77,20 @@ config_parity_from_name(const char* name, parity_t* out)
 }
 
 static void
-config_set_defaults(config_t* config)
+config_server_defaults(config_server_t* srv)
 {
-	memset(config, 0, sizeof(*config));
-	strcpy(config->bind_address, "127.0.0.1");
-	config->mode              = SERVER_MODE_TCP;
-	config->port              = SERVER_DEFAULT_PORT;
-	config->idle_timeout_ms   = SERVER_DEFAULT_IDLE_TIMEOUT_MS;
-	config->frame_gap_ms      = 0; /* auto: derive from baud, else default gap */
-	config->baud              = SERVER_DEFAULT_BAUD;
-	config->strict_t15        = false;
-	config->broadcast_execute = false;
-	config->data_bits         = 8;
-	config->parity            = PARITY_NONE;
-	config->stop_bits         = 1;
-	config->tls_require_client_certificate = true;
-	config->tls_min_version   = CONFIG_TLS_VERSION_1_2;
-	config->tls_handshake_timeout_ms = SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
+	memset(srv, 0, sizeof(*srv));
+	strcpy(srv->bind_address, "127.0.0.1");
+	srv->mode              = SERVER_MODE_TCP;
+	srv->port              = SERVER_DEFAULT_PORT;
+	srv->idle_timeout_ms   = SERVER_DEFAULT_IDLE_TIMEOUT_MS;
+	srv->baud              = SERVER_DEFAULT_BAUD;	/* frame gap 0: auto, derived from baud or the default gap */
+	srv->data_bits         = 8;
+	srv->parity            = PARITY_NONE;
+	srv->stop_bits         = 1;
+	srv->tls_require_client_certificate = true;
+	srv->tls_min_version   = CONFIG_TLS_VERSION_1_2;
+	srv->tls_handshake_timeout_ms = SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS;
 }
 
 #if WITH_TLS
@@ -109,7 +106,7 @@ check_tls_path(form_ctx_t* ctx, const char* key, const char* value)
 }
 
 static bool
-parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
+parse_tls(form_ctx_t* ctx, s7_pointer options, config_server_t* srv)
 {
 	static const char* const keys[] = {
 		"certificate", "private-key", "ca-certificate", "handshake-timeout-ms",
@@ -171,18 +168,18 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 	if (require_client && !ca_certificate)
 		return form_fail(ctx, "tls: ca-certificate is required when client certificates are required");
 
-	strcpy(config->tls_certificate, certificate);
-	strcpy(config->tls_private_key, private_key);
+	strcpy(srv->tls_certificate, certificate);
+	strcpy(srv->tls_private_key, private_key);
 	if (ca_certificate)
-		strcpy(config->tls_ca_certificate, ca_certificate);
+		strcpy(srv->tls_ca_certificate, ca_certificate);
 	if (ciphers)
-		strcpy(config->tls1_2_ciphers, ciphers);
+		strcpy(srv->tls1_2_ciphers, ciphers);
 	if (ciphersuites)
-		strcpy(config->tls1_3_ciphersuites, ciphersuites);
-	config->tls_enabled               = true;
-	config->tls_require_client_certificate = require_client;
-	config->tls_min_version           = (config_tls_version_t)version;
-	config->tls_handshake_timeout_ms  = (u32)handshake_timeout;
+		strcpy(srv->tls1_3_ciphersuites, ciphersuites);
+	srv->tls_enabled               = true;
+	srv->tls_require_client_certificate = require_client;
+	srv->tls_min_version           = (config_tls_version_t)version;
+	srv->tls_handshake_timeout_ms  = (u32)handshake_timeout;
 	return true;
 }
 #endif
@@ -190,14 +187,14 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 /* (http (port N) (bind "ADDR") (control on) (ui on) (allowed-host "NAME")...): the health, readiness,
  * Prometheus, optional control and web UI endpoint, any mode. */
 static bool
-parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
+parse_http(form_ctx_t* ctx, s7_pointer options, config_server_t* srv)
 {
 	static const char* const keys[] = { "port", "bind", "control", "ui", "allowed-host" };
 	s64		port = SERVER_DEFAULT_HTTP_PORT;
 	const char*	bind = NULL;
 	bool		control = false;
 	bool		ui = false;
-	char		hosts[sizeof(config->http_allowed_hosts)] = "";
+	char		hosts[sizeof(srv->http_allowed_hosts)] = "";
 	u32		host_count = 0;
 
 	if (!form_check_keys_repeat(ctx, options, keys, ARRAY_COUNT(keys), "http", "allowed-host") ||
@@ -228,19 +225,19 @@ parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
 		return form_fail(ctx, "http: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
 	if (bind && !os_ip_is_literal(bind))
 		return form_fail(ctx, "http: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
-	strcpy(config->http_bind_address, bind ? bind : "127.0.0.1");
-	config->http_port    = (u16)port;
-	config->http_control = control || ui;
-	config->http_ui      = ui;
-	strcpy(config->http_allowed_hosts, hosts);
-	config->http_enabled = true;
+	strcpy(srv->http_bind_address, bind ? bind : "127.0.0.1");
+	srv->http_port    = (u16)port;
+	srv->http_control = control || ui;
+	srv->http_ui      = ui;
+	strcpy(srv->http_allowed_hosts, hosts);
+	srv->http_enabled = true;
 	return true;
 }
 
 static bool
-parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
+parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 {
-	static const char* const keys[] = { "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls", "http" };
+	static const char* const keys[] = { "id", "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls", "http" };
 	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls" };
 	static const char* const udp_keys[] = { "mode", "port", "bind", "seed" };
 	static const char* const ascii_udp_keys[] = { "mode", "port", "bind", "seed" };
@@ -252,20 +249,21 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	const char* const* allowed = NULL;
 	u32		allowed_count     = 0;
 	s7_pointer	options           = s7_cdr(form);
-	s64		port              = config->port;
-	s64		seed              = config->seed;
-	s64		idle              = config->idle_timeout_ms;
-	s64		frame             = config->frame_gap_ms;
-	s64		baud              = config->baud;
-	s64		data_bits         = config->data_bits;
-	s64		stop_bits         = config->stop_bits;
-	u32		parity            = config->parity;
-	u32		mode              = config->mode;
+	s64		port              = srv->port;
+	s64		seed              = srv->seed;
+	s64		idle              = srv->idle_timeout_ms;
+	s64		frame             = srv->frame_gap_ms;
+	s64		baud              = srv->baud;
+	s64		data_bits         = srv->data_bits;
+	s64		stop_bits         = srv->stop_bits;
+	u32		parity            = srv->parity;
+	u32		mode              = srv->mode;
 	u32		mode_index        = 0;
-	bool		strict_t15        = config->strict_t15;
-	bool		broadcast_execute = config->broadcast_execute;
+	bool		strict_t15        = srv->strict_t15;
+	bool		broadcast_execute = srv->broadcast_execute;
 	const char*	bind              = NULL;
 	const char*	path              = NULL;
+	const char*	id                = NULL;
 #if WITH_TLS
 	s7_pointer	tls_form;
 #endif
@@ -278,6 +276,17 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 	if (!form_is_absent(ctx, form_find(ctx, options, "tls")))
 		return form_fail(ctx, "tls: built without TLS support");
 #endif
+
+	if (!form_opt_string(ctx, options, "id", &id))
+		return false;
+	if (id &&
+	    (!id[0] ||
+	     strlen(id) >= SERVER_ID_MAX ||
+	     strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_") != strlen(id)))
+		return form_fail(ctx, "server: id '%s' must be 1 to %d letters, digits, '.', '-' or '_'", id,
+				 SERVER_ID_MAX - 1);
+	if (id)
+		strcpy(srv->id, id);
 
 	if (!form_opt_choice(ctx, options, "mode", CONFIG_MODE_NAMES, ARRAY_COUNT(CONFIG_MODE_NAMES),
 			     &mode_index))
@@ -345,6 +354,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		bool supported = false;
 
 		if (strcmp(keys[i], "path") == 0 ||
+		    strcmp(keys[i], "id") == 0 ||
 		    strcmp(keys[i], "http") == 0 ||
 		    form_is_absent(ctx, form_find(ctx, options, keys[i])))
 			continue;
@@ -364,7 +374,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 #endif
 	port_given = !form_is_absent(ctx, form_find(ctx, options, "port"));
 #if WITH_TLS
-	if (!form_is_absent(ctx, tls_form) && !parse_tls(ctx, s7_cdr(tls_form), config))
+	if (!form_is_absent(ctx, tls_form) && !parse_tls(ctx, s7_cdr(tls_form), srv))
 		return false;
 #endif
 
@@ -372,7 +382,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return false;
 
 	if (!form_is_absent(ctx, form_find(ctx, options, "http")) &&
-	    !parse_http(ctx, s7_cdr(form_find(ctx, options, "http")), config))
+	    !parse_http(ctx, s7_cdr(form_find(ctx, options, "http")), srv))
 		return false;
 
 	if (!form_opt_int(ctx, options, "seed", 0, 4294967295LL, &seed))
@@ -426,115 +436,234 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_t* config)
 		return form_fail(ctx, "server: path is too long (max %d characters)", SERVER_PATH_MAX - 1);
 
 	if (bind)
-		strcpy(config->bind_address, bind);
+		strcpy(srv->bind_address, bind);
 	if (path)
-		strcpy(config->path, path);
+		strcpy(srv->path, path);
 
-	config->mode              = (server_mode_t)mode;
-	config->port              = (u16)(config->tls_enabled && !port_given ? CONFIG_DEFAULT_TLS_PORT : port);
-	if (config->http_enabled &&
-	    config->http_port == config->port &&
+	srv->mode              = (server_mode_t)mode;
+	srv->port              = (u16)(srv->tls_enabled && !port_given ? CONFIG_DEFAULT_TLS_PORT : port);
+	if (srv->http_enabled &&
+	    srv->http_port == srv->port &&
 	    (mode == SERVER_MODE_TCP || mode == SERVER_MODE_RTU_TCP || mode == SERVER_MODE_ASCII_TCP))
-		return form_fail(ctx, "http: port %u is already the Modbus server port", config->port);
-	config->seed              = (u32)seed;
-	config->idle_timeout_ms   = (u32)idle;
-	config->frame_gap_ms      = (u32)frame;
-	config->baud              = (u32)baud;
-	config->strict_t15        = strict_t15;
-	config->broadcast_execute = broadcast_execute;
-	config->data_bits         = (u32)data_bits;
-	config->parity            = (parity_t)parity;
-	config->stop_bits         = (u32)stop_bits;
+		return form_fail(ctx, "http: port %u is already the Modbus server port", srv->port);
+	srv->seed              = (u32)seed;
+	srv->idle_timeout_ms   = (u32)idle;
+	srv->frame_gap_ms      = (u32)frame;
+	srv->baud              = (u32)baud;
+	srv->strict_t15        = strict_t15;
+	srv->broadcast_execute = broadcast_execute;
+	srv->data_bits         = (u32)data_bits;
+	srv->parity            = (parity_t)parity;
+	srv->stop_bits         = (u32)stop_bits;
 	return true;
 }
 
+/** @brief True if a device with a server list names a server that does not exist. */
 static bool
-check_unit_ids_unique(form_ctx_t* ctx, const config_t* config)
+check_device_servers(form_ctx_t* ctx, const config_t* config)
 {
 	for (u32 i = 0; i < config->device_count; i++)
 	{
-		for (u32 j = i + 1; j < config->device_count; j++)
+		const device_t* dev = config->devices[i];
+
+		for (u32 k = 0; k < dev->server_count; k++)
 		{
-			if (config->devices[i]->unit_id != config->devices[j]->unit_id)
+			bool found = false;
+
+			for (u32 s = 0; s < config->server_count && !found; s++)
+				found = strcmp(config->servers[s].id, dev->servers[k]) == 0;
+			if (!found)
+				return form_fail(ctx, "device '%s': (servers ...) names '%s', but no (server (id \"%s\")) exists",
+						 dev->name, dev->servers[k], dev->servers[k]);
+		}
+	}
+	return true;
+}
+
+/** @brief Devices served by server `s`, in file order; returns how many. */
+static u32
+server_devices(const config_t* config, u32 s, const device_t** out)
+{
+	u32 n = 0;
+
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		if (device_serves(config->devices[i], config->servers[s].id[0] ? config->servers[s].id : NULL))
+			out[n++] = config->devices[i];
+	}
+	return n;
+}
+
+/** @brief Unit ids, any-unit, RTU/ASCII unit range and fault/mode rules of the devices of each server. */
+static bool
+check_server_devices(form_ctx_t* ctx, const config_t* config)
+{
+	for (u32 s = 0; s < config->server_count; s++)
+	{
+		const config_server_t*	srv = &config->servers[s];
+		const device_t*		devs[SERVER_MAX_DEVICES];
+		u32			n = server_devices(config, s, devs);
+		const device_t*		any = NULL;
+		bool			tcp_like = srv->mode == SERVER_MODE_TCP ||
+						   srv->mode == SERVER_MODE_RTU_TCP ||
+						   srv->mode == SERVER_MODE_ASCII_TCP;
+
+		if (n == 0)
+			return form_fail(ctx, "server '%s' serves no device; add (servers \"%s\") to a device",
+					 srv->id, srv->id);
+		for (u32 i = 0; i < n; i++)
+		{
+			for (u32 j = i + 1; j < n; j++)
+			{
+				if (devs[i]->unit_id == devs[j]->unit_id)
+					return form_fail(ctx, "devices '%s' and '%s' both use unit-id %u",
+							 devs[i]->name, devs[j]->name, devs[i]->unit_id);
+			}
+		}
+		for (u32 i = 0; i < n; i++)
+		{
+			if (!devs[i]->any_unit)
 				continue;
-			return form_fail(ctx, "devices '%s' and '%s' both use unit-id %u",
-					 config->devices[i]->name, config->devices[j]->name,
-					 config->devices[i]->unit_id);
+			if (any)
+				return form_fail(ctx, "devices '%s' and '%s' both set any-unit; only one device may answer every unit id",
+						 any->name, devs[i]->name);
+			any = devs[i];
+		}
+		for (u32 i = 0; i < n; i++)
+		{
+			const device_t*	dev = devs[i];
+			u8		id  = dev->unit_id;
+			bool		base_checksum =
+				(dev->faults.present & FAULT_BIT(FAULT_CORRUPT)) != 0 &&
+				dev->faults.by_kind[FAULT_CORRUPT].corrupt_mode == FAULT_CORRUPT_CHECKSUM;
+			bool		base_disconnect =
+				(dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) != 0;
+
+			if (srv->mode != SERVER_MODE_TCP &&
+			    srv->mode != SERVER_MODE_UDP &&
+			    (id == 0 || id > 247))
+				return form_fail(ctx, "device '%s': unit-id %u is not valid for RTU/ASCII (allowed: 1-247; 0 is broadcast, 248-255 reserved)",
+						 dev->name, id);
+			if ((srv->mode == SERVER_MODE_TCP ||
+			     srv->mode == SERVER_MODE_UDP) &&
+			    (base_checksum ||
+			     device_machine_corrupt_mode_present(dev, FAULT_CORRUPT_CHECKSUM)))
+				return form_fail(ctx, "device '%s': corrupt mode checksum is not valid in %s mode (MBAP frames have no checksum)",
+						 dev->name, MODE_NAMES[srv->mode]);
+			if (!tcp_like &&
+			    (base_disconnect ||
+			     device_machine_fault_present(dev, FAULT_DISCONNECT)))
+				return form_fail(ctx, "device '%s': (fault (kind disconnect)) is not valid in %s mode (TCP-like transports only)",
+						 dev->name, MODE_NAMES[srv->mode]);
+		}
+	}
+	return true;
+}
+
+/** @brief True for the addresses that listen on every interface. */
+static bool
+bind_is_wildcard(const char* bind)
+{
+	return strcmp(bind, "0.0.0.0") == 0 || strcmp(bind, "::") == 0;
+}
+
+/** @brief One socket or serial device a server opens, for the clash check. */
+struct listener_t
+{
+	/** @brief What the listener binds. */
+	enum { LISTEN_TCP, LISTEN_UDP, LISTEN_SERIAL } kind;
+	const char*	bind;	/**< address, or the serial path */
+	u16		port;
+};
+
+/** @brief Fills the listeners of a server (its transport, then its HTTP endpoint); returns how many. */
+static u32
+server_listeners(const config_server_t* srv, struct listener_t* out)
+{
+	u32 n = 0;
+
+	switch (srv->mode)
+	{
+		case SERVER_MODE_TCP:
+		case SERVER_MODE_RTU_TCP:
+		case SERVER_MODE_ASCII_TCP:
+			out[n++] = (struct listener_t){ LISTEN_TCP, srv->bind_address, srv->port };
+			break;
+		case SERVER_MODE_UDP:
+		case SERVER_MODE_RTU_UDP:
+		case SERVER_MODE_ASCII_UDP:
+			out[n++] = (struct listener_t){ LISTEN_UDP, srv->bind_address, srv->port };
+			break;
+		case SERVER_MODE_RTU_DEVICE:
+		case SERVER_MODE_ASCII_DEVICE:
+			out[n++] = (struct listener_t){ LISTEN_SERIAL, srv->path, 0 };
+			break;
+		case SERVER_MODE_RTU_PTY:
+		case SERVER_MODE_ASCII_PTY:
+		case SERVER_MODE_RTU_FD:
+		case SERVER_MODE_ASCII_FD:
+			break;
+	}
+	if (srv->http_enabled)
+		out[n++] = (struct listener_t){ LISTEN_TCP, srv->http_bind_address, srv->http_port };
+	return n;
+}
+
+/**
+ * @brief Rejects two servers that would open the same socket or serial device.
+ *
+ * Sockets clash when they are of the same family (TCP-like, UDP-like), use the same port and bind
+ * the same address or one binds every interface (`::` also covers every IPv4 address; `0.0.0.0`
+ * only IPv4 ones). The HTTP endpoints count as TCP listeners.
+ */
+static bool
+check_listener_clashes(form_ctx_t* ctx, const config_t* config)
+{
+	for (u32 a = 0; a < config->server_count; a++)
+	{
+		for (u32 b = a + 1; b < config->server_count; b++)
+		{
+			struct listener_t	la[2];
+			struct listener_t	lb[2];
+			u32			na = server_listeners(&config->servers[a], la);
+			u32			nb = server_listeners(&config->servers[b], lb);
+
+			for (u32 i = 0; i < na; i++)
+			{
+				for (u32 j = 0; j < nb; j++)
+				{
+					bool clash;
+
+					if (la[i].kind != lb[j].kind)
+						continue;
+					if (la[i].kind == LISTEN_SERIAL)
+						clash = strcmp(la[i].bind, lb[j].bind) == 0;
+					else
+						clash = la[i].port == lb[j].port &&
+							(strcmp(la[i].bind, lb[j].bind) == 0 ||
+							 strcmp(la[i].bind, "::") == 0 ||
+							 strcmp(lb[j].bind, "::") == 0 ||
+							 (bind_is_wildcard(la[i].bind) && !strchr(lb[j].bind, ':')) ||
+							 (bind_is_wildcard(lb[j].bind) && !strchr(la[i].bind, ':')));
+					if (!clash)
+						continue;
+					if (la[i].kind == LISTEN_SERIAL)
+						return form_fail(ctx, "servers '%s' and '%s' both use the serial device %s",
+								 config->servers[a].id, config->servers[b].id, la[i].bind);
+					return form_fail(ctx, "servers '%s' and '%s' both listen on %s port %u (%s and %s)",
+							 config->servers[a].id, config->servers[b].id,
+							 la[i].kind == LISTEN_TCP ? "TCP" : "UDP", la[i].port,
+							 la[i].bind, lb[j].bind);
+				}
+			}
 		}
 	}
 	return true;
 }
 
 static bool
-check_any_unit_single(form_ctx_t* ctx, const config_t* config)
-{
-	const device_t* first = NULL;
-
-	for (u32 i = 0; i < config->device_count; i++)
-	{
-		if (!config->devices[i]->any_unit)
-			continue;
-		if (first)
-			return form_fail(ctx, "devices '%s' and '%s' both set any-unit; only one device may answer every unit id",
-					 first->name, config->devices[i]->name);
-		first = config->devices[i];
-	}
-	return true;
-}
-
-static bool
-check_mode_rules(form_ctx_t* ctx, const config_t* config)
-{
-	if (config->mode == SERVER_MODE_TCP ||
-	    config->mode == SERVER_MODE_UDP)
-		return true;
-
-	for (u32 i = 0; i < config->device_count; i++)
-	{
-		u8 id = config->devices[i]->unit_id;
-
-		if (id == 0 || id > 247)
-			return form_fail(ctx, "device '%s': unit-id %u is not valid for RTU/ASCII (allowed: 1-247; 0 is broadcast, 248-255 reserved)",
-					 config->devices[i]->name, id);
-	}
-
-	return true;
-}
-
-static bool
-check_fault_modes(form_ctx_t* ctx, const config_t* config)
-{
-	bool tcp_like = config->mode == SERVER_MODE_TCP ||
-			config->mode == SERVER_MODE_RTU_TCP ||
-			config->mode == SERVER_MODE_ASCII_TCP;
-
-	for (u32 i = 0; i < config->device_count; i++)
-	{
-		const device_t* dev = config->devices[i];
-		bool base_checksum =
-			(dev->faults.present & FAULT_BIT(FAULT_CORRUPT)) != 0 &&
-			dev->faults.by_kind[FAULT_CORRUPT].corrupt_mode == FAULT_CORRUPT_CHECKSUM;
-		bool base_disconnect =
-			(dev->faults.present & FAULT_BIT(FAULT_DISCONNECT)) != 0;
-
-		if ((config->mode == SERVER_MODE_TCP ||
-		     config->mode == SERVER_MODE_UDP) &&
-		    (base_checksum ||
-		     device_machine_corrupt_mode_present(dev, FAULT_CORRUPT_CHECKSUM)))
-			return form_fail(ctx, "device '%s': corrupt mode checksum is not valid in %s mode (MBAP frames have no checksum)",
-					 dev->name, MODE_NAMES[config->mode]);
-		if (!tcp_like &&
-		    (base_disconnect ||
-		     device_machine_fault_present(dev, FAULT_DISCONNECT)))
-			return form_fail(ctx, "device '%s': (fault (kind disconnect)) is not valid in %s mode (TCP-like transports only)",
-					 dev->name, MODE_NAMES[config->mode]);
-	}
-	return true;
-}
-
-static bool
 parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_ms,
-		     config_t* config, bool* server_seen)
+		     config_t* config)
 {
 	const char*	head = form_head_name(form);
 
@@ -543,11 +672,15 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 
 	if (strcmp(head, "server") == 0)
 	{
-		if (*server_seen)
-			return form_fail(ctx, "the file has more than one (server ...); only one is allowed");
+		config_server_t* srv = &config->servers[config->server_count];
 
-		*server_seen = true;
-		return parse_server(ctx, form, config);
+		if (config->server_count >= SERVER_MAX_SERVERS)
+			return form_fail(ctx, "too many (server ...) forms (max %d)", SERVER_MAX_SERVERS);
+		config_server_defaults(srv);
+		if (!parse_server(ctx, form, srv))
+			return false;
+		config->server_count++;
+		return true;
 	}
 
 	if (strcmp(head, "define-action") == 0)
@@ -566,22 +699,66 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 static bool
 parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 {
-	u64	now_ms      = os_now_ms();
-	bool	server_seen = false;
+	u64	now_ms = os_now_ms();
 
 	for (s7_pointer p = forms; s7_is_pair(p); p = s7_cdr(p))
 	{
-		if (!parse_top_level_form(ctx, s7_car(p), arena, now_ms, config, &server_seen))
+		if (!parse_top_level_form(ctx, s7_car(p), arena, now_ms, config))
 			return false;
 	}
 
-	/* Machine point references were checked while each device was read; seeding and
-	 * finalization wait for (server (seed N)), which may appear after the devices. */
+	if (config->server_count == 0)
+	{
+		config_server_defaults(&config->servers[0]);
+		config->server_count = 1;
+	}
+	if (config->server_count > 1)
+	{
+		for (u32 i = 0; i < config->server_count; i++)
+		{
+			if (!config->servers[i].id[0])
+				return form_fail(ctx, "server %u has no (id \"NAME\"); every server needs one when the file has several",
+						 i + 1);
+			for (u32 j = 0; j < i; j++)
+			{
+				if (strcmp(config->servers[i].id, config->servers[j].id) == 0)
+					return form_fail(ctx, "servers %u and %u both use id '%s'", j + 1, i + 1,
+							 config->servers[i].id);
+			}
+		}
+	}
+
+	/* A single server serves every device; a device without (servers ...) is assigned to it. */
 	for (u32 i = 0; i < config->device_count; i++)
 	{
 		device_t* dev = config->devices[i];
 
-		device_seed_machines(dev, config->seed);
+		if (dev->server_count > 0)
+			continue;
+		if (config->server_count > 1)
+			return form_fail(ctx, "device '%s' is not assigned to a server; add (servers \"ID\" ...)", dev->name);
+		if (config->servers[0].id[0])
+			device_add_server(dev, config->servers[0].id);
+	}
+	if (!check_device_servers(ctx, config))
+		return false;
+
+	/* Machine point references were checked while each device was read; seeding and
+	 * finalization wait for (server (seed N)), which may appear after the devices. A device
+	 * is seeded by the first server (in file order) that serves it. */
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		device_t*	dev  = config->devices[i];
+		u32		seed = 0;
+
+		for (u32 s = 0; s < config->server_count; s++)
+		{
+			if (!device_serves(dev, config->servers[s].id[0] ? config->servers[s].id : NULL))
+				continue;
+			seed = config->servers[s].seed;
+			break;
+		}
+		device_seed_machines(dev, seed);
 		if (!config_machine_finalize(ctx, dev) ||
 		    !config_action_finalize(ctx, dev))
 			return false;
@@ -590,10 +767,8 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 	if (config->device_count == 0)
 		return form_fail(ctx, "the file has no (device ...) form");
 
-	return check_unit_ids_unique(ctx, config) &&
-	       check_any_unit_single(ctx, config) &&
-	       check_mode_rules(ctx, config) &&
-	       check_fault_modes(ctx, config);
+	return check_server_devices(ctx, config) &&
+	       check_listener_clashes(ctx, config);
 }
 
 /**
@@ -625,7 +800,7 @@ config_load(arena_t* persistent, arena_t* scratch, const char* path, config_t* o
 	char*		text   = readfile(scratch, path);
 	bool		ok     = false;
 
-	config_set_defaults(out);
+	memset(out, 0, sizeof(*out));
 	if (!text)
 		form_fail(&ctx, "cannot read file '%s'", path);
 	else if (!(ctx.sc = s7_init()))

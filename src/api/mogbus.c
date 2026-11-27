@@ -8,13 +8,14 @@
  */
 #include "mogbus.h"
 #include "build_config.h"
-#include "api/probe.h"
+#include "client/client.h"
 #include "device/action.h"
 #include "device/device.h"
 #include "modbus/pdu.h"
 #include "net/net_obs.h"
 #include "net/rtu_framer.h"
 #include "os/os_console.h"
+#include "os/os_mutex.h"
 #include "os/os_socket.h"
 #include "os/os_time.h"
 #include "server/server.h"
@@ -108,11 +109,14 @@ struct mogbus_server_t
 	server_t	server;
 	mogbus_t*	ctx;
 	bool		in_use;
+	device_t*	devices[SERVER_MAX_DEVICES];	/**< the devices this server serves, fixed at creation */
+	u32		device_count;
 	mogbus_frame_fn	frame_fn;	/**< frame hook of the host, or NULL */
 	void*		frame_user;
 	/** @brief Copies of the option strings, so they outlive the caller's buffers. */
 	struct strings_t
 	{
+		char	id[SERVER_ID_MAX];
 		char	bind[SERVER_BIND_MAX];
 		char	http_bind[SERVER_BIND_MAX];
 		char	http_hosts[NET_OBS_HOSTS_MAX];
@@ -130,41 +134,61 @@ struct mogbus_t
 {
 	arena_t*	arena;
 #if WITH_CONFIG
-	config_t	config;		/**< last loaded file: server section only is used */
+	config_t	config;		/**< last loaded file: server sections only are used */
 	bool		has_config;
 #endif
+	net_poll_group_t group;		/**< scratch of the shared wait of mogbus_step() */
 	device_t*	devices[SERVER_MAX_DEVICES];
 	u32		device_count;
 	mogbus_server_t* servers[MOGBUS_MAX_SERVERS];
-	mogbus_error_t	error_code;	/**< code of the last failed call; MOGBUS_OK if none */
-	char		error[1024];	/**< its message */
+	char		error[1024];	/**< message of the last failed call; empty if none */
+	os_mutex_t	lock;		/**< recursive; held by every call that touches the context, released while a step waits */
 };
 
-/** @brief Records a failure in the context and returns its code, so callers can `return fail(...)`. */
-static mogbus_error_t __attribute__((format(printf, 3, 4)))
-fail(mogbus_t* ctx, mogbus_error_t code, const char* fmt, ...)
+/** @brief Locks a context (NULL is a no-op) and hands it back, for LOCK(). */
+static mogbus_t*
+lock_ctx(const mogbus_t* ctx)
+{
+	if (ctx)
+		os_mutex_lock(&((mogbus_t*)ctx)->lock);
+	return (mogbus_t*)ctx;
+}
+
+static void
+unlock_ctx(mogbus_t** held)
+{
+	if (*held)
+		os_mutex_unlock(&(*held)->lock);
+}
+
+/** @brief Holds the context lock until the end of the enclosing function, whatever way it returns. */
+#define LOCK(ctx)	mogbus_t* lock_guard_ __attribute__((cleanup(unlock_ctx))) = lock_ctx(ctx)
+
+/** @brief Records a failure message in the context and returns the code, so callers can `return fail(...)`. */
+static mogbus_result_t __attribute__((format(printf, 3, 4)))
+fail(mogbus_t* ctx, mogbus_result_t code, const char* fmt, ...)
 {
 	va_list	args;
 
 	if (!ctx)
 		return code;
-	ctx->error_code = code;
 	va_start(args, fmt);
 	vsnprintf(ctx->error, sizeof(ctx->error), fmt, args);
 	va_end(args);
 	return code;
 }
 
+/** @brief The context a device handle belongs to; NULL for a NULL handle. */
+static mogbus_t*
+owner_of(const void* handle)
+{
+	return handle ? ((const device_t*)handle)->owner : NULL;
+}
+
 const char*
 mogbus_last_error(const mogbus_t* ctx)
 {
-	return ctx ? ctx->error : probe_last_error();
-}
-
-mogbus_error_t
-mogbus_last_error_code(const mogbus_t* ctx)
-{
-	return ctx ? ctx->error_code : MOGBUS_OK;
+	return ctx ? ctx->error : client_detached_error();
 }
 
 const char*
@@ -173,22 +197,32 @@ mogbus_version(void)
 	return VERSION_STRING(MOGBUS_VERSION_MAJOR, MOGBUS_VERSION_MINOR, MOGBUS_VERSION_PATCH);
 }
 
-mogbus_t*
-mogbus_create(void)
+mogbus_result_t
+mogbus_create(mogbus_t** out)
 {
 	arena_t*	arena = ARENA_ALLOC();
 	mogbus_t*	ctx   = NULL;
 
-	if (!arena)
-		return NULL;
-	ctx = ARENA_PUSH_ARRAY_ALIGNED(arena, mogbus_t, 1, 16);
+	*out = NULL;
+	if (arena)
+		ctx = ARENA_PUSH_ARRAY_ALIGNED(arena, mogbus_t, 1, 16);
 	if (!ctx)
 	{
-		arena_release(arena);
-		return NULL;
+		if (arena)
+			arena_release(arena);
+		client_detached_errorf("out of memory mapping the context arena");
+		return MOGBUS_ERR_NOMEM;
 	}
-	ctx->arena = arena;
-	return ctx;
+	if (!os_mutex_init(&ctx->lock))
+	{
+		arena_release(arena);
+		client_detached_errorf("cannot create the context lock");
+		return MOGBUS_ERR_NOMEM;
+	}
+	ctx->arena      = arena;
+	ctx->group.lock = &ctx->lock;
+	*out = ctx;
+	return MOGBUS_OK;
 }
 
 void
@@ -201,6 +235,7 @@ mogbus_destroy(mogbus_t* ctx)
 		if (ctx->servers[i] && ctx->servers[i]->in_use)
 			mogbus_server_close(ctx->servers[i]);
 	}
+	os_mutex_destroy(&ctx->lock);
 	arena_release(ctx->arena);	/* the context lives in its own arena */
 }
 
@@ -215,15 +250,31 @@ find_device(const mogbus_t* ctx, u8 unit)
 	return NULL;
 }
 
+/** @brief The first device that has the unit id of `dev` and shares a server with it, or NULL. */
+static device_t*
+device_conflict(const mogbus_t* ctx, const device_t* dev)
+{
+	for (u32 i = 0; i < ctx->device_count; i++)
+	{
+		if (ctx->devices[i] != dev &&
+		    ctx->devices[i]->unit_id == dev->unit_id &&
+		    device_shares_server(ctx->devices[i], dev))
+			return ctx->devices[i];
+	}
+	return NULL;
+}
+
 #if WITH_CONFIG
-mogbus_error_t
+mogbus_result_t
 mogbus_load_config(mogbus_t* ctx, const char* path)
 {
 	config_t	loaded;
 	arena_t*	scratch = ARENA_ALLOC();
-	u32		pos     = arena_pos(ctx->arena);
-	mogbus_error_t	error   = MOGBUS_ERR_CONFIG;
+	u32		pos;
+	mogbus_result_t	error   = MOGBUS_ERR_CONFIG;
+	LOCK(ctx);
 
+	pos = arena_pos(ctx->arena);
 	if (!scratch)
 		return fail(ctx, MOGBUS_ERR_NOMEM, "out of memory allocating scratch arena");
 	if (!config_load(ctx->arena, scratch, path, &loaded))
@@ -238,7 +289,7 @@ mogbus_load_config(mogbus_t* ctx, const char* path)
 	}
 	for (u32 i = 0; i < loaded.device_count; i++)
 	{
-		if (find_device(ctx, loaded.devices[i]->unit_id))
+		if (device_conflict(ctx, loaded.devices[i]))
 		{
 			fail(ctx, MOGBUS_ERR_CONFIG, "unit id %u is already used by another device",
 			     loaded.devices[i]->unit_id);
@@ -251,7 +302,8 @@ mogbus_load_config(mogbus_t* ctx, const char* path)
 			continue;
 		for (u32 j = 0; j < ctx->device_count; j++)
 		{
-			if (!ctx->devices[j]->any_unit)
+			if (!ctx->devices[j]->any_unit ||
+			    !device_shares_server(ctx->devices[j], loaded.devices[i]))
 				continue;
 			fail(ctx, MOGBUS_ERR_CONFIG,
 			     "devices '%s' and '%s' both set any-unit; only one device may answer every unit id",
@@ -276,62 +328,94 @@ done:
 	return error;
 }
 #else
-mogbus_error_t
+mogbus_result_t
 mogbus_load_config(mogbus_t* ctx, const char* path)
 {
+	LOCK(ctx);
 	(void)path;
 	return fail(ctx, MOGBUS_ERR_UNSUPPORTED, "built without config support");
 }
 #endif
 
-mogbus_device_t*
-mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name)
+mogbus_result_t
+mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name, mogbus_device_t** out)
 {
 	device_t*	dev = NULL;
+	LOCK(ctx);
 
+	*out = NULL;
 	if (ctx->device_count >= SERVER_MAX_DEVICES)
-	{
-		fail(ctx, MOGBUS_ERR_INVALID, "too many devices (max %d per context)", SERVER_MAX_DEVICES);
-		return NULL;
-	}
-	if (find_device(ctx, unit_id))
-	{
-		fail(ctx, MOGBUS_ERR_INVALID, "unit id %u is already used by another device", unit_id);
-		return NULL;
-	}
-	if (name && strlen(name) >= DEVICE_NAME_MAX)
-	{
-		fail(ctx, MOGBUS_ERR_INVALID, "device name is too long (max %d bytes)", DEVICE_NAME_MAX - 1);
-		return NULL;
-	}
+		return fail(ctx, MOGBUS_ERR_INVALID, "too many devices (max %d per context)", SERVER_MAX_DEVICES);
+	if (name &&
+	    strlen(name) >= DEVICE_NAME_MAX)
+		return fail(ctx, MOGBUS_ERR_INVALID, "device name is too long (max %d bytes)", DEVICE_NAME_MAX - 1);
 	dev = device_new(ctx->arena, os_now_ms());
 	if (!dev)
-	{
-		fail(ctx, MOGBUS_ERR_NOMEM, "out of memory while creating a device");
-		return NULL;
-	}
+		return fail(ctx, MOGBUS_ERR_NOMEM, "out of memory while creating a device");
 	dev->unit_id = unit_id;
 	dev->owner   = ctx;
 	strcpy(dev->name, name ? name : "unnamed");
 	ctx->devices[ctx->device_count++] = dev;
-	return (mogbus_device_t*)dev;
+	*out = (mogbus_device_t*)dev;
+	return MOGBUS_OK;
 }
 
 mogbus_device_t*
 mogbus_find_device(mogbus_t* ctx, uint8_t unit_id)
 {
+	LOCK(ctx);
 	return (mogbus_device_t*)find_device(ctx, unit_id);
+}
+
+mogbus_result_t
+mogbus_device_add_server(mogbus_device_t* handle, const char* id)
+{
+	device_t*	dev   = (device_t*)handle;
+	mogbus_t*	ctx   = dev->owner;
+	u32		count;
+	const char*	error;
+	LOCK(owner_of(handle));
+
+	count = dev->server_count;
+	error = device_add_server(dev, id);
+	if (error)
+		return fail(ctx, MOGBUS_ERR_INVALID, "%s", error);
+	if (dev->server_count != count)
+	{
+		/* Another device with this unit id may already be served by `id`. */
+		device_t* other = device_conflict(ctx, dev);
+
+		if (other)
+		{
+			dev->server_count = count;
+			return fail(ctx, MOGBUS_ERR_INVALID,
+				    "unit id %u of device '%s' is already used by device '%s' on server '%s'",
+				    dev->unit_id, dev->name, other->name, id);
+		}
+	}
+	return MOGBUS_OK;
+}
+
+const char*
+mogbus_device_server_at(const mogbus_device_t* handle, size_t index)
+{
+	const device_t* dev = (const device_t*)handle;
+	LOCK(owner_of(handle));
+
+	return index < dev->server_count ? dev->servers[index] : NULL;
 }
 
 size_t
 mogbus_device_count(const mogbus_t* ctx)
 {
+	LOCK(ctx);
 	return ctx->device_count;
 }
 
 mogbus_device_t*
 mogbus_device_at(mogbus_t* ctx, size_t index)
 {
+	LOCK(ctx);
 	return index < ctx->device_count ? (mogbus_device_t*)ctx->devices[index] : NULL;
 }
 
@@ -339,6 +423,7 @@ bool
 mogbus_device_info(const mogbus_device_t* handle, mogbus_device_info_t* out)
 {
 	const device_t*	dev = (const device_t*)handle;
+	LOCK(owner_of(handle));
 
 	if (!dev || !out)
 		return false;
@@ -374,6 +459,7 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 {
 	const device_t*	dev = (const device_t*)handle;
 	const point_t*	point;
+	LOCK(owner_of(handle));
 
 	if (!dev || !out || index >= dev->point_count)
 		return false;
@@ -398,7 +484,10 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 bool
 mogbus_device_action_at(const mogbus_device_t* handle, uint32_t index, mogbus_action_t* out)
 {
-	const action_instance_t* inst = device_action_at((const device_t*)handle, index);
+	const action_instance_t* inst;
+	LOCK(owner_of(handle));
+
+	inst = device_action_at((const device_t*)handle, index);
 
 	if (!inst || !out)
 		return false;
@@ -418,7 +507,7 @@ mogbus_device_action_at(const mogbus_device_t* handle, uint32_t index, mogbus_ac
 	return true;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_device_set_action_param(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 			       bool on_write, const char* name, double value)
 {
@@ -427,6 +516,7 @@ mogbus_device_set_action_param(mogbus_device_t* handle, mogbus_space_t space, ui
 	action_event_t	event = on_write ? ACTION_ON_WRITE : ACTION_ON_READ;
 	val_t		current = { 0 };
 	val_t		next = { 0 };
+	LOCK(ctx);
 
 	if (!dev ||
 	    !name ||
@@ -453,13 +543,14 @@ mogbus_device_set_action_param(mogbus_device_t* handle, mogbus_space_t space, ui
 	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_device_get_action_param(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 			       bool on_write, const char* name, double* out)
 {
 	device_t*	dev = (device_t*)handle;
 	mogbus_t*	ctx = dev ? dev->owner : NULL;
 	val_t		v = { 0 };
+	LOCK(ctx);
 
 	if (!dev ||
 	    !name ||
@@ -491,13 +582,14 @@ mogbus_rtu_timing(uint32_t baud, uint32_t frame_gap_ms, uint32_t* t35_us, uint32
 		*gap_ms = rtu_effective_gap_ms(frame_gap_ms, baud);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in)
 {
 	device_t*	dev   = (device_t*)handle;
 	mogbus_t*	ctx   = dev ? dev->owner : NULL;
 	point_t		point = { 0 };
 	const char*	error = NULL;
+	LOCK(owner_of(handle));
 
 	if (!dev ||
 	    !in)
@@ -565,61 +657,77 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in)
 	return error ? fail(ctx, MOGBUS_ERR_INVALID, "%s", error) : MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_read(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 		   uint32_t count, uint16_t* out)
 {
 	device_t*	dev = (device_t*)handle;
+	LOCK(owner_of(handle));
 
-	if ((unsigned)space >= SPACE_COUNT || count == 0 || !out)
-		return false;
+	if ((unsigned)space >= SPACE_COUNT ||
+	    count == 0 ||
+	    !out)
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "invalid table, count or output buffer");
 	device_tick(dev, os_now_ms());
-	return device_read(dev, (space_kind_t)space, address, count, out);
+	if (!device_read(dev, (space_kind_t)space, address, count, out))
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "an address in %u..%u is undefined or out of range",
+			    address, address + count - 1);
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_write(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 		    uint32_t count, const uint16_t* in)
 {
 	device_t*	dev = (device_t*)handle;
+	LOCK(owner_of(handle));
 
-	if ((unsigned)space >= SPACE_COUNT || count == 0 || !in)
-		return false;
+	if ((unsigned)space >= SPACE_COUNT ||
+	    count == 0 ||
+	    !in)
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "invalid table, count or input buffer");
 	if (space_is_bit((space_kind_t)space))
 	{
 		for (u32 i = 0; i < count; i++)
 		{
 			if (in[i] > 1)
-				return false;
+				return fail(owner_of(dev), MOGBUS_ERR_INVALID, "bit tables accept only 0 or 1");
 		}
 	}
 	device_tick(dev, os_now_ms());
-	return device_write(dev, (space_kind_t)space, address, count, in);
+	if (!device_write(dev, (space_kind_t)space, address, count, in))
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID,
+			    "an address in %u..%u is undefined, out of range or driven by a machine or the host",
+			    address, address + count - 1);
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_get_value(mogbus_device_t* handle, mogbus_space_t space, uint32_t address, double* out)
 {
 	device_t*	dev = (device_t*)handle;
 	val_t		val;
+	LOCK(owner_of(handle));
 
-	if ((unsigned)space >= SPACE_COUNT || !out)
-		return false;
+	if ((unsigned)space >= SPACE_COUNT ||
+	    !out)
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "invalid table or output pointer");
 	device_tick(dev, os_now_ms());
 	if (!device_get_point(dev, (space_kind_t)space, address, &val))
-		return false;
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "no numeric point starts at address %u", address);
 	*out = val.type == VAL_BOOL ? (val.b ? 1.0 : 0.0) : val.n;
-	return true;
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_set_value(mogbus_device_t* handle, mogbus_space_t space, uint32_t address, double value)
 {
 	device_t*	dev = (device_t*)handle;
 	val_t		val = { 0 };
+	LOCK(owner_of(handle));
 
 	if ((unsigned)space >= SPACE_COUNT)
-		return false;
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "invalid table");
 	device_tick(dev, os_now_ms());
 	if (space_is_bit((space_kind_t)space))
 	{
@@ -631,16 +739,22 @@ mogbus_device_set_value(mogbus_device_t* handle, mogbus_space_t space, uint32_t 
 		val.type = VAL_NUM;
 		val.n    = value;
 	}
-	return device_set_point(dev, (space_kind_t)space, address, &val);
+	if (!device_set_point(dev, (space_kind_t)space, address, &val))
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID, "no numeric point starts at address %u", address);
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_get_string(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 			 char* out, size_t size)
 {
+	LOCK(owner_of(handle));
 	if ((unsigned)space >= SPACE_COUNT)
-		return false;
-	return device_get_string((device_t*)handle, (space_kind_t)space, address, out, size);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "invalid table");
+	if (!device_get_string((device_t*)handle, (space_kind_t)space, address, out, size))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "no string point starts at address %u, or the buffer is too small", address);
+	return MOGBUS_OK;
 }
 
 /** @brief The host's hook and user pointer of one device, the `user` of its trampoline. */
@@ -699,12 +813,13 @@ written_trampoline(void* user, device_t* dev, const device_access_t* in)
 	hook->fn(hook->user, (mogbus_device_t*)dev, &access);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_device_add_file_record(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
 			      const uint16_t* values)
 {
 	mogbus_t*	ctx   = handle ? ((device_t*)handle)->owner : NULL;
 	const char*	error = NULL;
+	LOCK(owner_of(handle));
 
 	if (!handle ||
 	    !values)
@@ -713,31 +828,40 @@ mogbus_device_add_file_record(mogbus_device_t* handle, uint16_t file, uint16_t r
 	return error ? fail(ctx, MOGBUS_ERR_INVALID, "%s", error) : MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_read_file_records(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
 				uint16_t* out)
 {
+	LOCK(owner_of(handle));
 	if (!handle ||
 	    !out)
-		return false;
-	return device_read_file_records((device_t*)handle, file, record, count, out);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "device and output buffer are required");
+	if (!device_read_file_records((device_t*)handle, file, record, count, out))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "file %u records %u..%u are not all defined", file, record, record + count - 1);
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_write_file_records(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
 				 const uint16_t* values)
 {
+	LOCK(owner_of(handle));
 	if (!handle ||
 	    !values)
-		return false;
-	return device_write_file_records((device_t*)handle, file, record, count, values);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "device and values are required");
+	if (!device_write_file_records((device_t*)handle, file, record, count, values))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "file %u records %u..%u are not all defined", file, record, record + count - 1);
+	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_device_add_fifo(mogbus_device_t* handle, uint16_t address, uint16_t count, const uint16_t* values)
 {
 	mogbus_t*	ctx   = handle ? ((device_t*)handle)->owner : NULL;
 	const char*	error = NULL;
+	LOCK(owner_of(handle));
 
 	if (!handle ||
 	    (count > 0 && !values))
@@ -746,21 +870,26 @@ mogbus_device_add_fifo(mogbus_device_t* handle, uint16_t address, uint16_t count
 	return error ? fail(ctx, MOGBUS_ERR_INVALID, "%s", error) : MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_set_fifo(mogbus_device_t* handle, uint16_t address, uint16_t count, const uint16_t* values)
 {
+	LOCK(owner_of(handle));
 	if (!handle ||
 	    (count > 0 && !values))
-		return false;
-	return device_set_fifo((device_t*)handle, address, count, values);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "device and values are required");
+	if (!device_set_fifo((device_t*)handle, address, count, values))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "no FIFO is defined at address %u, or it cannot hold %u values", address, count);
+	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_device_add_canopen_object(mogbus_device_t* handle, uint8_t node, uint16_t index, uint8_t subindex,
 				 uint16_t length, const uint8_t* data)
 {
 	mogbus_t*	ctx   = handle ? ((device_t*)handle)->owner : NULL;
 	const char*	error = NULL;
+	LOCK(owner_of(handle));
 
 	if (!handle ||
 	    !data)
@@ -769,100 +898,118 @@ mogbus_device_add_canopen_object(mogbus_device_t* handle, uint8_t node, uint16_t
 	return error ? fail(ctx, MOGBUS_ERR_INVALID, "%s", error) : MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_read_canopen(mogbus_device_t* handle, uint8_t node, uint16_t index, uint8_t subindex,
 			   uint16_t offset, uint16_t count, uint8_t* out)
 {
+	LOCK(owner_of(handle));
 	if (!handle ||
 	    !out)
-		return false;
-	return device_canopen_read((device_t*)handle, node, index, subindex, offset, count, out);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "device and output buffer are required");
+	if (!device_canopen_read((device_t*)handle, node, index, subindex, offset, count, out))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "CANopen object %u:%04X:%u does not exist or the range is outside its length",
+			    node, index, subindex);
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_write_canopen(mogbus_device_t* handle, uint8_t node, uint16_t index, uint8_t subindex,
 			    uint16_t offset, uint16_t count, const uint8_t* data)
 {
+	LOCK(owner_of(handle));
 	if (!handle ||
 	    !data)
-		return false;
-	return device_canopen_write((device_t*)handle, node, index, subindex, offset, count, data);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "device and data are required");
+	if (!device_canopen_write((device_t*)handle, node, index, subindex, offset, count, data))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "CANopen object %u:%04X:%u does not exist or the range is outside its length",
+			    node, index, subindex);
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_set_any_unit(mogbus_device_t* handle, bool on)
 {
 	device_t*	dev = (device_t*)handle;
-	const mogbus_t*	ctx = dev ? dev->owner : NULL;
+	mogbus_t*	ctx = owner_of(dev);
+	LOCK(owner_of(handle));
 
 	if (!ctx)
-		return false;
+		return fail(ctx, MOGBUS_ERR_INVALID, "a device is required");
 	for (u32 i = 0; on && i < ctx->device_count; i++)
 	{
 		if (ctx->devices[i] != dev &&
 		    ctx->devices[i]->any_unit)
-			return false;
+			return fail(ctx, MOGBUS_ERR_INVALID, "device '%s' already answers every unit id",
+				    ctx->devices[i]->name);
 	}
 	dev->any_unit = on;
-	return true;
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_set_access_hook(mogbus_device_t* handle, mogbus_access_fn fn, void* user)
 {
 	device_t*		dev  = (device_t*)handle;
 	struct access_hook_t*	hook = NULL;
+	LOCK(owner_of(handle));
 
 	if (!dev)
-		return false;
+		return fail(NULL, MOGBUS_ERR_INVALID, "a device is required");
 	if (!fn)
 	{
 		dev->access_fn   = NULL;
 		dev->access_user = NULL;
-		return true;
+		return MOGBUS_OK;
 	}
 	/* The holder is allocated once per device and reused by later calls. */
 	hook = dev->access_fn == access_trampoline ? dev->access_user : ARENA_PUSH_ARRAY_ALIGNED(dev->arena, struct access_hook_t, 1, _Alignof(struct access_hook_t));
 	if (!hook)
-		return false;
+		return fail(owner_of(dev), MOGBUS_ERR_NOMEM, "out of memory while installing the hook");
 	hook->fn         = fn;
 	hook->user       = user;
 	dev->access_fn   = access_trampoline;
 	dev->access_user = hook;
-	return true;
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_set_written_hook(mogbus_device_t* handle, mogbus_written_fn fn, void* user)
 {
 	device_t*		dev  = (device_t*)handle;
 	struct written_hook_t*	hook = NULL;
+	LOCK(owner_of(handle));
 
 	if (!dev)
-		return false;
+		return fail(NULL, MOGBUS_ERR_INVALID, "a device is required");
 	if (!fn)
 	{
 		dev->written_fn   = NULL;
 		dev->written_user = NULL;
-		return true;
+		return MOGBUS_OK;
 	}
 	hook = dev->written_fn == written_trampoline ? dev->written_user : ARENA_PUSH_ARRAY_ALIGNED(dev->arena, struct written_hook_t, 1, _Alignof(struct written_hook_t));
 	if (!hook)
-		return false;
+		return fail(owner_of(dev), MOGBUS_ERR_NOMEM, "out of memory while installing the hook");
 	hook->fn          = fn;
 	hook->user        = user;
 	dev->written_fn   = written_trampoline;
 	dev->written_user = hook;
-	return true;
+	return MOGBUS_OK;
 }
 
-bool
+mogbus_result_t
 mogbus_device_set_string(mogbus_device_t* handle, mogbus_space_t space, uint32_t address,
 			 const char* text)
 {
+	LOCK(owner_of(handle));
 	if ((unsigned)space >= SPACE_COUNT)
-		return false;
-	return device_set_string((device_t*)handle, (space_kind_t)space, address, text);
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID, "invalid table");
+	if (!device_set_string((device_t*)handle, (space_kind_t)space, address, text))
+		return fail(owner_of(handle), MOGBUS_ERR_INVALID,
+			    "no string point starts at address %u, or the text is too long", address);
+	return MOGBUS_OK;
 }
 
 mogbus_server_options_t
@@ -908,15 +1055,48 @@ copy_string(mogbus_t* ctx, char* dst, size_t cap, const char* src, const char* w
  * `o` borrows its strings; they are copied into `st`, so the caller's storage may go away, and
  * `o` is repointed at the copies. Opens nothing.
  */
-static mogbus_error_t
-validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st)
+static mogbus_result_t
+validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st, device_t** devices, u32* count)
 {
 	bool ok = true;
 
-	if (ctx->device_count == 0)
+	*count = 0;
+	for (u32 i = 0; i < ctx->device_count; i++)
 	{
-		return fail(ctx, MOGBUS_ERR_INVALID, "the context has no devices to serve");
+		if (device_serves(ctx->devices[i], o->id))
+			devices[(*count)++] = ctx->devices[i];
 	}
+	if (ctx->device_count == 0)
+		return fail(ctx, MOGBUS_ERR_INVALID, "the context has no devices to serve");
+	if (*count == 0 &&
+	    o->id)
+		return fail(ctx, MOGBUS_ERR_INVALID,
+			    "no device is assigned to server '%s'; see mogbus_device_add_server()", o->id);
+	if (*count == 0)
+		return fail(ctx, MOGBUS_ERR_INVALID,
+			    "every device is assigned to a named server; a server without id serves the devices that list none");
+	for (u32 i = 0; i < *count; i++)
+	{
+		for (u32 j = 0; j < i; j++)
+		{
+			if (devices[j]->unit_id == devices[i]->unit_id)
+				return fail(ctx, MOGBUS_ERR_INVALID,
+					    "unit id %u is used by devices '%s' and '%s' of the same server; "
+					    "assign them to different servers with mogbus_device_add_server()",
+					    devices[i]->unit_id, devices[j]->name, devices[i]->name);
+		}
+	}
+	if (o->id &&
+	    !o->id[0])
+		return fail(ctx, MOGBUS_ERR_INVALID, "server id must not be empty");
+	for (u32 i = 0; o->id && i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use &&
+		    strcmp(ctx->servers[i]->strings.id, o->id) == 0)
+			return fail(ctx, MOGBUS_ERR_INVALID, "a server with id '%s' already exists", o->id);
+	}
+	o->id = copy_string(ctx, st->id, sizeof(st->id), o->id, "server id", &ok);
 	if ((o->mode == SERVER_MODE_RTU_DEVICE || o->mode == SERVER_MODE_ASCII_DEVICE) &&
 	    (!o->path || !o->path[0]))
 	{
@@ -973,14 +1153,15 @@ validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st)
 	return MOGBUS_OK;
 }
 
-/** @brief Common tail of both create functions; the failure reason is left in the context. */
-static mogbus_server_t*
-create_server(mogbus_t* ctx, server_options_t o)
+/** @brief Common tail of both create functions; the failure message is left in the context. */
+static mogbus_result_t
+create_server(mogbus_t* ctx, server_options_t o, mogbus_server_t** out)
 {
 	mogbus_server_t*	s     = NULL;
-	mogbus_error_t		error = MOGBUS_OK;
+	mogbus_result_t		error = MOGBUS_OK;
 	s32			rc    = 0;
 
+	*out = NULL;
 	for (u32 i = 0; i < MOGBUS_MAX_SERVERS && !s; i++)
 	{
 		if (!ctx->servers[i])
@@ -988,44 +1169,38 @@ create_server(mogbus_t* ctx, server_options_t o)
 		if (ctx->servers[i] && !ctx->servers[i]->in_use)
 			s = ctx->servers[i];
 		else if (!ctx->servers[i])
-		{
-			fail(ctx, MOGBUS_ERR_NOMEM, "out of memory while creating a server");
-			return NULL;
-		}
+			return fail(ctx, MOGBUS_ERR_NOMEM, "out of memory while creating a server");
 	}
 	if (!s)
-	{
-		fail(ctx, MOGBUS_ERR_INVALID, "too many servers (max %d per context)", MOGBUS_MAX_SERVERS);
-		return NULL;
-	}
+		return fail(ctx, MOGBUS_ERR_INVALID, "too many servers (max %d per context)", MOGBUS_MAX_SERVERS);
 
-	error = validate_options(ctx, &o, &s->strings);
+	error = validate_options(ctx, &o, &s->strings, s->devices, &s->device_count);
 	if (error != MOGBUS_OK)
 	{
 		/* A server that fails on TLS has always logged it; keep that for log readers. */
 		if (error == MOGBUS_ERR_LISTEN)
 			LOG_WARN("cannot configure TLS: %s", ctx->error);
-		return NULL;
+		return error;
 	}
 
-	o.devices      = ctx->devices;
-	o.device_count = ctx->device_count;
+	o.devices      = s->devices;
+	o.device_count = s->device_count;
 	rc = server_init(&s->server, &o);
 	if (rc != 0)
 	{
 		if (rc == 1)
-			fail(ctx, MOGBUS_ERR_SERIAL, "cannot open the serial device or PTY");
-		else
-			fail(ctx, MOGBUS_ERR_LISTEN,
-			     "cannot listen on %s:%u (address in use, invalid, or TLS setup failed)",
-			     o.bind_address ? o.bind_address : "", o.port);
-		return NULL;
+			return fail(ctx, MOGBUS_ERR_SERIAL, "cannot open the serial device or PTY");
+		return fail(ctx, MOGBUS_ERR_LISTEN,
+			    "cannot listen on %s:%u (address in use, invalid, or TLS setup failed)",
+			    o.bind_address ? o.bind_address : "", o.port);
 	}
 	s->ctx        = ctx;
+	s->server.obs.lock = &ctx->lock;
 	s->in_use     = true;
 	s->frame_fn   = NULL;
 	s->frame_user = NULL;
-	return s;
+	*out = s;
+	return MOGBUS_OK;
 }
 
 /** @brief Public options to internal ones; false and a failure in ctx for an enum out of range. */
@@ -1041,6 +1216,7 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 		return false;
 	}
 	*o = (server_options_t){
+		.id                       = in->id,
 		.mode                     = (server_mode_t)in->mode,
 		.bind_address             = in->bind_address ? in->bind_address : "127.0.0.1",
 		.http_bind_address        = in->http_bind_address,
@@ -1075,49 +1251,74 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 	return true;
 }
 
-mogbus_server_t*
-mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* in)
+mogbus_result_t
+mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* in, mogbus_server_t** out)
 {
 	server_options_t o;
+	LOCK(ctx);
 
+	*out = NULL;
 	if (!options_from_public(ctx, in, &o))
-		return NULL;
-	return create_server(ctx, o);
+		return MOGBUS_ERR_INVALID;
+	return create_server(ctx, o, out);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_server_check(mogbus_t* ctx, const mogbus_server_options_t* in)
 {
 	server_options_t	o;
 	struct strings_t	strings;
+	device_t*		devices[SERVER_MAX_DEVICES];
+	u32			count;
+	LOCK(ctx);
 
 	if (!options_from_public(ctx, in, &o))
 		return MOGBUS_ERR_INVALID;
-	return validate_options(ctx, &o, &strings);
+	return validate_options(ctx, &o, &strings, devices, &count);
 }
 
 #if WITH_CONFIG
-mogbus_server_t*
-mogbus_server_create_from_config(mogbus_t* ctx)
+size_t
+mogbus_config_server_count(const mogbus_t* ctx)
 {
-	if (!ctx->has_config)
-	{
-		fail(ctx, MOGBUS_ERR_INVALID, "no config loaded; call mogbus_load_config first");
-		return NULL;
-	}
-	return create_server(ctx, server_options_from_config(&ctx->config));
+	LOCK(ctx);
+	return ctx->has_config ? ctx->config.server_count : 0;
 }
 
-bool
-mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
+mogbus_result_t
+mogbus_server_create_from_config_at(mogbus_t* ctx, size_t index, mogbus_server_t** out)
 {
-	/* The config lives in the (non-const) context; the options only read it. */
+	LOCK(ctx);
+	*out = NULL;
+	if (!ctx->has_config)
+		return fail(ctx, MOGBUS_ERR_INVALID, "no config loaded; call mogbus_load_config first");
+	if (index >= ctx->config.server_count)
+		return fail(ctx, MOGBUS_ERR_INVALID, "the config has %u server%s, no server %zu",
+			    ctx->config.server_count, ctx->config.server_count == 1 ? "" : "s", index);
+	return create_server(ctx, server_options_from_config(&ctx->config, (u32)index), out);
+}
+
+mogbus_result_t
+mogbus_server_create_from_config(mogbus_t* ctx, mogbus_server_t** out)
+{
+	LOCK(ctx);
+	return mogbus_server_create_from_config_at(ctx, 0, out);
+}
+
+mogbus_result_t
+mogbus_config_server_options_at(mogbus_t* ctx, size_t index, mogbus_server_options_t* out)
+{
 	server_options_t	o;
+	LOCK(ctx);
 
 	if (!ctx->has_config)
-		return false;
-	o = server_options_from_config((config_t*)&ctx->config);
+		return fail(ctx, MOGBUS_ERR_INVALID, "no config loaded; call mogbus_load_config first");
+	if (index >= ctx->config.server_count)
+		return fail(ctx, MOGBUS_ERR_INVALID, "the config has %u server%s, no server %zu",
+			    ctx->config.server_count, ctx->config.server_count == 1 ? "" : "s", index);
+	o = server_options_from_config(&ctx->config, (u32)index);
 	*out = (mogbus_server_options_t){
+		.id                             = o.id,
 		.mode                           = (mogbus_mode_t)o.mode,
 		.bind_address                   = o.bind_address,
 		.port                           = o.port,
@@ -1147,28 +1348,61 @@ mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
 		.tls_ciphers_1_2                = o.tls.tls1_2_ciphers,
 		.tls_ciphersuites_1_3           = o.tls.tls1_3_ciphersuites,
 	};
-	return true;
-}
-#else
-mogbus_server_t*
-mogbus_server_create_from_config(mogbus_t* ctx)
-{
-	fail(ctx, MOGBUS_ERR_UNSUPPORTED, "built without config support");
-	return NULL;
+	return MOGBUS_OK;
 }
 
-bool
-mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
+mogbus_result_t
+mogbus_config_server_options(mogbus_t* ctx, mogbus_server_options_t* out)
 {
+	LOCK(ctx);
+	return mogbus_config_server_options_at(ctx, 0, out);
+}
+#else
+size_t
+mogbus_config_server_count(const mogbus_t* ctx)
+{
+	LOCK(ctx);
 	(void)ctx;
+	return 0;
+}
+
+mogbus_result_t
+mogbus_server_create_from_config_at(mogbus_t* ctx, size_t index, mogbus_server_t** out)
+{
+	LOCK(ctx);
+	(void)index;
+	*out = NULL;
+	return fail(ctx, MOGBUS_ERR_UNSUPPORTED, "built without config support");
+}
+
+mogbus_result_t
+mogbus_server_create_from_config(mogbus_t* ctx, mogbus_server_t** out)
+{
+	LOCK(ctx);
+	return mogbus_server_create_from_config_at(ctx, 0, out);
+}
+
+mogbus_result_t
+mogbus_config_server_options_at(mogbus_t* ctx, size_t index, mogbus_server_options_t* out)
+{
+	LOCK(ctx);
+	(void)index;
 	(void)out;
-	return false;
+	return fail(ctx, MOGBUS_ERR_UNSUPPORTED, "built without config support");
+}
+
+mogbus_result_t
+mogbus_config_server_options(mogbus_t* ctx, mogbus_server_options_t* out)
+{
+	LOCK(ctx);
+	return mogbus_config_server_options_at(ctx, 0, out);
 }
 #endif
 
 int
 mogbus_server_step(mogbus_server_t* server, int max_wait_ms)
 {
+	LOCK(server ? server->ctx : NULL);
 	return server_step(&server->server, max_wait_ms);
 }
 
@@ -1178,15 +1412,30 @@ mogbus_server_stop(mogbus_server_t* server)
 	server_stop(&server->server);
 }
 
+void
+mogbus_stop(mogbus_t* ctx)
+{
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			server_stop(&ctx->servers[i]->server);
+	}
+}
+
 static mogbus_server_t* volatile* g_stop_slot;
+static mogbus_t* volatile* g_stop_ctx_slot;
 
 static void
 stop_from_signal(void)
 {
-	mogbus_server_t* server = g_stop_slot ? *g_stop_slot : NULL;
+	mogbus_server_t*	server = g_stop_slot ? *g_stop_slot : NULL;
+	mogbus_t*		ctx    = g_stop_ctx_slot ? *g_stop_ctx_slot : NULL;
 
 	if (server)
 		mogbus_server_stop(server);
+	if (ctx)
+		mogbus_stop(ctx);
 }
 
 void
@@ -1196,15 +1445,64 @@ mogbus_stop_on_signals(mogbus_server_t* volatile* slot)
 	os_console_on_stop(stop_from_signal);
 }
 
+void
+mogbus_stop_context_on_signals(mogbus_t* volatile* slot)
+{
+	g_stop_ctx_slot = slot;
+	os_console_on_stop(stop_from_signal);
+}
+
+int
+mogbus_step(mogbus_t* ctx, int max_wait_ms)
+{
+	server_t*	servers[MOGBUS_MAX_SERVERS] = { NULL };
+	LOCK(ctx);
+
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			servers[i] = &ctx->servers[i]->server;
+	}
+	return server_group_step(servers, MOGBUS_MAX_SERVERS, &ctx->group, max_wait_ms);
+}
+
+int
+mogbus_run(mogbus_t* ctx)
+{
+	int rc;
+
+	/* One locked step at a time: the lock is free between steps for other threads. */
+	while ((rc = mogbus_step(ctx, -1)) == MOGBUS_STEP_CONTINUE)
+		;
+	LOCK(ctx);
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			server_close(&ctx->servers[i]->server);
+	}
+	return rc == MOGBUS_STEP_ERROR ? 1 : 0;
+}
+
 int
 mogbus_server_run(mogbus_server_t* server)
 {
-	return server_serve(&server->server);
+	int rc;
+
+	while ((rc = mogbus_server_step(server, -1)) == MOGBUS_STEP_CONTINUE)
+		;
+	{
+		LOCK(server->ctx);
+		server_close(&server->server);
+	}
+	return rc == MOGBUS_STEP_ERROR ? 1 : 0;
 }
 
 void
 mogbus_server_close(mogbus_server_t* server)
 {
+	LOCK(server ? server->ctx : NULL);
 	if (!server || !server->in_use)
 		return;
 	server_close(&server->server);
@@ -1229,21 +1527,24 @@ frame_trampoline(void* user, net_frame_dir_t dir, const char* peer, u8* data, u3
 	return out > capacity ? capacity + 1 : (u32)out;
 }
 
-bool
+mogbus_result_t
 mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* user)
 {
-	if (!server || !server->in_use)
-		return false;
+	LOCK(server ? server->ctx : NULL);
+	if (!server ||
+	    !server->in_use)
+		return fail(server ? server->ctx : NULL, MOGBUS_ERR_INVALID, "a running server is required");
 	server->frame_fn          = fn;
 	server->frame_user        = user;
 	server->server.obs.frame_fn   = fn ? frame_trampoline : NULL;
 	server->server.obs.frame_user = server;
-	return true;
+	return MOGBUS_OK;
 }
 
 const char*
 mogbus_server_pty_name(const mogbus_server_t* server)
 {
+	LOCK(server ? server->ctx : NULL);
 	return server_pty_name(&server->server);
 }
 
@@ -1284,6 +1585,7 @@ mogbus_set_log_format(mogbus_log_format_t format)
 size_t
 mogbus_server_metrics(const mogbus_server_t* server, char* out, size_t size)
 {
+	LOCK(server ? server->ctx : NULL);
 	if (!server || !server->in_use || !out || size == 0)
 		return 0;
 	return net_obs_render_metrics(&server->server.obs, out, size > UINT32_MAX ? UINT32_MAX : (u32)size);
@@ -1309,26 +1611,30 @@ function_trampoline(void* user, device_t* dev, u8 unit, u8 code, const u8* data,
 	return result;
 }
 
-bool
+mogbus_result_t
 mogbus_device_add_function_code(mogbus_device_t* handle, uint8_t code, mogbus_function_fn fn, void* user)
 {
 	device_t*		dev  = (device_t*)handle;
 	struct function_hook_t*	hook = NULL;
 	device_custom_fc_t	entry = { 0 };
+	const char*		error = NULL;
+	LOCK(owner_of(handle));
 
 	if (!dev ||
 	    !fn ||
 	    code < 1 ||
 	    code > 127 ||
 	    modbus_fc_is_builtin(code))
-		return false;
+		return fail(owner_of(dev), MOGBUS_ERR_INVALID,
+			    "function code %u must be 1-127, not built in, and have a callback", code);
 	hook = ARENA_PUSH_ARRAY_ALIGNED(dev->arena, struct function_hook_t, 1, _Alignof(struct function_hook_t));
 	if (!hook)
-		return false;
+		return fail(owner_of(dev), MOGBUS_ERR_NOMEM, "out of memory while adding the function code");
 	hook->fn   = fn;
 	hook->user = user;
 	entry.code = code;
 	entry.fn   = function_trampoline;
 	entry.user = hook;
-	return device_add_custom_fc(dev, &entry) == NULL;
+	error = device_add_custom_fc(dev, &entry);
+	return error ? fail(owner_of(dev), MOGBUS_ERR_INVALID, "%s", error) : MOGBUS_OK;
 }

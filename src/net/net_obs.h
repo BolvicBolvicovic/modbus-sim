@@ -10,6 +10,7 @@
 #define NET_OBS_H
 
 #include "modbus/pdu.h"
+#include "os/os_mutex.h"
 #include "os/os_socket.h"
 #include "os/os_wait.h"
 #include "vlib/c_types.h"
@@ -18,6 +19,8 @@
 typedef enum net_result_t net_result_t;
 typedef enum net_frame_dir_t net_frame_dir_t;
 typedef struct net_obs_t net_obs_t;
+typedef enum net_poll_phase_t net_poll_phase_t;
+typedef struct net_poll_group_t net_poll_group_t;
 
 /** @brief Limits of the metrics and HTTP endpoint. */
 enum
@@ -33,6 +36,32 @@ enum
 	NET_OBS_HOSTS_COUNT	= 8,		/**< most allowed Host names */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
 	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per wait */
+};
+
+/** @brief Phase of a net_poll_group_t. */
+enum net_poll_phase_t
+{
+	NET_POLL_GATHER,	/**< net_poll() only records the wait table and returns -1 */
+	NET_POLL_REPLAY,	/**< net_poll() takes the results of the shared wait instead of waiting */
+};
+
+/**
+ * @brief Lets several servers share one os_wait().
+ *
+ * A group step runs every server's step twice: in the gather phase each net_poll() appends its
+ * entries here and returns -1 without waiting (so the step returns before doing any I/O), then one
+ * os_wait() covers all entries, then in the replay phase each step runs again and net_poll()
+ * hands it the revents of its own entries by fd. Steps do only time-based, idempotent work
+ * (idle sweeps, due delayed responses) before polling, so running them twice is harmless.
+ */
+struct net_poll_group_t
+{
+	net_poll_phase_t phase;
+	os_mutex_t*	lock;		/**< released around the shared wait; NULL = none */
+	int		timeout_ms;	/**< shortest timeout a gathered step asked for; -1 = none */
+	u32		count;
+	os_wait_entry_t	entries[OS_WAIT_MAX];
+	const net_obs_t* owner[OS_WAIT_MAX];	/**< server that appended each entry */
 };
 
 /** @brief What happened to one request. */
@@ -75,7 +104,9 @@ struct net_obs_t
 	device_t**	devices;	/**< borrowed; metrics are kept per index */
 	u32		device_count;
 	u64		start_unix_s;	/**< wall-clock start, for mogbus_start_time_seconds */
-	bool		ready;		/**< serving; false before start and once stopping */
+	_Atomic bool	ready;		/**< serving; false before start and once stopping (stop may come from another thread) */
+	os_mutex_t*	lock;		/**< context lock, released around the wait in net_poll(); NULL = none */
+	net_poll_group_t* group;	/**< shared wait while a group step runs, else NULL */
 	net_frame_fn	frame_fn;	/**< frame hook, or NULL; set by the host after net_obs_init() */
 	void*		frame_user;
 
@@ -226,8 +257,23 @@ bool	net_obs_http_feed(net_obs_t* obs, struct net_http_conn_t* conn);
  *
  * `fds` and its revents are exactly as with os_wait(); the endpoint only lowers the timeout to
  * its own deadlines. `count` plus the endpoint's fds must fit NET_OBS_POLL_MAX.
+ * In a group (see net_poll_group_t) the gather phase returns -1 and the replay phase the number
+ * of ready entries.
  * @return os_wait()'s result for the whole set (negative on error).
  */
 int	net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms);
+
+/**
+ * @brief True if a transport's step should return NET_STEP_DONE for its stop flag.
+ *
+ * In the replay phase of a group the wait already returned events for this server, so they are
+ * served even when a stop arrived meanwhile (as a lone server does); the next gather ends it.
+ * @param obs The server's observability state; may be NULL.
+ * @param stop The transport's stop flag.
+ */
+bool	net_stop_requested(const net_obs_t* obs, bool stop);
+
+/** @brief True while `obs` is in the gather phase, where net_poll() returns -1 without an error. */
+bool	net_poll_gathering(const net_obs_t* obs);
 
 #endif

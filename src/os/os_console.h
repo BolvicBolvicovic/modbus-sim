@@ -7,9 +7,10 @@
 #define OS_CONSOLE_H
 
 #include <signal.h>
+#include <stdatomic.h>
 
 /** @brief Flag that is safe to set from a signal handler or another thread. */
-typedef volatile sig_atomic_t os_stop_flag_t;
+typedef _Atomic sig_atomic_t os_stop_flag_t;
 
 /**
  * @brief Calls handler on SIGINT and SIGTERM (without SA_RESTART, so a blocked wait returns)

@@ -6,7 +6,7 @@
  * Nonblocking sockets with os_wait() deadlines; no allocation.
  */
 #include "mogbus.h"
-#include "api/probe.h"
+#include "client/client.h"
 #include "modbus/ascii.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
@@ -14,32 +14,13 @@
 #include "os/os_socket.h"
 #include "os/os_time.h"
 #include "os/os_wait.h"
-#include <stdarg.h>
-#include <stdio.h>
 #include <string.h>
 
 #define PROBE_TID	0x4D42
 
 static const u8 PROBE_REQUEST[] = { FC_DIAGNOSTICS, 0x00, 0x00, 0xB0, 0x6B };
 
-/* mogbus_probe() has no context to own its message, so each thread keeps the last one. */
-static _Thread_local char probe_error[256];
-
-const char*
-probe_last_error(void)
-{
-	return probe_error;
-}
-
-static void __attribute__((format(printf, 1, 2)))
-probe_err(const char* fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	vsnprintf(probe_error, sizeof(probe_error), fmt, ap);
-	va_end(ap);
-}
+#define probe_err client_detached_errorf
 
 static int
 remaining_ms(u64 deadline)
@@ -101,7 +82,7 @@ parse_reply(mogbus_mode_t mode, const u8* buf, u32 len, u8 unit, u8* out, const 
 	}
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t timeout_ms)
 {
 	os_addr_t	addr;
@@ -119,7 +100,7 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 	os_socket_t	fd;
 	bool		ok = false;
 
-	probe_error[0] = '\0';
+	client_detached_errorf("");
 	if (!options)
 	{
 		probe_err("options are required");

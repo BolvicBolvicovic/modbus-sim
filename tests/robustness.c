@@ -56,17 +56,18 @@ fixture_start(fixture_t* f, mogbus_mode_t mode)
 	mogbus_point_t		p = { .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U16,
 				      .kind = MOGBUS_POINT_STATIC, .value = 0x1234 };
 	mogbus_server_options_t	o = mogbus_server_options_defaults();
-	mogbus_device_t*	dev;
+	mogbus_device_t*	dev = NULL;
 
-	f->ctx  = mogbus_create();
+	mogbus_create(&f->ctx);
 	f->mode = mode;
 	f->port = ts_free_port();
-	dev = f->ctx ? mogbus_add_device(f->ctx, 1, "robust") : NULL;
+	if (f->ctx)
+		mogbus_add_device(f->ctx, 1, "robust", &dev);
 	if (!dev || mogbus_device_add_point(dev, &p) != MOGBUS_OK)
 		return false;
 	o.mode = mode;
 	o.port = f->port;
-	f->server = mogbus_server_create(f->ctx, &o);
+	mogbus_server_create(f->ctx, &o, &f->server);
 	return f->server != NULL;
 }
 

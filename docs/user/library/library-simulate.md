@@ -69,7 +69,7 @@ if (mode != MODE_MANUAL && coil != pump)
 
 ## Strings
 
-@ref mogbus_device_get_string "mogbus_device_get_string()" copies a string point's text up to the first NUL into your buffer (it fails when the buffer cannot hold the text plus the terminator); @ref mogbus_device_set_string "mogbus_device_set_string()" replaces it, NUL padded. Unlike `set_value` it does not make the point host-owned: clients can still write the registers, and a restart restores the configured text. `get_value` and `set_value` return false on string points.
+@ref mogbus_device_get_string "mogbus_device_get_string()" copies a string point's text up to the first NUL into your buffer (it fails when the buffer cannot hold the text plus the terminator); @ref mogbus_device_set_string "mogbus_device_set_string()" replaces it, NUL padded. Unlike `set_value` it does not make the point host-owned: clients can still write the registers, and a restart restores the configured text. `get_value` and `set_value` fail on string points.
 
 ```text
   ok   the host reads the site name with mogbus_device_get_string

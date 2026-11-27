@@ -37,6 +37,9 @@ endif
 EXAMPLE_SRC = examples/embed_tcp.c
 EXAMPLE_SO  = examples/embed_tcp_shared
 EXAMPLE_A   = examples/embed_tcp_static
+CLIENT_SRC  = examples/client_function_code.c
+CLIENT_SO   = examples/client_function_code_shared
+CLIENT_A    = examples/client_function_code_static
 TUTORIAL_SRC = examples/tutorial/pump_station.c
 TUTORIAL_SO  = examples/tutorial/pump_station_shared
 TUTORIAL_A   = examples/tutorial/pump_station_static
@@ -227,16 +230,16 @@ TEST_SRCS   := $(filter-out tests/tests_utils/tls_client.c,$(TEST_SRCS))
 endif
 # These tests start the real binary or call config_load; the others run unchanged.
 ifeq ($(WITH_CONFIG),0)
-TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/tcp_server.c \
+TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/tcp_server.c \
                             tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
                             tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif
 # These fork, use PTYs, termios, poll() or POSIX sockets directly, or spawn the binary through
 # tests_utils/test_support.c; they stay out of the Windows test binary (docs/dev/architecture.md).
-TESTS_POSIX_ONLY = tests/api.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
-                   tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c \
+TESTS_POSIX_ONLY = tests/api.c tests/client.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
+                   tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c \
                    tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
-                   tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/udp_server.c \
+                   tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/threads.c tests/udp_server.c \
                    tests/tests_utils/test_support.c tests/tests_utils/tls_client.c
 ifeq ($(PLATFORM),win32)
 TEST_SRCS   := $(filter-out $(TESTS_POSIX_ONLY),$(TEST_SRCS))
@@ -378,19 +381,27 @@ $(EXAMPLE_A): $(EXAMPLE_SRC) include/mogbus.h $(LIB_STATIC)
 # Builds the libraries, requires the .so to export only mogbus_* symbols, and runs
 # the example against both.
 ifeq ($(PLATFORM),posix)
+$(CLIENT_SO): $(CLIENT_SRC) include/mogbus.h $(LIB_SHARED)
+	$(CC) $(CFLAGS) -Iinclude $< ./$(LIB_SHARED) $(LINK_FLAGS) -Wl,-rpath,'$$ORIGIN/..' -o $@
+
+$(CLIENT_A): $(CLIENT_SRC) include/mogbus.h $(LIB_STATIC)
+	$(CC) $(CFLAGS) -Iinclude $< $(LIB_STATIC) $(LINK_FLAGS) -o $@ $(LIBS)
+
 $(TUTORIAL_SO): $(TUTORIAL_SRC) include/mogbus.h $(LIB_SHARED)
 	$(CC) $(CFLAGS) -Iinclude $< ./$(LIB_SHARED) $(LINK_FLAGS) -Wl,-rpath,'$$ORIGIN/../..' -o $@
 
 $(TUTORIAL_A): $(TUTORIAL_SRC) include/mogbus.h $(LIB_STATIC)
 	$(CC) $(CFLAGS) -Iinclude $< $(LIB_STATIC) $(LINK_FLAGS) -o $@ $(LIBS)
 
-lib-check: $(EXAMPLE_SO) $(EXAMPLE_A) $(TUTORIAL_SO) $(TUTORIAL_A)
+lib-check: $(EXAMPLE_SO) $(EXAMPLE_A) $(CLIENT_SO) $(CLIENT_A) $(TUTORIAL_SO) $(TUTORIAL_A)
 	@bad=$$(nm -D --defined-only $(LIB_SHARED) | awk '{print $$3}' | \
 		grep -vE '^(mogbus_|_init$$|_fini$$|_edata$$|_end$$|__bss_start$$)' || true); \
 	if [ -n "$$bad" ]; then echo "$(LIB_SHARED) exports non-API symbols:" $$bad >&2; exit 1; fi; \
 	nm -D --defined-only $(LIB_SHARED) | grep -q ' mogbus_create$$' || { echo "$(LIB_SHARED) lacks mogbus_create" >&2; exit 1; }
 	./$(EXAMPLE_SO)
 	./$(EXAMPLE_A)
+	./$(CLIENT_SO)
+	./$(CLIENT_A)
 	./$(TUTORIAL_SO) $(TUTORIAL_ARGS) > /dev/null
 	./$(TUTORIAL_A) $(TUTORIAL_ARGS) > /dev/null
 endif
@@ -508,7 +519,7 @@ clean:
 	$(RM) -r $(DIST_DIR) build/docs build/docs-fixtures $(FUZZ_DIR)
 	rm -f $(REV_STAMP) $(WEBUI_DATA) $(WEBUI_DATA).tmp
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
-		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TUTORIAL_SO) $(TUTORIAL_A) $(TESTS).times $(ASAN_TESTS).times \
+		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(CLIENT_SO) $(CLIENT_A) $(TUTORIAL_SO) $(TUTORIAL_A) $(TESTS).times $(ASAN_TESTS).times \
 		python/mogbus/libmogbus.so mogbus mogbus.exe mogbus-tests mogbus-tests.exe mogbus-tests.exe.times mogbus.dll libmogbus.dll.a
 
 distclean: clean

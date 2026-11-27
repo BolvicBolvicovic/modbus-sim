@@ -2,7 +2,11 @@
 
 > **Summary:** Pick a transport, create the server, and step it from the program's own loop instead of handing the thread over.
 
-A server (`mogbus_server_t*`, created below) exposes every device the context has at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [step 1](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
+A server (`mogbus_server_t*`, created below) exposes the devices of the context at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [step 1](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
+
+## Several servers
+
+Give each server an `id` in its options and assign devices with @ref mogbus_device_add_server "mogbus_device_add_server()" (call it again to put a device on several servers) before creating the servers. A server with an id serves the devices that list it; a server without one serves the devices that list none, which is every device unless some were assigned. Unit ids must be unique per server, so two devices of the context may share one when they are on different servers. All servers of the context live in the context's arena (see [lifetimes](library-lifetimes.md)) and are driven together by @ref mogbus_step "mogbus_step()" (one poll for all of them) or @ref mogbus_run "mogbus_run()"; @ref mogbus_stop "mogbus_stop()" stops them all. After @ref mogbus_load_config "mogbus_load_config()" of a file with several `(server ...)` forms, @ref mogbus_config_server_count "mogbus_config_server_count()" says how many there are and @ref mogbus_server_create_from_config_at "mogbus_server_create_from_config_at()" creates each one. `mogbus_server_create_from_config()` creates the first.
 
 ## Options
 
@@ -24,21 +28,19 @@ If you loaded a config in step 1, @ref mogbus_config_server_options "mogbus_conf
 
 ## Check, then create
 
-@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and returns the server, or NULL. In `main()`, `ctx` is the context of step 1 and `g_server` a global that step 5 explains (it lets Ctrl-C stop the server):
+@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and hands the server back through its last parameter (NULL on failure). In `main()`, `ctx` is the context of step 1 and `g_server` a global that step 5 explains (it lets Ctrl-C stop the server):
 
 ```c
 if (mogbus_server_check(ctx, &options) != MOGBUS_OK) { ... }
-server = mogbus_server_create(ctx, &options);
-if (!server)
+if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
 {
-	fprintf(stderr, "server (status %d): %s\n", (int)mogbus_last_error_code(ctx),
-		mogbus_last_error(ctx));
+	fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
 	goto done;
 }
 g_server = server;
 ```
 
-On failure @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" (a @ref mogbus_error_t "mogbus_error_t") tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the code itself: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The `mogbus` binary maps serial to exit status 1 and listen to 2. A TLS server needs a library built with TLS; without it creation fails with an error.
+On failure @ref mogbus_server_create "mogbus_server_create()" returns a @ref mogbus_result_t "mogbus_result_t" that tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the same codes: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The `mogbus` binary maps serial to exit status 1 and listen to 2. A TLS server needs a library built with TLS; without it creation fails with an error.
 
 ## The loop
 
@@ -57,7 +59,7 @@ while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
 
 It returns `MOGBUS_STEP_CONTINUE`, `MOGBUS_STEP_DONE` (stopped, or the byte-stream peer went away) or `MOGBUS_STEP_ERROR` (poll failed). The wait doubles as your loop's timer: 100 ms here means the simulation advances at least ten times a second even with no clients. If you have nothing else to do, @ref mogbus_server_run "mogbus_server_run()" steps until stopped for you.
 
-One thread does everything. Requests are answered inside `mogbus_server_step`, so the simulation, the access hook and the host writes of the next step never run concurrently with a request. That is why the library needs no locks, and also why the step must not be starved: a long computation between steps delays every client.
+Requests are answered inside `mogbus_server_step`, so the simulation, the access hook and a host write never run concurrently with a request: a context has one lock, held while a request is answered and released while the step waits (see [threading](library-lifetimes.md#threading)). A host that wants a background thread can run `mogbus_server_run()` on it and keep calling `mogbus_device_*` from the others. A long computation between steps of your own loop still delays every client.
 
 ## Check that it answers
 

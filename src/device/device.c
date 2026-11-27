@@ -23,6 +23,49 @@ space_name(space_kind_t space)
 	return names[space];
 }
 
+const char*
+device_add_server(device_t* dev, const char* id)
+{
+	if (!id ||
+	    !id[0])
+		return "server id must not be empty";
+	if (strlen(id) >= DEVICE_SERVER_NAME_MAX)
+		return "server id is too long";
+	if (device_serves(dev, id))
+		return NULL;
+	if (dev->server_count >= DEVICE_MAX_SERVERS)
+		return "a device can be assigned to at most 8 servers";
+	strcpy(dev->servers[dev->server_count++], id);
+	return NULL;
+}
+
+bool
+device_serves(const device_t* dev, const char* id)
+{
+	if (!id)
+		return dev->server_count == 0;
+	for (u32 i = 0; i < dev->server_count; i++)
+	{
+		if (strcmp(dev->servers[i], id) == 0)
+			return true;
+	}
+	return false;
+}
+
+bool
+device_shares_server(const device_t* a, const device_t* b)
+{
+	if (a->server_count == 0 &&
+	    b->server_count == 0)
+		return true;
+	for (u32 i = 0; i < a->server_count; i++)
+	{
+		if (device_serves(b, a->servers[i]))
+			return true;
+	}
+	return false;
+}
+
 device_t*
 device_new(arena_t* arena, u64 start_ms)
 {

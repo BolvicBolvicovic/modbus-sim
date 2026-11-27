@@ -8,16 +8,23 @@
  *
  * Model: a mogbus_t context owns the devices and servers you create. Devices
  * come from a config file (mogbus_load_config) or are built in code
- * (mogbus_add_device + mogbus_device_add_point). A server exposes all devices
- * of the context over one transport (TCP, RTU, ASCII, ...), and the host drives
+ * (mogbus_add_device + mogbus_device_add_point). A server exposes the devices assigned to it (by
+ * default all devices of the context) over one transport (TCP, RTU, ASCII, ...), and the host drives
  * it with mogbus_server_step() from its own loop, or hands the thread over with
  * mogbus_server_run().
  *
  * Rules:
- *  - Not thread-safe. One thread at a time may call into a context: the thread
- *    that steps a server is the thread that must touch its devices. The only
- *    call that may come from another thread or a signal handler is
- *    mogbus_server_stop().
+ *  - Thread-safe per context. Every call that takes a context, one of its devices or one of
+ *    its servers holds one recursive lock of that context for the call, so any thread may
+ *    call them at any time, including while another thread runs mogbus_server_run() or
+ *    steps the server. The step releases the lock while it waits for I/O and holds it while
+ *    it answers requests. Hooks and callbacks run with the lock held on the stepping thread
+ *    and may call back into the context. The exceptions: mogbus_server_stop(),
+ *    mogbus_stop() and the signal helpers take no lock (async-signal-safe, any thread; a
+ *    running step notices within one second); a client (mogbus_client_t) is used by one thread
+ *    at a time; mogbus_destroy() and mogbus_server_close() must not race with any other call
+ *    on the same context or server; logging settings are process-wide and belong to
+ *    start-up; the message of mogbus_last_error() is shared by the threads of a context.
  *  - Nothing is allocated with malloc; memory comes from an mmap-backed arena
  *    owned by the context and is released by mogbus_destroy(). Devices live as
  *    long as the context (there is no per-device removal), so a pointer to a
@@ -31,11 +38,14 @@
  *  - The library never installs signal handlers. A TLS server writes to its
  *    sockets through OpenSSL, which can raise SIGPIPE when a client vanishes:
  *    a host that uses TLS must ignore SIGPIPE (signal(SIGPIPE, SIG_IGN)).
- *  - A fallible call reports failure one way only. Calls that return a pointer (constructors)
- *    return NULL; calls that return mogbus_error_t return the code. In both cases the text of the
- *    failure is kept by the context: mogbus_last_error() (and mogbus_last_error_code() after a
- *    NULL return). Only mogbus_probe(), which has no context, keeps its text per thread
- *    (mogbus_last_error(NULL)). Successful calls leave the last error alone.
+ *  - A fallible call reports failure one way only: it returns a mogbus_result_t, MOGBUS_OK on
+ *    success. A constructor hands the object back through its last parameter, which is set to NULL
+ *    on failure (`mogbus_create(&ctx)`). The text of the failure is kept by the context:
+ *    mogbus_last_error(). Only mogbus_create(), mogbus_probe() and mogbus_client_open(), which have
+ *    no owner yet, keep their text per thread (mogbus_last_error(NULL)); a client keeps the text
+ *    of its own calls (mogbus_client_last_error()). Successful calls leave the last error alone.
+ *    Accessors that cannot fail with valid handles (counts, `*_at` lookups, defaults) return
+ *    their value directly.
  */
 #ifndef MOGBUS_H
 #define MOGBUS_H
@@ -62,9 +72,10 @@ typedef enum mogbus_mode_t mogbus_mode_t;
 typedef enum mogbus_parity_t mogbus_parity_t;
 typedef enum mogbus_tls_version_t mogbus_tls_version_t;
 typedef struct mogbus_server_options_t mogbus_server_options_t;
+typedef struct mogbus_client_options_t mogbus_client_options_t;
 typedef enum mogbus_frame_direction_t mogbus_frame_direction_t;
 typedef struct mogbus_frame_t mogbus_frame_t;
-typedef enum mogbus_error_t mogbus_error_t;
+typedef enum mogbus_result_t mogbus_result_t;
 typedef enum mogbus_log_level_t mogbus_log_level_t;
 typedef enum mogbus_log_format_t mogbus_log_format_t;
 /** @brief A context: owns devices, servers and their memory. */
@@ -110,9 +121,11 @@ MOGBUS_API const char*	mogbus_version(void);
 
 /**
  * @brief Creates an empty context.
- * @return The context, or NULL if its memory cannot be mapped.
+ * @param out Receives the context, or NULL on failure.
+ * @return MOGBUS_OK, or MOGBUS_ERR_NOMEM if its memory cannot be mapped (the message is
+ *         mogbus_last_error(NULL)).
  */
-MOGBUS_API mogbus_t*	mogbus_create(void);
+MOGBUS_API mogbus_result_t	mogbus_create(mogbus_t** out);
 
 /**
  * @brief Closes every server of the context and releases all its memory, devices included.
@@ -126,7 +139,7 @@ MOGBUS_API void		mogbus_destroy(mogbus_t* ctx);
  * The `mogbus` binary maps MOGBUS_ERR_SERIAL to exit status 1 and MOGBUS_ERR_LISTEN to 2. A TLS
  * setup failure is also logged at WARN, like the transports log their own start-up errors.
  */
-enum mogbus_error_t
+enum mogbus_result_t
 {
 	MOGBUS_OK,		/**< no error */
 	MOGBUS_ERR_INVALID,	/**< bad argument or options, no devices, or a limit reached */
@@ -136,6 +149,10 @@ enum mogbus_error_t
 	MOGBUS_ERR_UNSUPPORTED,	/**< the library was built without config support */
 	MOGBUS_ERR_NOMEM,	/**< the context arena is exhausted */
 	MOGBUS_ERR_PROBE,	/**< mogbus_probe(): connection, send or reply failure */
+	MOGBUS_ERR_IO,		/**< client: connect, send or receive failed, or the server closed the connection */
+	MOGBUS_ERR_TIMEOUT,	/**< client: no reply within the timeout (after the retries) */
+	MOGBUS_ERR_EXCEPTION,	/**< client: the server answered with a Modbus exception, see mogbus_client_last_exception() */
+	MOGBUS_ERR_FRAME,	/**< client: malformed reply, or one that does not answer the request */
 };
 
 /**
@@ -143,27 +160,13 @@ enum mogbus_error_t
  *
  * Every failing call that takes the context (or a device of it) overwrites it; a successful call
  * leaves it unchanged. The pointer stays valid until the next failing call on @p ctx or
- * mogbus_destroy(). A call that returns mogbus_error_t gives the code directly, so use this only
- * for the text; a constructor that returns NULL gives code and text through the context
- * (mogbus_last_error_code(), this function).
+ * mogbus_destroy(). The failing call returns the code; this gives the text.
  *
- * @param ctx Context; NULL gives the message of the last failed mogbus_probe() of the calling
- *        thread.
+ * @param ctx Context; NULL gives the message of the last failed mogbus_probe() or
+ *        mogbus_client_open() or mogbus_create() of the calling thread.
  * @return The message, "" if nothing failed yet.
  */
 MOGBUS_API const char*	mogbus_last_error(const mogbus_t* ctx);
-
-/**
- * @brief Code of the most recent failed call on a context.
- *
- * For calls that return NULL on failure (mogbus_add_device(), mogbus_server_create(),
- * mogbus_server_create_from_config()). Calls that return mogbus_error_t report the code
- * themselves.
- *
- * @param ctx Context.
- * @return The code, MOGBUS_OK if nothing failed yet.
- */
-MOGBUS_API mogbus_error_t	mogbus_last_error_code(const mogbus_t* ctx);
 
 /**
  * @brief Loads a config file into the context.
@@ -179,7 +182,7 @@ MOGBUS_API mogbus_error_t	mogbus_last_error_code(const mogbus_t* ctx);
  *         use, MOGBUS_ERR_NOMEM, or MOGBUS_ERR_UNSUPPORTED in a build without config support. The
  *         message is in mogbus_last_error().
  */
-MOGBUS_API mogbus_error_t	mogbus_load_config(mogbus_t* ctx, const char* path);
+MOGBUS_API mogbus_result_t	mogbus_load_config(mogbus_t* ctx, const char* path);
 
 /* ---- Devices ---- */
 
@@ -321,20 +324,49 @@ struct mogbus_point_t
  * loaded devices can be mixed in one context, which holds up to MOGBUS_MAX_DEVICES devices.
  *
  * @param ctx Context.
- * @param unit_id Modbus unit id; must not be in use.
+ * @param unit_id Modbus unit id. Two devices may share one only when they are assigned to
+ *        different servers (mogbus_device_add_server()); mogbus_server_create() and
+ *        mogbus_device_add_server() fail when two devices of one server have the same id.
  * @param name Device name, copied, at most 63 bytes; NULL means "unnamed".
- * @return The device, or NULL on a duplicate unit id, a too long name or when MOGBUS_MAX_DEVICES
- *         is reached (mogbus_last_error_code() and mogbus_last_error() say why).
+ * @param out Receives the device, or NULL on failure.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID for a too long name or when MOGBUS_MAX_DEVICES is
+ *         reached, or MOGBUS_ERR_NOMEM. The message is in mogbus_last_error().
  */
-MOGBUS_API mogbus_device_t*	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name);
+MOGBUS_API mogbus_result_t	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name,
+						  mogbus_device_t** out);
 
 /**
  * @brief Finds a device by unit id, including devices loaded from config.
  * @param ctx Context.
  * @param unit_id Unit id to look up.
- * @return The device, or NULL.
+ * @return The first device with that unit id, or NULL (several may share it on different servers).
  */
 MOGBUS_API mogbus_device_t*	mogbus_find_device(mogbus_t* ctx, uint8_t unit_id);
+
+/**
+ * @brief Assigns the device to the server with the given id.
+ *
+ * A server created with that `id` serves the device; the device then no longer belongs to the
+ * servers without id. Call it again to serve the device from several servers. Only servers
+ * created afterwards are affected. Two devices with the same unit id cannot share a server.
+ *
+ * @param dev Device.
+ * @param id Server id, 1 to 31 bytes; copied. At most 8 servers per device.
+ * @return MOGBUS_OK (also when already assigned), or MOGBUS_ERR_INVALID for an empty or too long
+ *         id, too many servers or a unit id already used by a device of that server; the
+ *         message is in mogbus_last_error().
+ */
+MOGBUS_API mogbus_result_t	mogbus_device_add_server(mogbus_device_t* dev, const char* id);
+
+/**
+ * @brief Returns the id of a server the device is assigned to.
+ * @param dev Device.
+ * @param index Position in the order of mogbus_device_add_server() calls (or of the config's
+ *        `(servers ...)`; a config with one named server assigns it to every device that lists none).
+ * @return The id, borrowed from the device, or NULL when @p index is out of range, so index 0 is
+ *         NULL for a device served by the servers without id.
+ */
+MOGBUS_API const char*	mogbus_device_server_at(const mogbus_device_t* dev, size_t index);
 
 /**
  * @brief Returns the number of devices in the context.
@@ -449,7 +481,7 @@ MOGBUS_API bool		mogbus_device_action_at(const mogbus_device_t* dev, uint32_t in
  *         does not fit the parameter. The message is in mogbus_last_error() of the device's
  *         context.
  */
-MOGBUS_API mogbus_error_t	mogbus_device_set_action_param(mogbus_device_t* dev, mogbus_space_t space,
+MOGBUS_API mogbus_result_t	mogbus_device_set_action_param(mogbus_device_t* dev, mogbus_space_t space,
 							      uint32_t address, bool on_write,
 							      const char* name, double value);
 
@@ -464,7 +496,7 @@ MOGBUS_API mogbus_error_t	mogbus_device_set_action_param(mogbus_device_t* dev, m
  * @return MOGBUS_OK, or MOGBUS_ERR_INVALID when no such action or parameter exists. The message
  *         is in mogbus_last_error() of the device's context.
  */
-MOGBUS_API mogbus_error_t	mogbus_device_get_action_param(mogbus_device_t* dev, mogbus_space_t space,
+MOGBUS_API mogbus_result_t	mogbus_device_get_action_param(mogbus_device_t* dev, mogbus_space_t space,
 							      uint32_t address, bool on_write,
 							      const char* name, double* out);
 
@@ -477,9 +509,10 @@ MOGBUS_API mogbus_error_t	mogbus_device_get_action_param(mogbus_device_t* dev, m
  *
  * @param dev Device.
  * @param on true to enable, false to disable.
- * @return false if @p dev is NULL or another device of the context already has it.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if @p dev is NULL or another device of the context
+ *         already has it. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_set_any_unit(mogbus_device_t* dev, bool on);
+MOGBUS_API mogbus_result_t	mogbus_device_set_any_unit(mogbus_device_t* dev, bool on);
 
 /**
  * @brief Fills a snapshot of a device's points and faults.
@@ -514,7 +547,7 @@ MOGBUS_API bool		mogbus_device_point_at(const mogbus_device_t* dev, uint32_t ind
  *         overlapping or out-of-range address, bad ramp. The message is in mogbus_last_error()
  *         of the device's context.
  */
-MOGBUS_API mogbus_error_t	mogbus_device_add_point(mogbus_device_t* dev, const mogbus_point_t* point);
+MOGBUS_API mogbus_result_t	mogbus_device_add_point(mogbus_device_t* dev, const mogbus_point_t* point);
 
 /**
  * @brief Reads consecutive raw 16-bit values of a table.
@@ -527,10 +560,11 @@ MOGBUS_API mogbus_error_t	mogbus_device_add_point(mogbus_device_t* dev, const mo
  * @param address First address.
  * @param count Number of addresses.
  * @param out Receives @p count values.
- * @return false, changing nothing, if any address is undefined or out of range.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID, changing nothing, if any address is undefined or out
+ *         of range. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_read(mogbus_device_t* dev, mogbus_space_t space, uint32_t address,
-					   uint32_t count, uint16_t* out);
+MOGBUS_API mogbus_result_t	mogbus_device_read(mogbus_device_t* dev, mogbus_space_t space, uint32_t address,
+						   uint32_t count, uint16_t* out);
 /**
  * @brief Writes consecutive raw 16-bit values, as a client write would.
  *
@@ -545,11 +579,12 @@ MOGBUS_API bool		mogbus_device_read(mogbus_device_t* dev, mogbus_space_t space, 
  * @param address First address.
  * @param count Number of addresses.
  * @param in @p count values to write.
- * @return false, changing nothing, if any address is undefined or out of range, a value does not
- *         fit, or a point is driven by a machine or claimed with mogbus_device_set_value().
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID, changing nothing, if any address is undefined or out
+ *         of range, a value does not fit, or a point is driven by a machine or claimed with
+ *         mogbus_device_set_value(). The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_write(mogbus_device_t* dev, mogbus_space_t space, uint32_t address,
-					    uint32_t count, const uint16_t* in);
+MOGBUS_API mogbus_result_t	mogbus_device_write(mogbus_device_t* dev, mogbus_space_t space, uint32_t address,
+						    uint32_t count, const uint16_t* in);
 
 /**
  * @brief Reads the decoded value of the point that starts at @p address.
@@ -561,11 +596,11 @@ MOGBUS_API bool		mogbus_device_write(mogbus_device_t* dev, mogbus_space_t space,
  * @param space Table.
  * @param address First address of the point.
  * @param out Receives the value.
- * @return false if no point starts at @p address, or the point is a string (use
- *         mogbus_device_get_string()).
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if no point starts at @p address, or the point is a
+ *         string (use mogbus_device_get_string()). The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_get_value(mogbus_device_t* dev, mogbus_space_t space,
-						uint32_t address, double* out);
+MOGBUS_API mogbus_result_t	mogbus_device_get_value(mogbus_device_t* dev, mogbus_space_t space,
+							uint32_t address, double* out);
 /**
  * @brief Sets a point's value from the host side, like a machine output.
  *
@@ -577,11 +612,11 @@ MOGBUS_API bool		mogbus_device_get_value(mogbus_device_t* dev, mogbus_space_t sp
  * @param space Table.
  * @param address First address of the point.
  * @param value New value; for bit points nonzero means on.
- * @return false if no point starts at @p address, or the point is a string (use
- *         mogbus_device_set_string()).
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if no point starts at @p address, or the point is a
+ *         string (use mogbus_device_set_string()). The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_set_value(mogbus_device_t* dev, mogbus_space_t space,
-						uint32_t address, double value);
+MOGBUS_API mogbus_result_t	mogbus_device_set_value(mogbus_device_t* dev, mogbus_space_t space,
+							uint32_t address, double value);
 
 /**
  * @brief Reads a string point as text, up to its first NUL byte.
@@ -593,10 +628,11 @@ MOGBUS_API bool		mogbus_device_set_value(mogbus_device_t* dev, mogbus_space_t sp
  * @param address First address of the string point.
  * @param out Receives the NUL-terminated text.
  * @param size Size of @p out; at most 2*length + 1 bytes are needed.
- * @return false if no string point starts at @p address or @p out is too small.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if no string point starts at @p address or @p out is
+ *         too small. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_get_string(mogbus_device_t* dev, mogbus_space_t space,
-						 uint32_t address, char* out, size_t size);
+MOGBUS_API mogbus_result_t	mogbus_device_get_string(mogbus_device_t* dev, mogbus_space_t space,
+							 uint32_t address, char* out, size_t size);
 
 /**
  * @brief Replaces a string point's text from the host side, NUL padded.
@@ -608,10 +644,11 @@ MOGBUS_API bool		mogbus_device_get_string(mogbus_device_t* dev, mogbus_space_t s
  * @param space MOGBUS_HOLDING or MOGBUS_INPUT.
  * @param address First address of the string point.
  * @param text NUL-terminated text, at most 2*length bytes.
- * @return false if no string point starts at @p address or @p text is too long.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if no string point starts at @p address or @p text is
+ *         too long. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_set_string(mogbus_device_t* dev, mogbus_space_t space,
-						 uint32_t address, const char* text);
+MOGBUS_API mogbus_result_t	mogbus_device_set_string(mogbus_device_t* dev, mogbus_space_t space,
+							 uint32_t address, const char* text);
 
 /** @brief Kind of Modbus client access an access hook is asked about. */
 enum mogbus_access_kind_t
@@ -700,9 +737,9 @@ typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogb
  * @param dev Device.
  * @param fn Hook, or NULL to remove it.
  * @param user Passed back to @p fn.
- * @return false if @p dev is NULL or out of memory.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID if @p dev is NULL, or MOGBUS_ERR_NOMEM.
  */
-MOGBUS_API bool		mogbus_device_set_access_hook(mogbus_device_t* dev, mogbus_access_fn fn, void* user);
+MOGBUS_API mogbus_result_t	mogbus_device_set_access_hook(mogbus_device_t* dev, mogbus_access_fn fn, void* user);
 
 /**
  * @brief Post-write hook: runs after a Modbus client write was applied.
@@ -741,9 +778,9 @@ typedef void (*mogbus_written_fn)(void* user, mogbus_device_t* dev, const mogbus
  * @param dev Device.
  * @param fn Hook, or NULL to remove it.
  * @param user Passed back to @p fn.
- * @return false if @p dev is NULL or out of memory.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID if @p dev is NULL, or MOGBUS_ERR_NOMEM.
  */
-MOGBUS_API bool		mogbus_device_set_written_hook(mogbus_device_t* dev, mogbus_written_fn fn, void* user);
+MOGBUS_API mogbus_result_t	mogbus_device_set_written_hook(mogbus_device_t* dev, mogbus_written_fn fn, void* user);
 
 /**
  * @name User-defined function codes with a callback
@@ -795,11 +832,12 @@ typedef int (*mogbus_function_fn)(void* user, mogbus_device_t* dev, uint8_t unit
  * @param code Function code, 1-127 and not one mogbus implements.
  * @param fn Callback; must not be NULL.
  * @param user Passed back to @p fn.
- * @return false if @p dev or @p fn is NULL, the code is out of range, built in or already defined on
- *         the device (by config or by this function), the device already has 8 codes, or memory
- *         ran out.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID if @p dev or @p fn is NULL, the code is out of range,
+ *         built in or already defined on the device (by config or by this function) or the device
+ *         already has 8 codes, or MOGBUS_ERR_NOMEM. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_add_function_code(mogbus_device_t* dev, uint8_t code, mogbus_function_fn fn, void* user);
+MOGBUS_API mogbus_result_t	mogbus_device_add_function_code(mogbus_device_t* dev, uint8_t code,
+								mogbus_function_fn fn, void* user);
 
 /** @} */
 
@@ -819,7 +857,7 @@ MOGBUS_API bool		mogbus_device_add_function_code(mogbus_device_t* dev, uint8_t c
  *         too many files (16) or records per file (64), or out of memory. The message is in
  *         mogbus_last_error() of the device's context.
  */
-MOGBUS_API mogbus_error_t	mogbus_device_add_file_record(mogbus_device_t* dev, uint16_t file, uint16_t record,
+MOGBUS_API mogbus_result_t	mogbus_device_add_file_record(mogbus_device_t* dev, uint16_t file, uint16_t record,
 							      uint16_t count, const uint16_t* values);
 
 /**
@@ -829,10 +867,11 @@ MOGBUS_API mogbus_error_t	mogbus_device_add_file_record(mogbus_device_t* dev, ui
  * @param record First record number.
  * @param count Number of records.
  * @param out Receives @p count values.
- * @return false if the file or any record is not defined, @p count is 0 or @p out is NULL.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if the file or any record is not defined, @p count is 0
+ *         or @p out is NULL. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_read_file_records(mogbus_device_t* dev, uint16_t file, uint16_t record,
-							uint16_t count, uint16_t* out);
+MOGBUS_API mogbus_result_t	mogbus_device_read_file_records(mogbus_device_t* dev, uint16_t file, uint16_t record,
+								uint16_t count, uint16_t* out);
 
 /**
  * @brief Writes @p count consecutive file records starting at @p record (host side, no hook).
@@ -841,11 +880,11 @@ MOGBUS_API bool		mogbus_device_read_file_records(mogbus_device_t* dev, uint16_t 
  * @param record First record number.
  * @param count Number of records.
  * @param values @p count values to store.
- * @return false if the file or any record is not defined, @p count is 0 or @p values is NULL;
- *         nothing is written then.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if the file or any record is not defined, @p count is 0
+ *         or @p values is NULL; nothing is written then. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_write_file_records(mogbus_device_t* dev, uint16_t file, uint16_t record,
-							 uint16_t count, const uint16_t* values);
+MOGBUS_API mogbus_result_t	mogbus_device_write_file_records(mogbus_device_t* dev, uint16_t file, uint16_t record,
+								 uint16_t count, const uint16_t* values);
 
 /**
  * @brief Adds a FIFO queue that clients read with FC 18 at @p address.
@@ -859,7 +898,7 @@ MOGBUS_API bool		mogbus_device_write_file_records(mogbus_device_t* dev, uint16_t
  * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a duplicate address, too many values or queues
  *         (16), or out of memory. The message is in mogbus_last_error() of the device's context.
  */
-MOGBUS_API mogbus_error_t	mogbus_device_add_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
+MOGBUS_API mogbus_result_t	mogbus_device_add_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
 						       const uint16_t* values);
 
 /**
@@ -871,10 +910,11 @@ MOGBUS_API mogbus_error_t	mogbus_device_add_fifo(mogbus_device_t* dev, uint16_t 
  * @param address FIFO pointer address of an existing queue.
  * @param count New number of values, 0-31.
  * @param values @p count values; copied; may be NULL when @p count is 0.
- * @return false if no queue is defined at @p address or @p count is above 31.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if no queue is defined at @p address or @p count is
+ *         above 31. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_set_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
-					       const uint16_t* values);
+MOGBUS_API mogbus_result_t	mogbus_device_set_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
+						       const uint16_t* values);
 
 /**
  * @brief Adds a CANopen object served by FC 2B/0D, as `(canopen-object ...)` does in a config.
@@ -888,7 +928,7 @@ MOGBUS_API bool		mogbus_device_set_fifo(mogbus_device_t* dev, uint16_t address, 
  *         index, subindex), too many objects (64) or a NULL argument. The message is in
  *         mogbus_last_error() of the device's context.
  */
-MOGBUS_API mogbus_error_t	mogbus_device_add_canopen_object(mogbus_device_t* dev, uint8_t node, uint16_t index,
+MOGBUS_API mogbus_result_t	mogbus_device_add_canopen_object(mogbus_device_t* dev, uint8_t node, uint16_t index,
 								 uint8_t subindex, uint16_t length, const uint8_t* data);
 
 /**
@@ -900,10 +940,12 @@ MOGBUS_API mogbus_error_t	mogbus_device_add_canopen_object(mogbus_device_t* dev,
  * @param offset First byte.
  * @param count Number of bytes.
  * @param out Receives @p count bytes.
- * @return false if the object does not exist or the range is outside its length.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if the object does not exist or the range is outside
+ *         its length. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_read_canopen(mogbus_device_t* dev, uint8_t node, uint16_t index,
-						   uint8_t subindex, uint16_t offset, uint16_t count, uint8_t* out);
+MOGBUS_API mogbus_result_t	mogbus_device_read_canopen(mogbus_device_t* dev, uint8_t node, uint16_t index,
+							   uint8_t subindex, uint16_t offset, uint16_t count,
+							   uint8_t* out);
 
 /**
  * @brief Writes @p count bytes at @p offset of a CANopen object (host side, no hook).
@@ -917,11 +959,12 @@ MOGBUS_API bool		mogbus_device_read_canopen(mogbus_device_t* dev, uint8_t node, 
  * @param offset First byte.
  * @param count Number of bytes.
  * @param data @p count bytes to store.
- * @return false if the object does not exist or the range is outside its length.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if the object does not exist or the range is outside
+ *         its length. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_device_write_canopen(mogbus_device_t* dev, uint8_t node, uint16_t index,
-						    uint8_t subindex, uint16_t offset, uint16_t count,
-						    const uint8_t* data);
+MOGBUS_API mogbus_result_t	mogbus_device_write_canopen(mogbus_device_t* dev, uint8_t node, uint16_t index,
+							    uint8_t subindex, uint16_t offset, uint16_t count,
+							    const uint8_t* data);
 
 /* ---- Server ---- */
 
@@ -969,8 +1012,10 @@ enum mogbus_tls_version_t
  * broadcast_execute); the PTY and DEVICE modes use the serial line fields and RTU timing (`path`
  * for DEVICE); the FD modes use `fd`, a byte stream you already own (a socketpair or PTY master),
  * never closed by the library. All modes use `seed`. The HTTP fields are independent of the mode.
- * A server serves every device the context has when it is created; a context holds up to
- * MOGBUS_MAX_SERVERS servers.
+ * A server with an `id` serves the devices that list it (mogbus_device_add_server()); a server
+ * without one serves the devices that list no server, which is every device unless some were
+ * assigned. The devices are picked when the server is created. A context holds up to
+ * MOGBUS_MAX_SERVERS servers, which mogbus_step() and mogbus_run() drive together.
  */
 struct mogbus_server_options_t
 {
@@ -1002,6 +1047,7 @@ struct mogbus_server_options_t
 	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
 	bool		http_ui;		/**< serve the web UI on `/` (needs the endpoint; implies http_control) */
 	const char*	http_allowed_hosts;	/**< extra Host names /api/ and the UI accept (loopback and the bind address always pass): up to 8 comma-separated names; NULL = none */
+	const char*	id;			/**< names the server: unique among the live servers of the context, at most 31 bytes; prefixes its log lines; NULL = none */
 };
 
 /**
@@ -1014,35 +1060,74 @@ struct mogbus_server_options_t
 MOGBUS_API mogbus_server_options_t	mogbus_server_options_defaults(void);
 
 /**
- * @brief Starts a server for every device the context has now.
+ * @brief Starts a server for the devices assigned to it, which is every device of the context
+ *        unless mogbus_device_add_server() was used.
  *
- * Devices added later are not served.
+ * With `options->id` set the server serves the devices that list that id; without it, the
+ * devices that list none. Devices added or assigned later are not served by this server.
  *
- * @param ctx Context with at least one device.
+ * @param ctx Context with at least one device for this server.
  * @param options Server settings; strings are copied.
- * @return The server, or NULL if the options are invalid or the transport cannot start (port in
+ * @param out Receives the server, or NULL on failure.
+ * @return MOGBUS_OK, or the reason the options are invalid or the transport cannot start (port in
  *         use, serial device missing, TLS files unreadable, no devices, MOGBUS_MAX_SERVERS
- *         reached). The reason is in mogbus_last_error_code() (MOGBUS_ERR_INVALID,
- *         MOGBUS_ERR_SERIAL, MOGBUS_ERR_LISTEN) and its text in mogbus_last_error().
+ *         reached): MOGBUS_ERR_INVALID, MOGBUS_ERR_SERIAL, MOGBUS_ERR_LISTEN or MOGBUS_ERR_NOMEM.
+ *         The message is in mogbus_last_error().
  */
-MOGBUS_API mogbus_server_t*	mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* options);
+MOGBUS_API mogbus_result_t	mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* options,
+						     mogbus_server_t** out);
 
 /**
  * @brief Starts a server with the (server ...) section of the last mogbus_load_config().
  * @param ctx Context with a loaded config.
- * @return The server, or NULL (no config loaded, MOGBUS_ERR_UNSUPPORTED without config support,
- *         or see mogbus_server_create()); the reason is in mogbus_last_error_code() and
- *         mogbus_last_error().
+ * @param out Receives the server, or NULL on failure.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID if no config is loaded, MOGBUS_ERR_UNSUPPORTED without
+ *         config support, or see mogbus_server_create(). The message is in mogbus_last_error().
  */
-MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config(mogbus_t* ctx);
+MOGBUS_API mogbus_result_t	mogbus_server_create_from_config(mogbus_t* ctx, mogbus_server_t** out);
+
+/**
+ * @brief Returns how many (server ...) sections the last mogbus_load_config() read.
+ * @param ctx Context.
+ * @return The count (at least 1 after a successful load: a file without (server ...) has one
+ *         default server), or 0 if no config is loaded or the build has no config support.
+ */
+MOGBUS_API size_t	mogbus_config_server_count(const mogbus_t* ctx);
+
+/**
+ * @brief Starts the server number @p index of the last mogbus_load_config(), serving the devices
+ *        assigned to it.
+ *
+ * Index 0 is mogbus_server_create_from_config().
+ * @param ctx Context with a loaded config.
+ * @param index Position of the (server ...) section, below mogbus_config_server_count().
+ * @param out Receives the server, or NULL on failure.
+ * @return MOGBUS_OK, or see mogbus_server_create_from_config(); an index out of range fails with
+ *         MOGBUS_ERR_INVALID.
+ */
+MOGBUS_API mogbus_result_t	mogbus_server_create_from_config_at(mogbus_t* ctx, size_t index,
+								    mogbus_server_t** out);
 
 /**
  * @brief Returns the (server ...) section of the last mogbus_load_config() as options.
  * @param ctx Context.
  * @param out Receives the options; strings are borrowed from the context.
- * @return false if no config is loaded or the build has no config support.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID if no config is loaded, or MOGBUS_ERR_UNSUPPORTED without
+ *         config support. The message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out);
+MOGBUS_API mogbus_result_t	mogbus_config_server_options(mogbus_t* ctx, mogbus_server_options_t* out);
+
+/**
+ * @brief Returns the server section number @p index of the last mogbus_load_config() as options.
+ * @param ctx Context.
+ * @param index Position of the section, below mogbus_config_server_count(); 0 is
+ *        mogbus_config_server_options().
+ * @param out Receives the options; strings are borrowed from the context.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID if no config is loaded or @p index is out of range, or
+ *         MOGBUS_ERR_UNSUPPORTED without config support. The message is in mogbus_last_error().
+ */
+MOGBUS_API mogbus_result_t	mogbus_config_server_options_at(mogbus_t* ctx, size_t index,
+								mogbus_server_options_t* out);
 
 /**
  * @brief Validates options exactly as mogbus_server_create() would, without starting anything.
@@ -1055,7 +1140,7 @@ MOGBUS_API bool		mogbus_config_server_options(const mogbus_t* ctx, mogbus_server
  * @return MOGBUS_OK if mogbus_server_create() would accept the options, else MOGBUS_ERR_INVALID
  *         or MOGBUS_ERR_LISTEN (TLS setup); the message is in mogbus_last_error().
  */
-MOGBUS_API mogbus_error_t	mogbus_server_check(mogbus_t* ctx, const mogbus_server_options_t* options);
+MOGBUS_API mogbus_result_t	mogbus_server_check(mogbus_t* ctx, const mogbus_server_options_t* options);
 
 /**
  * @brief Checks that a server answers: one FC 08 Return Query Data round trip.
@@ -1076,7 +1161,7 @@ MOGBUS_API mogbus_error_t	mogbus_server_check(mogbus_t* ctx, const mogbus_server
  *         MOGBUS_ERR_PROBE for a timeout, a refused connection or a malformed reply. With no
  *         context the message is kept per thread: mogbus_last_error(NULL).
  */
-MOGBUS_API mogbus_error_t	mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id,
+MOGBUS_API mogbus_result_t	mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id,
 					     uint32_t timeout_ms);
 
 /**
@@ -1122,7 +1207,9 @@ MOGBUS_API int		mogbus_server_step(mogbus_server_t* server, int max_wait_ms);
 /**
  * @brief Asks the server to stop; the next step returns MOGBUS_STEP_DONE.
  *
- * Async-signal-safe, and the only call that may come from another thread or a signal handler.
+ * Async-signal-safe and lock-free: it only sets a flag, so it may come from any thread or a
+ * signal handler. A step that is waiting for I/O notices within one second (at most the
+ * @p max_wait_ms of that step, or the next timer of the server, if shorter).
  * @param server Server.
  */
 MOGBUS_API void		mogbus_server_stop(mogbus_server_t* server);
@@ -1138,6 +1225,51 @@ MOGBUS_API void		mogbus_server_stop(mogbus_server_t* server);
  * @param slot Host variable that holds the server to stop.
  */
 MOGBUS_API void		mogbus_stop_on_signals(mogbus_server_t* volatile* slot);
+
+/**
+ * @brief Runs one poll iteration of every server of the context with a single wait.
+ *
+ * Like mogbus_server_step(), but one call serves all live servers, so a host (or
+ * mogbus_run()) can drive TCP, UDP, serial and other servers from one thread. A server that
+ * stopped or whose byte-stream peer went away is skipped from then on. Everything said for
+ * mogbus_server_step() about threads applies to the whole context.
+ *
+ * @param ctx Context.
+ * @param max_wait_ms Longest time to block: 0 = do not block, -1 = until the nearest deadline of
+ *        any server (at most 1 s).
+ * @return MOGBUS_STEP_CONTINUE while some server is live, MOGBUS_STEP_DONE once every one has
+ *         stopped or finished (also with no server), MOGBUS_STEP_ERROR if a wait failed.
+ */
+MOGBUS_API int		mogbus_step(mogbus_t* ctx, int max_wait_ms);
+
+/**
+ * @brief Steps the whole context until every server stopped or finished, then closes the
+ *        transports.
+ *
+ * Still call mogbus_server_close() or mogbus_destroy() afterwards.
+ * @param ctx Context.
+ * @return 0 after a clean stop, 1 on a poll error.
+ */
+MOGBUS_API int		mogbus_run(mogbus_t* ctx);
+
+/**
+ * @brief Asks every server of the context to stop; the next mogbus_step() returns
+ *        MOGBUS_STEP_DONE.
+ *
+ * Async-signal-safe, like mogbus_server_stop().
+ * @param ctx Context.
+ */
+MOGBUS_API void		mogbus_stop(mogbus_t* ctx);
+
+/**
+ * @brief Makes SIGINT and SIGTERM (Ctrl-C on a console) call mogbus_stop() on the context held
+ *        in *slot, and ignores SIGPIPE.
+ *
+ * Does nothing while *slot is NULL. Process-wide, like mogbus_stop_on_signals(), which it may be
+ * combined with; the slot must stay valid for the life of the process.
+ * @param slot Host variable that holds the context to stop.
+ */
+MOGBUS_API void		mogbus_stop_context_on_signals(mogbus_t* volatile* slot);
 
 /**
  * @brief Steps until stopped or the byte-stream peer goes away, then closes the transport.
@@ -1249,9 +1381,10 @@ typedef size_t (*mogbus_frame_fn)(void* user, mogbus_server_t* server, mogbus_fr
  * @param server Server.
  * @param fn Hook, or NULL to remove it.
  * @param user Passed back to @p fn.
- * @return false if @p server is NULL.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if @p server is NULL or already closed. The message
+ *         is in mogbus_last_error() of the server's context.
  */
-MOGBUS_API bool		mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* user);
+MOGBUS_API mogbus_result_t	mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* user);
 
 /* ---- Logging (process-wide) ---- */
 
@@ -1306,6 +1439,275 @@ MOGBUS_API void		mogbus_set_log_level(mogbus_log_level_t level);
  * @param format New format; the default is MOGBUS_LOG_TEXT.
  */
 MOGBUS_API void		mogbus_set_log_format(mogbus_log_format_t format);
+
+/* ---- Client ---- */
+
+/** @brief A Modbus client: one connection to one endpoint. See mogbus_client_open(). */
+typedef struct mogbus_client_t		mogbus_client_t;
+
+/**
+ * @brief Client settings. Start from mogbus_client_options_defaults(); fields a mode does not use
+ *        are ignored.
+ *
+ * Modes: MOGBUS_MODE_TCP, MOGBUS_MODE_UDP, MOGBUS_MODE_RTU_TCP, MOGBUS_MODE_RTU_UDP,
+ * MOGBUS_MODE_ASCII_TCP and MOGBUS_MODE_ASCII_UDP use host and port; MOGBUS_MODE_RTU_DEVICE and
+ * MOGBUS_MODE_ASCII_DEVICE use the serial line fields. Every other mode is rejected.
+ */
+struct mogbus_client_options_t
+{
+	mogbus_mode_t	mode;		/**< transport */
+	const char*	host;		/**< network modes: IP literal or "localhost" */
+	uint16_t	port;		/**< network modes */
+	const char*	path;		/**< serial modes: the device, e.g. /dev/ttyUSB0 */
+	uint32_t	baud;		/**< serial modes; 0 keeps the device's speed */
+	uint32_t	data_bits;	/**< serial modes: 7 or 8 (RTU always uses 8) */
+	mogbus_parity_t	parity;		/**< serial modes */
+	uint32_t	stop_bits;	/**< serial modes: 1 or 2 */
+	bool		tls_enabled;	/**< not supported yet: mogbus_client_open() fails */
+	uint32_t	timeout_ms;	/**< how long to wait for each reply */
+	uint32_t	retries;	/**< extra attempts after a timeout; other errors are never retried */
+};
+
+/**
+ * @brief Returns the client defaults.
+ *
+ * TCP to 127.0.0.1:1502, 1000 ms timeout, no retries, 8N1.
+ * @return Default options.
+ */
+MOGBUS_API mogbus_client_options_t	mogbus_client_options_defaults(void);
+
+/**
+ * @brief Creates a Modbus client (master) for one endpoint.
+ *
+ * A client is independent of every mogbus_t and server: it only talks to an endpoint over the
+ * wire, so it may live in the same process as the server it queries, on another thread. It owns
+ * its memory (released by mogbus_client_close()) and connects lazily on the first call, and again
+ * on the first call after a connection error. A client may be used from any thread, but only one
+ * thread at a time; use one client per thread to talk in parallel. A TLS server cannot be reached
+ * yet. The library's logging (mogbus_set_log_sink()) stays process-wide.
+ *
+ * @param options Settings; strings are copied. Start from mogbus_client_options_defaults().
+ * @param out Receives the client, or NULL on failure.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID for invalid options (unknown or server-only mode, a host
+ *         that is not an IP address, no port, a bad serial line), MOGBUS_ERR_UNSUPPORTED for TLS or
+ *         serial lines on a platform without them, or MOGBUS_ERR_NOMEM. With no client yet to own
+ *         the message it is kept per thread, like the one of mogbus_probe():
+ *         mogbus_last_error(NULL).
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_open(const mogbus_client_options_t* options,
+						   mogbus_client_t** out);
+
+/**
+ * @brief Closes the connection and frees the client.
+ * @param client Client to close; NULL is ignored.
+ */
+MOGBUS_API void		mogbus_client_close(mogbus_client_t* client);
+
+/**
+ * @brief Message of the most recent failed call on a client.
+ *
+ * Every failing call overwrites it; a successful call leaves it unchanged. The pointer stays valid
+ * until the next failing call on @p client or mogbus_client_close().
+ *
+ * @param client Client.
+ * @return The message, "" if nothing failed yet.
+ */
+MOGBUS_API const char*	mogbus_client_last_error(const mogbus_client_t* client);
+
+/**
+ * @brief Exception code of the most recent MOGBUS_ERR_EXCEPTION on a client.
+ *
+ * 1 illegal function, 2 illegal data address, 3 illegal data value, 4 server failure, 11 gateway
+ * target failed to respond; the server may use others.
+ *
+ * @param client Client.
+ * @return The code, 0 if no call was answered with an exception yet.
+ */
+MOGBUS_API uint8_t	mogbus_client_last_exception(const mogbus_client_t* client);
+
+/**
+ * @brief Connects now instead of at the first call.
+ *
+ * Useful to find out early that the endpoint is not there. A no-op when already connected.
+ *
+ * @param client Client.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID (NULL client) or MOGBUS_ERR_IO (refused, unreachable,
+ *         serial device missing or busy). The message is in mogbus_client_last_error().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_connect(mogbus_client_t* client);
+
+/**
+ * @brief Sends any request and returns the reply, for function codes the typed calls do not cover
+ *        (including user-defined ones).
+ *
+ * @p data follows the function code in the request; the reply data (without the function code) is
+ * copied to @p reply. A reply with the exception bit set is MOGBUS_ERR_EXCEPTION, with
+ * mogbus_client_last_exception() holding the code. In the RTU and ASCII modes unit 0 is the
+ * broadcast address: the request is sent, nothing is awaited and @p reply_len is 0.
+ *
+ * Every call that takes a @p unit uses it as the server's unit id: 1-255 in the MBAP modes and
+ * 1-247 in the RTU and ASCII modes (0 broadcasts there, and only writes make sense).
+ *
+ * @param client Client.
+ * @param unit Unit id to ask.
+ * @param function_code Function code of the request, 1-127.
+ * @param data Request data after the function code, may be NULL when @p data_len is 0.
+ * @param data_len Bytes of @p data, at most 252.
+ * @param reply Receives the reply data after the function code; may be NULL when @p reply_cap is 0.
+ * @param reply_cap Size of @p reply.
+ * @param reply_len Receives the reply data length; set to 0 on failure. Required.
+ * @return MOGBUS_OK; MOGBUS_ERR_INVALID for a NULL client or argument or an out-of-range value;
+ *         MOGBUS_ERR_IO (connect, send or receive failed, or the server closed the connection:
+ *         the next call reconnects); MOGBUS_ERR_TIMEOUT; MOGBUS_ERR_EXCEPTION; MOGBUS_ERR_FRAME
+ *         (malformed reply, wrong function code, or a reply longer than @p reply_cap). The
+ *         message is in mogbus_client_last_error().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_request(mogbus_client_t* client, uint8_t unit, uint8_t function_code,
+						      const uint8_t* data, size_t data_len,
+						      uint8_t* reply, size_t reply_cap, size_t* reply_len);
+
+/**
+ * @brief Reads coils (function code 01).
+ * @param client Client.
+ * @param unit Unit id.
+ * @param address First coil.
+ * @param count Number of coils, 1-2000.
+ * @param values Receives @p count values, one byte each, 0 or 1.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_coils(mogbus_client_t* client, uint8_t unit, uint16_t address,
+							 uint16_t count, uint8_t* values);
+
+/**
+ * @brief Reads discrete inputs (function code 02).
+ * @param client Client.
+ * @param unit Unit id.
+ * @param address First input.
+ * @param count Number of inputs, 1-2000.
+ * @param values Receives @p count values, one byte each, 0 or 1.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_discrete_inputs(mogbus_client_t* client, uint8_t unit,
+								   uint16_t address, uint16_t count, uint8_t* values);
+
+/**
+ * @brief Reads holding registers (function code 03).
+ * @param client Client.
+ * @param unit Unit id.
+ * @param address First register.
+ * @param count Number of registers, 1-125.
+ * @param values Receives @p count raw 16-bit values.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_holding_registers(mogbus_client_t* client, uint8_t unit,
+								     uint16_t address, uint16_t count, uint16_t* values);
+
+/**
+ * @brief Reads input registers (function code 04).
+ * @param client Client.
+ * @param unit Unit id.
+ * @param address First register.
+ * @param count Number of registers, 1-125.
+ * @param values Receives @p count raw 16-bit values.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_input_registers(mogbus_client_t* client, uint8_t unit,
+								   uint16_t address, uint16_t count, uint16_t* values);
+
+/**
+ * @brief Writes one coil (function code 05).
+ * @param client Client.
+ * @param unit Unit id; 0 broadcasts in the RTU and ASCII modes.
+ * @param address Coil.
+ * @param on The new state.
+ * @return MOGBUS_OK or an error as for mogbus_client_request(); MOGBUS_ERR_FRAME when the echo
+ *         differs from the request.
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_write_coil(mogbus_client_t* client, uint8_t unit, uint16_t address,
+							 bool on);
+
+/**
+ * @brief Writes one holding register (function code 06).
+ * @param client Client.
+ * @param unit Unit id; 0 broadcasts in the RTU and ASCII modes.
+ * @param address Register.
+ * @param value The new raw value.
+ * @return MOGBUS_OK or an error as for mogbus_client_request(); MOGBUS_ERR_FRAME when the echo
+ *         differs from the request.
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_write_register(mogbus_client_t* client, uint8_t unit, uint16_t address,
+							     uint16_t value);
+
+/**
+ * @brief Writes consecutive coils (function code 15).
+ * @param client Client.
+ * @param unit Unit id; 0 broadcasts in the RTU and ASCII modes.
+ * @param address First coil.
+ * @param count Number of coils, 1-1968.
+ * @param values @p count values, one byte each; nonzero is on.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_write_coils(mogbus_client_t* client, uint8_t unit, uint16_t address,
+							  uint16_t count, const uint8_t* values);
+
+/**
+ * @brief Writes consecutive holding registers (function code 16).
+ * @param client Client.
+ * @param unit Unit id; 0 broadcasts in the RTU and ASCII modes.
+ * @param address First register.
+ * @param count Number of registers, 1-123.
+ * @param values @p count raw 16-bit values.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_write_registers(mogbus_client_t* client, uint8_t unit,
+							      uint16_t address, uint16_t count, const uint16_t* values);
+
+/**
+ * @brief Changes bits of a holding register (function code 22): new = (old AND and_mask) OR
+ *        (or_mask AND NOT and_mask).
+ * @param client Client.
+ * @param unit Unit id; 0 broadcasts in the RTU and ASCII modes.
+ * @param address Register.
+ * @param and_mask Bits to keep.
+ * @param or_mask Bits to set where @p and_mask is 0.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_mask_write_register(mogbus_client_t* client, uint8_t unit,
+								  uint16_t address, uint16_t and_mask, uint16_t or_mask);
+
+/**
+ * @brief Writes holding registers, then reads holding registers, in one request (function code 23).
+ * @param client Client.
+ * @param unit Unit id.
+ * @param read_address First register to read.
+ * @param read_count Registers to read, 1-125.
+ * @param read_values Receives @p read_count raw values.
+ * @param write_address First register to write.
+ * @param write_count Registers to write, 1-121.
+ * @param write_values @p write_count raw values.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_write_registers(mogbus_client_t* client, uint8_t unit,
+								   uint16_t read_address, uint16_t read_count,
+								   uint16_t* read_values, uint16_t write_address,
+								   uint16_t write_count, const uint16_t* write_values);
+
+/**
+ * @brief Reads the basic device identification objects (function code 43, MEI type 14).
+ *
+ * The objects (vendor name, product code, revision: ids 0-2) are returned as the server sent
+ * them, a list of [id][length][value bytes] triples. A server that has more objects than fit one
+ * reply is not followed up.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param out Receives the object list.
+ * @param cap Size of @p out; 252 is always enough.
+ * @param out_len Receives the bytes written to @p out.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_device_id(mogbus_client_t* client, uint8_t unit, uint8_t* out,
+							     size_t cap, size_t* out_len);
 
 #ifdef __cplusplus
 }

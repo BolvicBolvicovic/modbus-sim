@@ -12,6 +12,7 @@ static log_level_t	g_level    = LOG_LEVEL_INFO;
 static log_format_t	g_format   = LOG_FORMAT_TEXT;
 static log_sink_t	g_sink     = NULL;
 static void*		g_sink_ctx = NULL;
+static _Thread_local const char* g_prefix = NULL;
 
 static const char* const LEVEL_NAMES[] = {
 	[LOG_LEVEL_DEBUG] = "debug",
@@ -25,6 +26,12 @@ log_set_sink(log_sink_t sink, void* ctx)
 {
 	g_sink     = sink;
 	g_sink_ctx = ctx;
+}
+
+void
+log_set_prefix(const char* prefix)
+{
+	g_prefix = prefix && prefix[0] ? prefix : NULL;
 }
 
 void
@@ -90,7 +97,11 @@ log_vwrite(log_level_t level, const char* fields, const char* fmt, va_list ap)
 	char		stamp[32] = "";
 	os_utc_t	utc;
 
-	vsnprintf(message, sizeof(message), fmt, ap);
+	int		head = g_prefix ? snprintf(message, sizeof(message), "[%s] ", g_prefix) : 0;
+
+	if (head < 0 || (size_t)head >= sizeof(message))
+		head = 0;
+	vsnprintf(message + head, sizeof(message) - (size_t)head, fmt, ap);
 	if (os_utc_now(&utc))
 		snprintf(stamp, sizeof(stamp), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
 			 utc.year, utc.month, utc.day, utc.hour, utc.min, utc.sec, utc.msec);

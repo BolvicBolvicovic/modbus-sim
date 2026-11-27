@@ -31,7 +31,7 @@ enum
 	OS_WAIT_ERR   = 4,
 	OS_WAIT_HUP   = 8,
 	OS_WAIT_INVAL = 16,
-	OS_WAIT_MAX   = 64,	/**< most entries one os_wait() call takes */
+	OS_WAIT_MAX   = 512,	/**< most entries one os_wait() call takes (8 servers of 38 entries each fit) */
 };
 
 /** @brief One handle to wait on: events is the request, revents the result. */

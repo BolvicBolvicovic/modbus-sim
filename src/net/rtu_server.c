@@ -223,7 +223,7 @@ rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 	u32		gap_ms = rtu_effective_gap_ms(server->options.frame_gap_ms, server->options.baud);
 	u64		now_ms = os_now_ms();
 
-	if (server->stop)
+	if (net_stop_requested(server->options.obs, server->stop))
 		return NET_STEP_DONE;
 
 	rtu_process_gap_due(server, now_ms);
@@ -232,7 +232,8 @@ rtu_server_step(rtu_server_t* server, s32 max_wait_ms)
 		timeout = MIN(timeout, max_wait_ms);
 	if (net_poll(server->options.obs, &pfd, 1, timeout) < 0)
 	{
-		if (os_interrupted())
+		if (os_interrupted() ||
+		    net_poll_gathering(server->options.obs))
 			return NET_STEP_CONTINUE;	/* the caller re-checks stop */
 		LOG_WARN("RTU poll failed: %s", os_last_error_text());
 		return NET_STEP_ERROR;

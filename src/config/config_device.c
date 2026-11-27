@@ -142,6 +142,31 @@ parse_any_unit(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 	return form_get_bool(ctx, item, &dev->any_unit);
 }
 
+/* (servers "a" "b" ...): the servers of the file that serve this device. */
+static bool
+parse_servers(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	if (dev->server_count > 0)
+		return form_fail(ctx, "device '%s': servers is given more than once", dev->name);
+	if (!s7_is_pair(s7_cdr(item)))
+		return form_fail(ctx, "%s: expected (servers \"ID\" ...) with at least one server id",
+				 form_text(ctx, item));
+	for (s7_pointer p = s7_cdr(item); s7_is_pair(p); p = s7_cdr(p))
+	{
+		const char*	error;
+
+		if (!s7_is_string(s7_car(p)))
+			return form_fail(ctx, "%s: server ids are strings", form_text(ctx, item));
+		if (device_serves(dev, s7_string(s7_car(p))))
+			return form_fail(ctx, "device '%s': server '%s' is listed twice", dev->name,
+					 s7_string(s7_car(p)));
+		error = device_add_server(dev, s7_string(s7_car(p)));
+		if (error)
+			return form_fail(ctx, "%s: %s", form_text(ctx, item), error);
+	}
+	return true;
+}
+
 static bool
 parse_exception_status(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
@@ -1259,6 +1284,7 @@ static const item_entry_t DEVICE_ITEMS[] = {
 	{ "name",             parse_name             },
 	{ "unit-id",          parse_unit_id          },
 	{ "any-unit",         parse_any_unit         },
+	{ "servers",          parse_servers          },
 	{ "exception-status", parse_exception_status },
 	{ "server-id",        parse_server_id        },
 	{ "run-indicator",    parse_run_indicator    },
@@ -1308,7 +1334,7 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 				 form_text(ctx, item));
 
 	if (!entry)
-		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, any-unit, exception-status, server-id, "
+		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, any-unit, servers, exception-status, server-id, "
 				 "run-indicator, server-id-additional-data, com-status, com-event, vendor-name, "
 				 "product-code, major-minor-revision, vendor-url, product-name, model-name, "
 				 "user-application-name, device-id-object, fault, note, coil, discrete, input, "

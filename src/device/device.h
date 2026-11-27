@@ -35,6 +35,8 @@ typedef struct device_t device_t;
 typedef int (*device_custom_fn_t)(void* user, device_t* dev, u8 unit, u8 code, const u8* data, u32 len, u8* reply, u32 cap, u32* reply_len);
 
 #define DEVICE_NAME_MAX		64
+#define DEVICE_MAX_SERVERS	8	/**< servers one device can be assigned to */
+#define DEVICE_SERVER_NAME_MAX	32	/**< longest server name plus the NUL */
 #define DEVICE_ID_OBJECT_MAX	244	/**< 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
 /** @brief 253-byte Modbus PDU minus FC, byte count, server ID and run indicator. */
 #define DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX	249
@@ -276,6 +278,8 @@ struct device_t
 	char		name[DEVICE_NAME_MAX];
 	u8		unit_id;
 	bool		any_unit;		/**< also answers every unit id no other device has */
+	u32		server_count;		/**< names in `servers`; 0 = served by the servers that have no id */
+	char		servers[DEVICE_MAX_SERVERS][DEVICE_SERVER_NAME_MAX];	/**< ids of the servers that serve the device */
 	void*		owner;			/**< API context that holds the device (set by the API) */
 	u8		exception_status;	/**< FC 07 (Read Exception Status) response byte */
 	u8		server_id;		/**< FC 17 (Report Server ID) server ID byte */
@@ -338,6 +342,19 @@ struct device_t
  * Returns NULL if the arena is out of memory.
  */
 device_t*	device_new(arena_t* arena, u64 start_ms);
+
+/**
+ * @brief Assigns the device to the server named `id`.
+ *
+ * Returns NULL on success (also when already assigned), or a static error message.
+ */
+const char*	device_add_server(device_t* dev, const char* id);
+
+/** @brief True if a server with this id (NULL = a server without id) serves the device. */
+bool		device_serves(const device_t* dev, const char* id);
+
+/** @brief True if some server serves both devices, so their unit ids must differ. */
+bool		device_shares_server(const device_t* a, const device_t* b);
 
 /**
  * @brief Adds a point.

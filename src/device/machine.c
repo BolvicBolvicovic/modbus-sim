@@ -19,7 +19,7 @@ static const char* const handler_names[MACHINE_ROLE_COUNT] = {
 	"on-enter", "on-tick", "on-exit", "transition condition", "on-write",
 };
 
-static char error_text[256];
+static _Thread_local char error_text[256];
 
 static const char*
 machine_error(const char* machine, const char* state, const char* reason)

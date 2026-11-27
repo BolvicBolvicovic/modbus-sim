@@ -20,8 +20,13 @@
                   (s7 reads text)
 ```
 
-0. `main` turns the loaded config into `server_options_t` (`server_config`) and runs `server`, which
-   picks the transport below; a host can build the options itself and skip `config`.
+0. `main` turns each loaded `(server ...)` into a `server_options_t` (`server_config`), creates one
+   `mogbus_server_t` per section and runs them all with `mogbus_run` (one `os_wait` over the fds of every
+   live server, `mogbus_step`); each `server` picks the transport below; a host can build the options
+   itself and skip `config`. A server `id` (`(id "NAME")`) names a server; a device lists its servers
+   with `(servers ...)` (`device_t.servers`, `device_serves()`), and a server serves only those devices.
+   Unit ids are unique per server, which the config loader, `mogbus_device_add_server` and
+   `mogbus_server_create` check.
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
 2. `net/tcp_server` (Modbus TCP MBAP, optionally TLS-wrapped via `net/net_tls`), `net/rtu_server` (RTU CRC-framed byte stream),
@@ -66,7 +71,7 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/os` | `os_socket`, `os_wait`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX, `WSAPoll` on Windows), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
+| `src/os` | `os_socket`, `os_wait`, `os_mutex`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX, `WSAPoll` on Windows), a recursive mutex with caller-owned storage (`os_mutex`: pthread, `CRITICAL_SECTION`), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
 | `src/util` | `rng`, `log`, `arena_impl` | reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
@@ -74,11 +79,12 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 | `src/webui` | `webui`, `index.html` | the web page served on `/` of the HTTP endpoint (a vanilla-JS client of `/api/`): `index.html` is turned into a C array by a Makefile rule (`od` and `awk`, no other tools) in the gitignored `page_data.h`; knows nothing of the other modules |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
-| `src/api` | `mogbus.c`, `probe.c` | the public C API behind `include/mogbus.h` (see [Embedding mogbus in C](../user/library/library-start.md)): context, devices and points, server handles, logging, and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
+| `src/client` | `client` | the Modbus client (master): one request/reply exchange over TCP, UDP or a serial line in every framing (MBAP, RTU, ASCII), lazy connect, reconnect after an error, deadlines and timeout retries; owns its arena and shares nothing with the servers; knows only the `modbus` codecs, `util` and `os` |
+| `src/api` | `mogbus.c`, `probe.c`, `client_api.c` | the public C API behind `include/mogbus.h` (see [Embedding mogbus in C](../user/library/library-start.md)): context, devices and points, server handles, logging, `client_api.c` (the public client calls: function code encoding over `src/client`, `mogbus_client_*`), and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
 | `src/main.c` | | command line, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
 Dependencies point one way: `server → net → modbus → device → util → os`, `net → webui` (webui includes only util and os), `config → device → util`, every layer may also use `os`, and `os` includes no other module (only vlib),
-`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, modbus, device, util, os` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
+`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `client → modbus, util, os` (no TLS, no server, no device), and `api → client, server_config, server, config, net, modbus, device, util, os` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
 `server/server_mode.h` (the transport enum) and `server/server_limits.h` (array limits and option defaults shared with `api`),
 each in its own header so config does not pull in `net`, and `api` does not need config for them.
 A host that builds `server_options_t` itself can drop `config/` and `server_config.c`: `WITH_CONFIG=0`
@@ -142,7 +148,7 @@ Headers sit next to their `.c` files.
   (the config file text, released right after loading). Each server (`tcp_server_t`, `rtu_server_t`, ...,
   including its TLS session pool) is a caller-owned struct: a stack local in `main`, but a host may use
   static or arena storage. It must not move between init and close.
-- A library host gets one arena per `mogbus_t` context (`src/api`) holding devices and server slots; `mogbus_destroy` releases it.
+- A library host gets one arena per `mogbus_t` context (`src/api`) holding devices and server slots; `mogbus_destroy` releases it. The context arena owns every server too (no arena per server): a device can serve several servers, so it must outlive them all.
 - Request handling uses fixed-size stack buffers. Nothing is allocated per request.
 - Exception: the s7 interpreter allocates internally. It exists only while the config is read
   and is freed with `s7_free` (s7 keeps a few hundred bytes of interned strings; that is
@@ -187,6 +193,27 @@ The net layer installs no signal handlers. `main.c` calls `mogbus_stop_on_signal
 which only sets a flag, on the running server) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
 byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
 embedding a TLS server must ignore SIGPIPE itself.
+
+### Threading
+
+The public API is thread-safe per context and always on; there is no option. `mogbus_t` embeds one
+recursive `os_mutex_t` and every public function that takes a context, device or server locks it for
+its duration (`LOCK()` in `src/api/mogbus.c`, a `cleanup` attribute guard, so every return path
+unlocks). The layers below the API (`server`, `net`, `device`) know nothing about threads except
+two hooks for waiting: `net_poll()` (through `net_obs_t.lock`) and `server_group_step()` (through
+`net_poll_group_t.lock`) unlock around `os_wait()` and lock again afterwards, so a host thread can
+call `mogbus_device_*` while a server is idle, and a request is answered with the lock held. The lock
+is recursive because hooks and callbacks run inside the step and may call `mogbus_device_*`.
+`mogbus_server_run` and `mogbus_run` are loops of locked single steps, which also gives waiting host
+threads a window between requests. Stopping must stay async-signal-safe, so `server_stop` takes no
+lock: the stop flags (`os_stop_flag_t`) and `net_obs_t.ready` are atomics, and a step waiting in
+`os_wait` notices within its timeout (at most 1 s). Not covered: `mogbus_destroy` and
+`mogbus_server_close` racing other calls, a client used by two threads, and the process-wide log
+settings (the log prefix and the machine parser's error text are `_Thread_local`). An always-on lock
+was chosen over an option because an uncontended recursive mutex costs tens of nanoseconds per call
+against the I/O of every request, and an option would add API surface and a mode where a second
+thread silently corrupts a device. `tests/threads.c` covers it; run it with `-fsanitize=thread`
+after touching the locking.
 
 ### Logging (`util/log`)
 

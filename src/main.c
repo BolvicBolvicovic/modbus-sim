@@ -12,13 +12,14 @@
 
 typedef struct cli_t cli_t;
 
-/** @brief The server SIGINT/SIGTERM stop (see mogbus_stop_on_signals()). */
-static mogbus_server_t* volatile	g_server;
+/** @brief The context SIGINT/SIGTERM stop (see mogbus_stop_context_on_signals()). */
+static mogbus_t* volatile	g_ctx;
 
 /** @brief Parsed command line. */
 struct cli_t
 {
 	const char*	config_path;
+	const char*	server_id;	/* --server: the server --health probes and --web applies to */
 	bool		check_only;
 	bool		health;
 	uint32_t	timeout_ms;
@@ -39,8 +40,11 @@ print_usage(void)
 	     "\n"
 	     "Options:\n"
 	     "  -c, --check          check the config, print a summary and exit\n"
-	     "      --health         probe the server the config describes (FC 08 echo to its first\n"
-	     "                       device) and exit 0 if it answers, 1 if not\n"
+	     "      --health         probe a server of the config (FC 08 echo to its first device)\n"
+	     "                       and exit 0 if it answers, 1 if not; the first server unless\n"
+	     "                       --server is given\n"
+	     "      --server ID      the server --health probes and --web applies to (default: the\n"
+	     "                       first one); every server of the config is always started\n"
 	     "      --timeout-ms N   --health reply timeout (default 2000)\n"
 	     "  -w, --web            serve the web UI (and the control API it uses) on the HTTP endpoint;\n"
 	     "                       without (server (http ...)) in the config: 127.0.0.1 port 9102\n"
@@ -55,6 +59,8 @@ print_usage(void)
 	     "\n"
 	     "Transport/server settings (mode, path, port, bind, serial options) are\n"
 	     "defined in (server ...) in the config file; there are no server CLI options.\n"
+	     "A file with several (server (id \"NAME\") ...) runs them all together; each\n"
+	     "device lists its servers with (servers \"NAME\" ...).\n"
 	     "\n"
 	     "Exit status: 0 success, 1 config/serial/runtime error, 2 invalid CLI arguments\n"
 	     "or listener/TLS start-up failure.\n"
@@ -110,6 +116,15 @@ parse_args(int argc, char** argv, cli_t* cli)
 		}
 		else if (strcmp(arg, "--health") == 0)
 			cli->health = true;
+		else if (strcmp(arg, "--server") == 0)
+		{
+			if (i + 1 >= argc)
+			{
+				fprintf(stderr, "--server needs a server id\n");
+				return false;
+			}
+			cli->server_id = argv[++i];
+		}
 		else if (strcmp(arg, "--timeout-ms") == 0)
 		{
 			char* end = NULL;
@@ -211,12 +226,31 @@ print_rtu_timing(const mogbus_server_options_t* options)
 		printf(", frame-gap %u ms (default; baud unknown)", gap_ms);
 }
 
+/** @brief True if the server with this id (NULL: a server without id) serves the device. */
+static bool
+serves(const mogbus_device_t* dev, const char* id)
+{
+	if (!id)
+		return mogbus_device_server_at(dev, 0) == NULL;
+	for (size_t i = 0; mogbus_device_server_at(dev, i); i++)
+	{
+		if (strcmp(mogbus_device_server_at(dev, i), id) == 0)
+			return true;
+	}
+	return false;
+}
+
 static void
 print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 {
 	char		fault[512];
 	const char*	serial_path = "pty";
-	size_t		count       = mogbus_device_count(ctx);
+	size_t		count       = 0;
+
+	for (size_t i = 0; i < mogbus_device_count(ctx); i++)
+		count += serves(mogbus_device_at(ctx, i), options->id);
+	if (options->id)
+		printf("[%s] ", options->id);
 
 	if (options->mode == MOGBUS_MODE_RTU_DEVICE ||
 	    options->mode == MOGBUS_MODE_ASCII_DEVICE)
@@ -291,10 +325,12 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 		printf("  web UI on http://%s%s%s:%u/\n", strchr(host, ':') ? "[" : "", host,
 		       strchr(host, ':') ? "]" : "", options->http_port);
 	}
-	for (size_t i = 0; i < count; i++)
+	for (size_t i = 0; i < mogbus_device_count(ctx); i++)
 	{
 		mogbus_device_info_t info;
 
+		if (!serves(mogbus_device_at(ctx, i), options->id))
+			continue;
 		mogbus_device_info(mogbus_device_at(ctx, i), &info);
 		printf("  unit %-3u %-32s coils %u, discrete %u, input %u, holding %u, fault: %s%s\n",
 		       info.unit_id, info.name, info.point_count[MOGBUS_COIL],
@@ -356,7 +392,7 @@ show_registers(mogbus_t* ctx, bool all, bool json)
 			uint64_t	hash = 14695981039346656037ull;
 			double		number = 0;
 			bool		is_number = point.type != MOGBUS_TYPE_STRING &&
-						    mogbus_device_get_value(dev, point.space, point.address, &number);
+						    mogbus_device_get_value(dev, point.space, point.address, &number) == MOGBUS_OK;
 
 			if (point.type == MOGBUS_TYPE_STRING)
 				(void)mogbus_device_get_string(dev, point.space, point.address, text, sizeof(text));
@@ -412,8 +448,9 @@ main(int argc, char** argv)
 {
 	cli_t		cli     = { 0 };
 	mogbus_t*	ctx     = NULL;
-	mogbus_server_t* server = NULL;
-	mogbus_server_options_t options;
+	mogbus_server_options_t options[MOGBUS_MAX_SERVERS];
+	size_t		count   = 0;
+	size_t		selected = 0;	/* the server --health probes and --web applies to */
 	int		status  = 1;
 
 	if (!parse_args(argc, argv, &cli))
@@ -437,10 +474,9 @@ main(int argc, char** argv)
 
 	mogbus_set_log_level(cli.verbose ? MOGBUS_LOG_DEBUG : MOGBUS_LOG_INFO);
 	mogbus_set_log_format(cli.log_json ? MOGBUS_LOG_JSON : MOGBUS_LOG_TEXT);
-	ctx = mogbus_create();
-	if (!ctx)
+	if (mogbus_create(&ctx) != MOGBUS_OK)
 	{
-		fprintf(stderr, "out of memory allocating app arena\n");
+		fprintf(stderr, "%s\n", mogbus_last_error(NULL));
 		return 1;
 	}
 
@@ -450,28 +486,62 @@ main(int argc, char** argv)
 		goto cleanup;
 	}
 
-	mogbus_config_server_options(ctx, &options);
+	count = mogbus_config_server_count(ctx);
+	for (size_t i = 0; i < count; i++)
+	{
+		if (mogbus_config_server_options_at(ctx, i, &options[i]) != MOGBUS_OK)
+			count = 0;
+	}
+	if (count == 0)
+	{
+		fprintf(stderr, "%s: no server section could be read\n", cli.config_path);
+		goto cleanup;
+	}
+	if (cli.server_id)
+	{
+		for (selected = 0; selected < count; selected++)
+		{
+			if (options[selected].id &&
+			    strcmp(options[selected].id, cli.server_id) == 0)
+				break;
+		}
+		if (selected == count)
+		{
+			fprintf(stderr, "%s: no server with id '%s'\n", cli.config_path, cli.server_id);
+			status = 2;
+			goto cleanup;
+		}
+	}
 	if (cli.web)
 	{
-		if (!options.http_bind_address)
+		mogbus_server_options_t* web = &options[selected];
+
+		if (!web->http_bind_address)
 		{
-			options.http_bind_address = "127.0.0.1";
-			options.http_port         = mogbus_server_options_defaults().http_port;
+			web->http_bind_address = "127.0.0.1";
+			web->http_port         = mogbus_server_options_defaults().http_port;
 		}
-		options.http_ui      = true;
-		options.http_control = true;
+		web->http_ui      = true;
+		web->http_control = true;
 	}
 	if (cli.health)
 	{
-		mogbus_device_info_t first;
+		mogbus_device_t* first = NULL;
 
-		if (mogbus_device_count(ctx) == 0 ||
-		    !mogbus_device_info(mogbus_device_at(ctx, 0), &first))
+		for (size_t i = 0; i < mogbus_device_count(ctx) && !first; i++)
+		{
+			if (serves(mogbus_device_at(ctx, i), options[selected].id))
+				first = mogbus_device_at(ctx, i);
+		}
+		mogbus_device_info_t info;
+
+		if (!first ||
+		    !mogbus_device_info(first, &info))
 		{
 			fprintf(stderr, "%s: no device to probe\n", cli.config_path);
 			goto cleanup;
 		}
-		if (mogbus_probe(&options, first.unit_id, cli.timeout_ms ? cli.timeout_ms : 2000) != MOGBUS_OK)
+		if (mogbus_probe(&options[selected], info.unit_id, cli.timeout_ms ? cli.timeout_ms : 2000) != MOGBUS_OK)
 		{
 			fprintf(stderr, "unhealthy: %s\n", mogbus_last_error(NULL));
 			goto cleanup;
@@ -479,41 +549,57 @@ main(int argc, char** argv)
 		status = 0;
 		goto cleanup;
 	}
-	print_summary(ctx, &options);
+	for (size_t i = 0; i < count; i++)
+		print_summary(ctx, &options[i]);
 	if (cli.check_only)
 	{
-		if (mogbus_server_check(ctx, &options) != MOGBUS_OK)
+		for (size_t i = 0; i < count; i++)
 		{
-			fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path, mogbus_last_error(ctx));
-			goto cleanup;
+			if (mogbus_server_check(ctx, &options[i]) != MOGBUS_OK)
+			{
+				if (options[i].id)
+					fprintf(stderr, "%s: server '%s': %s\n", cli.config_path, options[i].id,
+						mogbus_last_error(ctx));
+				else
+					fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path,
+						mogbus_last_error(ctx));
+				goto cleanup;
+			}
 		}
 		puts("config OK");
 		status = 0;
 		goto cleanup;
 	}
 
-	mogbus_stop_on_signals(&g_server);
+	mogbus_stop_context_on_signals(&g_ctx);
 
 	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
-	server = cli.web ? mogbus_server_create(ctx, &options) : mogbus_server_create_from_config(ctx);
-	if (!server)
+	for (size_t i = 0; i < count; i++)
 	{
-		mogbus_error_t failure = mogbus_last_error_code(ctx);
+		mogbus_server_t* server = NULL;
+		mogbus_result_t	 failure = cli.web && i == selected ?
+					   mogbus_server_create(ctx, &options[i], &server) :
+					   mogbus_server_create_from_config_at(ctx, i, &server);
 
-		if (failure == MOGBUS_ERR_INVALID)
-			fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
-		status = failure == MOGBUS_ERR_SERIAL ? 1 : 2;
-		goto cleanup;
+		if (failure != MOGBUS_OK)
+		{
+			if (failure == MOGBUS_ERR_INVALID)
+				fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
+			status = failure == MOGBUS_ERR_SERIAL ? 1 : 2;
+			goto cleanup;
+		}
+		if (mogbus_server_pty_name(server))
+		{
+			printf("%s%s%s%s PTY slave: %s\n", options[i].id ? "[" : "", options[i].id ? options[i].id : "",
+			       options[i].id ? "] " : "",
+			       options[i].mode == MOGBUS_MODE_RTU_PTY ? "RTU" : "ASCII",
+			       mogbus_server_pty_name(server));
+			fflush(stdout);
+		}
 	}
-	g_server = server;
-	if (mogbus_server_pty_name(server))
-	{
-		printf("%s PTY slave: %s\n", options.mode == MOGBUS_MODE_RTU_PTY ? "RTU" : "ASCII",
-		       mogbus_server_pty_name(server));
-		fflush(stdout);
-	}
+	g_ctx = ctx;
 	if (cli.show_ms == 0)
-		status = mogbus_server_run(server);
+		status = mogbus_run(ctx);
 	else
 	{
 		int64_t	next = (int64_t)mogbus_now_ms();
@@ -531,15 +617,14 @@ main(int argc, char** argv)
 				next = (int64_t)mogbus_now_ms() + cli.show_ms;
 				wait = cli.show_ms;
 			}
-			rc = mogbus_server_step(server, (int)wait);
+			rc = mogbus_step(ctx, (int)wait);
 		}
 		while (rc == MOGBUS_STEP_CONTINUE);
 		status = rc == MOGBUS_STEP_ERROR ? 1 : 0;
 	}
-	g_server = NULL;
+	g_ctx = NULL;
 
 cleanup:
-	mogbus_server_close(server);
 	mogbus_destroy(ctx);
 	return status;
 }
