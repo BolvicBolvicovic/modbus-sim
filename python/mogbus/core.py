@@ -42,7 +42,7 @@ The classes mirror `mogbus.h`: Context is `mogbus_create`/`mogbus_destroy`, Cont
 Device.add_point `mogbus_device_add_point`, Device.read/write `mogbus_device_read/write` (raw
 registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (decoded),
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
-`mogbus_device_set_access_hook`, Device.info `mogbus_device_info`, Context.serve
+`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.info `mogbus_device_info`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
 `mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, probe `mogbus_probe`,
 rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
@@ -625,6 +625,7 @@ class Device:
         self._ctx = ctx
         self._h = handle
         self._access_ref = None  # the C callback object, alive while the hook is installed
+        self._written_ref = None  # same for the post-write hook
 
     def _live(self):
         self._ctx._check_open()
@@ -847,6 +848,56 @@ class Device:
         if not lib.mogbus_device_set_access_hook(handle, ref, None):
             raise MogbusError("cannot install the access hook (out of memory)")
         self._access_ref = ref
+
+    @_locked
+    def set_written_hook(self, hook: Optional[Callable[[Access], None]]) -> None:
+        """@brief Runs `hook(access)` after every Modbus client write of this device was applied; None removes it.
+
+        This is the equivalent of pymodbus `setValues`: react to a client write (a mode change, a command
+        register) instead of polling for it. The hook runs once per written range, after the write is
+        applied, for FC 05, 06, 15 (0x0F), 16 (0x10), 22 (0x16, the masked result), 23 (0x17, the write half,
+        before the read half is answered) and, once per sub-request, for FC 21 (0x15) file records
+        (Access.target is FILE_RECORD). Access.values holds the stored registers (bits as 0/1). It is not
+        called for a write the access hook vetoed, for a request answered with an exception, or for host
+        calls such as set_value() and write(). Faults do not change request processing, so it also runs when
+        the response is then dropped or corrupted.
+
+        The hook runs on the thread that steps the server with the context lock held. The lock is
+        reentrant, so the hook may call the methods of this device, for example set_value() to update a
+        status register. An exception raised by the hook is printed with its traceback and otherwise
+        ignored: the write stays applied and the response is unchanged.
+
+        ```python
+        def written(access):
+            if access.space == mogbus.Space.HOLDING and access.address == 0:
+                dev.set_value("holding", 1, access.values[0])   # mirror the command into a status register
+
+        dev.set_written_hook(written)
+        ```
+        @param hook A callable taking an Access and returning None; None removes the hook.
+        @throws MogbusError If the hook cannot be installed.
+        """
+        handle = self._live()
+        if hook is None:
+            if not lib.mogbus_device_set_written_hook(handle, ctypes.cast(None, _lib.WRITTEN_FN), None):
+                raise MogbusError("cannot remove the written hook")
+            self._written_ref = None
+            return
+
+        def trampoline(_user, _dev, access):
+            try:
+                a = access.contents
+                values = [a.values[i] for i in range(a.count)] if a.values else None
+                hook(Access(AccessKind(a.kind), Space(a.space), a.address, a.count, values,
+                            a.function_code, AccessTarget(a.target), a.file, a.node, a.index,
+                            a.subindex, None))
+            except BaseException:  # an exception must not unwind into C
+                traceback.print_exc()
+
+        ref = _lib.WRITTEN_FN(trampoline)
+        if not lib.mogbus_device_set_written_hook(handle, ref, None):
+            raise MogbusError("cannot install the written hook (out of memory)")
+        self._written_ref = ref
 
     @_locked
     def add_file_record(self, file, record, values: Sequence[int]) -> None:

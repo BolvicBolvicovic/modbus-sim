@@ -152,6 +152,29 @@ hook only records what it let through. Writing to the site name never reaches th
 > the hook can call the methods of its own device (the example's hook appends to the event log), but
 > it must stay short. See [Threads, locks and shutdown](python-threading.md).
 
+### Reacting after a write
+
+The access hook runs before the write, so it is the wrong place to record that something changed: a
+later hook, or the write itself, may still refuse it. \ref mogbus::core::Device::set_written_hook "Device.set_written_hook()"
+installs a callable that runs after a client write was applied (the equivalent of pymodbus
+`setValues`), once per written range, with the same `Access` and `values` holding what was stored. It
+does not run for refused writes or for host calls such as `set_value()`, so it may call them without
+looping. The example uses it to log the setpoint change in the event log of step 5:
+
+```python
+def written(self, access):
+    if (access.target == mogbus.AccessTarget.TABLE and
+            access.space == mogbus.Space.HOLDING and
+            access.address <= SETPOINT < access.address + access.count and
+            self.process is not None):
+        self.process.event(EV_SETPOINT)
+
+dev.set_written_hook(policy.written)
+```
+
+An exception in the hook is printed and swallowed: the write stays applied. Faults do not change
+this: the hook also runs when the response is then dropped.
+
 ## Step 5: alarms, the event log and the alarm FIFO
 
 Besides the four tables a device can hold *file records* (read with function code 0x14, written

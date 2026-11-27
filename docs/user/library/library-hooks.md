@@ -44,7 +44,7 @@ A client may write a range that overlaps the setpoint partly (an FC 16 over hold
   ok   FC 15 on the event log is refused: exception 01
 ```
 
-The `client write:` line is the hook logging every accepted write: a data logger under test can be checked against it. Calls from the host side (`mogbus_device_write`, `set_value`, the HTTP control API, machines) never reach the hook.
+The `client write:` line is the post-write hook (see below) logging every accepted write: a data logger under test can be checked against it. Calls from the host side (`mogbus_device_write`, `set_value`, the HTTP control API, machines) never reach the hook.
 
 ## Where the hook runs
 
@@ -55,6 +55,30 @@ The `client write:` line is the hook logging every accepted write: a data logger
 - Diagnostics (FC 08) and device identification (FC 2B/0E) are not covered.
 
 The hook runs on the thread that steps the server, so it may call the other `mogbus_device_*` functions on the same device (the example calls `get_value`, `set_fifo` and the file-record writes), but it must not block: no other client is served meanwhile. The pointers in the access are valid only during the call. A hook is not part of a config and does not survive @ref mogbus_destroy "mogbus_destroy()".
+
+## Reacting after a write
+
+The access hook runs before a write, so it cannot tell that the write happened. A *post-write hook* (@ref mogbus_written_fn "mogbus_written_fn", installed with @ref mogbus_device_set_written_hook "mogbus_device_set_written_hook()") runs after a Modbus client write was applied: the embedded counterpart of pymodbus `setValues`. The example uses it to count and log accepted writes and to put setpoint and mode changes in the event log, instead of polling the registers every tick:
+
+```c
+mogbus_device_set_written_hook(st.dev, on_written, &st);
+...
+if (a->address <= HOLD_MODE && end > HOLD_MODE)
+	log_event(st, EVT_MODE | a->values[HOLD_MODE - a->address]);
+```
+
+It gets the same @ref mogbus_access_t "mogbus_access_t" as the access hook, with `kind` always `MOGBUS_ACCESS_WRITE` and `values` the registers that were stored (bits as 0 or 1; for FC 16 the masked result). It runs once per written range: FC 05, 06, 0F, 10, 16, the write half of FC 17 (before the read half is answered) and, once per sub-request in order, FC 15 file records (`MOGBUS_TARGET_FILE_RECORD`). With `broadcast-execute` on it runs once per device.
+
+- It does not run for a write the access hook vetoed, for a request answered with an exception, or for host calls (`mogbus_device_write`, `set_value`, the HTTP control API, machines). That is why `log_event` and the other `mogbus_device_*` calls it makes do not trigger it again.
+- Faults do not change request processing: the hook runs even when the response is then dropped, delayed or corrupted, and a `restart` fault resets the device after the response is built, so the hook has already run.
+- There is one per device, a new one replaces it and NULL removes it. It runs on the server thread, must not block and the `values` pointer is valid only during the call.
+
+In the self-test, a refused setpoint leaves the event counter alone and an accepted one advances it by one:
+
+```text
+  ok   the refused write did not reach the post-write hook
+  ok   the post-write hook logged the setpoint event
+```
 
 ## Targets
 
@@ -84,7 +108,7 @@ mogbus_device_write_file_records(st->dev, LOG_FILE, slot, 1, &code);
 mogbus_device_write_file_records(st->dev, LOG_FILE, 1, 1, &count);
 ```
 
-@ref mogbus_device_read_file_records "mogbus_device_read_file_records()" reads them from the host. Both fail, changing nothing, if any record is undefined. The simulation logs pump starts and stops and alarms; the hook logs accepted setpoint and mode writes (`EVT_SETPOINT | setpoint*10`, `EVT_MODE | mode`). The self-test's FC 14 request reads record 1:
+@ref mogbus_device_read_file_records "mogbus_device_read_file_records()" reads them from the host. Both fail, changing nothing, if any record is undefined. The simulation logs pump starts and stops and alarms; the post-write hook logs accepted setpoint and mode writes (`EVT_SETPOINT | setpoint*10`, `EVT_MODE | mode`). The self-test's FC 14 request reads record 1:
 
 ```text
   ok   FC 14 reads the event counter (at least 5 events)

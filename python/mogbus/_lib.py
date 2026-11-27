@@ -113,6 +113,7 @@ class AccessC(ctypes.Structure):
 
 
 ACCESS_FN = ctypes.CFUNCTYPE(ctypes.c_uint8, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(AccessC))
+WRITTEN_FN = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(AccessC))
 LOG_FN = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p)
 
 
@@ -177,6 +178,7 @@ _sig("mogbus_device_get_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_ch
 _sig("mogbus_device_set_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_char_p)
 _sig("mogbus_device_set_any_unit", _c.c_bool, _ptr, _c.c_bool)
 _sig("mogbus_device_set_access_hook", _c.c_bool, _ptr, ACCESS_FN, _ptr)
+_sig("mogbus_device_set_written_hook", _c.c_bool, _ptr, WRITTEN_FN, _ptr)
 _sig("mogbus_device_add_file_record", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
      _p(_c.c_uint16), *_err)
 _sig("mogbus_device_read_file_records", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,

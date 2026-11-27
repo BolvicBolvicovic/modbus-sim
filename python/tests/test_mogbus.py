@@ -687,6 +687,42 @@ class AccessHookTest(unittest.TestCase):
                     self.assertEqual(mbap_read(sock, 1, 0), [502])
                     self.assertEqual(len(seen), n)
 
+    def test_written_hook_after_client_writes_only(self):
+        port = free_port()
+        seen = []
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 1)
+            dev.add_point("holding", 1, "u16", 0)
+            mode = {"v": "ok"}
+
+            def written(access):
+                seen.append((access.kind, access.function_code, access.address, access.values))
+                if mode["v"] == "raise":
+                    raise RuntimeError("boom")
+                dev.set_value("holding", 1, access.values[0] + 1)  # reentrant host write, no recursion
+
+            def veto(access):
+                return 6 if access.kind == mogbus.AccessKind.WRITE and access.values[0] == 99 else None
+
+            dev.set_written_hook(written)
+            dev.set_access_hook(veto)
+            with ctx.serve(port=port).start():
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                    self.assertEqual(self.raw_write(sock, 1, 0, 7), 7)
+                    self.assertEqual(seen, [(mogbus.AccessKind.WRITE, 6, 0, [7])])
+                    self.assertEqual(dev.get_value("holding", 1), 8)
+                    self.assertEqual(self.raw_write(sock, 1, 0, 99), ("exception", 6))
+                    self.assertEqual(len(seen), 1)
+                    dev.write("holding", 0, [5])  # host write: not reported
+                    self.assertEqual(len(seen), 1)
+                    mode["v"] = "raise"
+                    self.assertEqual(self.raw_write(sock, 1, 0, 3), 3)  # raising hook: write stays
+                    self.assertEqual(len(seen), 2)
+                    dev.set_written_hook(None)
+                    self.assertEqual(self.raw_write(sock, 1, 0, 4), 4)
+                    self.assertEqual(len(seen), 2)
+
     def test_hook_veto_and_raising_hook(self):
         port = free_port()
         with mogbus.Context() as ctx:

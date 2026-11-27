@@ -315,6 +315,9 @@ struct device_t
 	/** @brief Host hook run on Modbus client reads/writes (NULL: none); returns 0 or an exception code. */
 	u8		(*access_fn)(void* user, device_t* dev, const device_access_t* access);
 	void*		access_user;
+	/** @brief Host hook run after a Modbus client write was applied (NULL: none); the access carries the stored values. */
+	void		(*written_fn)(void* user, device_t* dev, const device_access_t* access);
+	void*		written_user;
 };
 
 /**

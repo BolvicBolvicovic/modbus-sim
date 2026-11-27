@@ -545,6 +545,31 @@ access_trampoline(void* user, device_t* dev, const device_access_t* in)
 	return hook->fn(hook->user, (mogbus_device_t*)dev, &access);
 }
 
+/** @brief The host's post-write hook and user pointer of one device, the `user` of its trampoline. */
+struct written_hook_t
+{
+	mogbus_written_fn fn;
+	void*		user;
+};
+
+static void
+written_trampoline(void* user, device_t* dev, const device_access_t* in)
+{
+	const struct written_hook_t*	hook   = user;
+	mogbus_access_t			access = {
+		.kind          = MOGBUS_ACCESS_WRITE,
+		.space         = (mogbus_space_t)in->space,
+		.address       = in->address,
+		.count         = in->count,
+		.values        = in->values,
+		.function_code = in->function_code,
+		.target        = (mogbus_access_target_t)in->target,
+		.file          = in->file_no,
+	};
+
+	hook->fn(hook->user, (mogbus_device_t*)dev, &access);
+}
+
 bool
 mogbus_device_add_file_record(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
 			      const uint16_t* values, char* err, size_t err_size)
@@ -688,6 +713,30 @@ mogbus_device_set_access_hook(mogbus_device_t* handle, mogbus_access_fn fn, void
 	hook->user       = user;
 	dev->access_fn   = access_trampoline;
 	dev->access_user = hook;
+	return true;
+}
+
+bool
+mogbus_device_set_written_hook(mogbus_device_t* handle, mogbus_written_fn fn, void* user)
+{
+	device_t*		dev  = (device_t*)handle;
+	struct written_hook_t*	hook = NULL;
+
+	if (!dev)
+		return false;
+	if (!fn)
+	{
+		dev->written_fn   = NULL;
+		dev->written_user = NULL;
+		return true;
+	}
+	hook = dev->written_fn == written_trampoline ? dev->written_user : ARENA_PUSH_ARRAY_ALIGNED(dev->arena, struct written_hook_t, 1, _Alignof(struct written_hook_t));
+	if (!hook)
+		return false;
+	hook->fn          = fn;
+	hook->user        = user;
+	dev->written_fn   = written_trampoline;
+	dev->written_user = hook;
 	return true;
 }
 

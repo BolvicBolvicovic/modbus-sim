@@ -63,6 +63,16 @@ access_call(device_t* dev, const device_access_t* access)
 	return dev->access_fn ? dev->access_fn(dev->access_user, dev, access) : 0;
 }
 
+/** @brief Tells the host's post-write hook that a client write of a table range was applied. */
+static void
+written_table(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count, const u16* values)
+{
+	device_access_t	access = { .write = true, .space = space, .address = address, .count = count, .values = values, .function_code = fc };
+
+	if (dev->written_fn)
+		dev->written_fn(dev->written_user, dev, &access);
+}
+
 /* --- reads --- */
 
 static u32
@@ -168,6 +178,7 @@ write_single_coil(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_COIL, address, 1, &bit))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	written_table(dev, req[0], SPACE_COIL, address, 1, &bit);
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -192,6 +203,7 @@ write_single_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &value))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	written_table(dev, req[0], SPACE_HOLDING, address, 1, &value);
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -226,6 +238,7 @@ write_multiple_coils(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_COIL, address, qty, bits))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	written_table(dev, req[0], SPACE_COIL, address, qty, bits);
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -260,6 +273,7 @@ write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, qty, words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	written_table(dev, req[0], SPACE_HOLDING, address, qty, words);
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -314,6 +328,7 @@ read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* res
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, write_addr, write_qty, write_words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	written_table(dev, req[0], SPACE_HOLDING, write_addr, write_qty, write_words);
 
 	/* Write happens before read; result reflects post-write values (including overlap). */
 	{
@@ -612,6 +627,20 @@ write_file_record_apply(device_t* dev, const u8* req, u32 byte_count)
 
 		if (!device_write_file_records(dev, file_no, rec_no, rec_len, values))
 			return false;
+		if (dev->written_fn)
+		{
+			device_access_t	access = {
+				.write         = true,
+				.values        = values,
+				.function_code = req[0],
+				.target        = ACCESS_FILE_RECORD,
+				.file_no       = file_no,
+				.address       = rec_no,
+				.count         = rec_len,
+			};
+
+			dev->written_fn(dev->written_user, dev, &access);
+		}
 		offset += 7 + (u32)rec_len * 2;
 	}
 	return true;
@@ -669,6 +698,7 @@ mask_write_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &result))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	written_table(dev, req[0], SPACE_HOLDING, address, 1, &result);
 
 	memcpy(resp, req, 7);
 	return 7;

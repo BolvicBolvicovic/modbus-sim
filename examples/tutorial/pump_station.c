@@ -202,24 +202,42 @@ on_access(void* user, mogbus_device_t* dev, const mogbus_access_t* a)
 				st->refused++;
 				return 3;
 			}
-			log_event(st, EVT_SETPOINT | (uint16_t)(sp * 10));
 		}
-		if (a->address <= HOLD_MODE && end > HOLD_MODE)
+		if (a->address <= HOLD_MODE &&
+		    end > HOLD_MODE &&
+		    a->values[HOLD_MODE - a->address] > MODE_MANUAL)
 		{
-			uint16_t m = a->values[HOLD_MODE - a->address];
-
-			if (m > MODE_MANUAL)
-			{
-				st->refused++;
-				return 3;
-			}
-			log_event(st, EVT_MODE | m);
+			st->refused++;
+			return 3;
 		}
 	}
+	return 0;
+}
+
+/**
+ * @brief Post-write hook: runs after a client write was applied and every rule let it through.
+ *
+ * Counts and logs the write and puts setpoint and mode changes in the event log, so the host reacts
+ * to them without polling.
+ */
+static void
+on_written(void* user, mogbus_device_t* dev, const mogbus_access_t* a)
+{
+	struct station*	st = user;
+	uint32_t	end = a->address + a->count;
+
+	(void)dev;
+	if (a->target != MOGBUS_TARGET_TABLE)
+		return;
 	st->accepted++;
 	printf("  client write: FC %02X, %s address %u, %u item(s)\n", a->function_code,
 	       a->space == MOGBUS_COIL ? "coil" : "holding", a->address, a->count);
-	return 0;
+	if (a->space != MOGBUS_HOLDING)
+		return;
+	if (a->address <= HOLD_SETPOINT && end > HOLD_SETPOINT)
+		log_event(st, EVT_SETPOINT | (uint16_t)(float_of(a->values + (HOLD_SETPOINT - a->address)) * 10));
+	if (a->address <= HOLD_MODE && end > HOLD_MODE)
+		log_event(st, EVT_MODE | a->values[HOLD_MODE - a->address]);
 }
 
 /** @brief Moves the process forward by dt seconds and publishes it with host-side writes. */
@@ -450,12 +468,16 @@ self_test(mogbus_server_t* server, const mogbus_server_options_t* options, struc
 	check(exchange(server, fd, unit, read_site, sizeof(read_site), r) == 18 && memcmp(pdu + 2, "NORTH-01", 8) == 0,
 	      "FC 03 reads the site name string");
 
+	uint32_t	events_before = st->events;
+
 	put_float(write_setpoint + 6, 9.0f);
 	check(exchange(server, fd, unit, write_setpoint, sizeof(write_setpoint), r) == 2 && is_exception(pdu, 0x10, 3),
 	      "FC 16 setpoint 9.0 m is refused by the hook: exception 03");
+	check(st->events == events_before, "the refused write did not reach the post-write hook");
 	put_float(write_setpoint + 6, 3.0f);
 	check(exchange(server, fd, unit, write_setpoint, sizeof(write_setpoint), r) == 5 && pdu[0] == 0x10,
 	      "FC 16 setpoint 3.0 m is accepted");
+	check(st->events == events_before + 1, "the post-write hook logged the setpoint event");
 	check(mogbus_device_get_value(st->dev, MOGBUS_HOLDING, HOLD_SETPOINT, &sp) && sp == 3.0,
 	      "the host reads the new setpoint back");
 	check(exchange(server, fd, unit, write_site, sizeof(write_site), r) == 2 && is_exception(pdu, 0x10, 2),
@@ -604,6 +626,7 @@ main(int argc, char** argv)
 		       info.point_count[MOGBUS_COIL], info.point_count[MOGBUS_DISCRETE]);
 	}
 	mogbus_device_set_access_hook(st.dev, on_access, &st);
+	mogbus_device_set_written_hook(st.dev, on_written, &st);
 
 	if (test)
 	{

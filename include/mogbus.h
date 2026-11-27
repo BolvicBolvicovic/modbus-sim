@@ -571,6 +571,47 @@ typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogb
 MOGBUS_API bool		mogbus_device_set_access_hook(mogbus_device_t* dev, mogbus_access_fn fn, void* user);
 
 /**
+ * @brief Post-write hook: runs after a Modbus client write was applied.
+ *
+ * It runs on the thread that steps the server and may call the other `mogbus_device_*` functions
+ * on the same device (they take the host path, so they never call the hooks again). The pointers
+ * in the access are valid only during the call.
+ *
+ * @param user Pointer given to mogbus_device_set_written_hook().
+ * @param dev Device that was written.
+ * @param access The write: `kind` is MOGBUS_ACCESS_WRITE, `values` the registers (bits as 0/1) that
+ *        were stored (the masked result for FC 16), `function_code`, `target` and the range as for
+ *        the access hook (MOGBUS_TARGET_TABLE or MOGBUS_TARGET_FILE_RECORD).
+ */
+typedef void (*mogbus_written_fn)(void* user, mogbus_device_t* dev, const mogbus_access_t* access);
+
+/**
+ * @brief Installs (or, with @p fn NULL, removes) the post-write hook of a device.
+ *
+ * pymodbus calls `setValues` after a write; this is the same notification, so a host can react to
+ * a client write (a mode change, a command register) instead of polling for it. It is called once
+ * per written range, after the write is applied, for FC 05, 06, 0F, 10, 16 (the masked result), 17
+ * (the write half, before the read half is answered) and, once per sub-request, for FC 15 file
+ * records (MOGBUS_TARGET_FILE_RECORD). With `broadcast-execute` on it runs once per device.
+ *
+ * It is not called for a write the access hook vetoed, for a request answered with an exception,
+ * or for host writes (mogbus_device_write(), mogbus_device_set_value(), the HTTP control API,
+ * machines). Faults do not change request processing, so it is also called when the response is
+ * then dropped, delayed or corrupted; a `restart` fault resets the device after the response is
+ * built, so the hook has already run. FC 15 sub-requests are applied in order and the hook of an
+ * earlier one runs before the later ones are written.
+ *
+ * A device has one hook; a new one replaces it. The hook is not part of a config and does not
+ * survive mogbus_destroy(). It must not block.
+ *
+ * @param dev Device.
+ * @param fn Hook, or NULL to remove it.
+ * @param user Passed back to @p fn.
+ * @return false if @p dev is NULL or out of memory.
+ */
+MOGBUS_API bool		mogbus_device_set_written_hook(mogbus_device_t* dev, mogbus_written_fn fn, void* user);
+
+/**
  * @brief Adds file records to a device, as `(file N (record R (values ...)))` does in a config.
  *
  * Clients read them with FC 14 and write them with FC 15. Records of one file must not overlap.

@@ -6,6 +6,7 @@
 #include "modbus/ascii.h"
 #include "modbus/pdu.h"
 #include "modbus/rtu.h"
+#include "net/rtu_framer.h"
 #include "os/os_time.h"
 #include "tests/tests_utils/test_support.h"
 #include <poll.h>
@@ -331,6 +332,174 @@ TEST(ApiAccessHookCanBeReplacedAndCleared)
 	ASSERT_EQ(mogbus_device_set_access_hook(dev, NULL, NULL));
 	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 4 && hook_log.calls == 1);
 	ASSERT_EQ(!mogbus_device_set_access_hook(NULL, test_hook, NULL));
+	mogbus_destroy(ctx);
+}
+
+static struct written_log_t
+{
+	int		calls;
+	mogbus_access_t	seen[8];
+	uint16_t	values[8][8];
+	int		reentrant;	/* set holding 3 to calls on every notification */
+} written_log;
+
+static void
+test_written(void* user, mogbus_device_t* dev, const mogbus_access_t* a)
+{
+	int	n = written_log.calls++;
+
+	(void)user;
+	if (n < 8)
+	{
+		written_log.seen[n] = *a;
+		if (a->values)
+			memcpy(written_log.values[n], a->values, (a->count < 8 ? a->count : 8) * sizeof(uint16_t));
+	}
+	if (written_log.reentrant)
+		(void)mogbus_device_set_value(dev, MOGBUS_HOLDING, 3, written_log.calls);
+}
+
+TEST(ApiWrittenHookRunsAfterEachClientWriteFunction)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		coil[] = { FC_WRITE_SINGLE_COIL, 0, 0, 0xFF, 0x00 };
+	u8		single[] = { FC_WRITE_SINGLE_REGISTER, 0, 2, 0x12, 0x34 };
+	u8		multi[] = { FC_WRITE_MULTIPLE_REGISTERS, 0, 0, 0, 2, 4, 0, 7, 0, 8 };
+	u8		coils[] = { FC_WRITE_MULTIPLE_COILS, 0, 0, 0, 1, 1, 0 };
+	u8		mask[] = { FC_MASK_WRITE_REGISTER, 0, 1, 0x00, 0xF0, 0x00, 0x0A };
+	u8		rw[] = { FC_READ_WRITE_MULTIPLE_REGISTERS, 0, 0, 0, 1, 0, 1, 0, 1, 2, 0, 9 };
+	u8		read[] = { FC_READ_HOLDING_REGISTERS, 0, 0, 0, 1 };
+	double		v = 0;
+
+	written_log.calls = 0;
+	written_log.reentrant = 1;
+	ASSERT_EQ(mogbus_device_set_written_hook(dev, test_written, NULL));
+
+	ASSERT_EQ(hook_pdu(dev, coil, sizeof(coil), resp) == 5);
+	ASSERT_EQ(written_log.calls == 1 && written_log.seen[0].kind == MOGBUS_ACCESS_WRITE);
+	ASSERT_EQ(written_log.seen[0].space == MOGBUS_COIL && written_log.seen[0].count == 1);
+	ASSERT_EQ(written_log.values[0][0] == 1 && written_log.seen[0].function_code == FC_WRITE_SINGLE_COIL);
+	ASSERT_EQ(hook_pdu(dev, single, sizeof(single), resp) == 5);
+	ASSERT_EQ(written_log.calls == 2 && written_log.seen[1].space == MOGBUS_HOLDING);
+	ASSERT_EQ(written_log.seen[1].address == 2 && written_log.values[1][0] == 0x1234);
+	ASSERT_EQ(hook_pdu(dev, multi, sizeof(multi), resp) == 5);
+	ASSERT_EQ(written_log.calls == 3 && written_log.seen[2].count == 2);
+	ASSERT_EQ(written_log.values[2][0] == 7 && written_log.values[2][1] == 8);
+	ASSERT_EQ(written_log.seen[2].function_code == FC_WRITE_MULTIPLE_REGISTERS);
+	ASSERT_EQ(hook_pdu(dev, coils, sizeof(coils), resp) == 5);
+	ASSERT_EQ(written_log.calls == 4 && written_log.seen[3].space == MOGBUS_COIL);
+	ASSERT_EQ(written_log.values[3][0] == 0 && written_log.seen[3].function_code == FC_WRITE_MULTIPLE_COILS);
+	/* holding 1 is 1: (1 & 0x00F0) | (0x000A & ~0x00F0) = 0x0A, the stored value */
+	ASSERT_EQ(hook_pdu(dev, mask, sizeof(mask), resp) == 7);
+	ASSERT_EQ(written_log.calls == 5 && written_log.values[4][0] == 0x0A);
+	ASSERT_EQ(written_log.seen[4].function_code == FC_MASK_WRITE_REGISTER);
+	ASSERT_EQ(hook_pdu(dev, rw, sizeof(rw), resp) == 4);
+	ASSERT_EQ(written_log.calls == 6 && written_log.seen[5].address == 1 && written_log.values[5][0] == 9);
+	ASSERT_EQ(written_log.seen[5].function_code == FC_READ_WRITE_MULTIPLE_REGISTERS);
+
+	/* the hook's own host writes did not recurse, and reads are not notified */
+	ASSERT_EQ(hook_pdu(dev, read, sizeof(read), resp) == 4 && written_log.calls == 6);
+	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 3, &v) && v == 6);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiWrittenHookRunsOncePerFileRecordSubRequest)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_WRITE_FILE_RECORD, 20,
+			  6, 0, 1, 0, 0, 0, 2, 0, 5, 0, 6,	/* file 1, records 0-1 */
+			  6, 0, 2, 0, 5, 0, 1, 0, 7 };		/* file 2, record 5 */
+	u8		again[] = { FC_WRITE_FILE_RECORD, 9, 6, 0, 1, 0, 0, 0, 1, 0, 5 };
+	uint16_t	file1[] = { 1, 2, 3 };
+	uint16_t	file2[] = { 4 };
+	uint16_t	out[3];
+	char		err[128];
+
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 1, 0, 3, file1, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 2, 5, 1, file2, err, sizeof(err)));
+	written_log.calls = 0;
+	written_log.reentrant = 0;
+	ASSERT_EQ(mogbus_device_set_written_hook(dev, test_written, NULL));
+
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == sizeof(req));
+	ASSERT_EQ(written_log.calls == 2);
+	ASSERT_EQ(written_log.seen[0].target == MOGBUS_TARGET_FILE_RECORD && written_log.seen[0].file == 1);
+	ASSERT_EQ(written_log.seen[0].address == 0 && written_log.seen[0].count == 2);
+	ASSERT_EQ(written_log.values[0][0] == 5 && written_log.values[0][1] == 6);
+	ASSERT_EQ(written_log.seen[0].function_code == FC_WRITE_FILE_RECORD);
+	ASSERT_EQ(written_log.seen[1].file == 2 && written_log.seen[1].address == 5 && written_log.values[1][0] == 7);
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 1, 0, 3, out) && out[0] == 5 && out[1] == 6 && out[2] == 3);
+
+	/* a veto by the access hook happens before anything is written and never reaches it */
+	memset(&hook_log, 0, sizeof(hook_log));
+	hook_log.answer = 4;
+	ASSERT_EQ(hook_pdu(dev, again, sizeof(again), resp) == 2 && resp[1] == 4);
+	ASSERT_EQ(written_log.calls == 2);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiWrittenHookIsSkippedForVetoesExceptionsAndHostWrites)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = hook_device(&ctx);
+	u8		resp[260];
+	u8		write[] = { FC_WRITE_SINGLE_REGISTER, 0, 0, 0, 5 };
+	u8		undefined[] = { FC_WRITE_SINGLE_REGISTER, 0x01, 0x00, 0, 1 };
+	u8		read_only[] = { FC_WRITE_SINGLE_REGISTER, 0, 10, 0, 1 };
+	u8		bad_value[] = { FC_WRITE_SINGLE_COIL, 0, 0, 0x12, 0x34 };
+	uint16_t	word = 5;
+
+	written_log.calls = 0;
+	written_log.reentrant = 0;
+	ASSERT_EQ(mogbus_device_set_written_hook(dev, test_written, NULL));
+
+	hook_log.answer = 6;
+	ASSERT_EQ(hook_pdu(dev, write, sizeof(write), resp) == 2 && resp[1] == 6);
+	hook_log.answer = 0;
+	ASSERT_EQ(hook_pdu(dev, undefined, sizeof(undefined), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(hook_pdu(dev, read_only, sizeof(read_only), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(hook_pdu(dev, bad_value, sizeof(bad_value), resp) == 2 && resp[1] == 3);
+	ASSERT_EQ(mogbus_device_write(dev, MOGBUS_HOLDING, 0, 1, &word));
+	ASSERT_EQ(mogbus_device_set_value(dev, MOGBUS_HOLDING, 1, 3));
+	ASSERT_EQ(written_log.calls == 0);
+
+	ASSERT_EQ(hook_pdu(dev, write, sizeof(write), resp) == 5 && written_log.calls == 1);
+	ASSERT_EQ(mogbus_device_set_written_hook(dev, NULL, NULL));
+	ASSERT_EQ(hook_pdu(dev, write, sizeof(write), resp) == 5 && written_log.calls == 1);
+	ASSERT_EQ(!mogbus_device_set_written_hook(NULL, test_written, NULL));
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiWrittenHookRunsOncePerDeviceOnBroadcastExecute)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* a = mogbus_add_device(ctx, 1, "a", NULL, 0);
+	mogbus_device_t* b = mogbus_add_device(ctx, 2, "b", NULL, 0);
+	mogbus_point_t	p = holding(0, 0);
+	char		err[128];
+	device_t*	devices[2] = { (device_t*)a, (device_t*)b };
+	rtu_framer_t	framer;
+	rng_t		rng;
+	rtu_framer_ctx_t fctx = { .devices = devices, .device_count = 2, .rng = &rng, .broadcast_execute = true };
+	u8		pdu[] = { FC_WRITE_SINGLE_REGISTER, 0, 0, 0, 0x2A };
+	u8		frame[MODBUS_RTU_MAX_FRAME];
+	u32		len = modbus_rtu_encode(frame, 0, pdu, sizeof(pdu));
+
+	ASSERT_EQ(mogbus_device_add_point(a, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_point(b, &p, err, sizeof(err)));
+	written_log.calls = 0;
+	written_log.reentrant = 0;
+	ASSERT_EQ(mogbus_device_set_written_hook(a, test_written, NULL));
+	ASSERT_EQ(mogbus_device_set_written_hook(b, test_written, NULL));
+	rng_seed(&rng, 1);
+	rtu_framer_init(&framer);
+	rtu_framer_handle_frame(&framer, &fctx, 0, frame, len);
+	ASSERT_EQ(written_log.calls == 2 && !framer.pending.active);
+	ASSERT_EQ(written_log.values[0][0] == 0x2A && written_log.values[1][0] == 0x2A);
 	mogbus_destroy(ctx);
 }
 

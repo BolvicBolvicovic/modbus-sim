@@ -167,8 +167,6 @@ class Policy:
                 setpoint = struct.unpack(">f", struct.pack(">HH", values[i], values[i + 1]))[0]
                 if not SETPOINT_RANGE[0] <= setpoint <= SETPOINT_RANGE[1]:
                     return self.refuse(access)
-                if self.process is not None:
-                    self.process.event(EV_SETPOINT)
             if first <= MODE <= last and values[MODE - first] > MANUAL:
                 return self.refuse(access)
         self.audit.append((access.function_code, access.space.name.lower(), access.address, list(values)))
@@ -177,6 +175,14 @@ class Policy:
     def refuse(self, access):
         self.refused += 1
         return 3                    # illegal data value
+
+    def written(self, access):
+        """The post-write hook: runs only once the write was applied, so a refused setpoint never logs."""
+        if (access.target == mogbus.AccessTarget.TABLE and
+                access.space == mogbus.Space.HOLDING and
+                access.address <= SETPOINT < access.address + access.count and
+                self.process is not None):
+            self.process.event(EV_SETPOINT)
 
 
 class Station:
@@ -208,6 +214,7 @@ def running_station():
         process = Process(dev)
         policy = Policy(dev, process)
         dev.set_access_hook(policy)
+        dev.set_written_hook(policy.written)
         dev.set_value("input", INFLOW, 40.0)        # no ramp: the same level curve on every run
         options = mogbus.ServerOptions(port=free_port(), http_bind_address="127.0.0.1",
                                        http_port=free_port(), http_control=True)
@@ -261,6 +268,7 @@ def main():
     process = Process(dev)
     policy = Policy(dev, process)
     dev.set_access_hook(policy)
+    dev.set_written_hook(policy.written)
     options = mogbus.ServerOptions(port=free_port(), http_bind_address="127.0.0.1", http_port=free_port(),
                                    http_control=True)
     ctx.check_server(options)
