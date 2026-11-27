@@ -8,7 +8,7 @@
  */
 #include "mogbus.h"
 #include "build_config.h"
-#include "api/probe.h"
+#include "client/client.h"
 #include "device/device.h"
 #include "modbus/pdu.h"
 #include "net/net_obs.h"
@@ -156,7 +156,7 @@ fail(mogbus_t* ctx, mogbus_error_t code, const char* fmt, ...)
 const char*
 mogbus_last_error(const mogbus_t* ctx)
 {
-	return ctx ? ctx->error : probe_last_error();
+	return ctx ? ctx->error : client_detached_error();
 }
 
 mogbus_error_t

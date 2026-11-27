@@ -125,13 +125,15 @@
         "docs/user/library/library-simulate.md",
         "docs/user/library/library-hooks.md",
         "docs/user/library/library-lifetimes.md",
+        "docs/user/library/library-client.md",
         "docs/user/python/python-start.md",
         "docs/user/python/python-device.md",
         "docs/user/python/python-serve.md",
         "docs/user/python/python-simulate.md",
         "docs/user/python/python-hooks.md",
         "docs/user/python/python-lifetimes.md",
-        "docs/user/python/python-testing.md"
+        "docs/user/python/python-testing.md",
+        "docs/user/python/python-client.md"
       ]
     },
     {
@@ -457,6 +459,7 @@
           "groups": [
             {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
             {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing", "Frame"]},
+            {"title": "Client", "items": ["Client", "ModbusException"]},
             {"title": "Logging and errors", "items": ["set_log_level", "set_log_format", "set_log_sink", "library_version", "MogbusError", "Status"]},
             {"title": "Enumerations", "items": ["Space", "ValueType", "WordOrder", "ByteOrder", "RampMode", "ClockField", "AccessKind", "AccessTarget", "FrameDirection", "Mode", "Parity", "TlsVersion", "FaultKind", "LogLevel", "LogFormat"]}
           ]

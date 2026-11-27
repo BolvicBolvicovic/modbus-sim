@@ -12,7 +12,7 @@ The features at a glance: protocols, data types, behaviours, faults, observabili
 | Clients | Up to 32 TCP connections at a time; UDP modes answer any number of peers on one socket. A delayed response never blocks other clients. |
 | Writes | Clients can write coils and holding registers, except points marked `(access read-only)`. Writing a ramp freezes it at the written value. |
 | Observability | `(server (http ...))` serves `/healthz`, `/readyz` and Prometheus `/metrics`; `--log-format json` writes one JSON object per log line, with structured request events under `-v`. `(http (control on))` adds an opt-in JSON API to read and write registers and set or clear faults while the server runs. |
-| Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`), and a Python package on top of it (`python/`, for pytest and scripts); the `mogbus` binary is itself a client of the C API. |
+| Embedding | `libmogbus.a` / `libmogbus.so` with a small C API (`include/mogbus.h`), and a Python package on top of it (`python/`, for pytest and scripts); both include a Modbus client (master) for every network transport and serial lines, with typed calls, raw requests, timeouts, retries and reconnects; the `mogbus` binary is itself a client of the C API. |
 
 ## How it is built
 
@@ -31,4 +31,4 @@ New here? The [pumping station tutorial](tutorial-app.md) walks through most of 
 | Protocol | [Modbus support](modbus/modbus-overview.md), [Function codes](modbus/function-codes.md), [Transports](transports/transports.md) |
 | Data, behaviours, faults | [Config reference](config/format.md), [Faults on the wire](modbus/fault-effects.md) |
 | Observability | [Health, readiness and metrics](observability/http-endpoint.md), [Metrics](observability/metrics/metrics.md), [Control API](observability/api/control-api.md), [Logs](observability/logs.md) |
-| Embedding | [Embedding mogbus in C](library/library-start.md), [Using mogbus from Python](python/python-start.md) |
+| Embedding | [Embedding mogbus in C](library/library-start.md), [Using mogbus from Python](python/python-start.md), [C client](library/library-client.md), [Python client](python/python-client.md) |

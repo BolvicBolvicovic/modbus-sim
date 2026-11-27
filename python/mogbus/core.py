@@ -45,7 +45,7 @@ Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_a
 `mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
 `mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, probe `mogbus_probe`,
-rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
+Client `mogbus_client_*` (a Modbus master, independent of every Context), rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
 
 ## Limits
 
@@ -292,6 +292,14 @@ class Status(enum.IntEnum):
     NOMEM = 6
     ## A probe could not connect, send or get a valid reply.
     PROBE = 7
+    ## A client could not connect, send or receive, or the server closed the connection.
+    IO = 8
+    ## A client got no reply within its timeout (after the retries).
+    TIMEOUT = 9
+    ## A client got a Modbus exception reply; see ModbusException.
+    EXCEPTION = 10
+    ## A client got a malformed reply, or one that does not answer the request.
+    FRAME = 11
 
 
 class LogLevel(enum.IntEnum):
@@ -1762,3 +1770,272 @@ def serve(config=None, config_text: Optional[str] = None, **options):
         yield Served(ctx, server, opts.port)
     finally:
         ctx.close()
+
+
+class ModbusException(MogbusError):
+    """@brief The server answered a request with a Modbus exception.
+
+    A subclass of MogbusError, so `except MogbusError` catches it too; its `status` is Status.EXCEPTION.
+    @param message The message of the client.
+    @param code The Modbus exception code: 1 illegal function, 2 illegal data address, 3 illegal data
+        value, 4 server device failure, 11 gateway target failed to respond; a server may use others.
+    """
+
+    def __init__(self, message: str, code: int):
+        super().__init__(message, Status.EXCEPTION)
+        self.code = code
+
+
+class Client:
+    """@brief A Modbus client (master): a connection to one endpoint, wrapping `mogbus_client_*`.
+
+    Independent of every Context and Server: it only talks to the endpoint over the wire, so it can
+    query a Server of the same process started with Server.start() or one that runs elsewhere. It connects
+    on the first call and again on the first call after a connection error (that call raises a
+    MogbusError with Status.IO). Use it as a context manager, or call close(). Each call is serialized
+    by a lock, so a Client may be shared by threads, though it handles one request at a time.
+
+    Every call takes an optional `unit` that overrides the default one given at construction. A
+    Modbus exception reply raises ModbusException, a missing reply MogbusError with Status.TIMEOUT
+    (after `retries` further attempts), other failures MogbusError with Status.IO or Status.FRAME.
+    In the RTU and ASCII modes unit 0 broadcasts: writes return at once, nothing is awaited.
+    @param mode Transport: a Mode or its name: `"tcp"` (default), `"udp"`, `"rtu-tcp"`, `"rtu-udp"`,
+        `"ascii-tcp"`, `"ascii-udp"`, or `"rtu-device"`/`"ascii-device"` for a serial line.
+    @param host IP address (or `"localhost"`) of the server; network modes.
+    @param port Port of the server; network modes.
+    @param unit Default unit id of the calls.
+    @param timeout_ms How long to wait for each reply.
+    @param retries Extra attempts after a timeout; any other error is not retried.
+    @param path Serial device, e.g. `"/dev/ttyUSB0"`; serial modes.
+    @param baud Serial speed; 0 keeps the device's.
+    @param data_bits Serial data bits: 7 or 8 (RTU: 8).
+    @param parity Serial Parity, a member or its name.
+    @param stop_bits Serial stop bits: 1 or 2.
+    @throws MogbusError If the options are invalid (not an IP address, a server-only mode, ...).
+    """
+
+    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1", port: int = 1502,
+                 unit: int = 1, timeout_ms: int = 1000, retries: int = 0, path: Optional[str] = None,
+                 baud: int = 0, data_bits: int = 8, parity: Union[str, int, Parity] = Parity.NONE,
+                 stop_bits: int = 1):
+        self._h = None
+        self._lock = threading.RLock()
+        c = _lib.ClientOptionsC()
+        c.mode = int(_coerce(Mode, mode, "mode"))
+        host_b, path_b = _text(host), _text(path)
+        c.host = host_b
+        c.port = _u(port, "port", 1 << 16)
+        c.path = path_b
+        c.baud = _u(baud, "baud", 1 << 32)
+        c.data_bits = _u(data_bits, "data_bits", 1 << 32)
+        c.parity = int(_coerce(Parity, parity, "parity"))
+        c.stop_bits = _u(stop_bits, "stop_bits", 1 << 32)
+        c.tls_enabled = False
+        c.timeout_ms = _u(timeout_ms, "timeout_ms", 1 << 32)
+        c.retries = _u(retries, "retries", 1 << 32)
+        self.unit = _u(unit, "unit", 256)
+        self._h = lib.mogbus_client_open(ctypes.byref(c))
+        if not self._h:
+            msg = lib.mogbus_last_error(None)
+            raise MogbusError(msg.decode(errors="replace") if msg else "cannot open the client", Status.INVALID)
+
+    def __enter__(self) -> "Client":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        """@brief Closes the connection and frees the client; calling it again does nothing.
+        """
+        with self._lock:
+            if self._h:
+                lib.mogbus_client_close(self._h)
+                self._h = None
+
+    def _live(self):
+        if not self._h:
+            raise MogbusError("the client is closed")
+        return self._h
+
+    def _check(self, code: int) -> None:
+        if code == 0:
+            return
+        msg = lib.mogbus_client_last_error(self._h)
+        text = msg.decode(errors="replace") if msg else "client call failed"
+        if code == Status.EXCEPTION:
+            raise ModbusException(text, lib.mogbus_client_last_exception(self._h))
+        raise MogbusError(text, Status(code))
+
+    def _unit(self, unit: Optional[int]) -> int:
+        return self.unit if unit is None else _u(unit, "unit", 256)
+
+    def connect(self) -> None:
+        """@brief Connects now instead of at the first call, to find out early that the endpoint is not there.
+        @throws MogbusError With Status.IO if the connection fails.
+        """
+        with self._lock:
+            self._check(lib.mogbus_client_connect(self._live()))
+
+    def _read_bits(self, fn, address, count, unit):
+        buf = (ctypes.c_uint8 * max(_u(count, "count", 1 << 16), 1))()
+        with self._lock:
+            self._check(fn(self._live(), self._unit(unit), _u(address, "address", 1 << 16), count, buf))
+        return [bool(b) for b in buf[:count]]
+
+    def _read_registers(self, fn, address, count, unit):
+        buf = (ctypes.c_uint16 * max(_u(count, "count", 1 << 16), 1))()
+        with self._lock:
+            self._check(fn(self._live(), self._unit(unit), _u(address, "address", 1 << 16), count, buf))
+        return list(buf[:count])
+
+    def read_coils(self, address: int, count: int, unit: Optional[int] = None) -> List[bool]:
+        """@brief Reads coils (function code 01).
+        @param address First coil.
+        @param count Number of coils, 1-2000.
+        @param unit Unit id; the client's default when None.
+        @return `count` booleans.
+        """
+        return self._read_bits(lib.mogbus_client_read_coils, address, count, unit)
+
+    def read_discrete_inputs(self, address: int, count: int, unit: Optional[int] = None) -> List[bool]:
+        """@brief Reads discrete inputs (function code 02).
+        @param address First input.
+        @param count Number of inputs, 1-2000.
+        @param unit Unit id; the client's default when None.
+        @return `count` booleans.
+        """
+        return self._read_bits(lib.mogbus_client_read_discrete_inputs, address, count, unit)
+
+    def read_holding_registers(self, address: int, count: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads holding registers (function code 03).
+        @param address First register.
+        @param count Number of registers, 1-125.
+        @param unit Unit id; the client's default when None.
+        @return `count` raw 16-bit values.
+        """
+        return self._read_registers(lib.mogbus_client_read_holding_registers, address, count, unit)
+
+    def read_input_registers(self, address: int, count: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads input registers (function code 04).
+        @param address First register.
+        @param count Number of registers, 1-125.
+        @param unit Unit id; the client's default when None.
+        @return `count` raw 16-bit values.
+        """
+        return self._read_registers(lib.mogbus_client_read_input_registers, address, count, unit)
+
+    def write_coil(self, address: int, value: bool, unit: Optional[int] = None) -> None:
+        """@brief Writes one coil (function code 05).
+        @param address Coil.
+        @param value The new state.
+        @param unit Unit id; the client's default when None.
+        """
+        with self._lock:
+            self._check(lib.mogbus_client_write_coil(self._live(), self._unit(unit),
+                                                     _u(address, "address", 1 << 16), bool(value)))
+
+    def write_register(self, address: int, value: int, unit: Optional[int] = None) -> None:
+        """@brief Writes one holding register (function code 06).
+        @param address Register.
+        @param value The new raw value, 0-65535.
+        @param unit Unit id; the client's default when None.
+        """
+        with self._lock:
+            self._check(lib.mogbus_client_write_register(self._live(), self._unit(unit),
+                                                         _u(address, "address", 1 << 16),
+                                                         _u(value, "value", 1 << 16)))
+
+    def write_coils(self, address: int, values: Sequence[bool], unit: Optional[int] = None) -> None:
+        """@brief Writes consecutive coils (function code 15).
+        @param address First coil.
+        @param values The new states, 1-1968.
+        @param unit Unit id; the client's default when None.
+        """
+        buf = (ctypes.c_uint8 * max(len(values), 1))(*[1 if v else 0 for v in values])
+        with self._lock:
+            self._check(lib.mogbus_client_write_coils(self._live(), self._unit(unit),
+                                                      _u(address, "address", 1 << 16),
+                                                      _u(len(values), "count", 1 << 16), buf))
+
+    def write_registers(self, address: int, values: Sequence[int], unit: Optional[int] = None) -> None:
+        """@brief Writes consecutive holding registers (function code 16).
+        @param address First register.
+        @param values The new raw values, 1-123, each 0-65535.
+        @param unit Unit id; the client's default when None.
+        """
+        buf = (ctypes.c_uint16 * max(len(values), 1))(*[_u(v, "value", 1 << 16) for v in values])
+        with self._lock:
+            self._check(lib.mogbus_client_write_registers(self._live(), self._unit(unit),
+                                                          _u(address, "address", 1 << 16),
+                                                          _u(len(values), "count", 1 << 16), buf))
+
+    def mask_write_register(self, address: int, and_mask: int, or_mask: int,
+                            unit: Optional[int] = None) -> None:
+        """@brief Changes bits of a holding register (function code 22): new = (old AND and_mask) OR (or_mask AND NOT and_mask).
+        @param address Register.
+        @param and_mask Bits to keep.
+        @param or_mask Bits to set where `and_mask` is 0.
+        @param unit Unit id; the client's default when None.
+        """
+        with self._lock:
+            self._check(lib.mogbus_client_mask_write_register(
+                self._live(), self._unit(unit), _u(address, "address", 1 << 16),
+                _u(and_mask, "and_mask", 1 << 16), _u(or_mask, "or_mask", 1 << 16)))
+
+    def read_write_registers(self, read_address: int, read_count: int, write_address: int,
+                             values: Sequence[int], unit: Optional[int] = None) -> List[int]:
+        """@brief Writes holding registers, then reads holding registers, in one request (function code 23).
+        @param read_address First register to read.
+        @param read_count Registers to read, 1-125.
+        @param write_address First register to write.
+        @param values The raw values to write, 1-121.
+        @param unit Unit id; the client's default when None.
+        @return The `read_count` raw values read after the write.
+        """
+        out = (ctypes.c_uint16 * max(_u(read_count, "read_count", 1 << 16), 1))()
+        buf = (ctypes.c_uint16 * max(len(values), 1))(*[_u(v, "value", 1 << 16) for v in values])
+        with self._lock:
+            self._check(lib.mogbus_client_read_write_registers(
+                self._live(), self._unit(unit), _u(read_address, "read_address", 1 << 16), read_count, out,
+                _u(write_address, "write_address", 1 << 16), _u(len(values), "count", 1 << 16), buf))
+        return list(out[:read_count])
+
+    def read_device_id(self, unit: Optional[int] = None) -> Dict[int, bytes]:
+        """@brief Reads the basic device identification objects (function code 43, MEI type 14).
+        @param unit Unit id; the client's default when None.
+        @return The objects by id: 0 vendor name, 1 product code, 2 revision.
+        """
+        buf = (ctypes.c_uint8 * 252)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_read_device_id(self._live(), self._unit(unit), buf, 252,
+                                                         ctypes.byref(n)))
+        raw, objects, i = bytes(buf[:n.value]), {}, 0
+        while i + 2 <= len(raw) and i + 2 + raw[i + 1] <= len(raw):
+            objects[raw[i]] = raw[i + 2:i + 2 + raw[i + 1]]
+            i += 2 + raw[i + 1]
+        return objects
+
+    def request(self, function_code: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends any request, including a user-defined function code, and returns the reply data.
+        @param function_code The function code, 1-127.
+        @param data The request data after the function code, at most 252 bytes.
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the function code (empty for a broadcast).
+        @throws ModbusException If the server answered with an exception.
+        """
+        data = bytes(data)
+        req = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
+        reply = (ctypes.c_uint8 * 252)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_request(self._live(), self._unit(unit), _u(function_code, "function_code", 256),
+                                                  req, len(data), reply, 252, ctypes.byref(n)))
+        return bytes(reply[:n.value])
