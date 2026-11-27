@@ -449,6 +449,7 @@
       "items": [
         "CONTRIBUTING.md",
         "docs/dev/architecture.md",
+        "docs/dev/roadmap.md",
         "docs/dev/release.md",
         "docs/dev/docs.md",
         "AGENTS.md",

@@ -1,0 +1,64 @@
+# Roadmap
+
+Implemented behaviour is documented in [Architecture](architecture.md) and the user docs; only
+outstanding work is listed here. When an item is done, document it there and remove it here.
+
+## RTU timing
+
+- Model true UART character-level timing. Why: t3.5/t1.5 are derived from baud and read
+  boundaries, which cannot reproduce byte-time-sensitive serial framing. RTU-over-TCP and
+  RTU-over-UDP need no change because they are explicit separate transports.
+
+## Protocol validation and compatibility
+
+- Conformance and interoperability runs against commercial PLC/SCADA products, following the method
+  of `examples/interop/` (which already checks every FC against pymodbus). Why: supporting an FC does
+  not prove interoperability.
+
+## Adoption (gaps compared with pymodbus as a server/simulator)
+
+- pymodbus importer coverage: custom Python actions (code, cannot be imported).
+  Why: each one turns into a warning and a manual edit after importing (see
+  `docs/user/import/import-pymodbus-servers.md`).
+- A browser UI over the HTTP control API (tables, values, faults). Why: the pymodbus simulator has
+  one, and some users want to change a running device without curl.
+- Windows (see [Windows build](architecture.md#windows-build) for what exists). Why: many PLC and SCADA engineers
+  work on Windows. Remaining:
+  - COM ports: the `os_wait` serial entry (overlapped COM I/O plus `WaitForMultipleObjects`, comm
+    events) and `DCB`/`COMMTIMEOUTS` setup in `os_serial_win32.c`; there is no PTY on Windows, so
+    tests would use a com0com pair.
+  - A portable `test_support`, which would bring most of `TESTS_POSIX_ONLY` to Windows.
+  - Tests on `windows-latest` (unit, Python, interop), native COM tests with com0com.
+  - OpenSSL (or Schannel) for TLS.
+  - Windows release artifacts.
+- Simulator actions in Python: a post-write notification (the access hook runs before a write and
+  can only allow or veto it), and a programmable callback for user-defined function codes (today
+  they are config-only pattern matching). Why: pymodbus datastores get `setValues` after a write and
+  custom `ModbusPDU` subclasses can run arbitrary logic.
+- Frame trace hooks: a host callback that sees, and may rewrite, each received and sent frame. Why:
+  pymodbus has `trace_packet`/`trace_pdu`/`trace_connect`; fault injection covers only fixed cases.
+- asyncio integration for the Python package. Why: `Server.start()` steps on a background thread, so
+  it does not plug into an existing event loop as pymodbus does.
+- A frame decoder command (hex frame in, decoded MBAP/RTU/ASCII ADU and PDU out). Why: pymodbus ships
+  a message decoder, and it helps when reading captures.
+- Gateway/forwarder: a device whose tables are served by a real remote Modbus device. Why: pymodbus
+  has `RemoteDeviceContext` for TCP-to-serial gateways.
+
+## Client side (gaps compared with libmodbus and pymodbus)
+
+- A client (master) API in C and Python: connect over every transport, the FC requests as calls,
+  raw requests, response/byte timeouts, retries and reconnects. Why: both libraries are mainly used as
+  clients; mogbus only has `mogbus_probe` (one FC 08 echo for `--health`). The codecs in
+  `src/modbus/` already encode and decode every frame.
+
+## Platforms and integration (gaps compared with libmodbus)
+
+- RS-485 line control: `TIOCSRS485` and manual RTS toggling with a delay. Why: half-duplex
+  adapters need it, and libmodbus has `modbus_rtu_set_serial_mode` and RTS callbacks.
+- macOS and the BSDs. Why: libmodbus builds there natively. Needs a vlib arena backend check and
+  `os_serial`/PTY differences.
+- Host names in `bind` (getaddrinfo). Why: only IPv4/IPv6 literals are accepted today.
+- Public value helpers (float/int32/int64 from registers in each word and byte order). Why: libmodbus
+  has `modbus_get_float_abcd` and friends; mogbus does this only inside points.
+- `make install` with a `pkg-config` file. Why: the release ships a tarball only, which makes linking
+  against `libmogbus` harder than against libmodbus.
