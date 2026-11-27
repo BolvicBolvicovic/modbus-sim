@@ -31,7 +31,7 @@
 #include <string.h>
 
 /** @brief The public enums are mapped by value, so they must match the internal ones. */
-_Static_assert(VIEW_MAX_DEVICES == SERVER_MAX_DEVICES, "view and context device limits differ");
+_Static_assert((int)VIEW_MAX_DEVICES == (int)SERVER_MAX_DEVICES, "view and context device limits differ");
 _Static_assert(MOGBUS_MAX_POINTS == DEVICE_MAX_POINTS, "public and internal point limits differ");
 _Static_assert((int)MOGBUS_COIL == (int)SPACE_COIL &&
 	       (int)MOGBUS_DISCRETE == (int)SPACE_DISCRETE &&
