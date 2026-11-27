@@ -96,6 +96,7 @@
               "title": "Values",
               "entries": [
                 "docs/user/observability/api/api-list-devices.md",
+                "docs/user/observability/api/api-list-points.md",
                 "docs/user/observability/api/api-read-values.md",
                 "docs/user/observability/api/api-write-values.md",
                 "docs/user/observability/api/api-get-value.md",

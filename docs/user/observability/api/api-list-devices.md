@@ -38,4 +38,5 @@ curl -s http://127.0.0.1:9102/api/devices
 ## See also
 
 - [Runtime control API](control-api.md)
+- [List points](api-list-points.md)
 - [Read values](api-read-values.md)

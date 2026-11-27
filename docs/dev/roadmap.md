@@ -20,10 +20,6 @@ outstanding work is listed here. When an item is done, document it there and rem
 - pymodbus importer coverage: custom Python actions (code, cannot be imported).
   Why: each one turns into a warning and a manual edit after importing (see
   `docs/user/import/import-pymodbus-servers.md`).
-- Web UI pages over the HTTP control API: viewing and editing tables and values, and setting faults.
-  The foundation (embedded page listing the devices, `--web`, Host/Origin checks) is in
-  [Web UI](../user/observability/web-ui.md). Why: the pymodbus simulator has a browser UI, and some
-  users want to change a running device without curl.
 - Windows (see [Windows build](architecture.md#windows-build) for what exists). Why: many PLC and SCADA engineers
   work on Windows. Remaining:
   - COM ports: the `os_wait` serial entry (overlapped COM I/O plus `WaitForMultipleObjects`, comm

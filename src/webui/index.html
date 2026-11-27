@@ -5,52 +5,339 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mogbus</title>
 <style>
-:root { color-scheme: light dark; --bg: #fff; --fg: #1b1f24; --line: #d0d7de; --muted: #667085; }
-@media (prefers-color-scheme: dark) { :root { --bg: #14171a; --fg: #e6e8ea; --line: #343a40; --muted: #98a2b3; } }
+:root { color-scheme: light dark; --bg: #fff; --fg: #1b1f24; --line: #d0d7de; --muted: #667085; --acc: #0b5fd6; --bad: #b42318; --ok: #1a7f37; --panel: #f6f8fa; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14171a; --fg: #e6e8ea; --line: #343a40; --muted: #98a2b3; --acc: #6ea8fe; --bad: #ff8a80; --ok: #56d364; --panel: #1c2128; } }
+* { box-sizing: border-box; }
 body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
-main { max-width: 56rem; margin: 0 auto; }
-h1 { font-size: 1.3rem; margin: 0 0 4px; }
-p { color: var(--muted); margin: 0 0 16px; }
+main { max-width: 72rem; margin: 0 auto; }
+h1 { font-size: 1.3rem; margin: 0 0 8px; }
+h2 { font-size: 1.05rem; margin: 20px 0 6px; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-weight: 600; }
-#status { margin-top: 12px; }
+td.num, td.raw { font-family: ui-monospace, monospace; }
+td.raw { color: var(--muted); word-break: break-all; }
+button, input, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--acc); }
+button[aria-selected="true"] { border-color: var(--acc); color: var(--acc); font-weight: 600; }
+button.link { border: 0; background: none; color: var(--acc); padding: 0; text-decoration: underline; font-family: ui-monospace, monospace; }
+:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+label { display: inline-flex; gap: 4px; align-items: center; }
+input { width: 9rem; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
+.muted { color: var(--muted); }
+.err { color: var(--bad); }
+.good { color: var(--ok); }
+#message { min-height: 1.5em; }
+.scroll { overflow-x: auto; }
 </style>
 </head>
 <body>
 <main>
 <h1>mogbus</h1>
-<p>Web UI, first version: the devices this server simulates.</p>
+<div class="bar">
+<label>Device <select id="device"></select></label>
+<span id="tabs" role="tablist" aria-label="Table"></span>
+<button id="pause" type="button" aria-pressed="false">Pause</button>
+<button id="refresh" type="button">Refresh now</button>
+<span id="info" class="muted"></span>
+</div>
+<div id="message" role="status" aria-live="polite"></div>
+
+<h2>Points</h2>
+<div class="scroll">
 <table>
-<thead><tr><th>Unit</th><th>Name</th><th>Coils</th><th>Discrete</th><th>Input</th><th>Holding</th></tr></thead>
-<tbody id="devices"></tbody>
+<thead><tr><th>Address</th><th>Type</th><th>Kind</th><th>Access</th><th>Value</th><th>Raw</th></tr></thead>
+<tbody id="points"></tbody>
 </table>
-<div id="status"></div>
+</div>
+<div class="bar" style="margin-top:8px">
+<button id="prev" type="button">Previous</button>
+<button id="next" type="button">Next</button>
+<span id="range" class="muted"></span>
+</div>
+
+<div class="panel" id="editor">
+<div class="bar">
+<strong>Write</strong>
+<label>Address <input id="addr" inputmode="numeric" size="6"></label>
+</div>
+<div class="bar">
+<label>Decoded value <input id="val"></label>
+<button id="setval" type="button">Set value</button>
+<span class="muted">sticks until the device restarts; Modbus writes then get exception 02</span>
+</div>
+<div class="bar">
+<label>Raw registers (or bits) <input id="raw" placeholder="1, 2, 3" size="24"></label>
+<button id="setraw" type="button">Write raw</button>
+<span class="muted">from the address, 0 to 65535 (0 or 1 for bits)</span>
+</div>
+<div id="werr" class="err" role="alert"></div>
+</div>
+
+<h2>Faults</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>Kind</th><th>Percent</th><th>Details</th><th></th></tr></thead>
+<tbody id="faults"></tbody>
+</table>
+</div>
+<div class="panel">
+<div class="bar">
+<label>Kind <select id="fkind"></select></label>
+<label>Percent <input id="fpercent" value="100" size="4"></label>
+<label id="fdelay_l">delay_ms <input id="fdelay" value="100" size="6"></label>
+<label id="fcode_l">exception_code <input id="fcode" value="4" size="4"></label>
+<label id="fmode_l">Mode <select id="fmode"><option>pdu</option><option>register</option><option>checksum</option></select></label>
+<button id="fset" type="button">Set fault</button>
+</div>
+<div id="ferr" class="err" role="alert"></div>
+</div>
+<p class="muted">No authentication: anyone who can reach this port can change device state.</p>
+
 <script>
 (function () {
-  var rows = document.getElementById("devices");
-  var status = document.getElementById("status");
-  function cell(tr, text) {
-    var td = document.createElement("td");
-    td.textContent = String(text);
-    tr.appendChild(td);
-  }
-  fetch("/api/devices", { headers: { "Accept": "application/json" } })
-    .then(function (r) {
-      if (!r.ok) { throw new Error("HTTP " + r.status); }
-      return r.json();
-    })
-    .then(function (devices) {
-      devices.forEach(function (d) {
-        var tr = document.createElement("tr");
-        cell(tr, d.unit);
-        cell(tr, d.name);
-        ["coil", "discrete", "input", "holding"].forEach(function (k) { cell(tr, d.points[k] || 0); });
-        rows.appendChild(tr);
+  "use strict";
+  var SPACES = ["coil", "discrete", "input", "holding"];
+  var KINDS = ["delay", "drop", "exception", "corrupt", "disconnect", "restart", "sensor-disconnect"];
+  var PAGE = 50, EVERY_MS = 1000;
+  var st = { unit: null, space: "holding", all: [], page: 0, paused: false, busy: false, gen: 0 };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function api(method, path, body) {
+    var o = { method: method, headers: { "Accept": "application/json" } };
+    if (method !== "GET") {
+      o.headers["Content-Type"] = "application/json";
+      if (body !== undefined) { o.body = JSON.stringify(body); }
+    }
+    return fetch(path, o).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { throw new Error(j.error || "HTTP " + r.status); }
+        return j;
       });
-      status.textContent = devices.length + " device" + (devices.length === 1 ? "" : "s");
-    })
-    .catch(function (e) { status.textContent = "Cannot read /api/devices: " + e.message; });
+    });
+  }
+  function el(tag, text, cls) {
+    var e = document.createElement(tag);
+    if (text !== undefined) { e.textContent = String(text); }
+    if (cls) { e.className = cls; }
+    return e;
+  }
+  function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
+  function say(id, text, bad) {
+    var n = $(id);
+    n.textContent = text;
+    n.className = bad === false ? "good" : "err";
+  }
+  function base() { return "/api/devices/" + st.unit; }
+  function isBit(sp) { return sp === "coil" || sp === "discrete"; }
+
+  /* The registers of one point to text: undo the byte order of each register, then the word order. */
+  function decode(pt, regs) {
+    var w = regs.slice(), dv;
+    if (pt.type === "bit") { return regs[0] ? "1" : "0"; }
+    if (pt.byte_order === "little") { w = w.map(function (r) { return ((r & 255) << 8) | (r >> 8); }); }
+    if (pt.type === "string") {
+      var s = "";
+      w.forEach(function (r) { s += String.fromCharCode(r >> 8, r & 255); });
+      return s.replace(/[\0 ]+$/, "").replace(/[^\x20-\x7e]/g, "?");
+    }
+    if (pt.word_order === "low-first") { w.reverse(); }
+    dv = new DataView(new ArrayBuffer(8));
+    w.forEach(function (r, k) { dv.setUint16(k * 2, r); });
+    switch (pt.type) {
+      case "u16": return String(dv.getUint16(0));
+      case "s16": return String(dv.getInt16(0));
+      case "u32": return String(dv.getUint32(0));
+      case "s32": return String(dv.getInt32(0));
+      case "float32": return String(parseFloat(dv.getFloat32(0).toPrecision(8)));
+      case "u64": return dv.getBigUint64(0).toString();
+      case "s64": return dv.getBigInt64(0).toString();
+      case "float64": return String(dv.getFloat64(0));
+    }
+    return "?";
+  }
+
+  function loadPoints() {
+    var gen = ++st.gen, acc = [];
+    st.all = [];
+    clear($("points"));
+    function more(from) {
+      return api("GET", base() + "/points?space=" + st.space + "&limit=200&from=" + from).then(function (j) {
+        if (gen !== st.gen) { return; }
+        acc = acc.concat(j.points);
+        if (j.next !== null) { return more(j.next); }
+        st.all = acc;
+        st.page = Math.min(st.page, Math.max(0, Math.ceil(acc.length / PAGE) - 1));
+        render();
+      });
+    }
+    return more(0).catch(function (e) { say("message", "Cannot list points: " + e.message); });
+  }
+
+  var rows = [];   /* {pt, valueCell, rawCell} of the page on screen */
+  function render() {
+    var body = $("points"), from = st.page * PAGE, part = st.all.slice(from, from + PAGE);
+    clear(body);
+    rows = part.map(function (pt) {
+      var tr = el("tr"), a = el("td"), b = el("button", pt.address, "link"), v = el("td", "", "num"), r = el("td", "", "raw");
+      b.type = "button";
+      b.addEventListener("click", function () { $("addr").value = pt.address; $("val").focus(); });
+      a.appendChild(b);
+      tr.appendChild(a);
+      tr.appendChild(el("td", pt.type + (pt.type === "string" ? "[" + pt.registers + "]" : "")));
+      tr.appendChild(el("td", pt.kind));
+      tr.appendChild(el("td", pt.read_only ? "read-only" : ""));
+      tr.appendChild(v);
+      tr.appendChild(r);
+      body.appendChild(tr);
+      return { pt: pt, v: v, r: r };
+    });
+    $("range").textContent = st.all.length ? "points " + (from + 1) + "-" + (from + part.length) + " of " + st.all.length : "no points in this table";
+    $("prev").disabled = st.page === 0;
+    $("next").disabled = from + PAGE >= st.all.length;
+    refresh();
+  }
+
+  /* Contiguous points become one raw read (<= 125 registers, <= 2000 bits). */
+  function refresh() {
+    var limit = isBit(st.space) ? 2000 : 125, runs = [], cur = null, gen = st.gen;
+    if (st.busy) { return; }
+    rows.forEach(function (row) {
+      var end = row.pt.address + row.pt.registers;
+      if (cur && cur.end === row.pt.address && end - cur.start <= limit) { cur.rows.push(row); cur.end = end; }
+      else { cur = { start: row.pt.address, end: end, rows: [row] }; runs.push(cur); }
+    });
+    st.busy = true;
+    Promise.all(runs.map(function (run) {
+      return api("GET", base() + "/" + st.space + "/" + run.start + "?count=" + (run.end - run.start)).then(function (j) {
+        if (gen !== st.gen) { return; }
+        run.rows.forEach(function (row) {
+          var regs = j.values.slice(row.pt.address - run.start, row.pt.address - run.start + row.pt.registers);
+          row.v.textContent = decode(row.pt, regs);
+          row.v.className = "num";
+          row.r.textContent = regs.join(" ");
+        });
+      }).catch(function (e) {
+        run.rows.forEach(function (row) { row.v.textContent = e.message; row.v.className = "err"; row.r.textContent = ""; });
+      });
+    })).then(function () { st.busy = false; }, function () { st.busy = false; });
+    loadFaults();
+  }
+
+  function loadFaults() {
+    var gen = st.gen;
+    api("GET", base() + "/faults").then(function (j) {
+      var body = $("faults");
+      if (gen !== st.gen) { return; }
+      clear(body);
+      j.faults.forEach(function (f) {
+        var tr = el("tr"), d = [], b = el("button", "Clear"), td = el("td");
+        if (f.delay_ms !== undefined) { d.push("delay_ms " + f.delay_ms); }
+        if (f.exception_code !== undefined) { d.push("exception_code " + f.exception_code); }
+        if (f.mode !== undefined) { d.push("mode " + f.mode); }
+        if (f.scheduled) { d.push("scheduled"); }
+        tr.appendChild(el("td", f.kind));
+        tr.appendChild(el("td", f.percent));
+        tr.appendChild(el("td", d.join(", ")));
+        b.type = "button";
+        b.setAttribute("aria-label", "Clear fault " + f.kind);
+        b.addEventListener("click", function () {
+          api("DELETE", base() + "/faults/" + f.kind).then(function () { say("ferr", "Cleared " + f.kind, false); loadFaults(); })
+            .catch(function (e) { say("ferr", e.message); });
+        });
+        td.appendChild(b);
+        tr.appendChild(td);
+        body.appendChild(tr);
+      });
+      if (!j.faults.length) { var e = el("tr"); var c = el("td", "No faults set", "muted"); c.colSpan = 4; e.appendChild(c); body.appendChild(e); }
+    }).catch(function (e) { say("ferr", "Cannot list faults: " + e.message); });
+  }
+
+  function num(id) { var s = $(id).value.trim(); return /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(s) ? Number(s) : NaN; }
+  function addr() {
+    var a = num("addr");
+    if (!(a >= 0 && a <= 65535 && a === Math.floor(a))) { say("werr", "Address must be a number from 0 to 65535"); return null; }
+    return a;
+  }
+  function write(method, path, body, ok) {
+    api(method, path, body).then(function () { say("werr", ok, false); refresh(); })
+      .catch(function (e) { say("werr", e.message); });
+  }
+  $("setval").addEventListener("click", function () {
+    var a = addr(), v = num("val");
+    if (a === null) { return; }
+    if (isNaN(v)) { say("werr", "Value must be a number"); return; }
+    write("PUT", base() + "/" + st.space + "/" + a + "/value", { value: v }, "Value set at " + a);
+  });
+  $("setraw").addEventListener("click", function () {
+    var a = addr(), vals;
+    if (a === null) { return; }
+    vals = $("raw").value.split(/[\s,]+/).filter(Boolean).map(Number);
+    if (!vals.length || vals.some(function (n) { return !isFinite(n); })) { say("werr", "Raw values must be a list of numbers"); return; }
+    write("PUT", base() + "/" + st.space + "/" + a, { values: vals }, "Wrote " + vals.length + " value" + (vals.length === 1 ? "" : "s") + " at " + a);
+  });
+  $("fkind").addEventListener("change", fields);
+  function fields() {
+    var k = $("fkind").value;
+    $("fdelay_l").hidden = k !== "delay";
+    $("fcode_l").hidden = k !== "exception";
+    $("fmode_l").hidden = k !== "corrupt";
+  }
+  $("fset").addEventListener("click", function () {
+    var k = $("fkind").value, b = { percent: num("fpercent") };
+    if (k === "delay") { b.delay_ms = num("fdelay"); }
+    if (k === "exception") { b.exception_code = num("fcode"); }
+    if (k === "corrupt") { b.mode = $("fmode").value; }
+    if (Object.keys(b).some(function (n) { return isNaN(b[n]); })) { say("ferr", "Fields must be numbers"); return; }
+    api("PUT", base() + "/faults/" + k, b).then(function () { say("ferr", "Set " + k, false); loadFaults(); })
+      .catch(function (e) { say("ferr", e.message); });
+  });
+
+  $("pause").addEventListener("click", function () {
+    st.paused = !st.paused;
+    this.textContent = st.paused ? "Resume" : "Pause";
+    this.setAttribute("aria-pressed", String(st.paused));
+  });
+  $("refresh").addEventListener("click", refresh);
+  $("prev").addEventListener("click", function () { st.page--; render(); });
+  $("next").addEventListener("click", function () { st.page++; render(); });
+  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; loadPoints(); });
+
+  function tabs() {
+    var t = $("tabs");
+    SPACES.forEach(function (s) {
+      var b = el("button", s);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(s === st.space));
+      b.addEventListener("click", function () {
+        st.space = s; st.page = 0;
+        Array.prototype.forEach.call(t.children, function (c) { c.setAttribute("aria-selected", String(c === b)); });
+        loadPoints();
+      });
+      t.appendChild(b);
+    });
+    KINDS.forEach(function (k) { $("fkind").appendChild(el("option", k)); });
+    fields();
+  }
+
+  tabs();
+  api("GET", "/api/devices").then(function (devices) {
+    var sel = $("device");
+    devices.forEach(function (d) {
+      var o = el("option", "unit " + d.unit + " - " + d.name);
+      o.value = d.unit;
+      sel.appendChild(o);
+    });
+    $("info").textContent = devices.length + " device" + (devices.length === 1 ? "" : "s");
+    if (!devices.length) { return; }
+    st.unit = devices[0].unit;
+    loadPoints();
+    setInterval(function () { if (!st.paused && !document.hidden && st.unit !== null) { refresh(); } }, EVERY_MS);
+  }).catch(function (e) { say("message", "Cannot read /api/devices: " + e.message); });
 }());
 </script>
 </main>

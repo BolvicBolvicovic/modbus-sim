@@ -22,6 +22,8 @@ enum
 	MAX_VALUES   = 512,	/**< a 1024-byte body holds at most this many numbers */
 	MAX_REGISTERS = 125,
 	MAX_BITS     = 2000,
+	POINTS_DEFAULT_LIMIT = 100,
+	POINTS_MAX_LIMIT     = 200,	/* ~125 bytes each: fits NET_OBS_HTTP_OUT */
 };
 
 static const char* const SPACE_NAMES[SPACE_COUNT] = {
@@ -257,6 +259,80 @@ list_devices(const net_obs_t* obs, char* out, u32 cap)
 	return used;
 }
 
+/* Value of the query parameter `name` (a decimal number); `*out` keeps its default when absent. */
+static bool
+query_uint(const char* query, const char* name, u32 max, u32* out)
+{
+	u32 n = (u32)strlen(name);
+
+	for (const char* q = query; *q;)
+	{
+		u32 len = (u32)strcspn(q, "&");
+
+		if (len > n &&
+		    memcmp(q, name, n) == 0 &&
+		    q[n] == '=')
+			return parse_uint(q + n + 1, len - n - 1, max, out);
+		q += len + (q[len] == '&');
+	}
+	return true;
+}
+
+/*
+ * One page of the points of a space, in address order. The response buffer holds a page of
+ * POINTS_MAX_LIMIT entries; `next` is the first address of the following page (null at the end),
+ * so a client that follows it never misses a point.
+ */
+static u32
+list_points(const device_t* dev, space_kind_t space, u32 from, u32 limit, char* out, u32 cap,
+	    int* status)
+{
+	static const char* const TYPES[] = {
+		[VT_U16] = "u16", [VT_S16] = "s16", [VT_U32] = "u32", [VT_S32] = "s32", [VT_F32] = "float32",
+		[VT_BOOL] = "bit", [VT_U64] = "u64", [VT_S64] = "s64", [VT_F64] = "float64", [VT_STRING] = "string",
+	};
+	static const char* const KINDS[] = {
+		[POINT_STATIC] = "static", [POINT_RAMP] = "ramp", [POINT_MODEL] = "model",
+		[POINT_MACHINE] = "machine", [POINT_CLOCK] = "clock",
+	};
+	const space_t*	sp = &dev->spaces[space];
+	u32		used = 0;
+	u32		n = 0;
+	u32		next = ADDRESS_SPACE_SIZE;
+
+	put(out, cap, &used, "{\"points\":[");
+	for (u32 a = from; a < ADDRESS_SPACE_SIZE; a++)
+	{
+		const point_t* pt;
+
+		if (sp->owner[a] == 0 ||
+		    (u32)sp->owner[a] > dev->point_count)
+			continue;
+		pt = &dev->points[sp->owner[a] - 1];
+		if (pt->space != space ||
+		    pt->address != a)
+			continue;
+		if (n == limit)
+		{
+			next = a;
+			break;
+		}
+		put(out, cap, &used,
+		    "%s{\"address\":%u,\"registers\":%u,\"type\":\"%s\",\"kind\":\"%s\",\"read_only\":%s,"
+		    "\"word_order\":\"%s\",\"byte_order\":\"%s\"}",
+		    n ? "," : "", a, point_width(pt), TYPES[pt->type],
+		    KINDS[pt->kind], pt->read_only ? "true" : "false",
+		    pt->order == WORDS_LOW_FIRST ? "low-first" : "high-first",
+		    pt->byte_order == BYTES_LITTLE ? "little" : "big");
+		n++;
+	}
+	if (next < ADDRESS_SPACE_SIZE)
+		put(out, cap, &used, "],\"next\":%u}", next);
+	else
+		put(out, cap, &used, "],\"next\":null}");
+	return used < cap ? used : fail(out, cap, status, 500, "response too large");
+}
+
 static u32
 list_faults(const device_t* dev, char* out, u32 cap)
 {
@@ -380,6 +456,32 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 		return fail(out, cap, status, 404, "unknown unit");
 	if (nseg == 2)
 		return fail(out, cap, status, 404, "unknown path");
+
+	if (seg_len[2] == 6 && memcmp(seg[2], "points", 6) == 0)
+	{
+		u32		from = 0;
+		u32		limit = POINTS_DEFAULT_LIMIT;
+		const char*	sp = strstr(query, "space=");
+		u32		sp_len = sp ? (u32)strcspn(sp + 6, "&") : 0;
+
+		if (nseg != 3)
+			return fail(out, cap, status, 404, "unknown path");
+		if (!get)
+			return fail(out, cap, status, 405, "method not allowed");
+		for (u32 s = 0; sp && (sp == query || sp[-1] == '&') && s < SPACE_COUNT; s++)
+		{
+			if (strlen(SPACE_NAMES[s]) == sp_len &&
+			    memcmp(SPACE_NAMES[s], sp + 6, sp_len) == 0)
+				space = s;
+		}
+		if (space == SPACE_COUNT)
+			return fail(out, cap, status, 400, "space must be coil, discrete, input or holding");
+		if (!query_uint(query, "from", 65535, &from) ||
+		    !query_uint(query, "limit", POINTS_MAX_LIMIT, &limit) ||
+		    limit == 0)
+			return fail(out, cap, status, 400, "from must be 0-65535 and limit 1-200");
+		return list_points(dev, (space_kind_t)space, from, limit, out, cap, status);
+	}
 
 	if (seg_len[2] == 6 && memcmp(seg[2], "faults", 6) == 0)
 	{

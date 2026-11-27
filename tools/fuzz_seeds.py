@@ -66,6 +66,8 @@ def http_seeds():
         'GET /api/devices/1/coil/0?count=24 HTTP/1.1\r\n\r\n',
         'GET /api/devices/1/holding/100/value HTTP/1.1\r\n\r\n',
         'GET /api/devices/1/faults HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/points?space=holding HTTP/1.1\r\n\r\n',
+        'GET /api/devices/1/points?space=input&from=5&limit=2 HTTP/1.1\r\n\r\n',
         'DELETE /api/devices/1/faults/delay HTTP/1.1\r\n\r\n',
     ]
     bodies = [

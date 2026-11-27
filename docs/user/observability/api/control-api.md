@@ -1,6 +1,6 @@
 # Runtime control API
 
-With `(control on)` the HTTP endpoint also serves a JSON API under `/api/` that changes the running server: read and write registers and bits, set a point's decoded value, and add or remove faults.
+With `(control on)` the HTTP endpoint also serves a JSON API under `/api/` that changes the running server: list the configured points, read and write registers and bits, set a point's decoded value, and add or remove faults.
 
 It is off by default, and while it is off every `/api/` path answers 404.
 
@@ -42,7 +42,7 @@ request with an `Origin` header must come from the same `http://host:port` with
 | Status | Meaning |
 |---|---|
 | 200 | Done |
-| 400 | Malformed JSON, an unknown or misplaced field, a missing required field, a bad number in the URL, or `count` out of range |
+| 400 | Malformed JSON, an unknown or misplaced field, a missing required field, a bad number in the URL, or `count`, `space`, `from` or `limit` out of range |
 | 403 | `Host` not allowed, or a cross-origin or non-JSON request with an `Origin` header (see Security) |
 | 404 | Unknown path, unit, space or fault kind, or `DELETE` of a fault that is not set |
 | 405 | Wrong method for that path |

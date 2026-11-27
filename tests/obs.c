@@ -558,6 +558,8 @@ feed_status(net_obs_t* obs, const char* request)
 	g_conn.in_len = (u32)strlen(request);
 	if (!net_obs_http_feed(obs, &g_conn) || !g_conn.writing)
 		return -1;
+	if (g_conn.out_len < sizeof(g_conn.out))
+		g_conn.out[g_conn.out_len] = '\0';	/* the buffer keeps older, longer responses */
 	sscanf(g_conn.out, "HTTP/1.1 %d", &code);
 	return code;
 }
@@ -696,6 +698,105 @@ TEST(ObsServesWebPageOnlyWithUi)
 	ASSERT_EQ(feed_status(&obs, "GET /other HTTP/1.1\r\nHost: localhost\r\n\r\n") == 404);
 	ASSERT_EQ(feed_status(&obs, "POST / HTTP/1.1\r\nHost: localhost\r\n\r\n") == 405);
 	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 403 && g_conn.ext == NULL);
+	arena_release(arena);
+}
+
+TEST(ObsListsPointsInPages)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { device_new(arena, 0) };
+	device_t*	big = device_new(arena, 0);
+	net_obs_t	obs;
+	point_t		p = { .kind = POINT_STATIC, .space = SPACE_HOLDING, .type = VT_U16 };
+	u32		seen = 0;
+	u32		from = 0;
+	char		request[160];
+
+	devs[0]->unit_id = 3;
+	ASSERT_EQ(device_add_point(devs[0], &p) == NULL);		/* holding 0 */
+	p.address = 10;
+	p.type    = VT_F32;
+	ASSERT_EQ(device_add_point(devs[0], &p) == NULL);		/* holding 10-11 */
+	p.space   = SPACE_COIL;
+	p.type    = VT_BOOL;
+	p.address = 0;
+	ASSERT_EQ(device_add_point(devs[0], &p) == NULL);
+	p = (point_t){ .kind = POINT_STATIC, .space = SPACE_HOLDING, .type = VT_U16 };
+	guarded_obs(&obs, devs, "127.0.0.1", "", false);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=holding HTTP/1.1\r\n\r\n") == 200);
+	ASSERT_EQ(strstr(g_conn.out,
+			 "{\"points\":[{\"address\":0,\"registers\":1,\"type\":\"u16\",\"kind\":\"static\","
+			 "\"read_only\":false,\"word_order\":\"high-first\",\"byte_order\":\"big\"},"
+			 "{\"address\":10,\"registers\":2,\"type\":\"float32\"") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "],\"next\":null}") != NULL);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=coil HTTP/1.1\r\n\r\n") == 200);
+	ASSERT_EQ(strstr(g_conn.out, "\"type\":\"bit\"") != NULL);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=input HTTP/1.1\r\n\r\n") == 200);
+	ASSERT_EQ(strstr(g_conn.out, "{\"points\":[],\"next\":null}") != NULL);
+	/* A page stops at `limit`; `next` is where the following page starts. */
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=holding&limit=1 HTTP/1.1\r\n\r\n") == 200);
+	ASSERT_EQ(strstr(g_conn.out, "],\"next\":10}") != NULL);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?limit=1&space=holding&from=10 HTTP/1.1\r\n\r\n") == 200);
+	ASSERT_EQ(strstr(g_conn.out, "{\"points\":[{\"address\":10,") != NULL &&
+		  strstr(g_conn.out, "],\"next\":null}") != NULL);
+	/* Bad requests are refused, never truncated. */
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/9/points?space=holding HTTP/1.1\r\n\r\n") == 404);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points HTTP/1.1\r\n\r\n") == 400);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=tape HTTP/1.1\r\n\r\n") == 400);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=holding&limit=201 HTTP/1.1\r\n\r\n") == 400);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=holding&limit=0 HTTP/1.1\r\n\r\n") == 400);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=holding&from=65536 HTTP/1.1\r\n\r\n") == 400);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points/x?space=holding HTTP/1.1\r\n\r\n") == 404);
+	ASSERT_EQ(feed_status(&obs, "POST /api/devices/3/points?space=holding HTTP/1.1\r\nContent-Length: 0\r\n\r\n") == 405);
+
+	/* The most points a device can have, walked page by page at the largest limit. */
+	big->unit_id = 4;
+	for (u32 a = 0; a < DEVICE_MAX_POINTS; a++)
+	{
+		p.address = a;
+		ASSERT_EQ(device_add_point(big, &p) == NULL);
+	}
+	devs[0] = big;
+	guarded_obs(&obs, devs, "127.0.0.1", "", false);
+	for (;;)
+	{
+		const char* next;
+
+		snprintf(request, sizeof(request),
+			 "GET /api/devices/4/points?space=holding&from=%u&limit=200 HTTP/1.1\r\n\r\n", from);
+		ASSERT_EQ(feed_status(&obs, request) == 200);
+		for (const char* q = g_conn.out; (q = strstr(q, "{\"address\":")) != NULL; q++)
+			seen++;
+		next = strstr(g_conn.out, "],\"next\":");
+		ASSERT_EQ(next != NULL);
+		if (strncmp(next, "],\"next\":null}", 14) == 0)
+			break;
+		ASSERT_EQ(sscanf(next + 9, "%u", &from) == 1);
+	}
+	ASSERT_EQ(seen == DEVICE_MAX_POINTS);
+	arena_release(arena);
+}
+
+TEST(ObsWebPageHasTheMainElements)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { make_device(arena, 1, "a") };
+	net_obs_t	obs;
+	static const char* const ids[] = {
+		"id=\"device\"", "id=\"tabs\"", "id=\"points\"", "id=\"refresh\"", "id=\"pause\"",
+		"id=\"faults\"", "id=\"message\"", "</html>",
+	};
+
+	guarded_obs(&obs, devs, "127.0.0.1", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n") == 200 && g_conn.ext != NULL);
+	for (u32 i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
+	{
+		bool found = false;
+
+		for (u32 at = 0; at + strlen(ids[i]) <= g_conn.ext_len && !found; at++)
+			found = memcmp(g_conn.ext + at, ids[i], strlen(ids[i])) == 0;
+		ASSERT_EQ(found);
+	}
 	arena_release(arena);
 }
 

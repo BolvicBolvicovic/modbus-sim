@@ -1,7 +1,8 @@
 # Web UI
 
-A browser UI is served by the HTTP endpoint. This is the first version: a small page that lists the
-devices of the running server (it reads `/api/devices`). It is off by default.
+A browser UI is served by the HTTP endpoint. It is one self-contained page (no external resources,
+no frameworks) over the [control API](api/control-api.md) that shows and changes a running server:
+tables and values, and faults. It is off by default.
 
 ## Opening it
 
@@ -16,6 +17,29 @@ turns control on, with the usual WARN in the log.
 
 The start-up summary (and `--check`) prints the address, for example
 `web UI on http://127.0.0.1:9102/`. Open it in a browser on the same machine.
+
+## What it shows and edits
+
+- **Device**: the selector lists the devices (`/api/devices`).
+- **Points**: one tab per table (`coil`, `discrete`, `input`, `holding`) lists the configured points
+  from [List points](api/api-list-points.md): address, type (strings show their register count), kind
+  (`static`, `ramp`, `model`, `clock`, `machine`), a read-only marker, the decoded value and the raw
+  registers. Values are decoded in the browser from raw reads, honouring each point's word and byte
+  order. The list is paged by 50 points.
+- **Refresh**: the visible page is read again every second, one raw read per run of adjacent points
+  (at most 125 registers or 2000 bits), only while the browser tab is visible. `Pause` stops it and
+  `Refresh now` reads once. Switching device or table, or paging, reloads the list.
+- **Write**: pick an address (click it in the list) and either set the decoded value of the point
+  ([Set a value](api/api-set-value.md)) or write raw registers from that address, comma-separated
+  ([Write values](api/api-write-values.md)). A refusal from the server, for example a string point,
+  a machine-driven point or an undefined address, is shown under the form.
+- **Faults**: lists the faults of the device with a `Clear` button each, and a form to set one:
+  kind, `percent`, and `delay_ms`, `exception_code` or `mode` where the kind takes them
+  ([Set a fault](api/api-set-fault.md)). Faults from a schedule are marked `scheduled`; setting a
+  fault over one replaces it.
+
+Writes change the running device exactly as the API does: a raw write turns a ramp or model into a
+static value, and a value write holds the point until the device restarts.
 
 ## Security
 
