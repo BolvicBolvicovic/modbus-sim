@@ -26,7 +26,17 @@ The start-up summary (and `--check`) prints the address, for example
   (`static`, `ramp`, `model`, `clock`, `machine`), a read-only marker, the decoded value and the raw
   registers. Values are decoded in the browser from raw reads, honouring each point's word and byte
   order. The list is paged by 50 points.
-- **Refresh**: the visible page is read again every second, one raw read per run of adjacent points
+- **Table / Plot**: a switch above the list. `Table` is the list; `Plot` shows a line chart of the
+  points ticked in the `Plot` column of the list (strings cannot be plotted). Up to 8 points, of any
+  table, can be plotted; the selection belongs to the device and is cleared when you switch device.
+  Each series is sampled on every refresh, wherever it is (another page or table), in both views, and
+  keeps the samples of the last 5 minutes (at most 3000); the chart shows the last 5 minutes (`-300s` to `now`) with an
+  auto-scaled vertical axis, bits as steps, and a gap where a read failed. The legend gives colour,
+  table and address, type, latest value, and a `×` button to remove the series. Samples are
+  kept in the browser only and are lost on reload.
+- **Refresh**: the visible page and the plotted points are read again every second by default (the
+  `Refresh every` selector offers 100 ms, 250 ms, 500 ms, 1 s, 2 s, 5 s and 10 s, applies at once to
+  both views and is remembered in the browser; a read still running makes the next tick skip), one raw read per run of adjacent points
   (at most 125 registers or 2000 bits), only while the browser tab is visible. `Pause` stops it and
   `Refresh now` reads once. Switching device or table, or paging, reloads the list.
 - **Write**: pick an address (click it in the list) and either set the decoded value of the point
