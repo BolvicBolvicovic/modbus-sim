@@ -28,6 +28,12 @@ log_set_sink(log_sink_t sink, void* ctx)
 	g_sink_ctx = ctx;
 }
 
+log_sink_t
+log_get_sink(void)
+{
+	return g_sink;
+}
+
 void
 log_set_prefix(const char* prefix)
 {

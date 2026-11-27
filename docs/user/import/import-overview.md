@@ -29,7 +29,7 @@ and write nothing.
 |---|---|
 | `-o FILE` | write the config to `FILE` instead of stdout |
 | `--strict` | treat every warning as an error: exit status 1, nothing written |
-| `--check` | run `$MOGBUS_BIN` (default `./mogbus`) `--check` on the result; a failing check exits 1 |
+| `--check` | run `$MOGBUS_BIN` (default `./mogbus`) `--check=verbose` on the result; a failing check exits 1 |
 | `--unit-id N` | Modbus unit id of the device (default 1) |
 | `--name TEXT` | device name (default: the file name, or the pymodbus device name) |
 

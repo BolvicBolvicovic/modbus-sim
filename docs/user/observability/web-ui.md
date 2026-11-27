@@ -15,7 +15,7 @@ turns control on, with the usual WARN in the log.
 - Library: `http_ui` in `mogbus_server_options_t` (Python `ServerOptions.http_ui`), with
   `http_bind_address` set.
 
-The start-up summary (and `--check`) prints the address, for example
+The start-up summary (and `--check=verbose`) prints the address, for example
 `web UI on http://127.0.0.1:9102/`. Open it in a browser on the same machine.
 
 ## Using it

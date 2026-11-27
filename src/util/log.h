@@ -42,6 +42,7 @@ typedef void (*log_sink_t)(void* ctx, log_level_t level, const char* message);
  * 1023 bytes are truncated. In LOG_FORMAT_JSON the sink receives the whole JSON object.
  */
 void	log_set_sink(log_sink_t sink, void* ctx);
+log_sink_t	log_get_sink(void);
 void	log_set_level(log_level_t level);
 void	log_set_format(log_format_t format);
 

@@ -1325,7 +1325,7 @@ def main(argv=None):
             tmp.close()
             path = tmp.name
         try:
-            r = subprocess.run([os.environ.get("MOGBUS_BIN", "./mogbus"), "--check", path],
+            r = subprocess.run([os.environ.get("MOGBUS_BIN", "./mogbus"), "--check=verbose", path],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             sys.stderr.write(r.stdout)
             if r.returncode != 0:

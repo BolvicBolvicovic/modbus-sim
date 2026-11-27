@@ -115,6 +115,7 @@ MOGBUS_API const char*	mogbus_version(void);
  */
 #define MOGBUS_MAX_DEVICES	16
 #define MOGBUS_MAX_SERVERS	8	/**< Maximum number of servers in one context. */
+#define MOGBUS_MAX_POINTS	8192	/**< Maximum number of points of one device. */
 
 /* ---- Context ---- */
 
@@ -948,6 +949,13 @@ enum mogbus_tls_version_t
  * without one serves the devices that list no server, which is every device unless some were
  * assigned. The devices are picked when the server is created. A context holds up to
  * MOGBUS_MAX_SERVERS servers, which mogbus_step() and mogbus_run() drive together.
+ *
+ * `show_registers_ms` is a setting of the context rather than of the server: while any live
+ * server has it set, mogbus_step() (and so mogbus_run()) shows the points of every device of
+ * the context at the smallest interval asked for. On a terminal that is one table redrawn in
+ * place, with the log lines in a pane below it; otherwise (a pipe, a file, or a JSON log
+ * format) the full snapshot is printed as text or JSON lines, then only the changes. Read
+ * values go to stdout, not through mogbus_set_log_sink().
  */
 struct mogbus_server_options_t
 {
@@ -980,6 +988,7 @@ struct mogbus_server_options_t
 	bool		http_ui;		/**< serve the web UI on `/` (needs the endpoint; implies http_control) */
 	const char*	http_allowed_hosts;	/**< extra Host names /api/ and the UI accept (loopback and the bind address always pass): up to 8 comma-separated names; NULL = none */
 	const char*	id;			/**< names the server: unique among the live servers of the context, at most 31 bytes; prefixes its log lines; NULL = none */
+	uint32_t	show_registers_ms;	/**< live register view of the context, 10 to 60000 ms; 0 = off (see below) */
 };
 
 /**

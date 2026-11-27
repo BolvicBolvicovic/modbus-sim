@@ -152,7 +152,7 @@ TEST(MultiServerCheckShowsEachServerAndItsDevices)
 	char	out[4096];
 
 	ASSERT_EQ(write_config(&tcp_port, &rtu_port, &udp_port));
-	ASSERT_EQ(run_mogbus("--check", out, sizeof(out)) == 0);
+	ASSERT_EQ(run_mogbus("--check=verbose", out, sizeof(out)) == 0);
 	ASSERT_EQ(strstr(out, "[plant] 1 device on 127.0.0.1:") != NULL);
 	ASSERT_EQ(strstr(out, "[gateway] 1 device, RTU-over-TCP") != NULL);
 	ASSERT_EQ(strstr(out, "[legacy] 1 device, UDP") != NULL);

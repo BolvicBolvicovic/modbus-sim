@@ -18,6 +18,7 @@ server_options_from_config(config_t* config, u32 index)
 		.fd                       = -1,
 		.seed                     = srv->seed,
 		.idle_timeout_ms          = srv->idle_timeout_ms,
+		.show_registers_ms        = srv->show_registers_ms,
 		.frame_gap_ms             = srv->frame_gap_ms,
 		.baud                     = srv->baud,
 		.strict_t15               = srv->strict_t15,

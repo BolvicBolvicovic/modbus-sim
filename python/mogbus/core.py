@@ -564,6 +564,7 @@ class ServerOptions:
     @param http_ui Serve the web UI on `/` (needs the endpoint; implies `http_control`).
     @param http_allowed_hosts Extra Host names `/api/` and the UI accept (loopback and the bind address always pass): a comma-separated string or a list of at most 8 names.
     @param id Names the server (at most 31 bytes, unique in the context); it serves the devices that list it with `Device.add_server`, a server without one the devices that list none.
+    @param show_registers_ms Show the point values of the context every this many milliseconds (10 to 60000; 0 is off): a live table when stdout is a terminal, text lines otherwise. Written by `mogbus_step()`, so it needs a stepping `Server`.
     """
     mode: Union[str, int, Mode] = Mode.TCP
     bind_address: Optional[str] = "127.0.0.1"
@@ -594,6 +595,7 @@ class ServerOptions:
     http_ui: bool = False
     http_allowed_hosts: Union[None, str, Sequence[str]] = None
     id: Optional[str] = None
+    show_registers_ms: int = 0
 
     def _to_c(self):
         """Returns (struct, keepalive). The struct points into the bytes objects in keepalive."""

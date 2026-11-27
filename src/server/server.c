@@ -3,7 +3,6 @@
  * @brief Transport-independent server facade: opens PTYs and serial devices and drives the selected transport.
  */
 #include "server/server.h"
-#include "server/server_limits.h"
 #include "os/os_error.h"
 #include "os/os_wait.h"
 #include "util/log.h"

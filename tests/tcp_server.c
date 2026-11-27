@@ -150,7 +150,7 @@ tls_check_run(const char* tls_options, int expected_status, const char* stderr_n
 {
 	const char* bin   = getenv("MOGBUS_BIN");
 	char	    config[512];
-	char*	    argv[] = { (char*)(bin ? bin : "./mogbus"), "--check",
+	char*	    argv[] = { (char*)(bin ? bin : "./mogbus"), "--check=verbose",
 			       g_tls_check.config, NULL };
 	int	    status = 0;
 	bool	    ok;

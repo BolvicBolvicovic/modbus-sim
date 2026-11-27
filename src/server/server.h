@@ -15,15 +15,55 @@
 #include "net/rtu_udp_server.h"
 #include "net/tcp_server.h"
 #include "net/udp_server.h"
-#include "server/server_limits.h"
-#include "server/server_mode.h"
 #include "os/os_serial.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
+typedef enum server_mode_t server_mode_t;
 typedef struct device_t device_t;
 typedef struct server_options_t server_options_t;
 typedef struct server_t server_t;
+
+/**
+ * @brief Limits and defaults shared by the config loader and the public API.
+ */
+enum
+{
+	SERVER_MAX_DEVICES			= 16,
+	SERVER_MAX_SERVERS			= 8,	/**< servers per config and per API context */
+	SERVER_ID_MAX				= 32,	/**< longest server id plus the NUL */
+	SERVER_DEFAULT_PORT			= 1502,
+	SERVER_DEFAULT_HTTP_PORT		= 9102,
+	SERVER_DEFAULT_IDLE_TIMEOUT_MS		= 0,
+	SERVER_DEFAULT_TLS_HANDSHAKE_TIMEOUT_MS	= 10000,
+	SERVER_DEFAULT_BAUD			= 0,	/**< 0 = unknown; derive RTU timing from tty when possible */
+	SERVER_BIND_MAX				= 128,
+	SERVER_PATH_MAX				= 256,
+	SERVER_TLS_PATH_MAX			= 256,
+	SERVER_TLS_CIPHER_MAX			= 512,
+};
+
+/**
+ * @brief Transport selected by (server (mode NAME)) or by a host program.
+ *
+ * The *_FD modes serve an already-open byte-stream fd (socketpair, PTY master, ...) borrowed from the host;
+ * the config file cannot select them.
+ */
+enum server_mode_t
+{
+	SERVER_MODE_TCP,
+	SERVER_MODE_RTU_PTY,
+	SERVER_MODE_RTU_DEVICE,
+	SERVER_MODE_RTU_TCP,
+	SERVER_MODE_ASCII_PTY,
+	SERVER_MODE_ASCII_DEVICE,
+	SERVER_MODE_ASCII_TCP,
+	SERVER_MODE_RTU_FD,
+	SERVER_MODE_ASCII_FD,
+	SERVER_MODE_UDP,
+	SERVER_MODE_ASCII_UDP,
+	SERVER_MODE_RTU_UDP,
+};
 
 /**
  * @brief What to run, independent of any config file.
@@ -55,6 +95,7 @@ struct server_options_t
 	u16		http_port;
 	bool		http_control;		/**< serve the runtime control API under /api/ */
 	bool		http_ui;		/**< serve the web page on `/`; implies http_control */
+	u32		show_registers_ms;	/**< live register view of the API context (see view/view.h); not used by the transports; 0 = off */
 	const char*	http_allowed_hosts;	/**< extra Host names for /api/ and the page, comma-separated; NULL = none */
 	device_t**	devices;
 	u32		device_count;

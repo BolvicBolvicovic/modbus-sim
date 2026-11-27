@@ -276,7 +276,8 @@
                 "docs/user/config/server/port.md",
                 "docs/user/config/server/bind.md",
                 "docs/user/config/server/seed.md",
-                "docs/user/config/server/idle-timeout-ms.md"
+                "docs/user/config/server/idle-timeout-ms.md",
+                "docs/user/config/server/show-registers.md"
               ]
             },
             {

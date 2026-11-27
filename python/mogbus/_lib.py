@@ -92,6 +92,7 @@ class ServerOptionsC(ctypes.Structure):
         ("http_ui", ctypes.c_bool),
         ("http_allowed_hosts", ctypes.c_char_p),
         ("id", ctypes.c_char_p),
+        ("show_registers_ms", ctypes.c_uint32),
     ]
 
 

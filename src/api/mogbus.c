@@ -18,8 +18,8 @@
 #include "os/os_socket.h"
 #include "os/os_time.h"
 #include "server/server.h"
-#include "server/server_limits.h"
 #include "util/log.h"
+#include "view/view.h"
 #include "vlib/arena.h"
 #if WITH_CONFIG
 #include "config/config.h"
@@ -31,6 +31,8 @@
 #include <string.h>
 
 /** @brief The public enums are mapped by value, so they must match the internal ones. */
+_Static_assert(VIEW_MAX_DEVICES == SERVER_MAX_DEVICES, "view and context device limits differ");
+_Static_assert(MOGBUS_MAX_POINTS == DEVICE_MAX_POINTS, "public and internal point limits differ");
 _Static_assert((int)MOGBUS_COIL == (int)SPACE_COIL &&
 	       (int)MOGBUS_DISCRETE == (int)SPACE_DISCRETE &&
 	       (int)MOGBUS_INPUT == (int)SPACE_INPUT &&
@@ -136,6 +138,7 @@ struct mogbus_t
 	bool		has_config;
 #endif
 	net_poll_group_t group;		/**< scratch of the shared wait of mogbus_step() */
+	view_t		view;		/**< live register view, open while a server asked for it */
 	device_t*	devices[SERVER_MAX_DEVICES];
 	u32		device_count;
 	mogbus_server_t* servers[MOGBUS_MAX_SERVERS];
@@ -233,6 +236,7 @@ mogbus_destroy(mogbus_t* ctx)
 		if (ctx->servers[i] && ctx->servers[i]->in_use)
 			mogbus_server_close(ctx->servers[i]);
 	}
+	view_close(&ctx->view);
 	os_mutex_destroy(&ctx->lock);
 	arena_release(ctx->arena);	/* the context lives in its own arena */
 }
@@ -1018,6 +1022,11 @@ validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st, devic
 	{
 		return fail(ctx, MOGBUS_ERR_INVALID, "this mode needs an open fd");
 	}
+	if (o->show_registers_ms != 0 &&
+	    (o->show_registers_ms < 10 || o->show_registers_ms > 60000))
+	{
+		return fail(ctx, MOGBUS_ERR_INVALID, "show_registers_ms must be 0 or 10 to 60000");
+	}
 	if ((o->data_bits != 7 && o->data_bits != 8) ||
 	    (o->stop_bits != 1 && o->stop_bits != 2) ||
 	    (unsigned)o->parity > PARITY_SPACE)
@@ -1095,6 +1104,10 @@ create_server(mogbus_t* ctx, server_options_t o, mogbus_server_t** out)
 		return error;
 	}
 
+	if (o.show_registers_ms &&
+	    !view_open(&ctx->view, ctx->arena, o.show_registers_ms))
+		return fail(ctx, MOGBUS_ERR_NOMEM, "out of memory opening the register view");
+
 	o.devices      = s->devices;
 	o.device_count = s->device_count;
 	rc = server_init(&s->server, &o);
@@ -1129,6 +1142,7 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 	}
 	*o = (server_options_t){
 		.id                       = in->id,
+		.show_registers_ms        = in->show_registers_ms,
 		.mode                     = (server_mode_t)in->mode,
 		.bind_address             = in->bind_address ? in->bind_address : "127.0.0.1",
 		.http_bind_address        = in->http_bind_address,
@@ -1231,6 +1245,7 @@ mogbus_config_server_options_at(mogbus_t* ctx, size_t index, mogbus_server_optio
 	o = server_options_from_config(&ctx->config, (u32)index);
 	*out = (mogbus_server_options_t){
 		.id                             = o.id,
+		.show_registers_ms              = o.show_registers_ms,
 		.mode                           = (mogbus_mode_t)o.mode,
 		.bind_address                   = o.bind_address,
 		.port                           = o.port,
@@ -1368,6 +1383,7 @@ int
 mogbus_step(mogbus_t* ctx, int max_wait_ms)
 {
 	server_t*	servers[MOGBUS_MAX_SERVERS] = { NULL };
+	int		rc;
 	LOCK(ctx);
 
 	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
@@ -1376,7 +1392,17 @@ mogbus_step(mogbus_t* ctx, int max_wait_ms)
 		    ctx->servers[i]->in_use)
 			servers[i] = &ctx->servers[i]->server;
 	}
-	return server_group_step(servers, MOGBUS_MAX_SERVERS, &ctx->group, max_wait_ms);
+	if (ctx->view.interval_ms)
+	{
+		u32 due = view_wait_ms(&ctx->view, os_now_ms());
+
+		if (max_wait_ms < 0 ||
+		    (u32)max_wait_ms > due)
+			max_wait_ms = due > 60000 ? 60000 : (int)due;
+	}
+	rc = server_group_step(servers, MOGBUS_MAX_SERVERS, &ctx->group, max_wait_ms);
+	view_update(&ctx->view, ctx->devices, ctx->device_count, os_now_ms());
+	return rc;
 }
 
 int
@@ -1394,6 +1420,7 @@ mogbus_run(mogbus_t* ctx)
 		    ctx->servers[i]->in_use)
 			server_close(&ctx->servers[i]->server);
 	}
+	view_close(&ctx->view);
 	return rc == MOGBUS_STEP_ERROR ? 1 : 0;
 }
 

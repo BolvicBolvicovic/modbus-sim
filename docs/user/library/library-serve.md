@@ -116,6 +116,10 @@ options.http_ui = true;
 
 `http_bind_address` (NULL = off) serves `/healthz`, `/readyz` and `/metrics`; `http_control` adds the unauthenticated `/api/` [runtime control API](../observability/api/control-api.md); `http_ui` serves the [web UI](../observability/web-ui.md) on `/` and implies the control API. `http_allowed_hosts` lists extra Host names those two accept. The endpoint is part of the same step loop; keep it on loopback, since the control API has no authentication.
 
+## Showing the register values
+
+`show_registers_ms` (10 to 60000; 0 = off) asks the context to show the points of all its devices while it is stepped: a table redrawn in place when stdout is a terminal, text or JSON lines otherwise (full snapshot, then changes), the same view as `mogbus --show-registers`. It is drawn by @ref mogbus_step "mogbus_step()" and @ref mogbus_run "mogbus_run()", at the smallest interval any live server asked for, and the log lines go below the table while it is on (a host log sink installed with @ref mogbus_set_log_sink "mogbus_set_log_sink()" keeps them). See [show-registers](../config/server/show-registers.md).
+
 ## Next
 
 - [Step 3: Simulate the process from the host](library-simulate.md)

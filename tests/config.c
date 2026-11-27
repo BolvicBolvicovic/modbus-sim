@@ -2239,6 +2239,26 @@ TEST(ConfigHttpUiAndAllowedHosts)
 	run_cases(cases, ARRAY_COUNT(cases));
 }
 
+TEST(ConfigShowRegisters)
+{
+	config_t config = load_ok("(server (mode tcp))" DEV);
+
+	ASSERT_EQ(config.servers[0].show_registers_ms == 0);
+	config = load_ok("(server (mode tcp) (show-registers 250))" DEV);
+	ASSERT_EQ(config.servers[0].show_registers_ms == 250);
+	config = load_ok("(server (mode udp) (show-registers 10))" DEV);
+	ASSERT_EQ(config.servers[0].show_registers_ms == 10);
+	config = load_ok("(server (mode rtu-pty) (show-registers 60000))" DEV);
+	ASSERT_EQ(config.servers[0].show_registers_ms == 60000);
+	static const struct cfg_case cases[] = {
+		{ "(server (show-registers 9))" DEV, "show-registers" },
+		{ "(server (show-registers 60001))" DEV, "show-registers" },
+		{ "(server (show-registers fast))" DEV, "show-registers" },
+		{ "(server (show-registers 100) (show-registers 200))" DEV, "more than once" },
+	};
+	run_cases(cases, ARRAY_COUNT(cases));
+}
+
 TEST(ConfigUserDefinedFunctionCodes)
 {
 	config_t			config = { 0 };

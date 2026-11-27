@@ -55,7 +55,31 @@ TEST(ApiVersionAndDefaults)
 	ASSERT_EQ(o.port == 1502 && o.fd == -1 && o.idle_timeout_ms == 0);
 	ASSERT_EQ(o.data_bits == 8 && o.parity == MOGBUS_PARITY_NONE && o.stop_bits == 1);
 	ASSERT_EQ(o.tls_require_client_certificate && o.tls_handshake_timeout_ms == 10000);
+	ASSERT_EQ(o.show_registers_ms == 0);
 	mogbus_destroy(NULL);
+}
+
+TEST(ApiShowRegistersMsIsValidated)
+{
+	mogbus_t*		ctx = NULL;
+	mogbus_device_t*	dev;
+	mogbus_point_t		p = holding(0, 1);
+	mogbus_server_options_t	o = mogbus_server_options_defaults();
+	static const uint32_t	values[] = { 0, 1, 9, 10, 1000, 60000, 60001 };
+
+	mogbus_create(&ctx);
+	mogbus_add_device(ctx, 1, "d", &dev);
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+	for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++)
+	{
+		o.show_registers_ms = values[i];
+		ASSERT_EQ((mogbus_server_check(ctx, &o) == MOGBUS_OK) ==
+			  (values[i] == 0 || (values[i] >= 10 && values[i] <= 60000)));
+	}
+	o.show_registers_ms = 5;
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_ERR_INVALID &&
+		  strstr(mogbus_last_error(ctx), "show_registers_ms") != NULL);
+	mogbus_destroy(ctx);
 }
 
 TEST(ApiDevicesPointsAndValues)

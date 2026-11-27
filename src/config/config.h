@@ -9,8 +9,7 @@
 #include "vlib/c_types.h"
 #include "vlib/arena.h"
 #include "device/device.h"
-#include "server/server_limits.h"
-#include "server/server_mode.h"
+#include "server/server.h"
 #include "os/os_serial.h"
 #include <stdbool.h>
 
@@ -48,6 +47,7 @@ struct config_t
 		char		path[SERVER_PATH_MAX];
 		u16		port;
 		u32		seed;			/**< seed for fault dice; 0 = fixed default */
+		u32		show_registers_ms;	/**< (show-registers MS): live register view; 0 = off */
 		u32		idle_timeout_ms;	/**< close idle connections after N ms; 0 = disabled */
 		u32		frame_gap_ms;		/**< RTU inter-frame silence override in ms; 0 = auto (baud-derived or default) */
 		u32		baud;			/**< RTU serial baud rate; 0 = unknown */
