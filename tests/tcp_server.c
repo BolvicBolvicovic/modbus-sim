@@ -3341,7 +3341,7 @@ TEST(NetWebFlagServesPageAndGuardsApi)
 	u16		http_port = ts_free_port();
 	char		options[64];
 	char		req[256];
-	static char	text[65536];	/* the page is about 15 KB */
+	static char	text[262144];	/* the page is about 72 KB */
 	const char*	body;
 	unsigned	length = 0;
 	bool		ok;
