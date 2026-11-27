@@ -1,6 +1,6 @@
 <p align="center">
 
-![](docs/assets/mogbus-logo.svg)
+![mogbus](docs/assets/mogbus-lockup.svg)
 
 </p>
 
