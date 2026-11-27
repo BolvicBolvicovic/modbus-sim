@@ -45,7 +45,7 @@ page, from [List points](api/api-list-points.md). Each row shows:
 ### Keep values fresh
 
 The visible page is read again every second. The `Refresh every` selector goes from 10 ms to 10 s,
-shows the rate actually achieved and is remembered by the browser; a tick is skipped while the
+shows the rate actually achieved in the header and is remembered by the browser; a tick is skipped while the
 previous read is still running. Reads are batched (one request per run of adjacent points) and only
 happen while the browser tab is visible. `Pause` stops refreshing and `Refresh now` reads once.
 
@@ -84,7 +84,7 @@ Every plotted point is sampled on each refresh, in both views, and the browser k
 | Freeze the view | `Pause` |
 | Measure | drag across the chart and release: a band stays until you click, press Esc or drag again, and the line under the chart gives `Δt` and each point's value at both edges and the difference |
 
-Gridlines are at absolute wall-clock times. The vertical axis fits the plotted values, bits are
+Times on the axis, the window range and the measure line are elapsed since the plot started (`m:ss`, with milliseconds on short windows), not the clock of the machine. `Reset` clears the samples of every plotted point and restarts the time at `0:00`; the ticked points stay. The vertical axis fits the plotted values, bits are
 drawn as steps and a failed read leaves a gap. Dense series are reduced to the minimum and maximum of
 each pixel column, so drawing cost does not depend on the sampling rate.
 
