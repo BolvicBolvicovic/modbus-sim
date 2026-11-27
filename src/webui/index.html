@@ -41,10 +41,23 @@ input { width: 9rem; }
 #plot svg { width: 100%; height: 300px; display: block; }
 #plot .grid { stroke: var(--line); stroke-width: 1; }
 #plot .tick { fill: var(--muted); font-size: 11px; }
+#plot { touch-action: pan-y; user-select: none; cursor: crosshair; }
+#plot .band { fill: var(--acc); fill-opacity: 0.16; }
+#plot .edge { stroke: var(--acc); stroke-width: 1; }
+#plot .nowline { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+#live[aria-pressed="true"] { border-color: var(--acc); color: var(--acc); font-weight: 600; }
+#live[aria-pressed="false"] { color: var(--muted); }
+#pcombo { position: relative; display: inline-block; }
+#padd_list { position: absolute; top: 100%; left: 0; min-width: 100%; width: max-content; max-width: 90vw; max-height: 16rem; overflow-y: auto; z-index: 20; margin-top: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25); }
+#padd_list [role="option"] { padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+#padd_list [role="option"].active { background: var(--line); }
+#padd_list .empty { padding: 3px 8px; color: var(--muted); }
+#pscroll { width: 100%; padding: 0; margin: 4px 0 0; }
+#measure { min-height: 1.5em; margin-top: 4px; }
 #plot .line { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; }
-.legend span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 4px; }
-.legend .item { display: inline-flex; align-items: center; gap: 4px; }
+.legend span.sw, #measure span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 4px; }
+.legend .item, #measure .item { display: inline-flex; align-items: center; gap: 4px; }
 </style>
 </head>
 <body>
@@ -81,15 +94,20 @@ input { width: 9rem; }
 <button id="zoomout" type="button" aria-label="Zoom out">&minus;</button>
 <button id="zoomin" type="button" aria-label="Zoom in">+</button>
 <span id="winlabel" class="muted"></span>
+<button id="live" type="button" aria-pressed="true" title="Follow the newest samples">Live</button>
+<span id="vrange" class="muted"></span>
 </div>
-<div id="plot"></div>
+<div id="plot" tabindex="0" aria-label="Plot: arrow keys scroll in time, drag to measure"></div>
+<input type="range" id="pscroll" min="0" max="0" value="0" step="1" aria-label="Scroll through the plot history">
+<div id="measure" class="muted" role="status"></div>
 <div id="legend" class="legend"></div>
 <div class="bar" style="margin-top:8px">
 <label>Add point <select id="padd_space"></select></label>
-<input id="padd" placeholder="filter by address or type" autocomplete="off" aria-label="Filter the points to add">
-<select id="padd_list" multiple size="6" aria-label="Points to add"></select>
-<button id="padd_go" type="button">Add</button>
-<span class="muted">Ctrl (⌘) or Shift-click to pick several</span>
+<span id="pcombo">
+<input id="padd" role="combobox" aria-expanded="false" aria-controls="padd_list" aria-autocomplete="list" placeholder="filter by address or type" autocomplete="off" aria-label="Filter the points to add">
+<div id="padd_list" role="listbox" aria-multiselectable="true" aria-label="Points to add" hidden></div>
+</span>
+<button id="padd_go" type="button">Add ticked</button>
 </div>
 </div>
 
@@ -271,7 +289,7 @@ input { width: 9rem; }
     if (!batch) { say("message", "", false); refresh(); }
     return true;
   }
-  function selChanged() { syncChecks(); fillAdd(); requestDraw(); }
+  function selChanged() { syncChecks(); fillAdd(); updateMeasure(); requestDraw(); }
   function toggleSeries(space, pt, cb) {
     var ser = findSeries(space, pt.address);
     if (!cb.checked) {
@@ -405,9 +423,30 @@ input { width: 9rem; }
     return more(0);
   }
   function pointLabel(space, pt) { return space + " " + pt.address + " \u00b7 " + pt.type + " \u00b7 " + pt.kind; }
+  /* Add point combobox: the filter input plus a popup list overlaying the page; options are ticked, not selected. */
+  var pticks = {}, pactive = -1;
+  function popen(open) {
+    $("padd_list").hidden = !open;
+    $("padd").setAttribute("aria-expanded", String(open));
+    if (!open) { pactive = -1; $("padd").removeAttribute("aria-activedescendant"); }
+  }
+  function popts() { return $("padd_list").querySelectorAll('[role="option"]'); }
+  function pmark(o) { o.firstChild.textContent = pticks[o.dataset.addr] ? "\u2611 " : "\u2610 "; o.setAttribute("aria-selected", String(!!pticks[o.dataset.addr])); }
+  function ptoggle(o) { pticks[o.dataset.addr] = !pticks[o.dataset.addr]; pmark(o); }
+  function pactivate(i) {
+    var os = popts();
+    if (!os.length) { return; }
+    if (pactive >= 0 && os[pactive]) { os[pactive].classList.remove("active"); }
+    pactive = (i + os.length) % os.length;
+    os[pactive].classList.add("active");
+    os[pactive].scrollIntoView({ block: "nearest" });
+    $("padd").setAttribute("aria-activedescendant", os[pactive].id);
+  }
   function fillAdd() {
     var space = $("padd_space").value, list = $("padd_list"), unit = st.unit;
     clear(list);
+    pactive = -1;
+    $("padd").removeAttribute("aria-activedescendant");
     if (unit === null || !space) { return; }
     tablePoints(space).then(function (pts) {
       var text = $("padd").value.trim().toLowerCase();
@@ -417,37 +456,48 @@ input { width: 9rem; }
         var o, label = pointLabel(space, pt);
         if (pt.type === "string" || findSeries(space, pt.address) !== null) { return; }
         if (text !== "" && label.toLowerCase().indexOf(text) < 0) { return; }
-        o = el("option", label);
-        o.value = String(pt.address);
+        o = el("div", "", "");
+        o.id = "padd_o" + pt.address;
+        o.setAttribute("role", "option");
+        o.dataset.addr = String(pt.address);
+        o.appendChild(el("span", ""));
+        o.appendChild(el("span", label));
+        pmark(o);
         list.appendChild(o);
       });
+      if (!list.firstChild) { list.appendChild(el("div", "No matching point", "empty")); }
     }).catch(function (e) { say("message", "Cannot list points: " + e.message); });
   }
   function addFromList() {
-    var space = $("padd_space").value, list = $("padd_list"), opts = [], i, added = 0, skipped = 0;
+    var space = $("padd_space").value, list = $("padd_list"), addrs = [], os = popts(), skipped = 0, added = 0;
     if (st.unit === null) { return; }
-    for (i = 0; i < list.options.length; i++) {
-      if (list.options[i].selected) { opts.push(list.options[i]); }
-    }
-    if (!opts.length && list.options.length === 1) { opts.push(list.options[0]); }
-    if (!opts.length) { say("message", "Select the points to add first", true); return; }
+    Object.keys(pticks).forEach(function (k) { if (pticks[k]) { addrs.push(k); } });
+    if (!addrs.length && os.length === 1) { addrs.push(os[0].dataset.addr); }
+    if (!addrs.length) { say("message", "Tick the points to add first", true); return; }
     tablePoints(space).then(function (pts) {
-      opts.forEach(function (o) {
-        var pt = pts.filter(function (p) { return String(p.address) === o.value; })[0];
+      addrs.forEach(function (a) {
+        var pt = pts.filter(function (p) { return String(p.address) === a; })[0];
         if (!pt || findSeries(space, pt.address) !== null) { return; }
         if (addSeries(space, pt, true)) { added++; } else { skipped++; }
       });
       say("message", skipped ? "At most " + MAX_SERIES + " points can be plotted; " + skipped + " not added, remove some first" : "", skipped > 0);
+      pticks = {};
       $("padd").value = "";
+      popen(false);
       if (added) { refresh(); }
       selChanged();
     }).catch(function (e) { say("message", "Cannot list points: " + e.message); });
+    list.scrollTop = 0;
   }
 
+  var live = true, viewEnd = 0, meas = null, geo = null, drag = null, scrolling = false;
   var WINDOWS = [1000, 2000, 5000, 10000, 30000, 60000, 120000, 300000], win = 4;
   function fmtSpan(ms) { return ms >= 60000 ? ms / 60000 + " min" : ms / 1000 + " s"; }
-  function setWindow(i) {
-    win = Math.max(0, Math.min(WINDOWS.length - 1, i));
+  function setWindow(i, f) {
+    var tA = viewEnd - WINDOWS[win] * (1 - f), j = Math.max(0, Math.min(WINDOWS.length - 1, i));
+    /* Not live: the time under the anchor (fraction f of the plot width) stays put; live: the right edge stays at now. */
+    win = j;
+    if (!live) { viewEnd = tA + WINDOWS[win] * (1 - f); clampView(); }
     try { localStorage.setItem("mogbus.window", String(WINDOWS[win])); } catch (e) { /* storage unavailable */ }
     $("winlabel").textContent = "window " + fmtSpan(WINDOWS[win]);
     $("zoomin").disabled = win === 0;
@@ -463,11 +513,12 @@ input { width: 9rem; }
     if (t - rateAt >= 250) { rateAt = t; $("rate").textContent = "\u2248 " + ticks.length + " samples/s"; }
   }
 
-  /* The plot is a strip chart: "now" is pinned at the right edge and a fixed window slides under it.
-     Drawing is decoupled from sampling: samples and zoom only mark the chart dirty, and one animation
-     frame draws it; while the plot is on screen and not paused it redraws every frame to keep sliding. */
+  /* The plot shows a window ending at viewEnd. Live follows now (the strip chart: data enters on the right);
+     any manual pan leaves live mode and the view then stays at fixed absolute times while samples keep arriving.
+     Drawing is decoupled from sampling: samples, pans and zoom only mark the chart dirty, and one animation
+     frame draws it; only live mode redraws every frame to keep sliding. */
   var raf = null, dirty = false, frozenNow = 0;
-  function sliding() { return st.view === "plot" && !st.paused && !document.hidden && st.sel.length > 0; }
+  function sliding() { return st.view === "plot" && !st.paused && live && !document.hidden && st.sel.length > 0; }
   function frame() {
     raf = null;
     if (dirty || sliding()) { dirty = false; drawPlot(); }
@@ -477,16 +528,97 @@ input { width: 9rem; }
     dirty = true;
     if (raf === null) { raf = requestAnimationFrame(frame); }
   }
+  function nowT() { return st.paused ? frozenNow : Date.now(); }
+  function oldestT() {
+    var o = null;
+    st.sel.forEach(function (ser) { if (ser.buf.length && (o === null || ser.buf[0].t < o)) { o = ser.buf[0].t; } });
+    return o;
+  }
+  /* Earliest right edge that keeps the view inside the kept history. */
+  function lowEnd() { var o = oldestT(), n = nowT(); return o === null ? n : Math.min(o + WINDOWS[win], n); }
+  function clampView() {
+    if (live) { return; }
+    viewEnd = Math.max(viewEnd, lowEnd());
+    if (viewEnd >= nowT()) { live = true; }
+  }
+  function syncLive() {
+    $("live").setAttribute("aria-pressed", String(live));
+    requestDraw();
+  }
+  function panBy(dt) {
+    if (live) { viewEnd = nowT(); live = false; }
+    viewEnd += dt;
+    clampView();
+    syncLive();
+  }
+  function goLive() { live = true; syncLive(); }
+  function pad(n, w) { return String(n).padStart(w || 2, "0"); }
+  function fmtClock(t, ms) {
+    var d = new Date(t);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + (ms ? "." + pad(d.getMilliseconds(), 3) : "");
+  }
+  function fmtDur(ms) {
+    var t;
+    if (ms < 1000) { return Math.round(ms) + " ms"; }
+    if (ms < 60000) { return (ms / 1000).toFixed(3) + " s"; }
+    t = Math.round(ms / 100);
+    return Math.floor(t / 600) + ":" + pad(Math.floor(t % 600 / 10)) + "." + t % 10 + " min";
+  }
+  var TSTEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
+  function tstep(span) {
+    var k = 0;
+    while (k < TSTEPS.length - 1 && TSTEPS[k] * 6 < span) { k++; }
+    return TSTEPS[k];
+  }
+  function nearest(buf, t) {
+    var a = 0, b = buf.length, m;
+    if (!b) { return null; }
+    while (a < b) { m = (a + b) >> 1; if (buf[m].t < t) { a = m + 1; } else { b = m; } }
+    return a > 0 && (a === buf.length || t - buf[a - 1].t <= buf[a].t - t) ? buf[a - 1] : buf[a];
+  }
+  /* The measured band: elapsed time and, per plotted series, the nearest sample at both edges. */
+  function updateMeasure() {
+    var m = $("measure");
+    clear(m);
+    m.className = meas ? "" : "muted";
+    if (!meas) { m.textContent = "Drag on the chart to measure a time span; Esc clears"; return; }
+    m.appendChild(el("div", "Δt = " + fmtDur(meas.b - meas.a) + "   (" + fmtClock(meas.a, true) + " → " + fmtClock(meas.b, true) + ")"));
+    st.sel.forEach(function (ser) {
+      var pa = nearest(ser.buf, meas.a), pb = nearest(ser.buf, meas.b), row = el("div", "", "item"), sw = el("span", "", "sw"), txt;
+      sw.style.background = "var(--c" + ser.c + ")";
+      if (pa && pb && pa.v !== null && pb.v !== null) {
+        txt = ser.space + " " + ser.pt.address + ": " + fmt(pa.v) + " → " + fmt(pb.v) + "  (Δ " + (pb.v - pa.v > 0 ? "+" : "") + fmt(Number((pb.v - pa.v).toPrecision(10))) + ")";
+      } else { txt = ser.space + " " + ser.pt.address + ": no sample"; }
+      row.appendChild(sw);
+      row.appendChild(el("span", txt));
+      m.appendChild(row);
+    });
+  }
+  function timeAt(clientX) {
+    var r = $("plot").getBoundingClientRect(), x = (clientX - r.left) * geo.W / r.width;
+    return geo.t0 + Math.max(0, Math.min(1, (x - geo.L) / geo.plotW)) * geo.span;
+  }
 
   function drawPlot() {
     var host = $("plot"), W = Math.max(320, host.clientWidth || 720), H = 300, L = 56, R = 10, T = 10, B = 24;
-    var now = st.paused ? frozenNow : Date.now(), span = WINDOWS[win], t0 = now - span, lo = Infinity, hi = -Infinity, s, i, y, step, plotW = W - L - R;
-    var all = [];
+    var span = WINDOWS[win], end, t0, lo = Infinity, hi = -Infinity, s, i, y, step, plotW = W - L - R;
+    var all = [], low, wasLive = live, lastX = -1e9, off;
     if (st.view !== "plot") { return; }
+    geo = null;
+    clampView();
+    if (live !== wasLive) { $("live").setAttribute("aria-pressed", String(live)); }
+    end = live ? nowT() : viewEnd;
+    t0 = end - span;
+    low = lowEnd();
+    $("pscroll").disabled = !st.sel.length;
+    $("pscroll").max = Math.max(0, nowT() - low);
+    if (!scrolling) { $("pscroll").value = live ? Math.max(0, nowT() - low) : viewEnd - low; }
+    $("vrange").textContent = st.sel.length ? fmtClock(t0, span <= 5000) + " – " + fmtClock(end, span <= 5000) : "";
     clear(host);
     if (legendKey !== st.sel.map(function (x) { return x.space + x.pt.address; }).join()) { buildLegend(); }
     st.sel.forEach(function (ser) { ser.valEl.textContent = ser.last === "" ? "-" : ser.last; });
     if (!st.sel.length) { host.appendChild(el("p", "Tick Plot on points in the table, or add one below, to plot them", "muted")); return; }
+    geo = { L: L, W: W, plotW: plotW, t0: t0, span: span };
     function px(t) { return L + (t - t0) / span * plotW; }
     /* One pass per series: the visible samples, reduced to the minimum and maximum of every pixel column. */
     st.sel.forEach(function (ser) {
@@ -499,7 +631,7 @@ input { width: 9rem; }
         else { cur.push(mx, mn); }
         mn = mx = null;
       }
-      for (; a < buf.length && buf[a].t <= now; a++) {
+      for (; a < buf.length && buf[a].t <= end; a++) {
         p = buf[a];
         if (p.v === null) { flush(); cur = null; col = -1; continue; }
         if (!cur) { cur = []; segs.push(cur); }
@@ -519,24 +651,36 @@ input { width: 9rem; }
     hi = Math.ceil(hi / step) * step;
     if (lo === hi) { hi = lo + step; }
     function py(v) { return T + (hi - v) / (hi - lo) * (H - T - B); }
-    s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Plot of the selected points over the last " + fmtSpan(span) });
+    s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Plot of the selected points, " + fmtSpan(span) + " window" });
     for (i = 0; lo + i * step <= hi + step / 2; i++) {
       y = lo + i * step;
       s.appendChild(svg("line", { x1: L, x2: W - R, y1: py(y), y2: py(y), "class": "grid" }));
       s.appendChild(svg("text", { x: L - 4, y: py(y) + 4, "text-anchor": "end", "class": "tick" }, fmt(y)));
     }
-    /* Gridlines sit at absolute multiples of the step, so they slide with the data; labels count back from now. */
-    step = nice(span, 5);
-    for (i = Math.ceil(t0 / step); i * step <= now; i++) {
-      var x = px(i * step), r = now - i * step;
+    /* Gridlines sit at absolute wall-clock multiples of the step, so they stay with the data. */
+    step = tstep(span);
+    off = -new Date(t0).getTimezoneOffset() * 60000;
+    for (i = Math.ceil((t0 + off) / step); i * step - off <= end; i++) {
+      var tt = i * step - off, x = px(tt);
       if (x < L) { continue; }
       s.appendChild(svg("line", { x1: x, x2: x, y1: T, y2: H - B, "class": "grid" }));
-      if (x < W - R - 34) {
-        s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": "middle", "class": "tick" },
-          "-" + (step >= 1000 ? Math.round(r / 1000) + "s" : Math.round(r / 10) * 10 + "ms")));
+      if (x < W - R - 34 && x - lastX >= (step < 1000 ? 84 : 62)) {
+        lastX = x;
+        s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": "middle", "class": "tick" }, fmtClock(tt, step < 1000)));
       }
     }
-    s.appendChild(svg("text", { x: W - R, y: H - 8, "text-anchor": "end", "class": "tick" }, "now"));
+    if (live) {
+      s.appendChild(svg("line", { x1: W - R, x2: W - R, y1: T, y2: H - B, "class": "nowline" }));
+      s.appendChild(svg("text", { x: W - R, y: H - 8, "text-anchor": "end", "class": "tick" }, "now"));
+    }
+    if (meas) {
+      var xa = px(meas.a), xb = px(meas.b);
+      if (xb > L && xa < W - R) {
+        s.appendChild(svg("rect", { x: Math.max(L, xa), y: T, width: Math.min(W - R, xb) - Math.max(L, xa), height: H - T - B, "class": "band" }));
+        if (xa >= L) { s.appendChild(svg("line", { x1: xa, x2: xa, y1: T, y2: H - B, "class": "edge" })); }
+        if (xb <= W - R) { s.appendChild(svg("line", { x1: xb, x2: xb, y1: T, y2: H - B, "class": "edge" })); }
+      }
+    }
     st.sel.forEach(function (ser, n) {
       var color = "var(--c" + ser.c + ")", bit = isBit(ser.space);
       all[n].forEach(function (seg) {
@@ -642,7 +786,7 @@ input { width: 9rem; }
   $("refresh").addEventListener("click", refresh);
   $("prev").addEventListener("click", function () { st.page--; render(); });
   $("next").addEventListener("click", function () { st.page++; render(); });
-  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; st.sel = []; pcache = {}; requestDraw(); loadPoints(); fillAdd(); });
+  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; st.sel = []; pcache = {}; pticks = {}; meas = null; updateMeasure(); requestDraw(); loadPoints(); fillAdd(); });
 
   var EVERY = [10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000], every = EVERY_MS, timer = null;
   function schedule() {
@@ -667,25 +811,107 @@ input { width: 9rem; }
     var savedWin = null;
     try { savedWin = Number(localStorage.getItem("mogbus.window")); } catch (e) { savedWin = null; }
     if (WINDOWS.indexOf(savedWin) >= 0) { win = WINDOWS.indexOf(savedWin); }
-    $("zoomin").addEventListener("click", function () { setWindow(win - 1); });
-    $("zoomout").addEventListener("click", function () { setWindow(win + 1); });
-    setWindow(win);
-    var wheelAt = 0;
-    $("plot").addEventListener("wheel", function (ev) {
-      var now = Date.now();
+    $("zoomin").addEventListener("click", function () { setWindow(win - 1, 0.5); });
+    $("zoomout").addEventListener("click", function () { setWindow(win + 1, 0.5); });
+    setWindow(win, 0.5);
+    updateMeasure();
+    var wheelAt = 0, plot = $("plot");
+    plot.addEventListener("wheel", function (ev) {
+      var now = Date.now(), u = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1, d = 0, r, f;
       ev.preventDefault();
+      /* Horizontal wheel/trackpad (or Shift+wheel) pans; vertical wheel zooms. */
+      if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) { d = ev.deltaX; }
+      else if (ev.shiftKey) { d = ev.deltaY; }
+      if (d !== 0) {
+        if (geo) { panBy(d * u / geo.plotW * geo.span); }
+        return;
+      }
       if (Math.abs(ev.deltaY) < 4 || now - wheelAt < 120) { return; }
       wheelAt = now;
-      setWindow(win + (ev.deltaY < 0 ? -1 : 1));
+      r = plot.getBoundingClientRect();
+      f = geo ? Math.max(0, Math.min(1, ((ev.clientX - r.left) * geo.W / r.width - geo.L) / geo.plotW)) : 0.5;
+      setWindow(win + (ev.deltaY < 0 ? -1 : 1), f);
     }, { passive: false });
+    plot.addEventListener("keydown", function (ev) {
+      var k = ev.key, span = WINDOWS[win];
+      if (k === "ArrowLeft") { panBy(-span / 10); }
+      else if (k === "ArrowRight") { panBy(span / 10); }
+      else if (k === "Home") { panBy(-1e12); }
+      else if (k === "End") { goLive(); }
+      else { return; }
+      ev.preventDefault();
+    });
+    $("live").addEventListener("click", goLive);
+    $("pscroll").addEventListener("input", function () {
+      var low = lowEnd();
+      if (live) { live = false; }
+      viewEnd = low + Number(this.value);
+      clampView();
+      syncLive();
+    });
+    $("pscroll").addEventListener("pointerdown", function () { scrolling = true; });
+    $("pscroll").addEventListener("pointerup", function () { scrolling = false; requestDraw(); });
+    $("pscroll").addEventListener("pointercancel", function () { scrolling = false; });
+    /* Drag on the chart to measure: the band keeps absolute times. A click without movement clears it. */
+    plot.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== 0 || !geo) { return; }
+      drag = { id: ev.pointerId, x: ev.clientX, t: timeAt(ev.clientX), moved: false };
+      try { plot.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic pointer */ }
+    });
+    plot.addEventListener("pointermove", function (ev) {
+      var t;
+      if (!drag || ev.pointerId !== drag.id || !geo) { return; }
+      if (!drag.moved && Math.abs(ev.clientX - drag.x) < 3) { return; }
+      drag.moved = true;
+      t = timeAt(ev.clientX);
+      meas = { a: Math.min(drag.t, t), b: Math.max(drag.t, t) };
+      updateMeasure();
+      requestDraw();
+    });
+    function endDrag(ev) {
+      if (!drag || ev.pointerId !== drag.id) { return; }
+      if (!drag.moved && meas) { meas = null; updateMeasure(); requestDraw(); }
+      drag = null;
+    }
+    plot.addEventListener("pointerup", endDrag);
+    plot.addEventListener("pointercancel", endDrag);
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape" && meas) { meas = null; updateMeasure(); requestDraw(); }
+    });
     document.addEventListener("visibilitychange", requestDraw);
     SPACES.forEach(function (s) { var o = el("option", s); o.value = s; $("padd_space").appendChild(o); });
     $("padd_space").value = st.space;
-    $("padd_space").addEventListener("change", fillAdd);
+    $("padd_space").addEventListener("change", function () { pticks = {}; fillAdd(); });
     $("padd_go").addEventListener("click", addFromList);
-    $("padd_list").addEventListener("dblclick", addFromList);
-    $("padd").addEventListener("input", fillAdd);
-    $("padd").addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); addFromList(); } });
+    $("padd").addEventListener("focus", function () { popen(true); });
+    $("padd").addEventListener("click", function () { popen(true); });
+    $("padd").addEventListener("input", function () { popen(true); fillAdd(); });
+    $("padd_list").addEventListener("mousedown", function (ev) { ev.preventDefault(); });
+    $("padd_list").addEventListener("click", function (ev) {
+      var o = ev.target.closest ? ev.target.closest('[role="option"]') : null;
+      if (o) { ptoggle(o); }
+    });
+    $("padd").addEventListener("keydown", function (ev) {
+      var k = ev.key, os = popts();
+      if (k === "ArrowDown" || k === "ArrowUp") {
+        ev.preventDefault();
+        if ($("padd_list").hidden) { popen(true); }
+        pactivate(pactive < 0 ? (k === "ArrowDown" ? 0 : -1) : pactive + (k === "ArrowDown" ? 1 : -1));
+      } else if (k === "Escape") {
+        if (!$("padd_list").hidden) { ev.stopPropagation(); popen(false); }
+      } else if (k === "Tab") {
+        popen(false);
+      } else if (k === "Enter") {
+        ev.preventDefault();
+        if (!$("padd_list").hidden && pactive >= 0 && os[pactive]) { ptoggle(os[pactive]); } else { addFromList(); }
+      } else if (k === " " && pactive >= 0 && os[pactive] && $("padd").value === "") {
+        ev.preventDefault();
+        ptoggle(os[pactive]);
+      }
+    });
+    document.addEventListener("pointerdown", function (ev) {
+      if (!$("pcombo").contains(ev.target)) { popen(false); }
+    });
     var t = $("tabs");
     SPACES.forEach(function (s) {
       var b = el("button", s);

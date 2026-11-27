@@ -785,7 +785,7 @@ TEST(ObsWebPageHasTheMainElements)
 	static const char* const ids[] = {
 		"id=\"device\"", "id=\"tabs\"", "id=\"points\"", "id=\"refresh\"", "id=\"pause\"",
 		"id=\"faults\"", "id=\"message\"", "id=\"views\"", "id=\"every\"", "id=\"plot\"", "id=\"plotview\"", "id=\"legend\"",
-		"id=\"rate\"", "id=\"zoomin\"", "id=\"zoomout\"", "id=\"winlabel\"", "id=\"padd\"", "id=\"padd_space\"", "id=\"padd_list\"", "id=\"padd_go\"", "</html>",
+		"id=\"rate\"", "id=\"zoomin\"", "id=\"zoomout\"", "id=\"winlabel\"", "id=\"live\"", "id=\"pscroll\"", "id=\"measure\"", "id=\"padd\"", "id=\"padd_space\"", "id=\"padd_list\"", "id=\"padd_go\"", "</html>",
 	};
 
 	guarded_obs(&obs, devs, "127.0.0.1", "", true);
