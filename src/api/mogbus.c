@@ -356,6 +356,30 @@ mogbus_device_info(const mogbus_device_t* handle, mogbus_device_info_t* out)
 	return true;
 }
 
+bool
+mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_point_t* out)
+{
+	const device_t*	dev = (const device_t*)handle;
+	const point_t*	point;
+
+	if (!dev || !out || index >= dev->point_count)
+		return false;
+	point = &dev->points[index];
+	memset(out, 0, sizeof(*out));
+	out->space       = (mogbus_space_t)point->space;
+	out->address     = point->address;
+	out->type        = (mogbus_value_type_t)point->type;
+	out->word_order  = (mogbus_word_order_t)point->order;
+	out->byte_order  = (mogbus_byte_order_t)point->byte_order;
+	out->kind        = point->kind == POINT_RAMP  ? MOGBUS_POINT_RAMP :
+			   point->kind == POINT_CLOCK ? MOGBUS_POINT_CLOCK : MOGBUS_POINT_STATIC;
+	out->length      = point->length;
+	out->read_only   = point->read_only;
+	out->clock_field = (mogbus_clock_field_t)point->clock_field;
+	out->clock_utc   = point->clock_utc;
+	return true;
+}
+
 void
 mogbus_rtu_timing(uint32_t baud, uint32_t frame_gap_ms, uint32_t* t35_us, uint32_t* gap_ms)
 {

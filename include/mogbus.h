@@ -374,6 +374,24 @@ MOGBUS_API bool		mogbus_device_set_any_unit(mogbus_device_t* dev, bool on);
 MOGBUS_API bool		mogbus_device_info(const mogbus_device_t* dev, mogbus_device_info_t* out);
 
 /**
+ * @brief Describes the point at an index of the device's points, in definition order.
+ *
+ * The index runs from 0 to the sum of mogbus_device_info() `point_count` minus one. Only the
+ * layout fields are filled (`space`, `address`, `type`, `word_order`, `byte_order`, `length`,
+ * `read_only`, `clock_field`, `clock_utc`); `value`, `ramp` and `text` are zero, and read the
+ * current value with mogbus_device_get_value() or mogbus_device_get_string(). `kind` is
+ * MOGBUS_POINT_RAMP or MOGBUS_POINT_CLOCK for those points and MOGBUS_POINT_STATIC for every other
+ * one, including model and machine points.
+ *
+ * @param dev Device.
+ * @param index Position of the point.
+ * @param out Receives the description.
+ * @return false if @p dev or @p out is NULL or @p index is past the last point.
+ */
+MOGBUS_API bool		mogbus_device_point_at(const mogbus_device_t* dev, uint32_t index,
+					       mogbus_point_t* out);
+
+/**
  * @brief Adds a point to a device.
  * @param dev Device.
  * @param point Point description; copied.

@@ -213,6 +213,14 @@ class DeviceTest(unittest.TestCase):
         self.assertEqual(info.point_counts["coil"], 1)
         self.assertEqual(info.faults, {})
         self.assertEqual(info.custom_function_codes, [])
+        pts = d.points()
+        self.assertEqual([(q.space, q.address, q.type) for q in pts],
+                         [(mogbus.Space.HOLDING, 0, mogbus.ValueType.U16),
+                          (mogbus.Space.HOLDING, 1, mogbus.ValueType.F32),
+                          (mogbus.Space.HOLDING, 3, mogbus.ValueType.U32),
+                          (mogbus.Space.COIL, 0, mogbus.ValueType.BOOL),
+                          (mogbus.Space.INPUT, 0, mogbus.ValueType.S16)])
+        self.assertEqual(pts[2].word_order, mogbus.WordOrder.LOW_FIRST)
 
     def test_ramp(self):
         self.dev.add_point("holding", 0, "u16",

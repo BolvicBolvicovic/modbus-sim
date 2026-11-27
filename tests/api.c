@@ -1286,6 +1286,21 @@ TEST(ApiEnumeratesDevicesAndDescribesThem)
 	ASSERT_EQ(mogbus_device_info(mogbus_device_at(ctx, 2), &info));
 	ASSERT_EQ(strcmp(info.name, "code") == 0 && info.point_count[MOGBUS_HOLDING] == 1);
 	ASSERT_EQ(!info.faults[MOGBUS_FAULT_DELAY].present && !mogbus_device_info(NULL, &info));
+	{
+		mogbus_point_t pt;
+		uint32_t       n = 0;
+
+		/* 7 points in definition order (two coils, discrete, input, three holding), then the end. */
+		while (mogbus_device_point_at(mogbus_device_at(ctx, 0), n, &pt))
+			n++;
+		ASSERT_EQ(n == 7);
+		ASSERT_EQ(mogbus_device_point_at(mogbus_device_at(ctx, 0), 0, &pt));
+		ASSERT_EQ(pt.space == MOGBUS_COIL && pt.address == 0 && pt.type == MOGBUS_TYPE_BOOL);
+		ASSERT_EQ(mogbus_device_point_at(mogbus_device_at(ctx, 0), 6, &pt));
+		ASSERT_EQ(pt.space == MOGBUS_HOLDING && pt.address == 2 && pt.type == MOGBUS_TYPE_U16);
+		ASSERT_EQ(!mogbus_device_point_at(NULL, 0, &pt) &&
+			  !mogbus_device_point_at(mogbus_device_at(ctx, 0), 0, NULL));
+	}
 	mogbus_destroy(ctx);
 	unlink(path);
 }

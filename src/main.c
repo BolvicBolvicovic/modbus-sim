@@ -5,9 +5,11 @@
  * A pure client of the public library API (mogbus.h); nothing here touches an internal module.
  */
 #include "mogbus.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct cli_t cli_t;
 
@@ -26,6 +28,7 @@ struct cli_t
 	bool		show_version;
 	bool		log_json;
 	bool		web;
+	uint32_t	show_ms;	/* --show-registers interval, 0 = off */
 };
 
 static inline void
@@ -42,6 +45,10 @@ print_usage(void)
 	     "      --timeout-ms N   --health reply timeout (default 2000)\n"
 	     "  -w, --web            serve the web UI (and the control API it uses) on the HTTP endpoint;\n"
 	     "                       without (server (http ...)) in the config: 127.0.0.1 port 9102\n"
+	     "  -r, --show-registers[=MS]\n"
+	     "                       print the point values to stdout every MS ms (10-60000, default\n"
+	     "                       1000): all of them first, then only the ones that changed;\n"
+	     "                       JSON lines with --log-format json\n"
 	     "  -v, --verbose        log every request\n"
 	     "      --log-format F   log lines as text (default) or json\n"
 	     "  -V, --version        print the version and exit\n"
@@ -88,6 +95,20 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->check_only = true;
 		else if (strcmp(arg, "-w") == 0 || strcmp(arg, "--web") == 0)
 			cli->web = true;
+		else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--show-registers") == 0)
+			cli->show_ms = 1000;
+		else if (strncmp(arg, "--show-registers=", 17) == 0)
+		{
+			char* end = NULL;
+			long  value = strtol(arg + 17, &end, 10);
+
+			if (end == arg + 17 || *end != '\0' || value < 10 || value > 60000)
+			{
+				fprintf(stderr, "--show-registers needs a number of milliseconds (10-60000)\n");
+				return false;
+			}
+			cli->show_ms = (uint32_t)value;
+		}
 		else if (strcmp(arg, "--health") == 0)
 			cli->health = true;
 		else if (strcmp(arg, "--timeout-ms") == 0)
@@ -285,6 +306,98 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 	}
 }
 
+/** @brief Wall clock in milliseconds; only used to pace --show-registers. */
+static int64_t
+now_ms(void)
+{
+	struct timespec ts;
+
+	timespec_get(&ts, TIME_UTC);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/** @brief Most points one device can have (DEVICE_MAX_POINTS in the library). */
+enum { SHOW_MAX_POINTS = 8192 };
+
+/** @brief FNV-1a hash of the last printed text of every point, to print only changes. */
+static uint64_t g_shown[MOGBUS_MAX_DEVICES][SHOW_MAX_POINTS];
+
+/**
+ * @brief Prints the points whose value changed since the last call (all of them when @p all).
+ *
+ * One text line or JSON object per point, flushed at the end so a pipe sees whole snapshots.
+ */
+static void
+show_registers(mogbus_t* ctx, bool all, bool json)
+{
+	static const char* const space_names[] = { "coil", "discrete", "input", "holding" };
+
+	for (size_t d = 0; d < mogbus_device_count(ctx) && d < MOGBUS_MAX_DEVICES; d++)
+	{
+		mogbus_device_t*	dev = mogbus_device_at(ctx, d);
+		mogbus_device_info_t	info;
+		mogbus_point_t		point;
+
+		if (!mogbus_device_info(dev, &info))
+			continue;
+		for (uint32_t i = 0; i < SHOW_MAX_POINTS && mogbus_device_point_at(dev, i, &point); i++)
+		{
+			char		text[2 * 123 + 1] = "";
+			char		value[2 * 123 * 6 + 8];
+			uint64_t	hash = 14695981039346656037ull;
+			double		number = 0;
+			bool		is_number = point.type != MOGBUS_TYPE_STRING &&
+						    mogbus_device_get_value(dev, point.space, point.address, &number);
+
+			if (point.type == MOGBUS_TYPE_STRING)
+				(void)mogbus_device_get_string(dev, point.space, point.address, text, sizeof(text));
+			if (is_number &&
+			    !isfinite(number))
+				snprintf(value, sizeof(value), json ? "null" : "%s",
+					 isnan(number) ? "nan" : number < 0 ? "-inf" : "inf");
+			else if (is_number)
+				snprintf(value, sizeof(value),
+					 point.type == MOGBUS_TYPE_F32 ? "%.7g" :
+					 point.type == MOGBUS_TYPE_F64 ? "%.15g" : "%.0f", number);
+			else
+			{
+				size_t used = 0;
+
+				value[used++] = '"';
+				for (const char* c = text; *c && used + 7 < sizeof(value); c++)
+				{
+					unsigned char ch = (unsigned char)*c;
+
+					if (ch == '"' || ch == '\\')
+					{
+						value[used++] = '\\';
+						value[used++] = (char)ch;
+					}
+					else if (ch < 0x20 || ch >= 0x7F)
+						used += (size_t)snprintf(value + used, 7, "\\u%04x", ch);
+					else
+						value[used++] = (char)ch;
+				}
+				value[used++] = '"';
+				value[used]   = '\0';
+			}
+			for (const char* c = value; *c; c++)
+				hash = (hash ^ (unsigned char)*c) * 1099511628211ull;
+			if (!all &&
+			    hash == g_shown[d][i])
+				continue;
+			g_shown[d][i] = hash;
+			if (json)
+				printf("{\"unit\":%u,\"space\":\"%s\",\"address\":%u,\"value\":%s}\n",
+				       info.unit_id, space_names[point.space], point.address, value);
+			else
+				printf("unit %u %s %u = %s\n", info.unit_id, space_names[point.space],
+				       point.address, value);
+		}
+	}
+	fflush(stdout);
+}
+
 int
 main(int argc, char** argv)
 {
@@ -392,7 +505,30 @@ main(int argc, char** argv)
 		       mogbus_server_pty_name(server));
 		fflush(stdout);
 	}
-	status = mogbus_server_run(server);
+	if (cli.show_ms == 0)
+		status = mogbus_server_run(server);
+	else
+	{
+		int64_t	next = now_ms();
+		bool	all  = true;
+		int	rc;
+
+		do
+		{
+			int64_t	wait = next - now_ms();
+
+			if (wait <= 0)
+			{
+				show_registers(ctx, all, cli.log_json);
+				all  = false;
+				next = now_ms() + cli.show_ms;
+				wait = cli.show_ms;
+			}
+			rc = mogbus_server_step(server, (int)wait);
+		}
+		while (rc == MOGBUS_STEP_CONTINUE);
+		status = rc == MOGBUS_STEP_ERROR ? 1 : 0;
+	}
 	g_server = NULL;
 
 cleanup:
