@@ -118,7 +118,7 @@ log_event(struct station* st, uint16_t code)
 }
 
 /** @brief Builds the device of the scenario. The failure text is in mogbus_last_error(ctx). */
-static mogbus_error_t
+static mogbus_result_t
 build_device(mogbus_t* ctx, struct station* st, uint8_t unit)
 {
 	const mogbus_point_t points[] = {
@@ -142,11 +142,10 @@ build_device(mogbus_t* ctx, struct station* st, uint8_t unit)
 	};
 	uint16_t zeros[LOG_RECORDS] = { 0 };
 
-	mogbus_error_t error;
+	mogbus_result_t error = mogbus_add_device(ctx, unit, "Pump station", &st->dev);
 
-	st->dev = mogbus_add_device(ctx, unit, "Pump station");
-	if (!st->dev)
-		return mogbus_last_error_code(ctx);
+	if (error != MOGBUS_OK)
+		return error;
 	for (size_t i = 0; i < sizeof(points) / sizeof(points[0]); i++)
 	{
 		error = mogbus_device_add_point(st->dev, &points[i]);
@@ -485,7 +484,7 @@ self_test(mogbus_server_t* server, const mogbus_server_options_t* options, struc
 	check(exchange(server, fd, unit, write_setpoint, sizeof(write_setpoint), r) == 5 && pdu[0] == 0x10,
 	      "FC 16 setpoint 3.0 m is accepted");
 	check(st->events == events_before + 1, "the post-write hook logged the setpoint event");
-	check(mogbus_device_get_value(st->dev, MOGBUS_HOLDING, HOLD_SETPOINT, &sp) && sp == 3.0,
+	check(mogbus_device_get_value(st->dev, MOGBUS_HOLDING, HOLD_SETPOINT, &sp) == MOGBUS_OK && sp == 3.0,
 	      "the host reads the new setpoint back");
 	check(exchange(server, fd, unit, write_site, sizeof(write_site), r) == 2 && is_exception(pdu, 0x10, 2),
 	      "FC 16 on the read-only site name: exception 02");
@@ -526,7 +525,7 @@ self_test(mogbus_server_t* server, const mogbus_server_options_t* options, struc
 
 	write_mode[4] = MODE_AUTO;
 	check(exchange(server, fd, unit, write_mode, sizeof(write_mode), r) == 5, "FC 06 switches back to auto");
-	check(mogbus_device_get_string(st->dev, MOGBUS_HOLDING, HOLD_SITE, text, sizeof(text)) &&
+	check(mogbus_device_get_string(st->dev, MOGBUS_HOLDING, HOLD_SITE, text, sizeof(text)) == MOGBUS_OK &&
 	      strcmp(text, "NORTH-01") == 0, "the host reads the site name with mogbus_device_get_string");
 	check(st->refused == 3 && st->accepted >= 5, "the hook counted its vetoes and accepted writes");
 	close(fd);
@@ -605,7 +604,7 @@ int
 main(int argc, char** argv)
 {
 	struct station		st = { 0 };
-	mogbus_t*		ctx = mogbus_create();
+	mogbus_t*		ctx = NULL;
 	mogbus_server_t*	server = NULL;
 	mogbus_server_options_t	options = mogbus_server_options_defaults();
 	const char*		config = NULL;
@@ -638,12 +637,14 @@ main(int argc, char** argv)
 		else
 		{
 			usage();
-			mogbus_destroy(ctx);
 			return 2;
 		}
 	}
-	if (!ctx)
+	if (mogbus_create(&ctx) != MOGBUS_OK)
+	{
+		fprintf(stderr, "%s\n", mogbus_last_error(NULL));
 		return 1;
+	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	mogbus_set_log_sink(log_sink, NULL);
 	mogbus_stop_on_signals(&g_server);
@@ -659,7 +660,7 @@ main(int argc, char** argv)
 			goto done;
 		}
 		printf("loaded %s: %zu device(s)\n", config, mogbus_device_count(ctx));
-		if (mogbus_config_server_options(ctx, &from_config))
+		if (mogbus_config_server_options(ctx, &from_config) == MOGBUS_OK)
 		{
 			uint16_t port = options.port;
 
@@ -683,7 +684,7 @@ main(int argc, char** argv)
 	}
 	mogbus_device_set_access_hook(st.dev, on_access, &st);
 	mogbus_device_set_written_hook(st.dev, on_written, &st);
-	if (!mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st))
+	if (mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st) != MOGBUS_OK)
 	{
 		fprintf(stderr, "cannot define function code 0x%02X\n", FC_STATUS_BLOCK);
 		goto done;
@@ -707,11 +708,9 @@ main(int argc, char** argv)
 		fprintf(stderr, "options: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
-	server = mogbus_server_create(ctx, &options);
-	if (!server)
+	if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
 	{
-		fprintf(stderr, "server (status %d): %s\n", (int)mogbus_last_error_code(ctx),
-			mogbus_last_error(ctx));
+		fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
 	g_server = server;

@@ -82,7 +82,7 @@ parse_reply(mogbus_mode_t mode, const u8* buf, u32 len, u8 unit, u8* out, const 
 	}
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t timeout_ms)
 {
 	os_addr_t	addr;

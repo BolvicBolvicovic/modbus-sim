@@ -71,13 +71,14 @@ In C, @ref mogbus_client_request "mogbus_client_request()" sends any function co
 ```c
 mogbus_client_options_t o = mogbus_client_options_defaults();
 o.port = 1502;
-mogbus_client_t* c = mogbus_client_open(&o);
+mogbus_client_t* c = NULL;
+mogbus_client_open(&o, &c);
 
 uint8_t request[] = { 0x01 };            /* request data after function code 0x41 */
 uint8_t reply[252];
 size_t  n = 0;
 
-mogbus_error_t err = mogbus_client_request(c, 1, 0x41, request, sizeof(request),
+mogbus_result_t err = mogbus_client_request(c, 1, 0x41, request, sizeof(request),
                                            reply, sizeof(reply), &n);
 if (err == MOGBUS_OK)
 	printf("%zu reply bytes\n", n);
@@ -125,8 +126,10 @@ static void* serve(void* server) { mogbus_server_run(server); return NULL; }
 
 int main(void)
 {
-	mogbus_t* ctx = mogbus_create();
-	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "meter");
+	mogbus_t* ctx = NULL;
+	mogbus_device_t* dev = NULL;
+	mogbus_server_t* server = NULL;
+	mogbus_client_t* client = NULL;
 	mogbus_point_t point = { .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U16, .value = 1234 };
 	mogbus_server_options_t so = mogbus_server_options_defaults();
 	mogbus_client_options_t co = mogbus_client_options_defaults();
@@ -134,13 +137,15 @@ int main(void)
 	size_t n = 0;
 	pthread_t thread;
 
+	mogbus_create(&ctx);
+	mogbus_add_device(ctx, 1, "meter", &dev);
 	mogbus_device_add_point(dev, &point);
 	mogbus_device_add_function_code(dev, 0x41, status, NULL);
 	so.port = co.port = 1502;                       /* the file asks the kernel for a free port */
-	mogbus_server_t* server = mogbus_server_create(ctx, &so);
+	mogbus_server_create(ctx, &so, &server);
 	pthread_create(&thread, NULL, serve, server);   /* the server has its own thread ... */
 
-	mogbus_client_t* client = mogbus_client_open(&co);      /* ... the client only knows host and port */
+	mogbus_client_open(&co, &client);               /* ... the client only knows host and port */
 	if (mogbus_client_request(client, 1, 0x41, ask, sizeof(ask), reply, sizeof(reply), &n) == MOGBUS_OK)
 		printf("0x41 -> %d\n", (reply[0] << 8) | reply[1]);   /* 1234 */
 

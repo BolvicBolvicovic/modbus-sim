@@ -16,8 +16,8 @@ o.port       = 502;
 o.timeout_ms = 500;
 o.retries    = 2;                     /* extra attempts after a timeout */
 
-mogbus_client_t* c = mogbus_client_open(&o);
-if (!c)
+mogbus_client_t* c = NULL;
+if (mogbus_client_open(&o, &c) != MOGBUS_OK)
 	fprintf(stderr, "client: %s\n", mogbus_last_error(NULL));
 ```
 
@@ -34,7 +34,7 @@ Because there is no client yet to own the message of a failed open, it is kept p
 
 ## Read and write
 
-Every call takes the unit id of the server to ask and returns a @ref mogbus_error_t "mogbus_error_t". Reads fill a buffer you pass in: bits as one byte each (0 or 1), registers as raw 16-bit values.
+Every call takes the unit id of the server to ask and returns a @ref mogbus_result_t "mogbus_result_t". Reads fill a buffer you pass in: bits as one byte each (0 or 1), registers as raw 16-bit values.
 
 ```c
 uint16_t regs[4];

@@ -19,7 +19,7 @@ impl(mogbus_client_t* c)
 	return (client_t*)c;
 }
 
-static mogbus_error_t
+static mogbus_result_t
 to_error(client_status_t st)
 {
 	switch (st)
@@ -49,15 +49,16 @@ mogbus_client_options_defaults(void)
 	};
 }
 
-mogbus_client_t*
-mogbus_client_open(const mogbus_client_options_t* options)
+mogbus_result_t
+mogbus_client_open(const mogbus_client_options_t* options, mogbus_client_t** out)
 {
 	client_options_t o;
 
+	*out = NULL;
 	if (!options)
 	{
 		client_detached_errorf("options are required");
-		return NULL;
+		return MOGBUS_ERR_INVALID;
 	}
 	switch (options->mode)
 	{
@@ -71,7 +72,7 @@ mogbus_client_open(const mogbus_client_options_t* options)
 		case MOGBUS_MODE_ASCII_DEVICE: o.mode = CLIENT_ASCII_SERIAL; break;
 		default:
 			client_detached_errorf("mode %d is not a client mode", (int)options->mode);
-			return NULL;
+			return MOGBUS_ERR_INVALID;
 	}
 	o.host       = options->host;
 	o.port       = options->port;
@@ -83,7 +84,7 @@ mogbus_client_open(const mogbus_client_options_t* options)
 	o.tls        = options->tls_enabled;
 	o.timeout_ms = options->timeout_ms;
 	o.retries    = options->retries;
-	return (mogbus_client_t*)client_new(&o);
+	return to_error(client_new(&o, (client_t**)out));
 }
 
 void
@@ -104,21 +105,21 @@ mogbus_client_last_exception(const mogbus_client_t* client)
 	return client_exception((const client_t*)client);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_connect(mogbus_client_t* client)
 {
 	return to_error(client_connect(impl(client)));
 }
 
 /* Sends req and leaves the whole reply PDU (function code first) in reply. */
-static mogbus_error_t
+static mogbus_result_t
 call(mogbus_client_t* client, u8 unit, const u8* req, u32 req_len, u8* reply, u32* reply_len)
 {
 	return to_error(client_request(impl(client), unit, req, req_len, reply, MODBUS_MAX_PDU, reply_len));
 }
 
 /* A malformed or out-of-range call: the message goes to the client like any failure. */
-static mogbus_error_t __attribute__((format(printf, 2, 3)))
+static mogbus_result_t __attribute__((format(printf, 2, 3)))
 reject(mogbus_client_t* client, const char* fmt, ...)
 {
 	char		text[128];
@@ -131,14 +132,14 @@ reject(mogbus_client_t* client, const char* fmt, ...)
 	return MOGBUS_ERR_INVALID;
 }
 
-static mogbus_error_t
+static mogbus_result_t
 bad_reply(mogbus_client_t* client, u8 fc)
 {
 	client_set_error(impl(client), "reply to function code 0x%02X does not match the request", fc);
 	return MOGBUS_ERR_FRAME;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_request(mogbus_client_t* client, uint8_t unit, uint8_t function_code,
 		      const uint8_t* data, size_t data_len,
 		      uint8_t* reply, size_t reply_cap, size_t* reply_len)
@@ -146,7 +147,7 @@ mogbus_client_request(mogbus_client_t* client, uint8_t unit, uint8_t function_co
 	u8		req[MODBUS_MAX_PDU];
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
-	mogbus_error_t	err;
+	mogbus_result_t	err;
 
 	if (reply_len)
 		*reply_len = 0;
@@ -179,14 +180,14 @@ mogbus_client_request(mogbus_client_t* client, uint8_t unit, uint8_t function_co
 	return MOGBUS_OK;
 }
 
-static mogbus_error_t
+static mogbus_result_t
 read_bits(mogbus_client_t* client, u8 fc, u8 unit, u16 address, u16 count, u8* values)
 {
 	u8		req[5] = { fc };
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
 	u32		bytes   = ((u32)count + 7) / 8;
-	mogbus_error_t	err;
+	mogbus_result_t	err;
 
 	if (!client)
 		return MOGBUS_ERR_INVALID;
@@ -204,13 +205,13 @@ read_bits(mogbus_client_t* client, u8 fc, u8 unit, u16 address, u16 count, u8* v
 	return MOGBUS_OK;
 }
 
-static mogbus_error_t
+static mogbus_result_t
 read_registers(mogbus_client_t* client, u8 fc, u8 unit, u16 address, u16 count, u16* values)
 {
 	u8		req[5] = { fc };
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
-	mogbus_error_t	err;
+	mogbus_result_t	err;
 
 	if (!client)
 		return MOGBUS_ERR_INVALID;
@@ -229,27 +230,27 @@ read_registers(mogbus_client_t* client, u8 fc, u8 unit, u16 address, u16 count, 
 	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_read_coils(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t count, uint8_t* values)
 {
 	return read_bits(client, FC_READ_COILS, unit, address, count, values);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_read_discrete_inputs(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t count,
 				   uint8_t* values)
 {
 	return read_bits(client, FC_READ_DISCRETE_INPUTS, unit, address, count, values);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_read_holding_registers(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t count,
 				     uint16_t* values)
 {
 	return read_registers(client, FC_READ_HOLDING_REGISTERS, unit, address, count, values);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_read_input_registers(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t count,
 				   uint16_t* values)
 {
@@ -257,12 +258,12 @@ mogbus_client_read_input_registers(mogbus_client_t* client, uint8_t unit, uint16
 }
 
 /* FC 05, 06 and 16 send 4 or 6 data bytes and get the same bytes back. */
-static mogbus_error_t
+static mogbus_result_t
 write_echo(mogbus_client_t* client, const u8* req, u32 req_len, u8 unit)
 {
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
-	mogbus_error_t	err;
+	mogbus_result_t	err;
 
 	if (!client)
 		return MOGBUS_ERR_INVALID;
@@ -274,7 +275,7 @@ write_echo(mogbus_client_t* client, const u8* req, u32 req_len, u8 unit)
 	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_write_coil(mogbus_client_t* client, uint8_t unit, uint16_t address, bool on)
 {
 	u8 req[5] = { FC_WRITE_SINGLE_COIL };
@@ -284,7 +285,7 @@ mogbus_client_write_coil(mogbus_client_t* client, uint8_t unit, uint16_t address
 	return write_echo(client, req, sizeof(req), unit);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_write_register(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t value)
 {
 	u8 req[5] = { FC_WRITE_SINGLE_REGISTER };
@@ -294,7 +295,7 @@ mogbus_client_write_register(mogbus_client_t* client, uint8_t unit, uint16_t add
 	return write_echo(client, req, sizeof(req), unit);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_mask_write_register(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t and_mask,
 				  uint16_t or_mask)
 {
@@ -307,12 +308,12 @@ mogbus_client_mask_write_register(mogbus_client_t* client, uint8_t unit, uint16_
 }
 
 /* FC 15 and 16: address and count echoed back. */
-static mogbus_error_t
+static mogbus_result_t
 write_multiple(mogbus_client_t* client, u8 unit, const u8* req, u32 req_len)
 {
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
-	mogbus_error_t	err = call(client, unit, req, req_len, pdu, &pdu_len);
+	mogbus_result_t	err = call(client, unit, req, req_len, pdu, &pdu_len);
 
 	if (err != MOGBUS_OK)
 		return err;
@@ -321,7 +322,7 @@ write_multiple(mogbus_client_t* client, u8 unit, const u8* req, u32 req_len)
 	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_write_coils(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t count,
 			  const uint8_t* values)
 {
@@ -341,7 +342,7 @@ mogbus_client_write_coils(mogbus_client_t* client, uint8_t unit, uint16_t addres
 	return write_multiple(client, unit, req, 6 + bytes);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_write_registers(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t count,
 			      const uint16_t* values)
 {
@@ -359,7 +360,7 @@ mogbus_client_write_registers(mogbus_client_t* client, uint8_t unit, uint16_t ad
 	return write_multiple(client, unit, req, 6 + 2u * count);
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_read_write_registers(mogbus_client_t* client, uint8_t unit, uint16_t read_address,
 				   uint16_t read_count, uint16_t* read_values, uint16_t write_address,
 				   uint16_t write_count, const uint16_t* write_values)
@@ -367,7 +368,7 @@ mogbus_client_read_write_registers(mogbus_client_t* client, uint8_t unit, uint16
 	u8		req[10 + 2 * 121] = { FC_READ_WRITE_MULTIPLE_REGISTERS };
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
-	mogbus_error_t	err;
+	mogbus_result_t	err;
 
 	if (!client)
 		return MOGBUS_ERR_INVALID;
@@ -397,14 +398,14 @@ mogbus_client_read_write_registers(mogbus_client_t* client, uint8_t unit, uint16
 	return MOGBUS_OK;
 }
 
-mogbus_error_t
+mogbus_result_t
 mogbus_client_read_device_id(mogbus_client_t* client, uint8_t unit, uint8_t* out, size_t cap, size_t* out_len)
 {
 	/* MEI type 14, read device id code 1 (basic), first object 0. */
 	static const u8	req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
-	mogbus_error_t	err;
+	mogbus_result_t	err;
 
 	if (out_len)
 		*out_len = 0;

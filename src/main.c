@@ -372,7 +372,7 @@ show_registers(mogbus_t* ctx, bool all, bool json)
 			uint64_t	hash = 14695981039346656037ull;
 			double		number = 0;
 			bool		is_number = point.type != MOGBUS_TYPE_STRING &&
-						    mogbus_device_get_value(dev, point.space, point.address, &number);
+						    mogbus_device_get_value(dev, point.space, point.address, &number) == MOGBUS_OK;
 
 			if (point.type == MOGBUS_TYPE_STRING)
 				(void)mogbus_device_get_string(dev, point.space, point.address, text, sizeof(text));
@@ -454,10 +454,9 @@ main(int argc, char** argv)
 
 	mogbus_set_log_level(cli.verbose ? MOGBUS_LOG_DEBUG : MOGBUS_LOG_INFO);
 	mogbus_set_log_format(cli.log_json ? MOGBUS_LOG_JSON : MOGBUS_LOG_TEXT);
-	ctx = mogbus_create();
-	if (!ctx)
+	if (mogbus_create(&ctx) != MOGBUS_OK)
 	{
-		fprintf(stderr, "out of memory allocating app arena\n");
+		fprintf(stderr, "%s\n", mogbus_last_error(NULL));
 		return 1;
 	}
 
@@ -470,7 +469,7 @@ main(int argc, char** argv)
 	count = mogbus_config_server_count(ctx);
 	for (size_t i = 0; i < count; i++)
 	{
-		if (!mogbus_config_server_options_at(ctx, i, &options[i]))
+		if (mogbus_config_server_options_at(ctx, i, &options[i]) != MOGBUS_OK)
 			count = 0;
 	}
 	if (count == 0)
@@ -557,14 +556,13 @@ main(int argc, char** argv)
 	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
 	for (size_t i = 0; i < count; i++)
 	{
-		mogbus_server_t* server = cli.web && i == selected ?
-					  mogbus_server_create(ctx, &options[i]) :
-					  mogbus_server_create_from_config_at(ctx, i);
+		mogbus_server_t* server = NULL;
+		mogbus_result_t	 failure = cli.web && i == selected ?
+					   mogbus_server_create(ctx, &options[i], &server) :
+					   mogbus_server_create_from_config_at(ctx, i, &server);
 
-		if (!server)
+		if (failure != MOGBUS_OK)
 		{
-			mogbus_error_t failure = mogbus_last_error_code(ctx);
-
 			if (failure == MOGBUS_ERR_INVALID)
 				fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
 			status = failure == MOGBUS_ERR_SERIAL ? 1 : 2;

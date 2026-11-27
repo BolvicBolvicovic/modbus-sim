@@ -38,12 +38,13 @@ Everything the library allocates belongs to a context, created with @ref mogbus_
 `main()` creates the context, and `build_device()` adds the device to it and stores the handle in `st->dev` (`unit` is 1 unless `--unit` says otherwise):
 
 ```c
-mogbus_t* ctx = mogbus_create();    /* in main() */
+mogbus_t* ctx = NULL;
+mogbus_create(&ctx);                /* in main() */
 ...
-st->dev = mogbus_add_device(ctx, unit, "Pump station");
+error = mogbus_add_device(ctx, unit, "Pump station", &st->dev);
 ```
 
-@ref mogbus_add_device "mogbus_add_device()" returns NULL on a duplicate unit id. The reason is kept by the context: @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" and @ref mogbus_last_error "mogbus_last_error(ctx)". Calls that return a @ref mogbus_error_t "mogbus_error_t" (`mogbus_load_config`, `mogbus_device_add_point`, ...) return the code directly and leave only the text in `mogbus_last_error()`; that is why `build_device()` returns `mogbus_last_error_code(ctx)` when the device is NULL.
+Every fallible call returns a @ref mogbus_result_t "mogbus_result_t": `MOGBUS_OK` or the reason. A call that makes an object (@ref mogbus_create "mogbus_create()", @ref mogbus_add_device "mogbus_add_device()", @ref mogbus_server_create "mogbus_server_create()", @ref mogbus_client_open "mogbus_client_open()") hands it back through its last parameter, which is set to NULL on failure. @ref mogbus_add_device "mogbus_add_device()" fails on a name that is too long or when the context has 16 devices. The text of the failure is kept by the context: @ref mogbus_last_error "mogbus_last_error(ctx)". That is why `build_device()` simply returns what `mogbus_add_device()` returned.
 
 ## Points
 
@@ -142,11 +143,11 @@ The tutorial program takes `--config FILE`. `main()` loads the file before it bu
 ```c
 if (mogbus_load_config(ctx, config) != MOGBUS_OK) { ... }
 printf("loaded %s: %zu device(s)\n", config, mogbus_device_count(ctx));
-if (mogbus_config_server_options(ctx, &from_config))
+if (mogbus_config_server_options(ctx, &from_config) == MOGBUS_OK)
     options = from_config;       /* the file's (server ...) section as options */
 ```
 
-@ref mogbus_config_server_options "mogbus_config_server_options()" returns false when the file has no `(server ...)` section; otherwise it fills a @ref mogbus_server_options_t "mogbus_server_options_t", so a harness can reuse the transport settings of a profile. Run the self-test with the two-device profile shipped in the repository, and move the station to unit 10 because the profile already owns units 1 and 2:
+@ref mogbus_config_server_options "mogbus_config_server_options()" fails when the file has no `(server ...)` section; otherwise it fills a @ref mogbus_server_options_t "mogbus_server_options_t", so a harness can reuse the transport settings of a profile. Run the self-test with the two-device profile shipped in the repository, and move the station to unit 10 because the profile already owns units 1 and 2:
 
 ```bash
 ./pump_station --self-test --unit 10 --config profiles/two-devices.scm

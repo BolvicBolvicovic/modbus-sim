@@ -44,7 +44,7 @@ status(void* user, mogbus_device_t* dev, uint8_t unit_id, uint8_t code, const ui
 	(void)user; (void)unit_id; (void)code; (void)reply_cap;
 	if (len != 1 || data[0] != 0x01)
 		return 3;
-	if (!mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &value))
+	if (mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &value) != MOGBUS_OK)
 		return 4;
 	reply[0]   = (uint8_t)((unsigned)value >> 8);
 	reply[1]   = (uint8_t)value;
@@ -62,8 +62,8 @@ serve(void* server)
 int
 main(void)
 {
-	mogbus_t*		ctx     = mogbus_create();
-	mogbus_device_t*	dev     = ctx ? mogbus_add_device(ctx, 1, "meter") : NULL;
+	mogbus_t*		ctx = NULL;
+	mogbus_device_t*	dev = NULL;
 	mogbus_point_t		point   = { .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U16, .value = 1234 };
 	mogbus_server_options_t	so      = mogbus_server_options_defaults();
 	mogbus_client_options_t	co      = mogbus_client_options_defaults();
@@ -73,17 +73,21 @@ main(void)
 	bool			running = false;
 	int			status_code = 1;
 
-	if (!dev ||
-	    mogbus_device_add_point(dev, &point) != MOGBUS_OK ||
-	    !mogbus_device_add_function_code(dev, STATUS_CODE, status, NULL))
+	if (mogbus_create(&ctx) != MOGBUS_OK)
 	{
-		fprintf(stderr, "device: %s\n", ctx ? mogbus_last_error(ctx) : "out of memory");
+		fprintf(stderr, "%s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+	if (mogbus_add_device(ctx, 1, "meter", &dev) != MOGBUS_OK ||
+	    mogbus_device_add_point(dev, &point) != MOGBUS_OK ||
+	    mogbus_device_add_function_code(dev, STATUS_CODE, status, NULL) != MOGBUS_OK)
+	{
+		fprintf(stderr, "device: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
 
 	so.port = co.port = free_port();
-	server = mogbus_server_create(ctx, &so);
-	if (!server)
+	if (mogbus_server_create(ctx, &so, &server) != MOGBUS_OK)
 	{
 		fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
 		goto done;
@@ -91,8 +95,8 @@ main(void)
 	running = pthread_create(&thread, NULL, serve, server) == 0;
 
 	/* The client knows nothing about the server object: host, port, unit and function code. */
-	client = mogbus_client_open(&co);
-	if (!running || !client)
+	if (mogbus_client_open(&co, &client) != MOGBUS_OK ||
+	    !running)
 	{
 		fprintf(stderr, "client: %s\n", client ? "no server thread" : mogbus_last_error(NULL));
 		goto done;

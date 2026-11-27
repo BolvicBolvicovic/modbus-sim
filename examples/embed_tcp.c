@@ -35,7 +35,7 @@ free_port(void)
 int
 main(void)
 {
-	mogbus_t*	ctx       = mogbus_create();
+	mogbus_t*	ctx = NULL;
 	mogbus_device_t* dev      = NULL;
 	mogbus_server_t* server   = NULL;
 	mogbus_server_options_t options = mogbus_server_options_defaults();
@@ -44,18 +44,20 @@ main(void)
 	int		status    = 1;
 
 	printf("mogbus %s\n", mogbus_version());
-	if (!ctx)
+	if (mogbus_create(&ctx) != MOGBUS_OK)
+	{
+		fprintf(stderr, "%s\n", mogbus_last_error(NULL));
 		return 1;
-	dev = mogbus_add_device(ctx, 1, "embedded");
-	if (!dev || mogbus_device_add_point(dev, &point) != MOGBUS_OK)
+	}
+	if (mogbus_add_device(ctx, 1, "embedded", &dev) != MOGBUS_OK ||
+	    mogbus_device_add_point(dev, &point) != MOGBUS_OK)
 	{
 		fprintf(stderr, "device: %s\n", mogbus_last_error(ctx));
 		goto done;
 	}
 
 	options.port = free_port();
-	server = mogbus_server_create(ctx, &options);
-	if (!server)
+	if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
 	{
 		fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
 		goto done;
@@ -109,7 +111,7 @@ main(void)
 	{
 		double value = 0;
 
-		if (!mogbus_device_get_value(dev, MOGBUS_HOLDING, 10, &value) || value != 1234)
+		if (mogbus_device_get_value(dev, MOGBUS_HOLDING, 10, &value) != MOGBUS_OK || value != 1234)
 			goto done;
 	}
 	puts("read holding register 10 = 1234 over TCP");

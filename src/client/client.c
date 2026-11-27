@@ -139,28 +139,30 @@ is_ascii(const client_t* c)
 	       c->o.mode == CLIENT_ASCII_SERIAL;
 }
 
-client_t*
-client_new(const client_options_t* options)
+client_status_t
+client_new(const client_options_t* options, client_t** out)
 {
 	arena_t*	arena;
 	client_t*	c;
 	const char*	host;
+	client_status_t	status = CLIENT_INVALID;
 
 	detached_error[0] = '\0';
+	*out = NULL;
 	if (!options)
 	{
 		client_detached_errorf("options are required");
-		return NULL;
+		return CLIENT_INVALID;
 	}
 	if (options->mode > CLIENT_ASCII_SERIAL)
 	{
 		client_detached_errorf("unknown client mode %d", (int)options->mode);
-		return NULL;
+		return CLIENT_INVALID;
 	}
 	if (options->tls)
 	{
 		client_detached_errorf("TLS is not supported by the client");
-		return NULL;
+		return CLIENT_UNSUPPORTED;
 	}
 	arena = ARENA_ALLOC();
 	c     = arena ? ARENA_PUSH_ARRAY_ALIGNED(arena, client_t, 1, 16) : NULL;
@@ -169,7 +171,7 @@ client_new(const client_options_t* options)
 		if (arena)
 			arena_release(arena);
 		client_detached_errorf("out of memory");
-		return NULL;
+		return CLIENT_NOMEM;
 	}
 	c->arena = arena;
 	c->o     = *options;
@@ -192,6 +194,7 @@ client_new(const client_options_t* options)
 		if (!os_serial_supported())
 		{
 			client_detached_errorf("serial lines are not supported on this platform");
+			status = CLIENT_UNSUPPORTED;
 			goto bad;
 		}
 		if ((options->data_bits != 7 && options->data_bits != 8) ||
@@ -205,7 +208,8 @@ client_new(const client_options_t* options)
 			goto bad;
 		}
 		snprintf(c->path, sizeof(c->path), "%s", options->path);
-		return c;
+		*out = c;
+		return CLIENT_OK;
 	}
 
 	host = options->host ? options->host : "127.0.0.1";
@@ -223,11 +227,12 @@ client_new(const client_options_t* options)
 		goto bad;
 	}
 	snprintf(c->host, sizeof(c->host), "%s", host);
-	return c;
+	*out = c;
+	return CLIENT_OK;
 
 bad:
 	arena_release(arena);
-	return NULL;
+	return status;
 }
 
 static void

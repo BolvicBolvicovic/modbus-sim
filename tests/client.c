@@ -81,7 +81,7 @@ server_up(fx_t* fx)
 
 	o.mode = fx->mode;
 	o.port = fx->port;
-	fx->server = mogbus_server_create(fx->ctx, &o);
+	mogbus_server_create(fx->ctx, &o, &fx->server);
 	if (!fx->server)
 		return false;
 	atomic_store(&fx->stop, false);
@@ -109,10 +109,10 @@ fx_start(fx_t* fx, mogbus_mode_t mode)
 	memset(fx, 0, sizeof(*fx));
 	fx->mode = mode;
 	fx->port = ts_free_port();
-	fx->ctx  = mogbus_create();
+	mogbus_create(&fx->ctx);
 	if (!fx->ctx || fx->port == 0)
 		return false;
-	dev = mogbus_add_device(fx->ctx, 1, "client-test");
+	mogbus_add_device(fx->ctx, 1, "client-test", &dev);
 	if (!dev)
 		return false;
 	for (uint32_t i = 0; i < 40; i++)
@@ -143,9 +143,9 @@ fx_start(fx_t* fx, mogbus_mode_t mode)
 		if (mogbus_device_add_point(dev, &p) != MOGBUS_OK)
 			return false;
 	}
-	return mogbus_device_add_function_code(dev, CUSTOM_FC, reverse_fn, fx) &&
-	       mogbus_device_add_function_code(dev, SILENT_FC, silent_fn, fx) &&
-	       mogbus_device_add_function_code(dev, REFUSING_FC, refusing_fn, fx) &&
+	return mogbus_device_add_function_code(dev, CUSTOM_FC, reverse_fn, fx) == MOGBUS_OK &&
+	       mogbus_device_add_function_code(dev, SILENT_FC, silent_fn, fx) == MOGBUS_OK &&
+	       mogbus_device_add_function_code(dev, REFUSING_FC, refusing_fn, fx) == MOGBUS_OK &&
 	       server_up(fx);
 }
 
@@ -160,13 +160,15 @@ fx_stop(fx_t* fx)
 static mogbus_client_t*
 client_for(const fx_t* fx, uint32_t retries)
 {
-	mogbus_client_options_t o = mogbus_client_options_defaults();
+	mogbus_client_options_t o      = mogbus_client_options_defaults();
+	mogbus_client_t*	client = NULL;
 
 	o.mode       = fx->mode;
 	o.port       = fx->port;
 	o.timeout_ms = CALL_TIMEOUT_MS;
 	o.retries    = retries;
-	return mogbus_client_open(&o);
+	mogbus_client_open(&o, &client);
+	return client;
 }
 
 /* Every typed call, in the framing of fx->mode. */
@@ -243,35 +245,36 @@ TEST(ClientOptionsAndOpenErrors)
 	ASSERT_EQ(o.mode == MOGBUS_MODE_TCP && o.port == 1502 && strcmp(o.host, "127.0.0.1") == 0);
 	ASSERT_EQ(o.timeout_ms == 1000 && o.retries == 0 && o.data_bits == 8 && o.stop_bits == 1);
 
-	ASSERT_EQ(mogbus_client_open(NULL) == NULL);
+	ASSERT_EQ(mogbus_client_open(NULL, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	ASSERT_EQ(strlen(mogbus_last_error(NULL)) > 0);
 
 	o.host = "not-an-ip";
-	ASSERT_EQ(mogbus_client_open(&o) == NULL);
+	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	ASSERT_EQ(strstr(mogbus_last_error(NULL), "not-an-ip") != NULL);
 	o.host = "127.0.0.1";
 
 	o.port = 0;
-	ASSERT_EQ(mogbus_client_open(&o) == NULL);
+	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	o.port = 1502;
 
 	o.mode = MOGBUS_MODE_RTU_PTY;
-	ASSERT_EQ(mogbus_client_open(&o) == NULL);
+	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	ASSERT_EQ(strstr(mogbus_last_error(NULL), "not a client mode") != NULL);
 	o.mode = MOGBUS_MODE_TCP;
 
 	o.tls_enabled = true;
-	ASSERT_EQ(mogbus_client_open(&o) == NULL);
+	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	ASSERT_EQ(strstr(mogbus_last_error(NULL), "TLS") != NULL);
 	o.tls_enabled = false;
 
 	o.mode = MOGBUS_MODE_RTU_DEVICE;
 	o.path = NULL;
-	ASSERT_EQ(mogbus_client_open(&o) == NULL);
+	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	o.mode = MOGBUS_MODE_TCP;
 
 	{
-		mogbus_client_t* c = mogbus_client_open(&o);
+		mogbus_client_t* c = NULL;
+		mogbus_client_open(&o, &c);
 
 		ASSERT_EQ(c != NULL);
 		ASSERT_EQ(strlen(mogbus_last_error(NULL)) == 0);	/* a success clears it */
@@ -285,7 +288,8 @@ TEST(ClientOptionsAndOpenErrors)
 TEST(ClientArgumentChecks)
 {
 	mogbus_client_options_t o = mogbus_client_options_defaults();
-	mogbus_client_t*	c = mogbus_client_open(&o);
+	mogbus_client_t*	c = NULL;
+	mogbus_client_open(&o, &c);
 	uint16_t		regs[200];
 	uint8_t			bits[2100];
 	size_t			n = 7;
@@ -468,8 +472,10 @@ TEST(ClientRawRequestAndBroadcast)
 static void
 serial_round_trip(mogbus_mode_t server_mode, mogbus_mode_t client_mode)
 {
-	mogbus_t*		ctx = mogbus_create();
-	mogbus_device_t*	dev = mogbus_add_device(ctx, 1, "serial");
+	mogbus_t*		ctx = NULL;
+	mogbus_create(&ctx);
+	mogbus_device_t*	dev = NULL;
+	mogbus_add_device(ctx, 1, "serial", &dev);
 	mogbus_point_t		p = { .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U16, .value = 4242 };
 	mogbus_server_options_t so = mogbus_server_options_defaults();
 	mogbus_client_options_t co = mogbus_client_options_defaults();
@@ -482,7 +488,7 @@ serial_round_trip(mogbus_mode_t server_mode, mogbus_mode_t client_mode)
 	p.address = 1;
 	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
 	so.mode    = server_mode;
-	fx.server  = mogbus_server_create(ctx, &so);
+	mogbus_server_create(ctx, &so, &fx.server);
 	ASSERT_EQ(fx.server != NULL);
 	atomic_store(&fx.stop, false);
 	ASSERT_EQ(pthread_create(&fx.thread, NULL, server_thread, &fx) == 0);
@@ -490,7 +496,7 @@ serial_round_trip(mogbus_mode_t server_mode, mogbus_mode_t client_mode)
 	co.mode       = client_mode;
 	co.path       = mogbus_server_pty_name(fx.server);
 	co.timeout_ms = 2000;
-	c = mogbus_client_open(&co);
+	mogbus_client_open(&co, &c);
 	ASSERT_EQ(c != NULL);
 	ASSERT_EQ(mogbus_client_read_holding_registers(c, 1, 0, 2, regs) == MOGBUS_OK);
 	ASSERT_EQ(regs[0] == 4242 && regs[1] == 4242);
@@ -519,7 +525,7 @@ TEST(ClientSerialDeviceMissing)
 
 	o.mode = MOGBUS_MODE_RTU_DEVICE;
 	o.path = "/nonexistent/ttyX";
-	c = mogbus_client_open(&o);
+	mogbus_client_open(&o, &c);
 	ASSERT_EQ(c != NULL);
 	ASSERT_EQ(mogbus_client_connect(c) == MOGBUS_ERR_IO);
 	ASSERT_EQ(strstr(mogbus_client_last_error(c), "/nonexistent/ttyX") != NULL);

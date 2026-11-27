@@ -28,21 +28,19 @@ If you loaded a config in step 1, @ref mogbus_config_server_options "mogbus_conf
 
 ## Check, then create
 
-@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and returns the server, or NULL. In `main()`, `ctx` is the context of step 1 and `g_server` a global that step 5 explains (it lets Ctrl-C stop the server):
+@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and hands the server back through its last parameter (NULL on failure). In `main()`, `ctx` is the context of step 1 and `g_server` a global that step 5 explains (it lets Ctrl-C stop the server):
 
 ```c
 if (mogbus_server_check(ctx, &options) != MOGBUS_OK) { ... }
-server = mogbus_server_create(ctx, &options);
-if (!server)
+if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
 {
-	fprintf(stderr, "server (status %d): %s\n", (int)mogbus_last_error_code(ctx),
-		mogbus_last_error(ctx));
+	fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
 	goto done;
 }
 g_server = server;
 ```
 
-On failure @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" (a @ref mogbus_error_t "mogbus_error_t") tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the code itself: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The `mogbus` binary maps serial to exit status 1 and listen to 2. A TLS server needs a library built with TLS; without it creation fails with an error.
+On failure @ref mogbus_server_create "mogbus_server_create()" returns a @ref mogbus_result_t "mogbus_result_t" that tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the same codes: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The `mogbus` binary maps serial to exit status 1 and listen to 2. A TLS server needs a library built with TLS; without it creation fails with an error.
 
 ## The loop
 

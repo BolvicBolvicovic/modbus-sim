@@ -65,9 +65,11 @@ struct client_options_t
  *
  * With no client to own the message, a failure leaves its text per thread
  * (client_detached_error()).
- * @return The client, or NULL.
+ * @param options Settings.
+ * @param out Receives the client, NULL on failure.
+ * @return CLIENT_OK, CLIENT_INVALID, CLIENT_NOMEM or CLIENT_UNSUPPORTED.
  */
-client_t*	client_new(const client_options_t* options);
+client_status_t	client_new(const client_options_t* options, client_t** out);
 
 /** @brief Closes the connection and releases the client's memory; NULL is ignored. */
 void		client_free(client_t* c);

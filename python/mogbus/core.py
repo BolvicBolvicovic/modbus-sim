@@ -784,7 +784,7 @@ class Device:
         if count == 0:
             return []
         out = (ctypes.c_uint16 * count)()
-        if not lib.mogbus_device_read(self._live(), space, address, count, out):
+        if lib.mogbus_device_read(self._live(), space, address, count, out):
             raise MogbusError(f"cannot read {count} value(s) at {Space(space).name.lower()} "
                               f"{address}: an address is undefined or out of range")
         return list(out)
@@ -807,7 +807,7 @@ class Device:
         if not values:
             return
         arr = (ctypes.c_uint16 * len(values))(*values)
-        if not lib.mogbus_device_write(self._live(), space, address, len(values), arr):
+        if lib.mogbus_device_write(self._live(), space, address, len(values), arr):
             raise MogbusError(f"cannot write {len(values)} value(s) at {Space(space).name.lower()} "
                               f"{address}: an address is undefined or out of range, a value does "
                               "not fit, or the point is driven by a machine or the host")
@@ -823,7 +823,7 @@ class Device:
         space = int(_coerce(Space, space, "space"))
         address = _u(address, "address", 65536)
         out = ctypes.c_double()
-        if not lib.mogbus_device_get_value(self._live(), space, address, ctypes.byref(out)):
+        if lib.mogbus_device_get_value(self._live(), space, address, ctypes.byref(out)):
             raise MogbusError(f"no point starts at {Space(space).name.lower()} {address}")
         return out.value
 
@@ -840,7 +840,7 @@ class Device:
         """
         space = int(_coerce(Space, space, "space"))
         address = _u(address, "address", 65536)
-        if not lib.mogbus_device_set_value(self._live(), space, address, float(value)):
+        if lib.mogbus_device_set_value(self._live(), space, address, float(value)):
             raise MogbusError(f"no point starts at {Space(space).name.lower()} {address}")
 
     @_locked
@@ -851,7 +851,7 @@ class Device:
         @param on True to turn it on, False to turn it off.
         @throws MogbusError If another device of the context already has it.
         """
-        if not lib.mogbus_device_set_any_unit(self._live(), bool(on)):
+        if lib.mogbus_device_set_any_unit(self._live(), bool(on)):
             raise MogbusError("another device of the context already answers any unit id")
 
     @_locked
@@ -899,7 +899,7 @@ class Device:
         """
         handle = self._live()
         if hook is None:
-            if not lib.mogbus_device_set_access_hook(handle, ctypes.cast(None, _lib.ACCESS_FN), None):
+            if lib.mogbus_device_set_access_hook(handle, ctypes.cast(None, _lib.ACCESS_FN), None):
                 raise MogbusError("cannot remove the access hook")
             self._access_ref = None
             return
@@ -923,7 +923,7 @@ class Device:
                 return 4
 
         ref = _lib.ACCESS_FN(trampoline)
-        if not lib.mogbus_device_set_access_hook(handle, ref, None):
+        if lib.mogbus_device_set_access_hook(handle, ref, None):
             raise MogbusError("cannot install the access hook (out of memory)")
         self._access_ref = ref
 
@@ -957,7 +957,7 @@ class Device:
         """
         handle = self._live()
         if hook is None:
-            if not lib.mogbus_device_set_written_hook(handle, ctypes.cast(None, _lib.WRITTEN_FN), None):
+            if lib.mogbus_device_set_written_hook(handle, ctypes.cast(None, _lib.WRITTEN_FN), None):
                 raise MogbusError("cannot remove the written hook")
             self._written_ref = None
             return
@@ -973,7 +973,7 @@ class Device:
                 traceback.print_exc()
 
         ref = _lib.WRITTEN_FN(trampoline)
-        if not lib.mogbus_device_set_written_hook(handle, ref, None):
+        if lib.mogbus_device_set_written_hook(handle, ref, None):
             raise MogbusError("cannot install the written hook (out of memory)")
         self._written_ref = ref
 
@@ -1027,7 +1027,7 @@ class Device:
                 return 4
 
         ref = _lib.FUNCTION_FN(trampoline)
-        if not lib.mogbus_device_add_function_code(self._live(), code, ref, None):
+        if lib.mogbus_device_add_function_code(self._live(), code, ref, None):
             raise MogbusError(f"cannot add function code 0x{code:02X} (not 1-127, built in, already defined, "
                               "or the device has 8)")
         self._function_refs.append(ref)
@@ -1061,7 +1061,7 @@ class Device:
         record = _u(record, "record", 65536)
         count = _u(count, "count", 65536)
         out = (ctypes.c_uint16 * max(count, 1))()
-        if not lib.mogbus_device_read_file_records(self._live(), file, record, count, out):
+        if lib.mogbus_device_read_file_records(self._live(), file, record, count, out):
             raise MogbusError(f"cannot read {count} record(s) at file {file} record {record}: "
                               "a record is undefined")
         return list(out)[:count]
@@ -1080,7 +1080,7 @@ class Device:
         record = _u(record, "record", 65536)
         values = [_u(v, "register value", 65536) for v in values]
         arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
-        if not lib.mogbus_device_write_file_records(self._live(), file, record, len(values), arr):
+        if lib.mogbus_device_write_file_records(self._live(), file, record, len(values), arr):
             raise MogbusError(f"cannot write {len(values)} record(s) at file {file} record {record}: "
                               "a record is undefined")
 
@@ -1108,7 +1108,7 @@ class Device:
         address = _u(address, "address", 65536)
         values = [_u(v, "register value", 65536) for v in values]
         arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
-        if not lib.mogbus_device_set_fifo(self._live(), address, len(values), arr):
+        if lib.mogbus_device_set_fifo(self._live(), address, len(values), arr):
             raise MogbusError(f"no FIFO is defined at {address}, or more than 31 values")
 
     @_locked
@@ -1146,7 +1146,7 @@ class Device:
         count = _u(count, "count", 65536)
         offset = _u(offset, "offset", 65536)
         out = (ctypes.c_uint8 * max(count, 1))()
-        if not lib.mogbus_device_read_canopen(self._live(), node, index, subindex, offset, count, out):
+        if lib.mogbus_device_read_canopen(self._live(), node, index, subindex, offset, count, out):
             raise MogbusError("no such CANopen object, or the range is outside it")
         return bytes(out)[:count]
 
@@ -1166,7 +1166,7 @@ class Device:
         offset = _u(offset, "offset", 65536)
         data = bytes(data)
         arr = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
-        if not lib.mogbus_device_write_canopen(self._live(), node, index, subindex, offset, len(data), arr):
+        if lib.mogbus_device_write_canopen(self._live(), node, index, subindex, offset, len(data), arr):
             raise MogbusError("no such CANopen object, or the range is outside it")
 
     @_locked
@@ -1180,7 +1180,7 @@ class Device:
         space = int(_coerce(Space, space, "space"))
         address = _u(address, "address", 65536)
         buf = ctypes.create_string_buffer(2 * 123 + 1)
-        if not lib.mogbus_device_get_string(self._live(), space, address, buf, len(buf)):
+        if lib.mogbus_device_get_string(self._live(), space, address, buf, len(buf)):
             raise MogbusError(f"no string point starts at {Space(space).name.lower()} {address}")
         return buf.value.decode("latin-1")
 
@@ -1194,7 +1194,7 @@ class Device:
         """
         space = int(_coerce(Space, space, "space"))
         address = _u(address, "address", 65536)
-        if not lib.mogbus_device_set_string(self._live(), space, address, text.encode("latin-1")):
+        if lib.mogbus_device_set_string(self._live(), space, address, text.encode("latin-1")):
             raise MogbusError(f"no string point starts at {Space(space).name.lower()} {address}, "
                               "or the text is longer than its registers")
 
@@ -1382,7 +1382,7 @@ class Server:
         """
         handle = self._live()
         if hook is None:
-            if not lib.mogbus_server_set_frame_hook(handle, ctypes.cast(None, _lib.FRAME_FN), None):
+            if lib.mogbus_server_set_frame_hook(handle, ctypes.cast(None, _lib.FRAME_FN), None):
                 raise MogbusError("cannot remove the frame hook")
             self._frame_ref = None
             return
@@ -1403,7 +1403,7 @@ class Server:
                 return f.len
 
         ref = _lib.FRAME_FN(trampoline)
-        if not lib.mogbus_server_set_frame_hook(handle, ref, None):
+        if lib.mogbus_server_set_frame_hook(handle, ref, None):
             raise MogbusError("cannot install the frame hook")
         self._frame_ref = ref
 
@@ -1439,7 +1439,9 @@ class Context:
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._h = lib.mogbus_create()
+        out = ctypes.c_void_p()
+        lib.mogbus_create(ctypes.byref(out))
+        self._h = out.value
         if not self._h:
             raise MogbusError("cannot create a context (memory cannot be mapped)")
         self._servers: List[Server] = []
@@ -1507,10 +1509,11 @@ class Context:
         with self._lock:
             self._check_open()
             unit_id = _u(unit_id, "unit_id", 256)
-            handle = lib.mogbus_add_device(self._h, unit_id, _text(name))
-            if not handle:
-                raise _fail(self._h, lib.mogbus_last_error_code(self._h), "cannot add device")
-            return self._device(handle)
+            out = ctypes.c_void_p()
+            code = lib.mogbus_add_device(self._h, unit_id, _text(name), ctypes.byref(out))
+            if code:
+                raise _fail(self._h, code, "cannot add device")
+            return self._device(out.value)
 
     def find_device(self, unit_id: int) -> Optional[Device]:
         """@brief The device with this unit id.
@@ -1545,7 +1548,7 @@ class Context:
         with self._lock:
             self._check_open()
             c = _lib.ServerOptionsC()
-            if not lib.mogbus_config_server_options(self._h, ctypes.byref(c)):
+            if lib.mogbus_config_server_options(self._h, ctypes.byref(c)):
                 return None
             return ServerOptions._from_c(c)
 
@@ -1578,9 +1581,10 @@ class Context:
         with self._lock:
             self._check_open()
             c, keep = options._to_c()
-            handle = lib.mogbus_server_create(self._h, ctypes.byref(c))
+            out = ctypes.c_void_p()
+            code = lib.mogbus_server_create(self._h, ctypes.byref(c), ctypes.byref(out))
             del keep
-            return self._new_server(handle)
+            return self._new_server(code, out.value)
 
     def serve_config(self) -> Server:
         """@brief Creates a server from the `(server ...)` section of the loaded config.
@@ -1589,11 +1593,13 @@ class Context:
         """
         with self._lock:
             self._check_open()
-            return self._new_server(lib.mogbus_server_create_from_config(self._h))
+            out = ctypes.c_void_p()
+            code = lib.mogbus_server_create_from_config(self._h, ctypes.byref(out))
+            return self._new_server(code, out.value)
 
-    def _new_server(self, handle):
-        if not handle:
-            raise _fail(self._h, lib.mogbus_last_error_code(self._h), "cannot create server")
+    def _new_server(self, code, handle):
+        if code:
+            raise _fail(self._h, code, "cannot create server")
         server = Server(self, handle)
         self._servers.append(server)
         return server
@@ -1850,10 +1856,12 @@ class Client:
         c.timeout_ms = _u(timeout_ms, "timeout_ms", 1 << 32)
         c.retries = _u(retries, "retries", 1 << 32)
         self.unit = _u(unit, "unit", 256)
-        self._h = lib.mogbus_client_open(ctypes.byref(c))
-        if not self._h:
+        out = ctypes.c_void_p()
+        code = lib.mogbus_client_open(ctypes.byref(c), ctypes.byref(out))
+        self._h = out.value
+        if code:
             msg = lib.mogbus_last_error(None)
-            raise MogbusError(msg.decode(errors="replace") if msg else "cannot open the client", Status.INVALID)
+            raise MogbusError(msg.decode(errors="replace") if msg else "cannot open the client", Status(code))
 
     def __enter__(self) -> "Client":
         return self
