@@ -31,9 +31,10 @@ range, a closed context) raise it too, before the C library is called.
 
 ## Threading
 
-The C library is not thread-safe, so every Context, Device and Server method takes one
-re-entrant lock per context: once a server runs with Server.start(), any thread may read and write
-device values. Server.stop() takes no lock. Logging is process-wide (set_log_sink()).
+The C library is thread-safe per context; every Context, Device and Server method also takes one
+re-entrant Python lock per context, which guards the package's own state (closed handles, hook
+registries, the background thread): once a server runs with Server.start(), any thread may read and
+write device values. Server.stop() takes no lock. Logging is process-wide (set_log_sink()).
 
 ## C equivalents
 

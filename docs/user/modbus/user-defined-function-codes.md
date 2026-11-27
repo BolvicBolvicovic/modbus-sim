@@ -150,7 +150,7 @@ int main(void)
 		printf("0x41 -> %d\n", (reply[0] << 8) | reply[1]);   /* 1234 */
 
 	mogbus_client_close(client);
-	mogbus_server_stop(server);                     /* the one call that is thread-safe */
+	mogbus_server_stop(server);                     /* lock-free: any thread or a signal handler */
 	pthread_join(thread, NULL);
 	mogbus_server_close(server);
 	mogbus_destroy(ctx);

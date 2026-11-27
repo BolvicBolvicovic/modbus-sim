@@ -62,7 +62,7 @@ mogbus_stop_on_signals(&g_server);
 g_server = server;
 ```
 
-@ref mogbus_server_stop "mogbus_server_stop()" is the one call that is async-signal-safe and may come from another thread: the next `mogbus_server_step` returns `MOGBUS_STEP_DONE` and the loop in step 2 ends. Press Ctrl-C while the example runs:
+@ref mogbus_server_stop "mogbus_server_stop()" is async-signal-safe and may come from another thread: the next `mogbus_server_step` returns `MOGBUS_STEP_DONE` and the loop in step 2 ends. Press Ctrl-C while the example runs:
 
 ```text
 level 2.25 m, pump ON, events 9, client writes 0 ok / 0 refused
@@ -98,12 +98,15 @@ done:
 
 ## Threading
 
-- **Not thread-safe.** One thread at a time uses a context. The thread that calls `mogbus_server_step()` is the thread that may touch the devices, including from the access hook, which runs inside the step. A harness that wants a background thread steps the server on it and does all device calls there, or serializes them with its own lock around both the step and the calls.
-- The only calls that may come from another thread or a signal handler are `mogbus_server_stop()` and `mogbus_stop()` (all servers of the context).
+- **Thread-safe per context.** Every call that takes a context, one of its devices or one of its servers holds one recursive lock of that context while it runs, so any thread may call them at any time: one thread can run @ref mogbus_server_run "mogbus_server_run()" (or loop on `mogbus_server_step()`) while others call `mogbus_device_set_value()`, `mogbus_device_get_value()` or `mogbus_device_add_point()` on the same devices. A step releases the lock while it waits for I/O and holds it while it answers requests, so a host call waits at most for the request being served. Different contexts are independent.
+- **Callbacks hold the lock.** The access, written, frame and function-code hooks run on the thread that steps the server with the lock held. The lock is recursive, so they may call `mogbus_device_*` on the same context, but they must not block or wait for another thread that wants the context (that thread waits for the lock the hook holds).
+- **No lock for stopping.** @ref mogbus_server_stop "mogbus_server_stop()", @ref mogbus_stop "mogbus_stop()" and the signal helpers only set a flag, so they are async-signal-safe and may come from any thread or a signal handler. A step that is waiting for I/O notices the flag within one second (sooner when a request arrives or a timer is due), then `mogbus_server_step()` returns `MOGBUS_STEP_DONE`.
+- **Not covered.** @ref mogbus_destroy "mogbus_destroy()" and @ref mogbus_server_close "mogbus_server_close()" free what other threads may be using: stop the server, wait for the thread that steps it (join it), then close. A client is used by one thread at a time (one client per thread to talk in parallel, see [the client](library-client.md#threads-and-the-server)). The message of `mogbus_last_error(ctx)` is shared by the threads of a context, so another thread's failure can replace it before you read it; the return code is always yours. Log level, format and sink are process-wide: set them before starting threads.
+- **Why always on.** There is no build or runtime switch. An uncontended lock costs tens of nanoseconds, against microseconds to milliseconds for the I/O of every request, so an option would only add API surface and a mode in which a second thread silently corrupts a device.
 - @ref mogbus_probe "mogbus_probe()" blocks, so call it from another thread or process, as in step 2.
 - Logging is process-wide: a sink is called on whichever thread logs, so make it safe for the threads that step servers.
 
-The [Python package](../python/python-lifetimes.md#threads-and-locks) applies these rules with one lock per context and an optional stepping thread.
+The [Python package](../python/python-lifetimes.md#threads-and-locks) adds its own lock per context on top and an optional stepping thread.
 
 ## Where next
 

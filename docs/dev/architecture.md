@@ -71,7 +71,7 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/os` | `os_socket`, `os_wait`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX, `WSAPoll` on Windows), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
+| `src/os` | `os_socket`, `os_wait`, `os_mutex`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX, `WSAPoll` on Windows), a recursive mutex with caller-owned storage (`os_mutex`: pthread, `CRITICAL_SECTION`), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
 | `src/util` | `rng`, `log`, `arena_impl` | reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
@@ -193,6 +193,27 @@ The net layer installs no signal handlers. `main.c` calls `mogbus_stop_on_signal
 which only sets a flag, on the running server) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
 byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
 embedding a TLS server must ignore SIGPIPE itself.
+
+### Threading
+
+The public API is thread-safe per context and always on; there is no option. `mogbus_t` embeds one
+recursive `os_mutex_t` and every public function that takes a context, device or server locks it for
+its duration (`LOCK()` in `src/api/mogbus.c`, a `cleanup` attribute guard, so every return path
+unlocks). The layers below the API (`server`, `net`, `device`) know nothing about threads except
+two hooks for waiting: `net_poll()` (through `net_obs_t.lock`) and `server_group_step()` (through
+`net_poll_group_t.lock`) unlock around `os_wait()` and lock again afterwards, so a host thread can
+call `mogbus_device_*` while a server is idle, and a request is answered with the lock held. The lock
+is recursive because hooks and callbacks run inside the step and may call `mogbus_device_*`.
+`mogbus_server_run` and `mogbus_run` are loops of locked single steps, which also gives waiting host
+threads a window between requests. Stopping must stay async-signal-safe, so `server_stop` takes no
+lock: the stop flags (`os_stop_flag_t`) and `net_obs_t.ready` are atomics, and a step waiting in
+`os_wait` notices within its timeout (at most 1 s). Not covered: `mogbus_destroy` and
+`mogbus_server_close` racing other calls, a client used by two threads, and the process-wide log
+settings (the log prefix and the machine parser's error text are `_Thread_local`). An always-on lock
+was chosen over an option because an uncontended recursive mutex costs tens of nanoseconds per call
+against the I/O of every request, and an option would add API surface and a mode where a second
+thread silently corrupts a device. `tests/threads.c` covers it; run it with `-fsanitize=thread`
+after touching the locking.
 
 ### Logging (`util/log`)
 

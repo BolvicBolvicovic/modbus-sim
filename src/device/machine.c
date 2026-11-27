@@ -24,7 +24,7 @@ static const char* const failure_names[EXPR_FAIL_TYPE + 1] = {
 	"point access failed", "invalid expression",
 };
 
-static char error_text[256];
+static _Thread_local char error_text[256];
 
 static const char*
 machine_error(const char* machine, const char* state, const char* reason)

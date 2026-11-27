@@ -239,7 +239,7 @@ endif
 TESTS_POSIX_ONLY = tests/api.c tests/client.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
                    tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c \
                    tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
-                   tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/udp_server.c \
+                   tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/threads.c tests/udp_server.c \
                    tests/tests_utils/test_support.c tests/tests_utils/tls_client.c
 ifeq ($(PLATFORM),win32)
 TEST_SRCS   := $(filter-out $(TESTS_POSIX_ONLY),$(TEST_SRCS))

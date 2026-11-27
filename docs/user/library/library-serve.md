@@ -59,7 +59,7 @@ while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
 
 It returns `MOGBUS_STEP_CONTINUE`, `MOGBUS_STEP_DONE` (stopped, or the byte-stream peer went away) or `MOGBUS_STEP_ERROR` (poll failed). The wait doubles as your loop's timer: 100 ms here means the simulation advances at least ten times a second even with no clients. If you have nothing else to do, @ref mogbus_server_run "mogbus_server_run()" steps until stopped for you.
 
-One thread does everything. Requests are answered inside `mogbus_server_step`, so the simulation, the access hook and the host writes of the next step never run concurrently with a request. That is why the library needs no locks, and also why the step must not be starved: a long computation between steps delays every client.
+Requests are answered inside `mogbus_server_step`, so the simulation, the access hook and a host write never run concurrently with a request: a context has one lock, held while a request is answered and released while the step waits (see [threading](library-lifetimes.md#threading)). A host that wants a background thread can run `mogbus_server_run()` on it and keep calling `mogbus_device_*` from the others. A long computation between steps of your own loop still delays every client.
 
 ## Check that it answers
 

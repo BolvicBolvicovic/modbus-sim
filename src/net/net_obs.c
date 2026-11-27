@@ -889,7 +889,15 @@ net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 		}
 	}
 	else
+	{
+		if (obs &&
+		    obs->lock)
+			os_mutex_unlock(obs->lock);
 		rc = os_wait(all, n, timeout_ms);
+		if (obs &&
+		    obs->lock)
+			os_mutex_lock(obs->lock);
+	}
 	if (all != fds)
 	{
 		for (u32 i = 0; i < count; i++)

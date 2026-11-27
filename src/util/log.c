@@ -12,7 +12,7 @@ static log_level_t	g_level    = LOG_LEVEL_INFO;
 static log_format_t	g_format   = LOG_FORMAT_TEXT;
 static log_sink_t	g_sink     = NULL;
 static void*		g_sink_ctx = NULL;
-static const char*	g_prefix   = NULL;
+static _Thread_local const char* g_prefix = NULL;
 
 static const char* const LEVEL_NAMES[] = {
 	[LOG_LEVEL_DEBUG] = "debug",

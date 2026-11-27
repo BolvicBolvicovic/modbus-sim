@@ -10,6 +10,7 @@
 #define NET_OBS_H
 
 #include "modbus/pdu.h"
+#include "os/os_mutex.h"
 #include "os/os_socket.h"
 #include "os/os_wait.h"
 #include "vlib/c_types.h"
@@ -56,6 +57,7 @@ enum net_poll_phase_t
 struct net_poll_group_t
 {
 	net_poll_phase_t phase;
+	os_mutex_t*	lock;		/**< released around the shared wait; NULL = none */
 	int		timeout_ms;	/**< shortest timeout a gathered step asked for; -1 = none */
 	u32		count;
 	os_wait_entry_t	entries[OS_WAIT_MAX];
@@ -102,7 +104,8 @@ struct net_obs_t
 	device_t**	devices;	/**< borrowed; metrics are kept per index */
 	u32		device_count;
 	u64		start_unix_s;	/**< wall-clock start, for mogbus_start_time_seconds */
-	bool		ready;		/**< serving; false before start and once stopping */
+	_Atomic bool	ready;		/**< serving; false before start and once stopping (stop may come from another thread) */
+	os_mutex_t*	lock;		/**< context lock, released around the wait in net_poll(); NULL = none */
 	net_poll_group_t* group;	/**< shared wait while a group step runs, else NULL */
 	net_frame_fn	frame_fn;	/**< frame hook, or NULL; set by the host after net_obs_init() */
 	void*		frame_user;

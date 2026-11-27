@@ -309,7 +309,11 @@ server_group_step(server_t** servers, u32 count, net_poll_group_t* group, s32 ma
 		if (max_wait_ms >= 0 &&
 		    max_wait_ms < timeout)
 			timeout = max_wait_ms;
+		if (group->lock)
+			os_mutex_unlock(group->lock);
 		rc = os_wait(group->entries, group->count, timeout);
+		if (group->lock)
+			os_mutex_lock(group->lock);
 		if (rc < 0 &&
 		    !os_interrupted())
 		{

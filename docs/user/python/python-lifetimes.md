@@ -88,10 +88,12 @@ runs.
 
 ## Threads and locks
 
-The C library is not thread-safe, so the package serialises it: every method of a
-\ref mogbus::core::Context "Context", \ref mogbus::core::Device "Device" and
-\ref mogbus::core::Server "Server" takes one re-entrant lock per context. You do not manage that lock
-yourself; you only need to know who holds it when.
+The C library is thread-safe per context (see the
+[C threading rules](../library/library-lifetimes.md#threading)). The package still takes one re-entrant
+Python lock per context in every method of a \ref mogbus::core::Context "Context",
+\ref mogbus::core::Device "Device" and \ref mogbus::core::Server "Server", because it also guards
+the package's own state (closed handles, hook registries, the background thread). You do not manage
+that lock yourself; you only need to know who holds it when.
 
 So far the example moved time by calling `tick()` itself. A live simulation ticks on its own thread
 while clients are being served. The `start()` method of `Process` starts such a thread, which calls

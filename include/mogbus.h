@@ -14,10 +14,17 @@
  * mogbus_server_run().
  *
  * Rules:
- *  - Not thread-safe. One thread at a time may call into a context: the thread
- *    that steps a server is the thread that must touch its devices. The only
- *    call that may come from another thread or a signal handler is
- *    mogbus_server_stop().
+ *  - Thread-safe per context. Every call that takes a context, one of its devices or one of
+ *    its servers holds one recursive lock of that context for the call, so any thread may
+ *    call them at any time, including while another thread runs mogbus_server_run() or
+ *    steps the server. The step releases the lock while it waits for I/O and holds it while
+ *    it answers requests. Hooks and callbacks run with the lock held on the stepping thread
+ *    and may call back into the context. The exceptions: mogbus_server_stop(),
+ *    mogbus_stop() and the signal helpers take no lock (async-signal-safe, any thread; a
+ *    running step notices within one second); a client (mogbus_client_t) is used by one thread
+ *    at a time; mogbus_destroy() and mogbus_server_close() must not race with any other call
+ *    on the same context or server; logging settings are process-wide and belong to
+ *    start-up; the message of mogbus_last_error() is shared by the threads of a context.
  *  - Nothing is allocated with malloc; memory comes from an mmap-backed arena
  *    owned by the context and is released by mogbus_destroy(). Devices live as
  *    long as the context (there is no per-device removal), so a pointer to a
@@ -1132,7 +1139,9 @@ MOGBUS_API int		mogbus_server_step(mogbus_server_t* server, int max_wait_ms);
 /**
  * @brief Asks the server to stop; the next step returns MOGBUS_STEP_DONE.
  *
- * Async-signal-safe, and the only call that may come from another thread or a signal handler.
+ * Async-signal-safe and lock-free: it only sets a flag, so it may come from any thread or a
+ * signal handler. A step that is waiting for I/O notices within one second (at most the
+ * @p max_wait_ms of that step, or the next timer of the server, if shorter).
  * @param server Server.
  */
 MOGBUS_API void		mogbus_server_stop(mogbus_server_t* server);
