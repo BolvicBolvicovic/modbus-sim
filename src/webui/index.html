@@ -25,6 +25,7 @@ button[aria-selected="true"] { border-color: var(--acc); color: var(--acc); font
 button.link { border: 0; background: none; color: var(--acc); padding: 0; text-decoration: underline; font-family: ui-monospace, monospace; }
 :focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
 label { display: inline-flex; gap: 4px; align-items: center; }
+[hidden] { display: none !important; }
 input { width: 9rem; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
 .muted { color: var(--muted); }
@@ -291,7 +292,7 @@ input { width: 9rem; }
     if (k === "delay") { b.delay_ms = num("fdelay"); }
     if (k === "exception") { b.exception_code = num("fcode"); }
     if (k === "corrupt") { b.mode = $("fmode").value; }
-    if (Object.keys(b).some(function (n) { return isNaN(b[n]); })) { say("ferr", "Fields must be numbers"); return; }
+    if (Object.keys(b).some(function (n) { return n !== "mode" && isNaN(b[n]); })) { say("ferr", "Fields must be numbers"); return; }
     api("PUT", base() + "/faults/" + k, b).then(function () { say("ferr", "Set " + k, false); loadFaults(); })
       .catch(function (e) { say("ferr", e.message); });
   });
