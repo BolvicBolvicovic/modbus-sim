@@ -353,10 +353,11 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in, char*
 	    (unsigned)in->type > MOGBUS_TYPE_STRING ||
 	    (unsigned)in->word_order > MOGBUS_WORDS_LOW_FIRST ||
 	    (unsigned)in->byte_order > MOGBUS_BYTES_LITTLE ||
-	    (unsigned)in->kind > MOGBUS_POINT_RAMP ||
+	    (unsigned)in->kind > MOGBUS_POINT_CLOCK ||
+	    (unsigned)in->clock_field > MOGBUS_CLOCK_UNIX ||
 	    (unsigned)in->ramp.mode > MOGBUS_RAMP_HOLD)
 	{
-		set_err(err, err_size, "point has an invalid space, type, word order, byte order, kind or ramp mode");
+		set_err(err, err_size, "point has an invalid space, type, word order, byte order, kind, clock field or ramp mode");
 		return false;
 	}
 	point.space   = (space_kind_t)in->space;
@@ -375,8 +376,12 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in, char*
 		point.length = (u16)in->length;
 		point.text   = in->text;
 	}
-	point.kind    = (point_kind_t)in->kind;
-	if (in->kind == MOGBUS_POINT_RAMP)
+	point.kind    = in->kind == MOGBUS_POINT_CLOCK ? POINT_CLOCK : (point_kind_t)in->kind;
+	point.clock_field = (clock_field_t)in->clock_field;
+	point.clock_utc   = in->clock_utc;
+	if (in->kind == MOGBUS_POINT_CLOCK)
+		point.static_value = 0;
+	else if (in->kind == MOGBUS_POINT_RAMP)
 	{
 		if (space_is_bit(point.space))
 		{

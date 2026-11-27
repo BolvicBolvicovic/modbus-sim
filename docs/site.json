@@ -374,6 +374,7 @@
                 "docs/user/config/behaviours/ramp.md",
                 "docs/user/config/behaviours/sine.md",
                 "docs/user/config/behaviours/lag.md",
+                "docs/user/config/behaviours/clock.md",
                 "docs/user/config/behaviours/noise.md",
                 "docs/user/config/behaviours/degradation.md",
                 "docs/user/config/behaviours/client-writes.md"

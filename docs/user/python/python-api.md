@@ -9,7 +9,7 @@ The Python calls and the C functions they wrap, the accepted names for spaces an
 | `Context()`, `.close()`, `with` | `mogbus_create`, `mogbus_destroy` |
 | `ctx.load_config(path)` | `mogbus_load_config` |
 | `ctx.add_device(unit_id, name=None)`, `ctx.find_device(unit_id)`, `ctx.devices`, `iter(ctx)`, `len(ctx)` | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_at/count` |
-| `dev.add_point(space, address, type="u16", value=0, word_order="high-first", ramp=None, byte_order="big", length=0, text=None, read_only=False)` | `mogbus_device_add_point` |
+| `dev.add_point(space, address, type="u16", value=0, word_order="high-first", ramp=None, byte_order="big", length=0, text=None, read_only=False, clock=None, clock_utc=False)` | `mogbus_device_add_point` |
 | `dev.read(space, address, count)`, `dev.write(space, address, values)` | `mogbus_device_read/write` (raw registers) |
 | `dev.get_value(space, address)`, `dev.set_value(space, address, value)` | `mogbus_device_get_value/set_value` (decoded) |
 | `dev.get_string(space, address)`, `dev.set_string(space, address, text)` | `mogbus_device_get_string/set_string` (string points) |

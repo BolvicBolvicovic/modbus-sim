@@ -127,6 +127,24 @@ TEST(ApiReadOnlyPointsRefuseClientsButNotTheHost)
 	mogbus_destroy(ctx);
 }
 
+TEST(ApiClockPointsShowTheWallClock)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "clock", NULL, 0);
+	mogbus_point_t	p = { .space = MOGBUS_HOLDING, .type = MOGBUS_TYPE_U16, .kind = MOGBUS_POINT_CLOCK,
+			      .clock_field = MOGBUS_CLOCK_YEAR, .clock_utc = true };
+	double		v = 0;
+	char		err[128];
+
+	ASSERT_EQ(mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v) && v >= 2024);
+	p.address     = 1;
+	p.clock_field = MOGBUS_CLOCK_UNIX;
+	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "32-bit") != NULL);
+	mogbus_destroy(ctx);
+}
+
 /* ---- access hook ---- */
 
 static struct hook_log_t

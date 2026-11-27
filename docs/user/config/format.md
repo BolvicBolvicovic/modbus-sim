@@ -51,7 +51,7 @@ The reference has one page per key or form, grouped by where the key is written:
 | [Server](server/index.md) | `(server ...)`: transport mode, listen address, serial line, timing, TLS and HTTP |
 | [Device](device/index.md) | `(device ...)`: unit id, identification, diagnostics data, file records, FIFOs, function codes |
 | [Points](points/index.md) | `(coil ...)`, `(discrete ...)`, `(input ...)`, `(holding ...)` and their data layout |
-| [Behaviours](behaviours/index.md) | How a point's value moves: static, ramp, sine, lag, noise, degradation |
+| [Behaviours](behaviours/index.md) | How a point's value moves: static, ramp, sine, lag, clock, noise, degradation |
 | [Faults](faults/index.md) | `(fault ...)`: delays, drops, exceptions, corruption, disconnects, restarts |
 | [Machines](machines/index.md) | `(machine ...)`: scripted state machines that drive points |
 

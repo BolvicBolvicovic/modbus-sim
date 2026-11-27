@@ -11,7 +11,7 @@ Defines a point in one of the four Modbus tables, at an address a client can rea
   (byte-order ...)    ; registers only, default big
   (length N)          ; (type string) only: registers, 1-123
   (padding ...)       ; (type string) only: nul (default) or space
-  (static VALUE)      ; or (ramp ...), (sine ...) or (lag ...): only one. None: 0 / off
+  (static VALUE)      ; or (ramp ...), (sine ...), (lag ...) or (clock FIELD): only one. None: 0 / off
   (noise ...)         ; optional, registers only: added to any of the above
   (degradation ...)   ; optional: drift, noise growth, stuck and fail over time
   (access ...)        ; coil and holding only: read-write (default) or read-only
