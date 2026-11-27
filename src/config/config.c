@@ -441,6 +441,23 @@ check_unit_ids_unique(form_ctx_t* ctx, const config_t* config)
 }
 
 static bool
+check_any_unit_single(form_ctx_t* ctx, const config_t* config)
+{
+	const device_t* first = NULL;
+
+	for (u32 i = 0; i < config->device_count; i++)
+	{
+		if (!config->devices[i]->any_unit)
+			continue;
+		if (first)
+			return form_fail(ctx, "devices '%s' and '%s' both set any-unit; only one device may answer every unit id",
+					 first->name, config->devices[i]->name);
+		first = config->devices[i];
+	}
+	return true;
+}
+
+static bool
 check_mode_rules(form_ctx_t* ctx, const config_t* config)
 {
 	if (config->mode == SERVER_MODE_TCP ||
@@ -545,6 +562,7 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 		return form_fail(ctx, "the file has no (device ...) form");
 
 	return check_unit_ids_unique(ctx, config) &&
+	       check_any_unit_single(ctx, config) &&
 	       check_mode_rules(ctx, config) &&
 	       check_fault_modes(ctx, config);
 }

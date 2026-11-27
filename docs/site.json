@@ -311,6 +311,7 @@
               "entries": [
                 "docs/user/config/device/device.md",
                 "docs/user/config/device/unit-id.md",
+                "docs/user/config/device/any-unit.md",
                 "docs/user/config/device/name.md",
                 "docs/user/config/device/note.md"
               ]

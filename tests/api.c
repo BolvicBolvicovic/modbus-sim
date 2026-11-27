@@ -732,6 +732,27 @@ TEST(ApiServesDevicesOverRtuUdp)
 	mogbus_destroy(ctx);
 }
 
+TEST(ApiAnyUnitAllowsOnlyOneDeviceAndShowsInInfo)
+{
+	mogbus_t*		ctx = mogbus_create();
+	mogbus_device_t*	a = mogbus_add_device(ctx, 1, "a", NULL, 0);
+	mogbus_device_t*	b = mogbus_add_device(ctx, 2, "b", NULL, 0);
+	mogbus_device_info_t	info;
+
+	ASSERT_EQ(a != NULL && b != NULL);
+	ASSERT_EQ(mogbus_device_info(a, &info) && !info.any_unit);
+	ASSERT_EQ(mogbus_device_set_any_unit(a, true));
+	ASSERT_EQ(mogbus_device_info(a, &info) && info.any_unit);
+	ASSERT_EQ(!mogbus_device_set_any_unit(b, true));
+	ASSERT_EQ(mogbus_device_set_any_unit(a, true));	/* idempotent */
+	ASSERT_EQ(mogbus_device_set_any_unit(b, false));
+	ASSERT_EQ(mogbus_device_set_any_unit(a, false));
+	ASSERT_EQ(mogbus_device_set_any_unit(b, true));
+	ASSERT_EQ(mogbus_device_info(b, &info) && info.any_unit);
+	ASSERT_EQ(!mogbus_device_set_any_unit(NULL, true));
+	mogbus_destroy(ctx);
+}
+
 #if WITH_CONFIG
 
 TEST(ApiLoadsConfigAndServesFromIt)
@@ -1126,6 +1147,24 @@ TEST(ApiEnumeratesDevicesAndDescribesThem)
 	ASSERT_EQ(mogbus_device_info(mogbus_device_at(ctx, 2), &info));
 	ASSERT_EQ(strcmp(info.name, "code") == 0 && info.point_count[MOGBUS_HOLDING] == 1);
 	ASSERT_EQ(!info.faults[MOGBUS_FAULT_DELAY].present && !mogbus_device_info(NULL, &info));
+	mogbus_destroy(ctx);
+	unlink(path);
+}
+
+TEST(ApiLoadConfigRejectsSecondAnyUnitDevice)
+{
+	char		path[] = "/tmp/mogbus-api-XXXXXX";
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* a = mogbus_add_device(ctx, 1, "a", NULL, 0);
+	char		err[256] = "";
+
+	ASSERT_EQ(write_config(path, "(device (name \"b\") (unit-id 2) (any-unit on) (holding 0))\n"));
+	ASSERT_EQ(a != NULL && mogbus_device_set_any_unit(a, true));
+	ASSERT_EQ(!mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(strstr(err, "both set any-unit") != NULL && mogbus_device_count(ctx) == 1);
+	ASSERT_EQ(mogbus_device_set_any_unit(a, false));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_set_any_unit(a, true));
 	mogbus_destroy(ctx);
 	unlink(path);
 }

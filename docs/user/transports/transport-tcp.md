@@ -31,7 +31,8 @@ Modbus TCP: MBAP-framed requests over a TCP listen socket, optionally wrapped in
 - `bind` accepts a plain IPv4 or IPv6 literal. The default is loopback; accepting remote clients
   needs an explicit `(bind "0.0.0.0")` or `(bind "::")`. See [bind addresses](transports.md#bind-addresses).
 - MBAP has no checksum, so `(fault (kind corrupt) (mode checksum))` is rejected.
-- A request for a unit id that no device has gets exception 0B. Unit 0 is an ordinary id here, never a
+- A request for a unit id that no device has gets exception 0B, unless a device has
+  [`(any-unit on)`](../config/device/any-unit.md), which answers it. Unit 0 is an ordinary id here, never a
   broadcast.
 - `idle-timeout-ms` closes a connection after that many milliseconds with no I/O progress.
   Connections waiting to send a delayed fault response are not idle.

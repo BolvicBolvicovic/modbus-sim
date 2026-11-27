@@ -243,6 +243,31 @@ TEST(AsciiTcpUnitZeroBroadcastIsNotProcessed)
 	server_stop();
 }
 
+TEST(AsciiTcpAnyUnitDeviceAnswersWithTheRequestAddress)
+{
+	u8 read_req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 pdu[MODBUS_MAX_PDU], addr = 0;
+	u32 pdu_len = 0;
+	int fd;
+
+	server_start("", "(device (unit-id 1) (holding 0 (static 11)))\n"
+			 "(device (unit-id 2) (any-unit on) (holding 0 (static 22)))");
+	fd = connect_port(AF_INET, 100, 2000);
+	ASSERT(fd >= 0);
+	ASSERT_EQ(send_ascii_request(fd, 1, read_req, sizeof(read_req)));
+	ASSERT_EQ(recv_ascii_response(fd, &addr, pdu, &pdu_len, 2000));
+	ASSERT_EQ(addr == 1 && get_be16(pdu + 2) == 11);
+	ASSERT_EQ(send_ascii_request(fd, 77, read_req, sizeof(read_req)));
+	ASSERT_EQ(recv_ascii_response(fd, &addr, pdu, &pdu_len, 2000));
+	ASSERT_EQ(addr == 77 && get_be16(pdu + 2) == 22);
+	ASSERT_EQ(send_ascii_request(fd, 0, read_req, sizeof(read_req)));
+	ASSERT_EQ(recv_nothing(fd, 250));
+	ASSERT_EQ(send_ascii_request(fd, 250, read_req, sizeof(read_req)));
+	ASSERT_EQ(recv_nothing(fd, 250));
+	close(fd);
+	server_stop();
+}
+
 TEST(AsciiTcpDelayedFaultDoesNotExpireQueuedFrame)
 {
 	u8 req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };

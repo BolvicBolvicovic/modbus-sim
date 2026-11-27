@@ -152,6 +152,37 @@ TEST(ConfigDeviceRequiresUnitId)
 	ASSERT_EQ(config.devices[0]->unit_id == 0);
 }
 
+TEST(ConfigAnyUnitDefaultsOffAllowsOneDevice)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(!config.devices[0]->any_unit);
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (any-unit off) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(!config.devices[0]->any_unit);
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (holding 0)) (device (unit-id 2) (any-unit on) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(!config.devices[0]->any_unit && config.devices[1]->any_unit);
+	ASSERT_EQ(config.devices[1]->unit_id == 2);
+	ASSERT_SUCCESS(load_text("(device (unit-id 1) (any-unit on) (holding 0)) (device (unit-id 2) (any-unit off) (holding 0))",
+				 &config, err, sizeof(err)));
+}
+
+TEST(ConfigAnyUnitRejectsSecondDeviceAndKeepsUnitIdRules)
+{
+	EXPECT_ERROR("(device (name \"a\") (unit-id 1) (any-unit on) (holding 0))"
+		     "(device (name \"b\") (unit-id 2) (any-unit on) (holding 0))",
+		     "devices 'a' and 'b' both set any-unit");
+	EXPECT_ERROR("(device (unit-id 1) (any-unit maybe) (holding 0))", "any-unit");
+	EXPECT_ERROR("(server (mode rtu-tcp)) (device (unit-id 0) (any-unit on) (holding 0))",
+		     "not valid for RTU/ASCII");
+	EXPECT_ERROR("(server (mode ascii-tcp)) (device (unit-id 250) (any-unit on) (holding 0))",
+		     "not valid for RTU/ASCII");
+	EXPECT_ERROR("(device (unit-id 1) (any-unit on) (holding 0)) (device (unit-id 1) (holding 0))",
+		     "both use unit-id 1");
+}
+
 TEST(ConfigRampBounceStepLimitBoundaries)
 {
 	config_t	config = { 0 };

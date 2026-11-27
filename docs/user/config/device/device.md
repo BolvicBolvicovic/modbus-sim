@@ -28,6 +28,7 @@ and the data answered by the less common function codes.
 | Entry | What it does |
 |---|---|
 | [`(unit-id N)`](unit-id.md) | Modbus unit id (slave address), required |
+| [`(any-unit on)`](any-unit.md) | Also answer every unit id no other device has |
 | [`(name "Text")`](name.md) | Name shown in logs and `--check` |
 | [`(note "Text")`](note.md) | A comment kept for humans |
 | [`(exception-status N)`](exception-status.md) | Byte returned by FC 07 |
@@ -52,4 +53,5 @@ and the data answered by the less common function codes.
 ## See also
 
 - [unit-id](unit-id.md)
+- [any-unit](any-unit.md)
 - [points](../points/point.md)

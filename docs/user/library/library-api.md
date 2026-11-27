@@ -7,7 +7,7 @@ The calls of `mogbus.h` by area, the server modes and what each option applies t
 | Area | Calls |
 |---|---|
 | Context | `mogbus_create`, `mogbus_destroy`, `mogbus_load_config` |
-| Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point`, `mogbus_device_count`, `mogbus_device_at`, `mogbus_device_info` |
+| Devices | `mogbus_add_device`, `mogbus_find_device`, `mogbus_device_add_point`, `mogbus_device_count`, `mogbus_device_at`, `mogbus_device_info`, `mogbus_device_set_any_unit` (also answer every unit id no other device has; one per context, see [any-unit](../config/device/any-unit.md)) |
 | Values | `mogbus_device_read/write` (raw registers), `mogbus_device_get_value/set_value` (decoded), `mogbus_device_get_string/set_string` (string points) |
 | Access hook | `mogbus_device_set_access_hook` ([run code on every client read or write](library-access-hook.md)) |
 | Server | `mogbus_server_options_defaults`, `mogbus_server_create`, `mogbus_server_create_from_config`, `mogbus_server_step`, `mogbus_server_run`, `mogbus_server_stop`, `mogbus_stop_on_signals`, `mogbus_server_close`, `mogbus_server_pty_name`, `mogbus_config_server_options`, `mogbus_server_check`, `mogbus_probe`, `mogbus_rtu_timing` |

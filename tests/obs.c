@@ -412,11 +412,11 @@ TEST(ObsControlSetsAndClearsFaults)
 	obs.control.tcp_like = true;
 	rng_seed(&rng, 1);
 
-	net_handle_pdu(&obs, NULL, devs[0], &rng, 1, req, sizeof(req), out, &decision);
+	net_handle_pdu(&obs, NULL, devs[0], devs[0]->unit_id, &rng, 1, req, sizeof(req), out, &decision);
 	ASSERT_EQ(decision.exception_code == 0);
 	ASSERT_EQ(control(&obs, port, "PUT", "/api/devices/3/faults/exception", "{\"exception_code\":6}", resp, sizeof(resp)));
 	ASSERT_EQ(status_is(resp, 200));
-	net_handle_pdu(&obs, NULL, devs[0], &rng, 2, req, sizeof(req), out, &decision);
+	net_handle_pdu(&obs, NULL, devs[0], devs[0]->unit_id, &rng, 2, req, sizeof(req), out, &decision);
 	ASSERT_EQ(decision.exception_code == 6);
 	ASSERT_EQ(control(&obs, port, "GET", "/api/devices/3/faults", "", resp, sizeof(resp)));
 	ASSERT_EQ(strcmp(body_of(resp), "{\"faults\":[{\"kind\":\"exception\",\"percent\":100,"
@@ -425,7 +425,7 @@ TEST(ObsControlSetsAndClearsFaults)
 	/* A later PUT replaces the kind; percent 0 never fires. */
 	ASSERT_EQ(control(&obs, port, "PUT", "/api/devices/3/faults/exception", "{\"exception_code\":4,\"percent\":0}", resp, sizeof(resp)));
 	ASSERT_EQ(status_is(resp, 200));
-	net_handle_pdu(&obs, NULL, devs[0], &rng, 3, req, sizeof(req), out, &decision);
+	net_handle_pdu(&obs, NULL, devs[0], devs[0]->unit_id, &rng, 3, req, sizeof(req), out, &decision);
 	ASSERT_EQ(decision.exception_code == 0);
 
 	ASSERT_EQ(control(&obs, port, "DELETE", "/api/devices/3/faults/exception", "", resp, sizeof(resp)));
@@ -438,11 +438,11 @@ TEST(ObsControlSetsAndClearsFaults)
 	/* Every kind takes its own fields and validates like the config. */
 	ASSERT_EQ(control(&obs, port, "PUT", "/api/devices/3/faults/delay", "{\"delay_ms\":250}", resp, sizeof(resp)));
 	ASSERT_EQ(status_is(resp, 200));
-	net_handle_pdu(&obs, NULL, devs[0], &rng, 4, req, sizeof(req), out, &decision);
+	net_handle_pdu(&obs, NULL, devs[0], devs[0]->unit_id, &rng, 4, req, sizeof(req), out, &decision);
 	ASSERT_EQ(decision.delay_ms == 250);
 	ASSERT_EQ(control(&obs, port, "PUT", "/api/devices/3/faults/drop", "{}", resp, sizeof(resp)));
 	ASSERT_EQ(status_is(resp, 200));
-	net_handle_pdu(&obs, NULL, devs[0], &rng, 5, req, sizeof(req), out, &decision);
+	net_handle_pdu(&obs, NULL, devs[0], devs[0]->unit_id, &rng, 5, req, sizeof(req), out, &decision);
 	ASSERT_EQ(decision.drop);
 	ASSERT_EQ(control(&obs, port, "PUT", "/api/devices/3/faults/corrupt", "{\"mode\":\"register\"}", resp, sizeof(resp)));
 	ASSERT_EQ(status_is(resp, 200) && devs[0]->faults.by_kind[FAULT_CORRUPT].corrupt_mode == FAULT_CORRUPT_REGISTER);

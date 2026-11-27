@@ -63,7 +63,7 @@ exception.
 - **Malformed framing**: a missing leading `:`, a missing or wrong `CR LF`, an odd hex count, an
   invalid hex digit, an overlong frame, a `CR` followed by a non-`LF`, or a lone `LF` inside a frame.
 - **Bad LRC**: the decoded LRC does not match the sum of the address and PDU bytes.
-- **Unknown unit**: no device has that unit id.
+- **Unknown unit**: no device has that unit id (and no device has [`(any-unit on)`](../config/device/any-unit.md) with the address in 1-247).
 - **Broadcast (unit 0)**: ignored in every ASCII mode, never executed.
 - **Fault drop or disconnect**: the fault suppresses the response; a disconnect also closes a
   TCP-like connection (never a serial fd).

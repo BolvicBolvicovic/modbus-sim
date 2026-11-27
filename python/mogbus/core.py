@@ -220,6 +220,7 @@ class CustomFunctionCode:
 class DeviceInfo:
     name: str
     unit_id: int
+    any_unit: bool
     point_counts: Dict[str, int]
     faults: Dict[str, FaultInfo]
     custom_function_codes: List[CustomFunctionCode]
@@ -429,6 +430,15 @@ class Device:
             raise MogbusError(f"no point starts at {Space(space).name.lower()} {address}")
 
     @_locked
+    def set_any_unit(self, on: bool = True) -> None:
+        """Makes this device also answer every unit id no other device has (RTU/ASCII keep 0 and 248-255 unanswered).
+
+        Raises MogbusError when another device of the context already has it.
+        """
+        if not lib.mogbus_device_set_any_unit(self._live(), bool(on)):
+            raise MogbusError("another device of the context already answers any unit id")
+
+    @_locked
     def set_access_hook(self, hook: Optional[Callable[[Access], Optional[int]]]) -> None:
         """Runs hook(access) on every Modbus client read or write of this device; None removes it.
 
@@ -501,6 +511,7 @@ class Device:
         return DeviceInfo(
             name=_decode(c.name) or "",
             unit_id=c.unit_id,
+            any_unit=bool(c.any_unit),
             point_counts={Space(i).name.lower(): c.point_count[i] for i in range(4)},
             faults=faults,
             custom_function_codes=fcs)

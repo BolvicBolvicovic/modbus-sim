@@ -231,6 +231,8 @@ struct device_t
 {
 	char		name[DEVICE_NAME_MAX];
 	u8		unit_id;
+	bool		any_unit;		/**< also answers every unit id no other device has */
+	void*		owner;			/**< API context that holds the device (set by the API) */
 	u8		exception_status;	/**< FC 07 (Read Exception Status) response byte */
 	u8		server_id;		/**< FC 17 (Report Server ID) server ID byte */
 	u8		run_indicator;		/**< FC 17 Run Indicator Status (0xFF run, 0x00 off) */

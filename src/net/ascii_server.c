@@ -57,7 +57,7 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		return;
 	}
-	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr) : NULL;
+	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr, true) : NULL;
 	if (!dev)
 	{
 		/* broadcast or unknown unit: no response; never reaches a device */
@@ -65,7 +65,7 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 		return;
 	}
 
-	resp_len = net_handle_pdu(server->options.obs, NULL, dev, &server->rng, now_ms, pdu, pdu_len,
+	resp_len = net_handle_pdu(server->options.obs, NULL, dev, addr, &server->rng, now_ms, pdu, pdu_len,
 				  resp, &decision);
 	if (decision.drop)
 		return;

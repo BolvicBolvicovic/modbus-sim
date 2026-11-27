@@ -20,7 +20,7 @@ Modbus TCP's MBAP ADU over UDP: one complete ADU (7-byte header plus PDU) per da
 
 ## Behaviour
 
-- Unit routing, PDU handlers, the unknown-unit exception `0B` and fault injection are the same as in
+- Unit routing, PDU handlers, the unknown-unit exception `0B` (or the [any-unit](../config/device/any-unit.md) device) and fault injection are the same as in
   [`tcp`](transport-tcp.md). The MBAP header is echoed except for the length.
 - The reply is one datagram sent to the request's source address, so several peers can talk to the
   same socket and each gets its own answer.

@@ -227,7 +227,23 @@ mogbus_load_config(mogbus_t* ctx, const char* path, char* err, size_t err_size)
 		}
 	}
 	for (u32 i = 0; i < loaded.device_count; i++)
+	{
+		if (!loaded.devices[i]->any_unit)
+			continue;
+		for (u32 j = 0; j < ctx->device_count; j++)
+		{
+			if (!ctx->devices[j]->any_unit)
+				continue;
+			set_err(err, err_size, "devices '%s' and '%s' both set any-unit; only one device may answer every unit id",
+				ctx->devices[j]->name, loaded.devices[i]->name);
+			goto done;
+		}
+	}
+	for (u32 i = 0; i < loaded.device_count; i++)
+	{
+		loaded.devices[i]->owner = ctx;
 		ctx->devices[ctx->device_count++] = loaded.devices[i];
+	}
 	ctx->config     = loaded;
 	ctx->has_config = true;
 	ok = true;
@@ -277,6 +293,7 @@ mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name, char* err, s
 		return NULL;
 	}
 	dev->unit_id = unit_id;
+	dev->owner   = ctx;
 	strcpy(dev->name, name ? name : "unnamed");
 	ctx->devices[ctx->device_count++] = dev;
 	return (mogbus_device_t*)dev;
@@ -310,6 +327,7 @@ mogbus_device_info(const mogbus_device_t* handle, mogbus_device_info_t* out)
 	memset(out, 0, sizeof(*out));
 	out->name    = dev->name;
 	out->unit_id = dev->unit_id;
+	out->any_unit = dev->any_unit;
 	for (u32 i = 0; i < dev->point_count; i++)
 		out->point_count[dev->points[i].space]++;
 	for (u32 i = 0; i < FAULT_KIND_COUNT; i++)
@@ -511,6 +529,24 @@ access_trampoline(void* user, device_t* dev, const device_access_t* in)
 	};
 
 	return hook->fn(hook->user, (mogbus_device_t*)dev, &access);
+}
+
+bool
+mogbus_device_set_any_unit(mogbus_device_t* handle, bool on)
+{
+	device_t*	dev = (device_t*)handle;
+	const mogbus_t*	ctx = dev ? dev->owner : NULL;
+
+	if (!ctx)
+		return false;
+	for (u32 i = 0; on && i < ctx->device_count; i++)
+	{
+		if (ctx->devices[i] != dev &&
+		    ctx->devices[i]->any_unit)
+			return false;
+	}
+	dev->any_unit = on;
+	return true;
 }
 
 bool

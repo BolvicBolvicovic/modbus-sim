@@ -46,16 +46,22 @@ enum
 	NET_STEP_ERROR    = 2,	/**< wait failed */
 };
 
-/** @brief Returns the device with the given unit id, or NULL. */
-device_t*	net_find_device(device_t** devices, u32 count, u8 unit);
+/**
+ * @brief Returns the device with the given unit id, else the any-unit device, else NULL.
+ *
+ * With `serial` (RTU/ASCII) units 248-255 are reserved and never fall back to the any-unit
+ * device.
+ */
+device_t*	net_find_device(device_t** devices, u32 count, u8 unit, bool serial);
 
 /**
  * @brief Runs the PDU against the device, decides the response fault, and records and logs the
  *        request in `obs` (NULL records nothing).
  *
- * `peer` describes the client in logs (NULL for a byte stream).
+ * `peer` describes the client in logs (NULL for a byte stream); `unit` is the request's unit
+ * id, which differs from the device's own for an any-unit device.
  */
-u32		net_handle_pdu(net_obs_t* obs, const char* peer, device_t* dev, rng_t* rng, u64 now_ms,
+u32		net_handle_pdu(net_obs_t* obs, const char* peer, device_t* dev, u8 unit, rng_t* rng, u64 now_ms,
 			       const u8* req, u32 req_len, u8* resp, fault_decision_t* decision);
 
 /**

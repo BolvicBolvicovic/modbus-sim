@@ -257,10 +257,11 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 		mogbus_device_info_t info;
 
 		mogbus_device_info(mogbus_device_at(ctx, i), &info);
-		printf("  unit %-3u %-32s coils %u, discrete %u, input %u, holding %u, fault: %s\n",
+		printf("  unit %-3u %-32s coils %u, discrete %u, input %u, holding %u, fault: %s%s\n",
 		       info.unit_id, info.name, info.point_count[MOGBUS_COIL],
 		       info.point_count[MOGBUS_DISCRETE], info.point_count[MOGBUS_INPUT],
-		       info.point_count[MOGBUS_HOLDING], fault_text(&info, fault, sizeof(fault)));
+		       info.point_count[MOGBUS_HOLDING], fault_text(&info, fault, sizeof(fault)),
+		       info.any_unit ? ", any unit" : "");
 		for (uint32_t f = 0; f < info.custom_fc_count; f++)
 			printf("           function code 0x%02X%s%s\n", info.custom_fcs[f].code,
 			       info.custom_fcs[f].name[0] ? " " : "", info.custom_fcs[f].name);

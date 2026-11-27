@@ -28,7 +28,7 @@ main(void)
 	F(P, byte_order); F(P, length); F(P, text); F(P, read_only);
 
 	SIZE(I);
-	F(I, name); F(I, unit_id); F(I, point_count); F(I, faults); F(I, custom_fc_count);
+	F(I, name); F(I, unit_id); F(I, any_unit); F(I, point_count); F(I, faults); F(I, custom_fc_count);
 	F(I, custom_fcs);
 	F(I, faults[0].present); F(I, faults[0].scheduled); F(I, faults[0].percent);
 	F(I, faults[0].delay_ms); F(I, faults[0].exception_code);

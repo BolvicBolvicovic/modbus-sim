@@ -136,6 +136,12 @@ parse_unit_id(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 }
 
 static bool
+parse_any_unit(form_ctx_t* ctx, s7_pointer item, device_t* dev)
+{
+	return form_get_bool(ctx, item, &dev->any_unit);
+}
+
+static bool
 parse_exception_status(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 {
 	s64	status = 0;
@@ -1178,6 +1184,7 @@ struct item_entry_t
 static const item_entry_t DEVICE_ITEMS[] = {
 	{ "name",             parse_name             },
 	{ "unit-id",          parse_unit_id          },
+	{ "any-unit",         parse_any_unit         },
 	{ "exception-status", parse_exception_status },
 	{ "server-id",        parse_server_id        },
 	{ "run-indicator",    parse_run_indicator    },
@@ -1227,7 +1234,7 @@ parse_item(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 				 form_text(ctx, item));
 
 	if (!entry)
-		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, exception-status, server-id, "
+		return form_fail(ctx, "device: unknown item '%s'. Use name, unit-id, any-unit, exception-status, server-id, "
 				 "run-indicator, server-id-additional-data, com-status, com-event, vendor-name, "
 				 "product-code, major-minor-revision, vendor-url, product-name, model-name, "
 				 "user-application-name, device-id-object, fault, note, coil, discrete, input, "

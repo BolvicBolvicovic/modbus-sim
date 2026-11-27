@@ -42,7 +42,7 @@ corruption leave the recomputed CRC valid.
 ### No response
 
 - **Bad CRC**: frames whose CRC does not match are silently ignored.
-- **Unknown unit**: a valid frame for a unit id with no device is ignored.
+- **Unknown unit**: a valid frame for a unit id with no device is ignored, unless a device has [`(any-unit on)`](../config/device/any-unit.md) and the address is 1-247.
 - **Broadcast (unit 0)**: ignored by default. With `(server (broadcast-execute on))` the request
   runs on every configured device and still sends no response. See
   [Unit ids and broadcast](../modbus/unit-ids.md).

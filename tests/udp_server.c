@@ -154,6 +154,28 @@ TEST(UdpRoutesByUnitAndUnknownUnitGetsGatewayException)
 	server_stop();
 }
 
+TEST(UdpAnyUnitDeviceAnswersUnknownUnits)
+{
+	u8  resp[MODBUS_MAX_PDU];
+	u32 len = 0;
+	int fd;
+
+	server_start("", "(device (unit-id 1) (holding 0 (static 11)))\n"
+			 "(device (unit-id 2) (any-unit on) (holding 0 (static 22)))\n");
+	fd = client_open();
+	ASSERT(fd >= 0);
+	ASSERT_EQ(exchange(fd, 1, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
+	ASSERT_EQ(get_be16(resp + 2) == 11);
+	ASSERT_EQ(exchange(fd, 2, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
+	ASSERT_EQ(get_be16(resp + 2) == 22);
+	ASSERT_EQ(exchange(fd, 9, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && len == 4 && get_be16(resp + 2) == 22);
+	ASSERT_EQ(exchange(fd, 255, READ_HOLDING_0, sizeof(READ_HOLDING_0), resp, &len));
+	ASSERT_EQ(resp[0] == FC_READ_HOLDING_REGISTERS && get_be16(resp + 2) == 22);
+	close(fd);
+	server_stop();
+}
+
 TEST(UdpIgnoresMalformedDatagramsAndKeepsServing)
 {
 	u8  frame[MBAP_MAX_FRAME + 40];

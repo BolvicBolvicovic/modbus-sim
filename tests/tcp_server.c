@@ -885,6 +885,30 @@ TEST(NetTcpUnitZeroIsNotBroadcast)
 	ASSERT_EQ(ok);
 }
 
+TEST(NetAnyUnitDeviceAnswersUnknownUnitsAndExactMatchWins)
+{
+	client_t client = { .fd = -1 };
+	u8	 req[8];
+	u8	 resp[MODBUS_MAX_PDU];
+	u32	 len  = 0;
+	bool	 ok   = server_start("",
+				     "(device (unit-id 1) (holding 0 (static 11)))\n"
+				     "(device (unit-id 5) (any-unit on) (holding 0 (static 55)))");
+
+	ok = ok && client_open(g_server.probe_port, NET_RECV_TIMEOUT_MS, &client);
+	read_pdu(req, FC_READ_HOLDING_REGISTERS, 0, 1);
+	/* exchange() only succeeds when the reply echoes the request's unit id */
+	ok = ok && exchange(&client, 1, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 11;
+	ok = ok && exchange(&client, 5, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
+	ok = ok && exchange(&client, 9, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
+	ok = ok && exchange(&client, 0, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
+	ok = ok && exchange(&client, 255, req, 5, resp, &len) && len == 4 && register_value(resp, len, 0) == 55;
+
+	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
 TEST(NetExceptionsOverWire)
 {
 	client_t client = { .fd = -1 };

@@ -375,8 +375,8 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 	}
 	if (!parse_uint(seg[1], seg_len[1], 255, &unit))
 		return fail(out, cap, status, 400, "unit must be a number from 0 to 255");
-	dev = net_find_device(obs->devices, obs->device_count, (u8)unit);
-	if (!dev)
+	dev = net_find_device(obs->devices, obs->device_count, (u8)unit, false);
+	if (!dev || dev->unit_id != unit)
 		return fail(out, cap, status, 404, "unknown unit");
 	if (nseg == 2)
 		return fail(out, cap, status, 404, "unknown path");

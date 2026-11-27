@@ -1,12 +1,18 @@
 # Unit ids and broadcast
 
-Each device answers to exactly one unit id. This page covers how requests are routed, which ids are valid, and how broadcast works.
+Each device answers to its own unit id, and one device can also answer every other id. This page covers how requests are routed, which ids are valid, and how broadcast works.
 
 ## Routing
 
-Each `(device ...)` must set `(unit-id N)` and answers only to that id. There is no "any unit id"
-mode: a client using the wrong id gets exception 0B in the MBAP transports (`tcp`, `udp`). If a
-client sends 255 or 0 by default, set the device's `unit-id` to match.
+Each `(device ...)` must set `(unit-id N)` and answers to that id. A client using an id no device
+has gets exception 0B in the MBAP transports (`tcp`, `udp`) and no response in RTU and ASCII.
+
+To answer every id with one device (the pymodbus "single" behaviour), give it
+[`(any-unit on)`](../config/device/any-unit.md): an exact match still wins, and the any-unit device
+takes all other requests, so exception 0B never happens while it exists. Replies carry the
+request's unit id. RTU and ASCII still leave broadcast (0) and the reserved addresses 248-255
+unanswered; in `tcp` and `udp` units 0 and 255 are answered like any other id. At most one device
+can have it; the C API calls it `mogbus_device_set_any_unit`.
 
 ## Valid ids in RTU and ASCII
 

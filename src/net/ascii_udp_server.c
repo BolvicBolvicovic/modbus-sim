@@ -43,7 +43,7 @@ handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8
 		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		return;
 	}
-	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr) : NULL;
+	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr, true) : NULL;
 	if (!dev)
 	{
 		/* broadcast or unknown unit: no response, no request processing; never reaches a device */
@@ -51,7 +51,7 @@ handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8
 		return;
 	}
 
-	resp_len = net_handle_pdu(server->options.obs, peer->text, dev, &server->rng, now_ms, pdu, pdu_len,
+	resp_len = net_handle_pdu(server->options.obs, peer->text, dev, addr, &server->rng, now_ms, pdu, pdu_len,
 				  resp, &decision);
 	if (decision.drop)
 		return;

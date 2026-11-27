@@ -156,6 +156,47 @@ TEST(RtuOverTcpServesReadHoldingRegisters)
 	server_stop();
 }
 
+TEST(RtuOverTcpAnyUnitDeviceAnswersWithTheRequestAddress)
+{
+	int fd;
+	u8 req_pdu[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8 frame[MODBUS_RTU_MAX_FRAME], resp[MODBUS_MAX_PDU], addr = 0;
+	u32 plen = 0, flen;
+
+	server_start("", "(device (unit-id 1) (holding 0 (static 11)))\n"
+			 "(device (unit-id 2) (any-unit on) (holding 0 (static 22)))\n");
+	fd = connect_port(100, 2000);
+	ASSERT(fd >= 0);
+
+	/* exact match wins; recv_rtu_resp verifies the CRC */
+	flen = modbus_rtu_encode(frame, 1, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 1 && get_be16(resp + 2) == 11);
+
+	/* any other address reaches the any-unit device but is answered with the request address */
+	flen = modbus_rtu_encode(frame, 77, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 77 && plen == 4 && get_be16(resp + 2) == 22);
+
+	/* broadcast and the reserved addresses stay silent */
+	flen = modbus_rtu_encode(frame, 0, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(ts_no_data(fd, 250));
+	flen = modbus_rtu_encode(frame, 250, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(ts_no_data(fd, 250));
+
+	flen = modbus_rtu_encode(frame, 2, req_pdu, sizeof(req_pdu));
+	ASSERT_EQ(send_all_fd(fd, frame, flen));
+	ASSERT_EQ(recv_rtu_resp(fd, &addr, resp, &plen, 2000));
+	ASSERT_EQ(addr == 2 && get_be16(resp + 2) == 22);
+
+	close(fd);
+	server_stop();
+}
+
 TEST(RtuOverTcpWriteThenRead)
 {
 	int fd;

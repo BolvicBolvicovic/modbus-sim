@@ -75,7 +75,7 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
 		return;
 	}
-	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr) : NULL;
+	dev = addr ? net_find_device(server->options.devices, server->options.device_count, addr, true) : NULL;
 	if (!dev)
 	{
 		/* broadcast or unknown unit: no response, no request processing; never reaches a device */
@@ -83,7 +83,7 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 		return;
 	}
 
-	resp_len = net_handle_pdu(server->options.obs, conn->base.peer, dev, &server->rng, now_ms, pdu, pdu_len,
+	resp_len = net_handle_pdu(server->options.obs, conn->base.peer, dev, addr, &server->rng, now_ms, pdu, pdu_len,
 				  resp, &decision);
 	if (decision.disconnect)
 	{

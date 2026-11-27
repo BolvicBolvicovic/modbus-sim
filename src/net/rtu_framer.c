@@ -119,21 +119,21 @@ rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
 		{
 			fault_decision_t ignored = { 0 };
 
-			(void)net_handle_pdu(NULL, NULL, ctx->devices[i], NULL, now_ms, pdu, pdu_len,
+			(void)net_handle_pdu(NULL, NULL, ctx->devices[i], 0, NULL, now_ms, pdu, pdu_len,
 					     resp, &ignored);
 		}
 		/* Recorded once as a request without a response, not once per device. */
 		net_obs_request(ctx->obs, ctx->peer, NULL, 0, pdu[0], NULL, 0, NULL);
 		return;
 	}
-	dev = net_find_device(ctx->devices, ctx->device_count, addr);
+	dev = net_find_device(ctx->devices, ctx->device_count, addr, true);
 	if (!dev)
 	{
 		net_obs_request(ctx->obs, ctx->peer, NULL, addr, pdu[0], NULL, 0, NULL);
 		return; /* unknown unit: no response */
 	}
 
-	resp_len = net_handle_pdu(ctx->obs, ctx->peer, dev, ctx->rng, now_ms, pdu, pdu_len, resp,
+	resp_len = net_handle_pdu(ctx->obs, ctx->peer, dev, addr, ctx->rng, now_ms, pdu, pdu_len, resp,
 				  &decision);
 	framer->fault_disconnect |= decision.disconnect;
 	if (decision.drop || resp_len == 0)

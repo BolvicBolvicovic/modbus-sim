@@ -14,6 +14,7 @@ The Python calls and the C functions they wrap, the accepted names for spaces an
 | `dev.get_value(space, address)`, `dev.set_value(space, address, value)` | `mogbus_device_get_value/set_value` (decoded) |
 | `dev.get_string(space, address)`, `dev.set_string(space, address, text)` | `mogbus_device_get_string/set_string` (string points) |
 | `dev.set_access_hook(fn)`, `dev.set_access_hook(None)` | `mogbus_device_set_access_hook` |
+| `dev.set_any_unit(on=True)` | `mogbus_device_set_any_unit` (raises when another device has it) |
 | `dev.info()` | `mogbus_device_info` |
 | `ctx.serve(options=None, **overrides)`, `ctx.serve_config()` | `mogbus_server_create`, `mogbus_server_create_from_config` |
 | `ctx.config_server_options()`, `ctx.check_server(...)` | `mogbus_config_server_options`, `mogbus_server_check` |
@@ -53,7 +54,7 @@ else raises `MogbusError` listing the valid names.
 - `ServerOptions` has the fields of `mogbus_server_options_t` in snake_case with the defaults of
   `mogbus_server_options_defaults()` (TCP on `127.0.0.1:1502`). Strings are encoded and kept alive for
   the duration of the C call; the library copies them.
-- `dev.info()` returns a `DeviceInfo` with `name`, `unit_id`, `point_counts` per space, `faults` (only
+- `dev.info()` returns a `DeviceInfo` with `name`, `unit_id`, `any_unit`, `point_counts` per space, `faults` (only
   configured kinds, for example `"delay"`) and `custom_function_codes`.
 - Errors raise `MogbusError` with the message of the C `err` buffer. A failed server creation also
   sets `error.status` (`mogbus.Status.INVALID`, `SERIAL`, `LISTEN`).

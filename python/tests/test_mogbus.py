@@ -170,6 +170,18 @@ class DeviceTest(unittest.TestCase):
         with self.assertRaises(MogbusError):
             self.ctx.add_device(1)
 
+    def test_any_unit(self):
+        other = self.ctx.add_device(2)
+        self.assertFalse(self.dev.info().any_unit)
+        self.dev.set_any_unit()
+        self.assertTrue(self.dev.info().any_unit)
+        with self.assertRaises(MogbusError):
+            other.set_any_unit(True)
+        self.dev.set_any_unit(False)
+        other.set_any_unit(True)
+        self.assertTrue(other.info().any_unit)
+        self.assertFalse(self.dev.info().any_unit)
+
     def test_points_and_read_write(self):
         d = self.dev
         d.add_point("holding", 0, "u16", 1234)

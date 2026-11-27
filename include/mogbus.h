@@ -291,6 +291,7 @@ struct mogbus_device_info_t
 {
 	const char*	name;			/**< borrowed from the device */
 	uint8_t		unit_id;		/**< Modbus unit id */
+	bool		any_unit;		/**< also answers every unit id no other device has */
 	uint32_t	point_count[MOGBUS_SPACE_COUNT];	/**< points per mogbus_space_t */
 	/** @brief One fault slot of the device. */
 	struct
@@ -309,6 +310,19 @@ struct mogbus_device_info_t
 		const char*	name;		/**< borrowed; "" when unnamed */
 	} custom_fcs[8];
 };
+
+/**
+ * @brief Makes a device also answer every unit id that no device of the context has.
+ *
+ * Exact unit ids still win. RTU and ASCII never answer the broadcast address 0 or the reserved
+ * addresses 248-255 this way; on Modbus TCP/UDP unit 0 and 255 are ordinary addresses. Only one
+ * device of a context can have it (the `(any-unit on)` config key does the same).
+ *
+ * @param dev Device.
+ * @param on true to enable, false to disable.
+ * @return false if @p dev is NULL or another device of the context already has it.
+ */
+MOGBUS_API bool		mogbus_device_set_any_unit(mogbus_device_t* dev, bool on);
 
 /**
  * @brief Fills a snapshot of a device's points and faults.

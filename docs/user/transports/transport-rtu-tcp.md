@@ -28,7 +28,7 @@ Modbus RTU frames carried on a TCP listen socket: no MBAP header, the frame is `
   It is an explicit listen mode, not a transparent gateway or proxy.
 - The same PDU handlers, device model, unit routing, fault injection and CRC validation are used as
   for [RTU](transport-rtu.md). Up to 32 clients are served, and `idle-timeout-ms` closes idle connections.
-- A bad CRC and an unknown unit produce no response. Broadcast (unit 0) is ignored by default;
+- A bad CRC and an unknown unit (no exact match and no [any-unit](../config/device/any-unit.md) device) produce no response. Broadcast (unit 0) is ignored by default;
   `(broadcast-execute on)` executes it on every device with no response.
 - A `(fault (kind disconnect) ...)` closes the TCP connection after the addressed frame is processed.
   It is not applied to bad-CRC, unknown-unit or broadcast frames, which stay silent without
