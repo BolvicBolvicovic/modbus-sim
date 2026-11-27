@@ -111,6 +111,13 @@
                 "docs/user/observability/api/api-set-fault.md",
                 "docs/user/observability/api/api-clear-fault.md"
               ]
+            },
+            {
+              "title": "Actions",
+              "entries": [
+                "docs/user/observability/api/api-list-actions.md",
+                "docs/user/observability/api/api-set-action-param.md"
+              ]
             }
           ]
         }
@@ -471,7 +478,7 @@
           "pyapi": "python/mogbus/core.py",
           "title": "Python API",
           "groups": [
-            {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
+            {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "ActionInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
             {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing", "Frame"]},
             {"title": "Logging and errors", "items": ["set_log_level", "set_log_format", "set_log_sink", "library_version", "MogbusError", "Status"]},
             {"title": "Enumerations", "items": ["Space", "ValueType", "WordOrder", "ByteOrder", "RampMode", "ClockField", "AccessKind", "AccessTarget", "FrameDirection", "Mode", "Parity", "TlsVersion", "FaultKind", "LogLevel", "LogFormat"]}

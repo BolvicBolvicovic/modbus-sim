@@ -66,6 +66,14 @@ the kind, `percent`, and `delay_ms`, `exception_code` or `mode` where the kind t
 ([Set a fault](api/api-set-fault.md)). Faults that come from a schedule are marked `scheduled`;
 setting a fault over one replaces it.
 
+### Change action params
+
+When the device has [point actions](../config/actions/index.md), an `Actions` panel lists each one
+(point, event, name) with an input and a `Set` button per param, from
+[List actions](api/api-list-actions.md). `Set` calls [Set an action param](api/api-set-action-param.md);
+the new value is used from the action's next run, and a refusal is shown under the table. The panel
+shows the values read when the device was selected: reselect the device to read them again.
+
 ### Plot values over time
 
 Switch to `Plot` to chart up to 8 points of any table. Tick them in the `Plot` column, or use

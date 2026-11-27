@@ -434,6 +434,41 @@ MOGBUS_API bool		mogbus_device_action_at(const mogbus_device_t* dev, uint32_t in
 						mogbus_action_t* out);
 
 /**
+ * @brief Changes a parameter of a point action; the new value is used from the next run.
+ *
+ * Parameters are read-only to the action itself. A boolean parameter takes exactly 0 or 1; a
+ * number parameter takes any finite number. A device restart keeps the current value.
+ *
+ * @param dev Device.
+ * @param space Table of the point the action is attached to.
+ * @param address Address of that point.
+ * @param on_write false for the `on-read` action of the point, true for its `on-write` action.
+ * @param name Parameter name.
+ * @param value New value.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID when no such action or parameter exists or the value
+ *         does not fit the parameter. The message is in mogbus_last_error() of the device's
+ *         context.
+ */
+MOGBUS_API mogbus_error_t	mogbus_device_set_action_param(mogbus_device_t* dev, mogbus_space_t space,
+							      uint32_t address, bool on_write,
+							      const char* name, double value);
+
+/**
+ * @brief Reads the current value of a point action parameter (a boolean reads back 0 or 1).
+ * @param dev Device.
+ * @param space Table of the point the action is attached to.
+ * @param address Address of that point.
+ * @param on_write false for the `on-read` action, true for the `on-write` action.
+ * @param name Parameter name.
+ * @param out Receives the value.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID when no such action or parameter exists. The message
+ *         is in mogbus_last_error() of the device's context.
+ */
+MOGBUS_API mogbus_error_t	mogbus_device_get_action_param(mogbus_device_t* dev, mogbus_space_t space,
+							      uint32_t address, bool on_write,
+							      const char* name, double* out);
+
+/**
  * @brief Makes a device also answer every unit id that no device of the context has.
  *
  * Exact unit ids still win. RTU and ASCII never answer the broadcast address 0 or the reserved
