@@ -18,59 +18,75 @@ turns control on, with the usual WARN in the log.
 The start-up summary (and `--check`) prints the address, for example
 `web UI on http://127.0.0.1:9102/`. Open it in a browser on the same machine.
 
-## What it shows and edits
+## Using it
 
-- **Header**: the mogbus logo (icon and wordmark, inlined in the page; the icon is also the favicon).
-- **Device**: the selector lists the devices (`/api/devices`).
-- **Points**: one tab per table (`coil`, `discrete`, `input`, `holding`) lists the configured points
-  from [List points](api/api-list-points.md): address, type (strings show their register count), kind
-  (`static`, `ramp`, `model`, `clock`, `machine`), a read-only marker, the decoded value and the raw
-  registers. Values are decoded in the browser from raw reads, honouring each point's word and byte
-  order. The list is paged by 50 points.
-- **Table / Plot**: a switch above the list. `Table` is the list; `Plot` shows a line chart of the
-  points ticked in the `Plot` column of the list (strings cannot be plotted). Up to 8 points, of any
-  table, can be plotted; the selection belongs to the device and is cleared when you switch device.
-  Each series is sampled on every refresh, wherever it is (another page or table), in both views, and
-  keeps the samples of the last 5 minutes (at most 30 000). The window is chosen with the `-`/`+`
-  buttons or the vertical mouse wheel over the chart (1 s, 2 s, 5 s, 10 s, 30 s by default, 1 min, 2 min
-  or 5 min, remembered in the browser). By default the chart is `Live`: it follows now, with data
-  entering on the right and leaving on the left (an empty left part means there is not that much history
-  yet). Scrolling in time leaves live mode: use the horizontal wheel or trackpad, Shift and the wheel,
-  the Left/Right arrow keys (Home goes to the oldest sample) when the chart has focus, or the history
-  scrollbar under the chart. The view then stays at fixed absolute times while samples keep arriving,
-  and the range shown next to the window size is updated; the `Live` button (pressed while following)
-  or End, or scrolling to the newest sample, returns to now. Zooming keeps the time under the cursor
-  fixed when not live. Time gridlines sit at absolute wall-clock times and are labelled with the time of
-  day (with milliseconds below 1 s steps). Drag across the chart and release to measure: a shaded band
-  between the two times stays until you click on the chart, press Esc or drag again, and the line under
-  the chart gives the elapsed time (`Δt = 1.234 s`) and, for every plotted point, its value (nearest
-  sample) at both edges and the difference. The band is fixed in time, so it moves with scrolling. The
-  vertical axis scales to the plotted values, bits as steps, and a gap where
-  a read failed. Dense series are reduced to the minimum and maximum of every pixel column, and drawing
-  runs once per animation frame, independent of the sampling rate. `Pause` freezes the view. The legend
-  gives colour, table and address, type, latest value, and a `×` button to remove the series. Below it,
-  `Add point` picks a table; the box next to it filters that table's plottable points by address or
-  label and opens a dropdown over the page (also with ArrowDown) listing them, for example `holding 10 ·
-  float32 · ramp`. Tick several (click, or Up/Down and Enter) and press `Add ticked` to plot them all;
-  with nothing ticked and a single point left after filtering, Enter or `Add ticked` adds that one. Esc,
-  Tab or a click elsewhere closes the dropdown. At most 8 points
-  are plotted, extra ones are skipped with a message. The points' checkboxes in the list follow. Samples are kept in the browser only and are lost on reload.
-- **Refresh**: the visible page and the plotted points are read again every second by default (the
-  `Refresh every` selector offers 10 ms, 20 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s, 2 s, 5 s and 10 s, applies at once to
-  both views and is remembered in the browser; a read still running makes the next tick skip, and the achieved rate is shown next to the selector), one raw read per run of adjacent points
-  (at most 125 registers or 2000 bits), only while the browser tab is visible. `Pause` stops it and
-  `Refresh now` reads once. Switching device or table, or paging, reloads the list.
-- **Write**: pick an address (click it in the list) and either set the decoded value of the point
-  ([Set a value](api/api-set-value.md)) or write raw registers from that address, comma-separated
-  ([Write values](api/api-write-values.md)). A refusal from the server, for example a string point,
-  a machine-driven point or an undefined address, is shown under the form.
-- **Faults**: lists the faults of the device with a `Clear` button each, and a form to set one:
-  kind, `percent`, and `delay_ms`, `exception_code` or `mode` where the kind takes them
-  ([Set a fault](api/api-set-fault.md)). Faults from a schedule are marked `scheduled`; setting a
-  fault over one replaces it.
+The page has a device selector at the top, a `Table`/`Plot` switch, a refresh control and a faults
+panel. Everything it does goes through the [control API](api/control-api.md).
 
-Writes change the running device exactly as the API does: a raw write turns a ramp or model into a
-static value, and a value write holds the point until the device restarts.
+### Pick a device
+
+The selector lists the configured devices. Switching device reloads the list and clears the plot
+selection, which belongs to the device.
+
+### Browse points
+
+One tab per table (`coil`, `discrete`, `input`, `holding`) lists the configured points, 50 per
+page, from [List points](api/api-list-points.md). Each row shows:
+
+| Column | Content |
+|---|---|
+| Address | as sent on the wire |
+| Type | the data type; strings show their register count |
+| Kind | `static`, `ramp`, `model`, `clock` or `machine`, plus a read-only marker |
+| Value | decoded in the browser from the raw registers, honouring word and byte order |
+| Raw | the registers as read |
+| Plot | a checkbox that puts the point on the chart (not for strings) |
+
+### Keep values fresh
+
+The visible page is read again every second. The `Refresh every` selector goes from 10 ms to 10 s,
+shows the rate actually achieved and is remembered by the browser; a tick is skipped while the
+previous read is still running. Reads are batched (one request per run of adjacent points) and only
+happen while the browser tab is visible. `Pause` stops refreshing and `Refresh now` reads once.
+
+### Change a value
+
+Click an address in the list, then either set the decoded value of the point
+([Set a value](api/api-set-value.md)) or write raw registers from that address, comma-separated
+([Write values](api/api-write-values.md)). A refusal from the server (a string point, a
+machine-driven point, an undefined address) is shown under the form.
+
+Writes act on the running device as the API does: a raw write turns a ramp or model into a static
+value, and a value write holds the point until the device restarts.
+
+### Inject faults
+
+The faults panel lists the faults of the device with a `Clear` button each, and a form to set one:
+the kind, `percent`, and `delay_ms`, `exception_code` or `mode` where the kind takes them
+([Set a fault](api/api-set-fault.md)). Faults that come from a schedule are marked `scheduled`;
+setting a fault over one replaces it.
+
+### Plot values over time
+
+Switch to `Plot` to chart up to 8 points of any table. Tick them in the `Plot` column, or use
+`Add point`: pick a table, type in the box to filter its points by address or label, tick the ones
+you want in the dropdown (click, or Up/Down and Enter) and press `Add ticked`. The legend shows
+colour, address, type and latest value, with a `×` to remove a series.
+
+Every plotted point is sampled on each refresh, in both views, and the browser keeps the last
+5 minutes (at most 30 000 samples). They are lost on reload.
+
+| To do this | Do this |
+|---|---|
+| Change the time window (1 s to 5 min) | `-`/`+` buttons or the vertical wheel over the chart; remembered by the browser |
+| Follow now | `Live` button (pressed while following), End, or scroll to the newest sample |
+| Look back in time | horizontal wheel or trackpad, Shift and the wheel, Left/Right keys (Home: oldest), or the scrollbar under the chart; this leaves live mode and the view stays at fixed times |
+| Freeze the view | `Pause` |
+| Measure | drag across the chart and release: a band stays until you click, press Esc or drag again, and the line under the chart gives `Δt` and each point's value at both edges and the difference |
+
+Gridlines are at absolute wall-clock times. The vertical axis fits the plotted values, bits are
+drawn as steps and a failed read leaves a gap. Dense series are reduced to the minimum and maximum of
+each pixel column, so drawing cost does not depend on the sampling rate.
 
 ## Security
 

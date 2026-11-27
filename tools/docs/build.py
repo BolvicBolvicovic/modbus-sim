@@ -503,12 +503,12 @@ class Render:
             return s[3:-4]
         return s
 
-    def code(self, lang, text, cls='', label=None):
+    def code(self, lang, text, cls='', label=None, copy_btn=True):
         label = label or LANG_NAMES.get(lang, lang or 'Text')
-        return ('<div class="code%s" data-lang="%s"><span class="code-lang">%s</span>'
-                '<button class="copy" type="button" aria-label="Copy code">Copy</button>'
+        btn = '<button class="copy" type="button" aria-label="Copy code">Copy</button>' if copy_btn else ''
+        return ('<div class="code%s" data-lang="%s"><span class="code-lang">%s</span>%s'
                 '<pre><code data-lang="%s">%s</code></pre></div>' %
-                (cls, esc(lang), esc(label), esc(lang), esc(text)))
+                (cls, esc(lang), esc(label), btn, esc(lang), esc(text)))
 
     def tabs(self, run):
         bar = []
@@ -519,9 +519,10 @@ class Render:
                        (esc(lang), sel, esc(LANG_NAMES.get(lang, lang))))
             hidden = '' if n == 0 else ' hidden'
             panels.append('<div class="tabpanel" role="tabpanel" data-lang="%s"%s>%s</div>' %
-                          (esc(lang), hidden, self.code(lang, text, ' in-tab')))
-        return '<div class="tabs" data-tabs><div class="tabbar" role="tablist">%s</div>%s</div>' % (
-            ''.join(bar), ''.join(panels))
+                          (esc(lang), hidden, self.code(lang, text, ' in-tab', copy_btn=False)))
+        return ('<div class="tabs" data-tabs><div class="tabbar"><div class="tablist" role="tablist">%s</div>'
+                '<button class="copy" type="button" aria-label="Copy code">Copy</button></div>%s</div>' % (
+                    ''.join(bar), ''.join(panels)))
 
 
 def r_is_head(row):

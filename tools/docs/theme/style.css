@@ -284,14 +284,15 @@ a code { color: inherit; }
 .in-tab .code-lang { display: none; }
 .in-tab pre { padding-top: 1rem; }
 .tabs { margin: 1.25rem 0 1.5rem; background: var(--code-bg); border-radius: 10px; border: 1px solid var(--code-line); overflow: hidden; }
-.tabbar { display: flex; gap: .1rem; padding: .3rem 5rem 0 .5rem; background: var(--code-bar); overflow-x: auto; border-bottom: 1px solid var(--code-line); }
+.tabbar { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem 0 .5rem; background: var(--code-bar); border-bottom: 1px solid var(--code-line); }
+.tablist { display: flex; gap: .1rem; flex: 1 1 auto; min-width: 0; overflow-x: auto; }
 .tabbar button {
   font: 600 .78rem var(--font); color: #8ea2c1; background: none; border: 0; border-bottom: 2px solid transparent;
   padding: .55rem .8rem; cursor: pointer; white-space: nowrap;
 }
 .tabbar button:hover { color: #fff; }
 .tabbar button[aria-selected="true"] { color: #fff; border-bottom-color: var(--amber); }
-.tabs .copy { top: .5rem; z-index: 2; }
+.tabs .copy { position: static; flex: none; margin-bottom: .3rem; }
 .tabpanel[hidden] { display: none; }
 
 /* syntax colours */
@@ -312,6 +313,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--bg-soft) 70%, transpare
 td p { margin: 0; }
 td p + p { margin-top: .5rem; }
 .a-center { text-align: center; } .a-right { text-align: right; }
+td code { white-space: nowrap; overflow-wrap: normal; }
 td.pname { white-space: nowrap; font-weight: 600; }
 
 /* ---- callouts ---- */

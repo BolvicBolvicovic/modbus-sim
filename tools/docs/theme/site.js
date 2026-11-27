@@ -252,22 +252,31 @@
     });
   });
 
-  /* ---- table of contents: highlight the section in view ---- */
+  /* ---- table of contents: highlight the heading in view ---- */
   var toc = $('.toc');
-  if (toc && 'IntersectionObserver' in window) {
+  if (toc) {
     var links = {};
-    $$('a', toc).forEach(function (a) { links[a.getAttribute('href').slice(1)] = a; });
-    var heads = $$('.doc h2[id], .doc h3[id]').filter(function (h) { return links[h.id]; });
+    $$('a', toc).forEach(function (a) { links[decodeURIComponent(a.getAttribute('href').slice(1))] = a; });
+    var heads = $$('.doc h2[id], .doc h3[id], .doc h4[id], .doc h5[id]').filter(function (h) { return links[h.id]; });
     var active = null;
-    var obs = new IntersectionObserver(function (ents) {
-      ents.forEach(function (e) {
-        if (e.isIntersecting && links[e.target.id]) {
-          if (active) { active.classList.remove('active'); }
-          active = links[e.target.id];
-          active.classList.add('active');
-        }
-      });
-    }, { rootMargin: '-60px 0px -70% 0px' });
-    heads.forEach(function (h) { obs.observe(h); });
+    var pending = false;
+    var spy = function () {
+      pending = false;
+      var cur = null;
+      for (var i = 0; i < heads.length; i++) {
+        if (heads[i].getBoundingClientRect().top <= 90) { cur = heads[i]; } else { break; }
+      }
+      if (!cur && heads.length) { cur = heads[0]; }
+      var a = cur ? links[cur.id] : null;
+      if (a !== active) {
+        if (active) { active.classList.remove('active'); }
+        active = a;
+        if (a) { a.classList.add('active'); }
+      }
+    };
+    var onScroll = function () { if (!pending) { pending = true; window.requestAnimationFrame(spy); } };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    spy();
   }
 })();

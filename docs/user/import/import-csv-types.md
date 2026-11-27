@@ -13,7 +13,7 @@ How the importer reads the type, layout, default, access and scale columns of a 
 | `float32` | float, float32, real, ieee754, single, f32, "32-bit float" |
 | `u64` / `s64` | u64, uint64, ulint, lword / s64, int64, lint |
 | `float64` | double, float64, lreal, f64 |
-| bool | bool, bit, boolean, flag (coils and discrete inputs) |
+| `bool` | bool, bit, boolean, flag (coils and discrete inputs) |
 | `string` | string, ascii, char, text |
 
 With no type column (or an empty cell) the type is `--type` (default `u16`). An unknown type skips the

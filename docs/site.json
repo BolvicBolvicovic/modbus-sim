@@ -7,9 +7,9 @@
       "title": "Get started",
       "items": [
         "docs/user/get-started.md",
-        "docs/user/tutorial-app.md",
         "docs/user/features.md",
-        "docs/user/building.md"
+        "docs/user/building.md",
+        "docs/user/tutorial-app.md"
       ]
     },
     {

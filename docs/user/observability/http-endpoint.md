@@ -26,6 +26,24 @@ port. The endpoint is served by the same loop that answers Modbus requests.
 Other paths get 404 and methods other than GET and HEAD get 405. The optional
 [runtime control API](api/control-api.md) under `/api/` is the exception.
 
+## One endpoint, three uses
+
+The probes and metrics, the [runtime control API](api/control-api.md) and the [web UI](web-ui.md)
+are one HTTP server: the `(server (http ...))` section, one port, one bind address. The keys
+`control` and `ui` only decide which paths that server answers:
+
+| Path | Served | Needs |
+|---|---|---|
+| `/healthz`, `/readyz`, `/metrics` | always | `(http ...)` present |
+| `/api/...` | read and write tables, set values and faults | `(control on)` |
+| `/` and `/index.html` (the page) | the web UI | `(ui on)`, which also turns `control` on |
+
+The page is a client of `/api/`, so it cannot work without it. Without `control`, `/api/` answers
+404 and the page is not served. Only `/api/` and the page check the `Host` and `Origin` headers; the
+probe and metrics paths are never checked, so they stay usable by Prometheus and orchestrators on
+any name. Both `control` and `ui` are off by default and have no authentication, so enable them only
+on loopback or behind your own access control.
+
 ## Limits
 
 A connection is closed after one response or after 2 s, and at most 4 clients are served at once.

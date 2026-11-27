@@ -5,7 +5,7 @@ Build a simulated water pumping station, run it as a Modbus server, and use it t
 The station has one tank and one pump. The tank fills at a steady rate and the pump drains it. In auto
 mode the pump starts when the level is 0.3 m above the setpoint and stops 0.3 m below it. The finished
 config is [`examples/tutorial/pump-station.scm`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/tutorial/pump-station.scm),
-and CI checks it, so it cannot rot. The same station is built from [C](library/library-start.md) and
+and it is checked with `mogbus --check` on every change, so it cannot rot. The same station is built from [C](library/library-start.md) and
 [Python](python/python-start.md) elsewhere; here it is only a config file and the `mogbus` binary.
 
 You need a built `./mogbus` ([Get started](get-started.md), step 1). Run every command from the

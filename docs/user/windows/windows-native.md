@@ -27,7 +27,7 @@ unreachable from a vanished client does not disturb it.
 
 ## How it is tested
 
-`tools/win32_check.sh` (CI job `windows-cross`) builds everything, runs the unit tests and starts
+`tools/win32_check.sh` builds everything, runs the unit tests and starts
 `mogbus.exe` in every network mode under Wine, checking it with the Linux `mogbus --health`,
 `tools/modbus_probe.py` and the pymodbus interop script. The tests that fork, use PTYs or call POSIX
 sockets directly stay Linux-only (`TESTS_POSIX_ONLY` in the Makefile). It has not been run on Windows

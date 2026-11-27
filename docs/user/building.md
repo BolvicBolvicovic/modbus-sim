@@ -16,13 +16,13 @@ Compilation is safe to parallelize, so `-j$(nproc)` gives a faster clean build.
 The default build prefers `clang`, falling back to `gcc` and then `cc`, and uses the system linker with
 the hardening flags `-pie -Wl,-z,relro,-z,now`. `ccache` and `mold` are independent optional
 speed-ups: `ccache` prefixes the chosen compiler when installed, and `-fuse-ld=mold` is used only when
-mold is installed and the compiler accepts it (as in CI, where all three are present). An explicit
+mold is installed and the compiler accepts it (the project's own builds use all three). An explicit
 `CC` or `LDFLAGS` from the environment or command line wins (for example, `CC=gcc make`); hardening
 flags are still appended unless already present.
 
 ## Optimization: `BUILD`
 
-`BUILD` controls optimization (`prod` by default, matching CI):
+`BUILD` controls optimization (`prod` by default, the hardened optimized build):
 
 | Value | Effect |
 |---|---|

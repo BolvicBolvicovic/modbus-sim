@@ -95,5 +95,5 @@ Only the points you configure exist. A client that reads any other address gets 
   [import a register map](import/import-overview.md).
 - Add behaviour and faults: the [config reference](config/format.md).
 - Serve another transport: [Transports](transports/transports.md).
-- Run it in CI or a container: [Docker](deployment/docker.md), [Python](python/python-start.md).
+- Run it in an automated test setup or a container: [Docker](deployment/docker.md), [Python](python/python-start.md).
 - Look at what a client sends: [Logs](observability/logs.md), or run `./mogbus -v my-device.scm`.

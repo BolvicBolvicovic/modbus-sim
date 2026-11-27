@@ -25,16 +25,16 @@ docker run --rm -p 127.0.0.1:1502:1502 mogbus:0.0.1 /usr/share/mogbus/profiles/p
 docker run --rm -p 127.0.0.1:1502:1502 -v "$PWD/my.scm:/etc/mogbus/mogbus.scm:ro" mogbus:0.0.1
 ```
 
-The profiles bind `127.0.0.1` (see below), so use a copy with `(bind "0.0.0.0")`, or the default
-config, for anything that must be reachable. A mounted config must be readable by UID 10001. TLS
+The profiles bind `127.0.0.1`, which is not reachable from outside the container (see the next section).
+A mounted config must be readable by UID 10001. TLS
 certificates and keys are mounted the same way and referenced by absolute path in `(tls ...)`;
 `(tls ...)` servers default to port 802, so publish that port or set `(port 1502)`.
 
 ## The server must bind 0.0.0.0
 
 mogbus binds `127.0.0.1` by default, which inside a container is unreachable through a published
-port. The container config therefore sets `(bind "0.0.0.0")`; the same is needed in any config you
-mount. This opens the port to everything that can reach the container, so publish it to loopback
+port. The container config therefore sets `(bind "0.0.0.0")`; any config you mount, and any profile
+you run, needs the same (use a copy with `(bind "0.0.0.0")`). This opens the port to everything that can reach the container, so publish it to loopback
 (`-p 127.0.0.1:1502:1502`) unless remote clients are intended.
 
 `EXPOSE` lists 1502/tcp and 1502/udp. Use the transports `tcp`, `rtu-tcp` and `ascii-tcp` on TCP and
