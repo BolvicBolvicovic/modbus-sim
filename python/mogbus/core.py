@@ -281,6 +281,8 @@ class ServerOptions:
     http_bind_address: Optional[str] = None
     http_port: int = 9102
     http_control: bool = False
+    http_ui: bool = False
+    http_allowed_hosts: Union[None, str, Sequence[str]] = None
 
     def _to_c(self):
         """Returns (struct, keepalive). The struct points into the bytes objects in keepalive."""
@@ -294,6 +296,13 @@ class ServerOptions:
                 value = int(_coerce(Parity, value, "parity"))
             elif f.name == "tls_min_version":
                 value = int(_coerce(TlsVersion, value, "tls_min_version"))
+            elif f.name == "http_allowed_hosts":
+                if isinstance(value, (list, tuple)):
+                    value = ",".join(value)
+                if value is not None and not isinstance(value, str):
+                    raise MogbusError(f"http_allowed_hosts must be a string, a list of strings or None, got {value!r}")
+                value = _text(value)
+                keep.append(value)
             elif f.name in ("bind_address", "path", "tls_certificate", "tls_private_key",
                             "tls_ca_certificate", "tls_ciphers_1_2", "tls_ciphersuites_1_3",
                             "http_bind_address"):
@@ -307,7 +316,7 @@ class ServerOptions:
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise MogbusError(f"fd must be an integer, got {value!r}")
             elif f.name in ("strict_t15", "broadcast_execute", "tls_enabled",
-                            "tls_require_client_certificate", "http_control"):
+                            "tls_require_client_certificate", "http_control", "http_ui"):
                 value = bool(value)
             else:
                 value = _u(value, f.name, 1 << 32)

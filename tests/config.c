@@ -2718,6 +2718,36 @@ TEST(ConfigHttpEndpointRejectsBadValues)
 		     "http: port 9102 is already the Modbus server port");
 }
 
+TEST(ConfigHttpUiAndAllowedHosts)
+{
+	config_t	config = { 0 };
+	char		err[256] = "";
+
+	ASSERT_SUCCESS(load_text("(server (http)) (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(!config.http_ui && config.http_allowed_hosts[0] == '\0');
+	ASSERT_SUCCESS(load_text("(server (http (ui on))) (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(config.http_ui && config.http_control);	/* the UI needs the control API */
+	ASSERT_SUCCESS(load_text("(server (http (ui off) (control off))) (device (unit-id 1) (holding 0))",
+				 &config, err, sizeof(err)));
+	ASSERT_EQ(!config.http_ui && !config.http_control);
+	ASSERT_SUCCESS(load_text("(server (http (allowed-host \"sim.lab\") (allowed-host \"mogbus-1\")))"
+				 " (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strcmp(config.http_allowed_hosts, "sim.lab,mogbus-1") == 0);
+	ASSERT_SUCCESS(load_text("(server (http (allowed-host \"a\") (allowed-host \"b\") (allowed-host \"c\")"
+				 " (allowed-host \"d\") (allowed-host \"e\") (allowed-host \"f\") (allowed-host \"g\")"
+				 " (allowed-host \"h\"))) (device (unit-id 1) (holding 0))", &config, err, sizeof(err)));
+	ASSERT_EQ(strcmp(config.http_allowed_hosts, "a,b,c,d,e,f,g,h") == 0);
+	EXPECT_ERROR("(server (http (allowed-host \"a\") (allowed-host \"b\") (allowed-host \"c\")"
+		     " (allowed-host \"d\") (allowed-host \"e\") (allowed-host \"f\") (allowed-host \"g\")"
+		     " (allowed-host \"h\") (allowed-host \"i\"))) (device (unit-id 1) (holding 0))",
+		     "at most 8 allowed-host names");
+	EXPECT_ERROR("(server (http (allowed-host \"\"))) (device (unit-id 1) (holding 0))", "allowed-host");
+	EXPECT_ERROR("(server (http (allowed-host \"a:80\"))) (device (unit-id 1) (holding 0))", "allowed-host");
+	EXPECT_ERROR("(server (http (allowed-host a))) (device (unit-id 1) (holding 0))", "allowed-host");
+	EXPECT_ERROR("(server (http (ui on) (ui off))) (device (unit-id 1) (holding 0))", "more than once");
+	EXPECT_ERROR("(server (http (ui maybe))) (device (unit-id 1) (holding 0))", "ui");
+}
+
 TEST(ConfigUserDefinedFunctionCodes)
 {
 	config_t			config = { 0 };

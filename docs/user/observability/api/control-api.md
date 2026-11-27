@@ -16,6 +16,15 @@ It is off by default, and while it is off every `/api/` path answers 404.
 > default), or put it behind a reverse proxy or firewall that does the access control before
 > exposing it.
 
+## Security
+
+Besides the missing authentication, `/api/` checks each request against browser attacks: the
+`Host` header must name this server (loopback, the bind address or an
+[allowed-host](../../config/server/http-allowed-host.md)) or the answer is 403, and a state-changing
+request with an `Origin` header must come from the same `http://host:port` with
+`Content-Type: application/json`. Requests without `Origin` (curl, scripts) pass. Details are in
+[Web UI](../web-ui.md#security).
+
 ## Conventions
 
 - Requests and responses are JSON. A request body is at most 1024 bytes and must come with a
@@ -34,6 +43,7 @@ It is off by default, and while it is off every `/api/` path answers 404.
 |---|---|
 | 200 | Done |
 | 400 | Malformed JSON, an unknown or misplaced field, a missing required field, a bad number in the URL, or `count` out of range |
+| 403 | `Host` not allowed, or a cross-origin or non-JSON request with an `Origin` header (see Security) |
 | 404 | Unknown path, unit, space or fault kind, or `DELETE` of a fault that is not set |
 | 405 | Wrong method for that path |
 | 413 | `Content-Length` over 1024 |

@@ -9,6 +9,7 @@
 #include "net/net_control.h"
 #include "os/os_time.h"
 #include "util/log.h"
+#include "webui/webui.h"
 #include "vlib/macros.h"
 #include <ctype.h>
 #include <stdarg.h>
@@ -42,6 +43,7 @@ net_obs_init(net_obs_t* obs, const char* transport, device_t** devices, u32 devi
 		obs->http.conns[i].fd = OS_SOCKET_INVALID;
 	if (!http_bind)
 		return 0;
+	snprintf(obs->control.bind, sizeof(obs->control.bind), "%s", http_bind);
 	obs->http.listen_fd = net_tcp_listen(http_bind, http_port, 16);
 	if (obs->http.listen_fd == OS_SOCKET_INVALID)
 	{
@@ -366,13 +368,185 @@ http_close(struct net_http_conn_t* conn)
 	conn->fd = OS_SOCKET_INVALID;
 }
 
+bool
+net_obs_hosts_valid(const char* list)
+{
+	u32 names = 0;
+	u32 len   = 0;
+
+	if (!list || !list[0])
+		return true;
+	if (strlen(list) >= NET_OBS_HOSTS_MAX)
+		return false;
+	for (const char* c = list;; c++)
+	{
+		if (*c == ',' || *c == '\0')
+		{
+			if (len == 0)
+				return false;
+			names++;
+			len = 0;
+			if (*c == '\0')
+				break;
+		}
+		else if (isalnum((unsigned char)*c) || *c == '.' || *c == '-' || *c == '_')
+			len++;
+		else
+			return false;
+	}
+	return names <= NET_OBS_HOSTS_COUNT;
+}
+
+/* Case-insensitive equality of `n` bytes (strncasecmp lives in a header only os/ may include). */
+static bool
+ieq(const char* a, const char* b, u32 n)
+{
+	for (u32 i = 0; i < n; i++)
+	{
+		if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i]))
+			return false;
+	}
+	return true;
+}
+
+/** @brief Outcome of http_header(). */
+enum { HEADER_ABSENT, HEADER_FOUND, HEADER_TOO_LONG };
+
+/* Copies the value of header `name` (lowercase, with the colon) from the request head, trimmed. */
+static int
+http_header(const struct net_http_conn_t* conn, const char* name, char* out, u32 cap)
+{
+	u32 name_len = (u32)strlen(name);
+
+	for (const char* line = strchr(conn->in, '\n'); line && line + 1 < conn->in + conn->head_len;
+	     line = strchr(line + 1, '\n'))
+	{
+		const char* v = line + 1;
+		u32	    n = 0;
+		u32	    k = 0;
+
+		while (k < name_len && tolower((unsigned char)v[k]) == name[k])
+			k++;
+		if (k != name_len)
+			continue;
+		v += name_len;
+		while (*v == ' ' || *v == '\t')
+			v++;
+		while (v[n] != '\0' && v[n] != '\r' && v[n] != '\n')
+			n++;
+		while (n > 0 && (v[n - 1] == ' ' || v[n - 1] == '\t'))
+			n--;
+		if (n >= cap)
+			return HEADER_TOO_LONG;
+		memcpy(out, v, n);
+		out[n] = '\0';
+		return HEADER_FOUND;
+	}
+	return HEADER_ABSENT;
+}
+
+/* Host header value without the port; an IPv6 literal keeps its brackets. */
+static u32
+host_name_len(const char* host)
+{
+	if (host[0] == '[')
+	{
+		const char* close = strchr(host, ']');
+
+		return close ? (u32)(close - host) + 1 : 0;
+	}
+	return (u32)strcspn(host, ":");
+}
+
+/* DNS rebinding defence: a missing Host is allowed (HTTP/1.0); otherwise it must name this
+ * server: loopback, the specific bind address, an allowed name, or (wildcard bind) any IP literal. */
+static bool
+http_host_ok(const net_obs_t* obs, const struct net_http_conn_t* conn)
+{
+	char		host[NET_OBS_HOST_MAX + 32];
+	char		bind[NET_OBS_HOST_MAX + 2];
+	const char*	list = obs->control.allowed_hosts;
+	const char*	b = obs->control.bind;
+	u32		len;
+	bool		wildcard = b[0] != '\0';
+
+	switch (http_header(conn, "host:", host, sizeof(host)))
+	{
+		case HEADER_ABSENT : return true;
+		case HEADER_FOUND  : break;
+		default            : return false;
+	}
+	len = host_name_len(host);
+	if (len == 0)
+		return false;
+	if ((len == 9 && ieq(host, "localhost", 9)) ||
+	    (len == 9 && strncmp(host, "127.0.0.1", 9) == 0) ||
+	    (len == 5 && strncmp(host, "[::1]", 5) == 0))
+		return true;
+	for (const char* c = b; *c; c++)
+		wildcard = wildcard && (*c == '0' || *c == ':' || *c == '.');
+	if (b[0] != '\0' && !wildcard)
+	{
+		snprintf(bind, sizeof(bind), strchr(b, ':') ? "[%s]" : "%s", b);
+		if (strlen(bind) == len && ieq(host, bind, len))
+			return true;
+	}
+	while (*list)
+	{
+		u32 n = (u32)strcspn(list, ",");
+
+		if (n == len && ieq(list, host, n))
+			return true;
+		list += n + (list[n] == ',');
+	}
+	if (wildcard)
+	{
+		if (host[0] == '[')
+			return true;
+		for (u32 i = 0; i < len; i++)
+		{
+			if (!isdigit((unsigned char)host[i]) && host[i] != '.')
+				return false;
+		}
+		return true;
+	}
+	return false;
+}
+
+/* CSRF defence for state-changing /api/ requests: a browser always sends Origin, which must be
+ * this very page (http, same host and port as Host) and the body must claim to be JSON, which a
+ * form post cannot. Clients without Origin (curl, scripts) are not browsers and pass. */
+static bool
+http_origin_ok(const struct net_http_conn_t* conn)
+{
+	char origin[NET_OBS_HOST_MAX + 40];
+	char host[NET_OBS_HOST_MAX + 32];
+	char type[64];
+
+	switch (http_header(conn, "origin:", origin, sizeof(origin)))
+	{
+		case HEADER_ABSENT : return true;
+		case HEADER_FOUND  : break;
+		default            : return false;
+	}
+	if (http_header(conn, "host:", host, sizeof(host)) != HEADER_FOUND ||
+	    strncmp(origin, "http://", 7) != 0 ||
+	    strlen(origin + 7) != strlen(host) ||
+	    !ieq(origin + 7, host, (u32)strlen(host)))
+		return false;
+	return http_header(conn, "content-type:", type, sizeof(type)) == HEADER_FOUND &&
+	       ieq(type, "application/json", 16) &&
+	       (type[16] == '\0' || type[16] == ';' || type[16] == ' ');
+}
+
 /* Builds the whole response into conn->out: the body is rendered behind room for the head,
- * then the head is written and the body moved up against it. `forced` is a status for a
- * request that cannot be parsed (400, 413); 0 routes it. */
+ * then the head is written and the body moved up against it. A static body (the web page) is
+ * not copied: conn->ext points at it and the write path sends it after `out`. `forced` is a
+ * status for a request that cannot be parsed (400, 413); 0 routes it. */
 static void
 http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 {
-	enum { HEAD_ROOM = 256 };
+	enum { HEAD_ROOM = 768 };
 	char*		body = conn->out + HEAD_ROOM;
 	u32		cap = sizeof(conn->out) - HEAD_ROOM;
 	char		method[8] = "";
@@ -380,9 +554,14 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 	char		head[HEAD_ROOM];
 	const char*	status = "200 OK";
 	const char*	type = "text/plain; charset=utf-8";
+	const char*	extra = "";
 	const char*	query = "";
+	const u8*	page = NULL;
+	u32		page_len = 0;
 	bool		is_head;
 	bool		api;
+	bool		changes;
+	bool		ui;
 	u32		body_len;
 	int		code = 200;
 	int		n;
@@ -392,7 +571,9 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 		query = path + strcspn(path, "?") + 1;
 	path[strcspn(path, "?")] = '\0';
 	is_head = strcmp(method, "HEAD") == 0;
+	changes = strcmp(method, "GET") != 0 && !is_head;
 	api = strncmp(path, "/api/", 5) == 0;
+	ui = obs->control.ui && (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0);
 	if (api && !obs->control.enabled)
 		code = 404, body_len = (u32)snprintf(body, cap, "not found; try /healthz, /readyz or /metrics\n");
 	else if (forced != 0 || api)
@@ -403,6 +584,16 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 			body_len = (u32)snprintf(body, cap, "{\"error\":\"%s\"}",
 						 forced == 413 ? "request body too large" : "bad Content-Length");
 		}
+		else if (!http_host_ok(obs, conn))
+		{
+			code     = 403;
+			body_len = (u32)snprintf(body, cap, "{\"error\":\"host not allowed\"}");
+		}
+		else if (changes && !http_origin_ok(conn))
+		{
+			code     = 403;
+			body_len = (u32)snprintf(body, cap, "{\"error\":\"origin not allowed\"}");
+		}
 		else
 		{
 			conn->in[conn->head_len + conn->body_len] = '\0';
@@ -412,8 +603,23 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 		type = "application/json";
 		obs->metrics.control_requests[code >= 400]++;
 	}
-	else if (strcmp(method, "GET") != 0 && !is_head)
+	else if (changes)
 		code = 405, body_len = (u32)snprintf(body, cap, "only GET and HEAD\n");
+	else if (ui)
+	{
+		if (!http_host_ok(obs, conn))
+			code = 403, body_len = (u32)snprintf(body, cap, "host not allowed\n");
+		else if (webui_serve(path, (u32)strlen(path), &page, &page_len, &type))
+		{
+			extra = "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
+				"X-Frame-Options: DENY\r\n"
+				"Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; "
+				"style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'\r\n";
+			body_len = page_len;
+		}
+		else
+			code = 404, body_len = (u32)snprintf(body, cap, "not found\n");
+	}
 	else if (strcmp(path, "/healthz") == 0)
 		body_len = (u32)snprintf(body, cap, "ok\n");
 	else if (strcmp(path, "/readyz") == 0)
@@ -437,6 +643,7 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 	switch (code)
 	{
 		case 400: status = "400 Bad Request"; break;
+		case 403: status = "403 Forbidden"; break;
 		case 404: status = "404 Not Found"; break;
 		case 405: status = "405 Method Not Allowed"; break;
 		case 413: status = "413 Payload Too Large"; break;
@@ -446,15 +653,23 @@ http_respond(net_obs_t* obs, struct net_http_conn_t* conn, int forced)
 		default: break;
 	}
 	n = snprintf(head, sizeof(head),
-		     "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %u\r\nConnection: close\r\n\r\n",
-		     status, type, body_len);
+		     "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %u\r\n%sConnection: close\r\n\r\n",
+		     status, type, body_len, extra);
 	if (n < 0 || (u32)n >= sizeof(head))
 	{
 		http_close(conn);
 		return;
 	}
+	conn->ext     = NULL;
+	conn->ext_len = 0;
 	if (is_head)
 		body_len = 0;
+	else if (page)
+	{
+		conn->ext     = page;
+		conn->ext_len = page_len;
+		body_len      = 0;
+	}
 	memmove(conn->out + n, body, body_len);
 	memcpy(conn->out, head, (u32)n);
 	conn->out_len  = (u32)n + body_len;
@@ -538,7 +753,11 @@ http_read(net_obs_t* obs, struct net_http_conn_t* conn)
 static void
 http_write(struct net_http_conn_t* conn)
 {
-	s64 sent = os_socket_send(conn->fd, conn->out + conn->out_sent, conn->out_len - conn->out_sent);
+	bool in_head = conn->out_sent < conn->out_len;
+	s64  sent    = in_head ?
+		       os_socket_send(conn->fd, conn->out + conn->out_sent, conn->out_len - conn->out_sent) :
+		       os_socket_send(conn->fd, conn->ext + (conn->out_sent - conn->out_len),
+				      conn->ext_len - (conn->out_sent - conn->out_len));
 
 	if (sent < 0 && os_retry())
 		return;
@@ -548,7 +767,7 @@ http_write(struct net_http_conn_t* conn)
 		return;
 	}
 	conn->out_sent += (u32)sent;
-	if (conn->out_sent == conn->out_len)
+	if (conn->out_sent == conn->out_len + conn->ext_len)
 		http_close(conn);
 }
 

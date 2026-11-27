@@ -9,6 +9,7 @@
 #include "mogbus.h"
 #include "build_config.h"
 #include "device/device.h"
+#include "net/net_obs.h"
 #include "net/rtu_framer.h"
 #include "os/os_console.h"
 #include "os/os_socket.h"
@@ -108,6 +109,7 @@ struct mogbus_server_t
 	{
 		char	bind[SERVER_BIND_MAX];
 		char	http_bind[SERVER_BIND_MAX];
+		char	http_hosts[NET_OBS_HOSTS_MAX];
 		char	path[SERVER_PATH_MAX];
 		char	certificate[SERVER_TLS_PATH_MAX];
 		char	private_key[SERVER_TLS_PATH_MAX];
@@ -782,6 +784,15 @@ validate_options(const mogbus_t* ctx, server_options_t* o, struct strings_t* st,
 			o->http_bind_address);
 		return MOGBUS_ERR_INVALID;
 	}
+	if (o->http_allowed_hosts && !net_obs_hosts_valid(o->http_allowed_hosts))
+	{
+		set_err(err, err_size, "HTTP allowed hosts must be at most %d comma-separated host names "
+			"of letters, digits, '.', '-' and '_' (%d characters in all)",
+			NET_OBS_HOSTS_COUNT, NET_OBS_HOSTS_MAX - 1);
+		return MOGBUS_ERR_INVALID;
+	}
+	o->http_allowed_hosts = copy_string(st->http_hosts, sizeof(st->http_hosts), o->http_allowed_hosts,
+					    "HTTP allowed hosts", &ok, err, err_size);
 	o->path         = copy_string(st->path, sizeof(st->path), o->path, "device path", &ok, err, err_size);
 	o->tls.certificate = copy_string(st->certificate, sizeof(st->certificate), o->tls.certificate,
 					 "TLS certificate path", &ok, err, err_size);
@@ -882,6 +893,8 @@ options_from_public(const mogbus_server_options_t* in, server_options_t* o, char
 		.http_bind_address        = in->http_bind_address,
 		.http_port                = in->http_port,
 		.http_control             = in->http_control,
+		.http_ui                  = in->http_ui,
+		.http_allowed_hosts       = in->http_allowed_hosts,
 		.port                     = in->port,
 		.path                     = in->path,
 		.fd                       = in->fd,
@@ -970,6 +983,8 @@ mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
 		.http_bind_address              = o.http_bind_address,
 		.http_port                      = o.http_port,
 		.http_control                   = o.http_control,
+		.http_ui                        = o.http_ui,
+		.http_allowed_hosts             = o.http_allowed_hosts,
 		.path                           = o.path[0] ? o.path : NULL,
 		.fd                             = -1,
 		.seed                           = o.seed,

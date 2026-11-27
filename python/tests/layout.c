@@ -21,7 +21,7 @@ main(void)
 	F(O, broadcast_execute); F(O, data_bits); F(O, parity); F(O, stop_bits); F(O, tls_enabled);
 	F(O, tls_handshake_timeout_ms); F(O, tls_certificate); F(O, tls_private_key);
 	F(O, tls_ca_certificate); F(O, tls_require_client_certificate); F(O, tls_min_version);
-	F(O, tls_ciphers_1_2); F(O, tls_ciphersuites_1_3); F(O, http_bind_address); F(O, http_port); F(O, http_control);
+	F(O, tls_ciphers_1_2); F(O, tls_ciphersuites_1_3); F(O, http_bind_address); F(O, http_port); F(O, http_control); F(O, http_ui); F(O, http_allowed_hosts);
 
 	SIZE(P);
 	F(P, space); F(P, address); F(P, type); F(P, word_order); F(P, kind); F(P, value); F(P, ramp);

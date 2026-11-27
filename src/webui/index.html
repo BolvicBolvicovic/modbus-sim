@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mogbus</title>
+<style>
+:root { color-scheme: light dark; --bg: #fff; --fg: #1b1f24; --line: #d0d7de; --muted: #667085; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14171a; --fg: #e6e8ea; --line: #343a40; --muted: #98a2b3; } }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 56rem; margin: 0 auto; }
+h1 { font-size: 1.3rem; margin: 0 0 4px; }
+p { color: var(--muted); margin: 0 0 16px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; }
+#status { margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+<h1>mogbus</h1>
+<p>Web UI, first version: the devices this server simulates.</p>
+<table>
+<thead><tr><th>Unit</th><th>Name</th><th>Coils</th><th>Discrete</th><th>Input</th><th>Holding</th></tr></thead>
+<tbody id="devices"></tbody>
+</table>
+<div id="status"></div>
+<script>
+(function () {
+  var rows = document.getElementById("devices");
+  var status = document.getElementById("status");
+  function cell(tr, text) {
+    var td = document.createElement("td");
+    td.textContent = String(text);
+    tr.appendChild(td);
+  }
+  fetch("/api/devices", { headers: { "Accept": "application/json" } })
+    .then(function (r) {
+      if (!r.ok) { throw new Error("HTTP " + r.status); }
+      return r.json();
+    })
+    .then(function (devices) {
+      devices.forEach(function (d) {
+        var tr = document.createElement("tr");
+        cell(tr, d.unit);
+        cell(tr, d.name);
+        ["coil", "discrete", "input", "holding"].forEach(function (k) { cell(tr, d.points[k] || 0); });
+        rows.appendChild(tr);
+      });
+      status.textContent = devices.length + " device" + (devices.length === 1 ? "" : "s");
+    })
+    .catch(function (e) { status.textContent = "Cannot read /api/devices: " + e.message; });
+}());
+</script>
+</main>
+</body>
+</html>

@@ -67,6 +67,10 @@ bool		form_is_absent(form_ctx_t* ctx, s7_pointer found);
 bool		form_check_keys(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
 				u32 count, const char* where);
 
+/** @brief form_check_keys() where the key `repeatable` (or NULL) may appear any number of times. */
+bool		form_check_keys_repeat(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
+				       u32 count, const char* where, const char* repeatable);
+
 /** @brief Fails if `key` is missing from options. */
 bool		form_need(form_ctx_t* ctx, s7_pointer options, const char* key, const char* where);
 

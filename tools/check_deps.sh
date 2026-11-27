@@ -3,6 +3,7 @@ set -eu
 
 # Enforce documented dependency direction:
 #   net -> modbus -> device -> util -> os
+#   net -> webui (a static page; webui includes only util and os)
 #   config -> device -> util
 #   server -> net, config -> server (server_mode.h, server_limits.h only)
 #   api -> config, device, modbus, net, server, util
@@ -26,7 +27,7 @@ check_layer() {
 	[ -d "$dir" ] || return 0
 
 	bad=$(grep -rnE \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|util|os)/[^">]+)[">]' \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|util|os|webui)/[^">]+)[">]' \
 		"$dir" 2>/dev/null || true)
 	[ -n "$bad" ] || return 0
 
@@ -38,7 +39,7 @@ check_layer() {
 		IFS=$old_ifs
 		[ -n "$line" ] || continue
 		include=$(printf '%s\n' "$line" | sed -nE \
-			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|util|os)/[^">]+))[">].*!\1!p')
+			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|util|os|webui)/[^">]+))[">].*!\1!p')
 		target=$(printf '%s\n' "$include" | sed -E 's!^(\.\./)*!!; s!/.*!!')
 		case " $allowed " in
 		*" $target "*) ;;
@@ -122,7 +123,8 @@ check_main() {
 
 check_tree() {
 	root=$1
-	check_layer "$root" net    "net modbus util os"
+	check_layer "$root" net    "net modbus util os webui"
+	check_layer "$root" webui  "webui util os"
 	check_layer "$root" modbus "modbus device util os"
 	check_layer "$root" device "device util os"
 	check_layer "$root" config "config device server util os"
@@ -153,6 +155,9 @@ self_test() {
 	printf '#include "util/log.h"\n'       >"$clean/src/modbus/ok-util.c"
 	printf '#include "modbus/pdu.h"\n'     >"$clean/src/net/ok.c"
 	printf '#include "util/log.h"\n'       >"$clean/src/net/ok-util.c"
+	mkdir -p "$clean/src/webui"
+	printf '#include "webui/webui.h"\n'    >"$clean/src/net/ok-webui.c"
+	printf '#include "vlib/c_types.h"\n'   >"$clean/src/webui/ok.c"
 	printf '#include "util/rng.h"\n'       >"$clean/src/util/ok.c"
 	printf '#include "net/rtu_framer.h"\n' >"$clean/src/api/ok-net.c"
 	printf '#include "mogbus.h"\n#include <stdio.h>\n' >"$clean/src/main.c"
@@ -189,6 +194,14 @@ self_test() {
 	expect_fail util-config     util   "config/config.h"
 	expect_fail util-relative   util   "../modbus/rtu.h"
 
+	expect_fail webui-net       webui  "net/net_obs.h"
+	expect_fail webui-modbus    webui  "modbus/pdu.h"
+	expect_fail webui-device    webui  "device/device.h"
+	expect_fail webui-config    webui  "config/config.h"
+	expect_fail webui-server    webui  "server/server.h"
+	expect_fail webui-api       webui  "api/x.h"
+	expect_fail util-webui      util   "webui/webui.h"
+	expect_fail device-webui    device "webui/webui.h"
 	expect_fail net-server      net    "server/server.h"
 	expect_fail device-api      device "api/x.h"
 	expect_fail config-server   config "server/server.h"

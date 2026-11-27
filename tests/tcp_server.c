@@ -45,6 +45,7 @@ static ts_server_t g_server = {
 static u32 g_server_nofile = 0;
 /* Extra CLI flags for the next server_start (cleared by server_stop). */
 static bool g_server_json_logs = false;
+static bool g_server_web = false;
 
 /* Separate fixture for --check runs, which exit instead of listening. */
 #if WITH_TLS
@@ -311,8 +312,9 @@ server_start_with_bind(const char* bind, const char* server_options, const char*
 		char*       argv[] = { (char*)(bin ? bin : "./mogbus"), g_server.config, NULL };
 		char*       json[] = { (char*)(bin ? bin : "./mogbus"), "-v", "--log-format", "json",
 				       g_server.config, NULL };
+		char*       web[] = { (char*)(bin ? bin : "./mogbus"), "-w", g_server.config, NULL };
 
-		return ts_server_start(&g_server, g_server_json_logs ? json : argv);
+		return ts_server_start(&g_server, g_server_json_logs ? json : g_server_web ? web : argv);
 	}
 }
 
@@ -329,6 +331,7 @@ server_stop(void)
 	g_server.probe_port = 0;
 	g_server_nofile = 0;
 	g_server_json_logs = false;
+	g_server_web = false;
 }
 
 static void
@@ -3184,15 +3187,13 @@ TEST(NetTlsCheckAcceptsValidTlsConfig)
 
 /* One raw HTTP/1.1 GET against the running binary's endpoint; the server closes after it. */
 static bool
-http_get_binary(u16 port, const char* path, char* out, u32 cap)
+http_raw(u16 port, const char* req, char* out, u32 cap)
 {
-	char	req[128];
 	int	fd = ts_connect_loopback(port, AF_INET, 1000);
 	u32	len = 0;
 
 	if (fd < 0)
 		return false;
-	snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: test\r\n\r\n", path);
 	ts_set_recv_timeout(fd, 2000);
 	if (!ts_send_socket(fd, (const u8*)req, (u32)strlen(req)))
 	{
@@ -3210,6 +3211,15 @@ http_get_binary(u16 port, const char* path, char* out, u32 cap)
 	out[len] = '\0';
 	close(fd);
 	return len > 0;
+}
+
+static bool
+http_get_binary(u16 port, const char* path, char* out, u32 cap)
+{
+	char req[128];
+
+	snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: test\r\n\r\n", path);
+	return http_raw(port, req, out, cap);
 }
 
 TEST(NetHttpEndpointServesMetricsAndJsonLogs)
@@ -3259,7 +3269,7 @@ http_send_binary(u16 port, const char* method, const char* path, const char* bod
 
 	if (fd < 0)
 		return false;
-	snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: test\r\nContent-Length: %zu\r\n\r\n%s", method,
+	snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: %zu\r\n\r\n%s", method,
 		 path, strlen(body), body);
 	ts_set_recv_timeout(fd, 2000);
 	if (!ts_send_socket(fd, (const u8*)req, (u32)strlen(req)))
@@ -3321,6 +3331,79 @@ TEST(NetHttpControlChangesRegistersAndFaults)
 	     strstr(text, "\nmogbus_control_requests_total{result=\"ok\"} 4\n") != NULL &&
 	     strstr(text, "\nmogbus_control_requests_total{result=\"error\"} 1\n") != NULL;
 	client_close(&client);
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+/* `mogbus -w` turns the UI and the control API on for a config that only has (http ...). */
+TEST(NetWebFlagServesPageAndGuardsApi)
+{
+	u16		http_port = ts_free_port();
+	char		options[64];
+	char		req[256];
+	static char	text[8192];
+	const char*	body;
+	unsigned	length = 0;
+	bool		ok;
+
+	snprintf(options, sizeof(options), "(http (port %u))", http_port);
+	g_server_web = true;
+	ok = server_start(options, "(device (unit-id 1) (holding 0 (static 5)))");
+	ok = ok && ts_file_contains(g_server.stderr_path, "HTTP control API enabled");
+	snprintf(req, sizeof(req), "GET / HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n\r\n", http_port);
+	ok = ok && http_raw(http_port, req, text, sizeof(text)) && strncmp(text, "HTTP/1.1 200 OK", 15) == 0 &&
+	     strstr(text, "Content-Type: text/html; charset=utf-8\r\n") != NULL &&
+	     strstr(text, "Content-Security-Policy: ") != NULL;
+	body = ok ? strstr(text, "\r\n\r\n") : NULL;
+	ok = ok && body && strstr(text, "Content-Length: ") &&
+	     sscanf(strstr(text, "Content-Length: ") + 16, "%u", &length) == 1 &&
+	     length > 100 && strlen(body + 4) == length &&
+	     strncmp(body + 4, "<!doctype html>", 15) == 0 && strstr(body, "</html>") != NULL;
+	snprintf(req, sizeof(req), "GET /api/devices HTTP/1.1\r\nHost: localhost:%u\r\n\r\n", http_port);
+	ok = ok && http_raw(http_port, req, text, sizeof(text)) && strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	/* A rebinding name is refused, on the page and on the API. */
+	ok = ok && http_raw(http_port, "GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 403 ", 13) == 0;
+	ok = ok && http_raw(http_port, "GET /api/devices HTTP/1.1\r\nHost: evil.example\r\n\r\n", text,
+			    sizeof(text)) && strncmp(text, "HTTP/1.1 403 ", 13) == 0;
+	ok = ok && http_get_binary(http_port, "/healthz", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+/* (http (ui on) (allowed-host ...)) in the config, without any CLI flag. */
+TEST(NetHttpUiFromConfigAndAllowedHost)
+{
+	u16		http_port = ts_free_port();
+	char		options[128];
+	static char	text[8192];
+	bool		ok;
+
+	snprintf(options, sizeof(options), "(http (port %u) (ui on) (allowed-host \"sim.lab\"))", http_port);
+	ok = server_start(options, "(device (unit-id 1) (holding 0 (static 5)))");
+	ok = ok && ts_file_contains(g_server.stderr_path, "HTTP control API enabled");
+	ok = ok && http_raw(http_port, "GET / HTTP/1.1\r\nHost: SIM.lab:9102\r\n\r\n", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	ok = ok && http_raw(http_port, "GET /api/devices HTTP/1.1\r\nHost: sim.lab\r\n\r\n", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 200 OK", 15) == 0;
+	ok = ok && http_raw(http_port, "GET / HTTP/1.1\r\nHost: other.lab\r\n\r\n", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 403 ", 13) == 0;
+	server_stop();
+	ASSERT_EQ(ok);
+}
+
+TEST(NetHttpPageIsNotServedWithoutUi)
+{
+	u16		http_port = ts_free_port();
+	char		options[64];
+	static char	text[4096];
+	bool		ok;
+
+	snprintf(options, sizeof(options), "(http (port %u) (control on))", http_port);
+	ok = server_start(options, "(device (unit-id 1) (holding 0 (static 5)))");
+	ok = ok && http_raw(http_port, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", text, sizeof(text)) &&
+	     strncmp(text, "HTTP/1.1 404 ", 13) == 0;
 	server_stop();
 	ASSERT_EQ(ok);
 }

@@ -187,27 +187,52 @@ parse_tls(form_ctx_t* ctx, s7_pointer options, config_t* config)
 }
 #endif
 
-/* (http (port N) (bind "ADDR") (control on)): the health, readiness, Prometheus and optional control endpoint, any mode. */
+/* (http (port N) (bind "ADDR") (control on) (ui on) (allowed-host "NAME")...): the health, readiness,
+ * Prometheus, optional control and web UI endpoint, any mode. */
 static bool
 parse_http(form_ctx_t* ctx, s7_pointer options, config_t* config)
 {
-	static const char* const keys[] = { "port", "bind", "control" };
+	static const char* const keys[] = { "port", "bind", "control", "ui", "allowed-host" };
 	s64		port = SERVER_DEFAULT_HTTP_PORT;
 	const char*	bind = NULL;
 	bool		control = false;
+	bool		ui = false;
+	char		hosts[sizeof(config->http_allowed_hosts)] = "";
+	u32		host_count = 0;
 
-	if (!form_check_keys(ctx, options, keys, ARRAY_COUNT(keys), "http") ||
+	if (!form_check_keys_repeat(ctx, options, keys, ARRAY_COUNT(keys), "http", "allowed-host") ||
 	    !form_opt_int(ctx, options, "port", 1, 65535, &port) ||
 	    !form_opt_string(ctx, options, "bind", &bind) ||
-	    !form_opt_bool(ctx, options, "control", &control))
+	    !form_opt_bool(ctx, options, "control", &control) ||
+	    !form_opt_bool(ctx, options, "ui", &ui))
 		return false;
+	for (s7_pointer p = options; s7_is_pair(p); p = s7_cdr(p))
+	{
+		const char*	head = form_head_name(s7_car(p));
+		const char*	name = NULL;
+
+		if (!head || strcmp(head, "allowed-host") != 0)
+			continue;
+		if (!form_get_string(ctx, s7_car(p), &name))
+			return false;
+		if (++host_count > 8)
+			return form_fail(ctx, "http: at most 8 allowed-host names");
+		if (!name[0] ||
+		    strlen(name) + strlen(hosts) + 2 > sizeof(hosts) ||
+		    strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_") != strlen(name))
+			return form_fail(ctx, "http: allowed-host '%s' must be a host name of letters, digits, '.', '-' and '_' "
+					 "(no port, at most %u characters in all)", name, (u32)sizeof(hosts) - 1);
+		sprintf(hosts + strlen(hosts), "%s%s", hosts[0] ? "," : "", name);
+	}
 	if (bind && strlen(bind) >= SERVER_BIND_MAX)
 		return form_fail(ctx, "http: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
 	if (bind && !os_ip_is_literal(bind))
 		return form_fail(ctx, "http: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
 	strcpy(config->http_bind_address, bind ? bind : "127.0.0.1");
 	config->http_port    = (u16)port;
-	config->http_control = control;
+	config->http_control = control || ui;
+	config->http_ui      = ui;
+	strcpy(config->http_allowed_hosts, hosts);
 	config->http_enabled = true;
 	return true;
 }

@@ -6,6 +6,7 @@
 #include "modbus/pdu.h"
 #include "os/os_time.h"
 #include "vlib/arena.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #ifndef _WIN32
@@ -542,3 +543,168 @@ TEST(ObsControlLimitsAndCountsRequests)
 	arena_release(arena);
 }
 #endif
+
+/* Host, Origin and web page checks go through net_obs_http_feed() directly: no sockets. */
+static struct net_http_conn_t g_conn;
+
+static int
+feed_status(net_obs_t* obs, const char* request)
+{
+	int code = 0;
+
+	memset(&g_conn, 0, offsetof(struct net_http_conn_t, in));
+	g_conn.fd = OS_SOCKET_INVALID;
+	snprintf(g_conn.in, sizeof(g_conn.in), "%s", request);
+	g_conn.in_len = (u32)strlen(request);
+	if (!net_obs_http_feed(obs, &g_conn) || !g_conn.writing)
+		return -1;
+	sscanf(g_conn.out, "HTTP/1.1 %d", &code);
+	return code;
+}
+
+static void
+guarded_obs(net_obs_t* obs, device_t** devs, const char* bind, const char* allowed, bool ui)
+{
+	net_obs_init(obs, "tcp", devs, 1, NULL, 0);
+	obs->control.enabled = true;
+	obs->control.ui      = ui;
+	snprintf(obs->control.bind, sizeof(obs->control.bind), "%s", bind);
+	snprintf(obs->control.allowed_hosts, sizeof(obs->control.allowed_hosts), "%s", allowed);
+}
+
+TEST(ObsHostCheckProtectsApiAndPage)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { make_device(arena, 1, "a") };
+	net_obs_t	obs;
+
+	/* Loopback bind: only loopback names. */
+	guarded_obs(&obs, devs, "127.0.0.1", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: localhost:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nhost: LOCALHOST\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: [::1]:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.0\r\n\r\n") == 200);	/* no Host */
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 403);
+	ASSERT_EQ(strstr(g_conn.out, "{\"error\":\"host not allowed\"}") != NULL);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: localhost.evil.example\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 10.0.0.5\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: [fe80::1]:9102\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: \r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: localhost:9102\r\n\r\n") == 200);
+	/* Probes are never checked. */
+	ASSERT_EQ(feed_status(&obs, "GET /healthz HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /readyz HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 503);
+	ASSERT_EQ(feed_status(&obs, "GET /metrics HTTP/1.1\r\nHost: prometheus.svc:9102\r\n\r\n") == 200);
+
+	/* A specific bind address is accepted, other IPs are not. */
+	guarded_obs(&obs, devs, "192.168.1.5", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 192.168.1.5:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 192.168.1.6\r\n\r\n") == 403);
+	guarded_obs(&obs, devs, "fe80::1", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: [fe80::1]:9102\r\n\r\n") == 200);
+
+	/* A wildcard bind accepts any IP literal, but a name only when allowed. */
+	guarded_obs(&obs, devs, "0.0.0.0", "sim.lab,Mogbus", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 10.1.2.3:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: [fd00::5]:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: SIM.lab:80\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: mogbus\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: other.lab\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 10.1.2.3.evil.example\r\n\r\n") == 403);
+	guarded_obs(&obs, devs, "::", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: [fd00::5]\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: sim.lab\r\n\r\n") == 403);
+	arena_release(arena);
+}
+
+TEST(ObsOriginCheckProtectsStateChanges)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { make_device(arena, 1, "a") };
+	net_obs_t	obs;
+	static const char put[] = "PUT /api/devices/1/holding/0 HTTP/1.1\r\nContent-Length: 14\r\n";
+	char		request[512];
+	u16		value = 0;
+
+	guarded_obs(&obs, devs, "127.0.0.1", "", true);
+#define PUT_WITH(headers) \
+	(snprintf(request, sizeof(request), "%s%s\r\n{\"values\":[9]}", put, headers), feed_status(&obs, request))
+	/* Rejected first: none of these may write. */
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://localhost:9103\r\n"
+			   "Content-Type: application/json\r\n") == 403);
+	ASSERT_EQ(strstr(g_conn.out, "{\"error\":\"origin not allowed\"}") != NULL);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://evil.example\r\n"
+			   "Content-Type: application/json\r\n") == 403);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: https://localhost:9102\r\n"
+			   "Content-Type: application/json\r\n") == 403);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: null\r\nContent-Type: application/json\r\n") == 403);
+	/* Same origin but a form content type, or none, cannot be a fetch of ours. */
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://localhost:9102\r\n"
+			   "Content-Type: text/plain\r\n") == 403);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://localhost:9102\r\n"
+			   "Content-Type: application/x-www-form-urlencoded\r\n") == 403);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://localhost:9102\r\n") == 403);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://localhost:9102\r\n"
+			   "Content-Type: application/jsonx\r\n") == 403);
+	ASSERT_EQ(device_read(devs[0], SPACE_HOLDING, 0, 1, &value) && value == 0);
+	/* Accepted: no Origin (curl, scripts), or the page's own origin with JSON. */
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\n") == 200);
+	ASSERT_EQ(PUT_WITH("Host: localhost:9102\r\nOrigin: http://localhost:9102\r\n"
+			   "Content-Type: application/json\r\n") == 200);
+	ASSERT_EQ(PUT_WITH("host: LocalHost:9102\r\norigin: http://localhost:9102\r\n"
+			   "content-type: Application/JSON; charset=utf-8\r\n") == 200);
+	ASSERT_EQ(device_read(devs[0], SPACE_HOLDING, 0, 1, &value) && value == 9);
+	/* Reads are not state changes; a cross-origin delete is. */
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: localhost:9102\r\n"
+				    "Origin: http://evil.example\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "DELETE /api/devices/1/faults/drop HTTP/1.1\r\nHost: localhost:9102\r\n"
+				    "Origin: http://evil.example\r\nContent-Type: application/json\r\n\r\n") == 403);
+#undef PUT_WITH
+	arena_release(arena);
+}
+
+TEST(ObsServesWebPageOnlyWithUi)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { make_device(arena, 1, "a") };
+	net_obs_t	obs;
+	char		want[32];
+
+	guarded_obs(&obs, devs, "127.0.0.1", "", false);
+	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n") == 404);
+	ASSERT_EQ(g_conn.ext == NULL);
+
+	guarded_obs(&obs, devs, "127.0.0.1", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n") == 200);
+	ASSERT_EQ(g_conn.ext != NULL && g_conn.ext_len > 100);
+	ASSERT_EQ(strstr(g_conn.out, "Content-Type: text/html; charset=utf-8\r\n") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "Cache-Control: no-store\r\n") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "X-Content-Type-Options: nosniff\r\n") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "X-Frame-Options: DENY\r\n") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "Content-Security-Policy: default-src 'self'; ") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "frame-ancestors 'none'") != NULL);
+	/* The body is not in out[]: the head ends the buffer and the page is sent from ext. */
+	ASSERT_EQ(strstr(g_conn.out, "\r\n\r\n") == g_conn.out + g_conn.out_len - 4);
+	ASSERT_EQ(memcmp(g_conn.ext, "<!doctype html>", 15) == 0);
+	snprintf(want, sizeof(want), "Content-Length: %u\r\n", g_conn.ext_len);
+	ASSERT_EQ(strstr(g_conn.out, want) != NULL);
+	/* The page also answers under /index.html; HEAD gets the head only. */
+	ASSERT_EQ(feed_status(&obs, "GET /index.html HTTP/1.1\r\nHost: localhost\r\n\r\n") == 200 && g_conn.ext != NULL);
+	ASSERT_EQ(feed_status(&obs, "HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n") == 200 && g_conn.ext == NULL);
+	ASSERT_EQ(feed_status(&obs, "GET /other HTTP/1.1\r\nHost: localhost\r\n\r\n") == 404);
+	ASSERT_EQ(feed_status(&obs, "POST / HTTP/1.1\r\nHost: localhost\r\n\r\n") == 405);
+	ASSERT_EQ(feed_status(&obs, "GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 403 && g_conn.ext == NULL);
+	arena_release(arena);
+}
+
+TEST(ObsValidatesAllowedHostLists)
+{
+	ASSERT_EQ(net_obs_hosts_valid(NULL) && net_obs_hosts_valid(""));
+	ASSERT_EQ(net_obs_hosts_valid("a") && net_obs_hosts_valid("sim-1.lab,b_c,10.0.0.1"));
+	ASSERT_EQ(net_obs_hosts_valid("a,b,c,d,e,f,g,h"));
+	ASSERT_EQ(!net_obs_hosts_valid("a,b,c,d,e,f,g,h,i"));
+	ASSERT_EQ(!net_obs_hosts_valid(",a") && !net_obs_hosts_valid("a,") && !net_obs_hosts_valid("a,,b"));
+	ASSERT_EQ(!net_obs_hosts_valid("a:80") && !net_obs_hosts_valid("a b") && !net_obs_hosts_valid("[::1]"));
+}

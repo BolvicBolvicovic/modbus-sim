@@ -89,6 +89,8 @@ class ServerOptionsC(ctypes.Structure):
         ("http_bind_address", ctypes.c_char_p),
         ("http_port", ctypes.c_uint16),
         ("http_control", ctypes.c_bool),
+        ("http_ui", ctypes.c_bool),
+        ("http_allowed_hosts", ctypes.c_char_p),
     ]
 
 

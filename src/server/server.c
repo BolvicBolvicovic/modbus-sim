@@ -42,9 +42,13 @@ server_init(server_t* server, const server_options_t* options)
 		net_obs_close(&server->obs);
 		return 2;
 	}
-	if (options->http_control && options->http_bind_address)
+	if ((options->http_control || options->http_ui) && options->http_bind_address)
 	{
 		server->obs.control.enabled  = true;
+		server->obs.control.ui       = options->http_ui;
+		if (options->http_allowed_hosts)
+			snprintf(server->obs.control.allowed_hosts, sizeof(server->obs.control.allowed_hosts), "%s",
+				 options->http_allowed_hosts);
 		server->obs.control.tcp_like = options->mode == SERVER_MODE_TCP ||
 					       options->mode == SERVER_MODE_RTU_TCP ||
 					       options->mode == SERVER_MODE_ASCII_TCP;

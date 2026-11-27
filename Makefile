@@ -361,6 +361,17 @@ endif
 $(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(CFG_S7_OBJ)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 
+# The web page becomes a C array with POSIX tools only (od, awk): the same bytes on every host, no
+# paths or timestamps. It is included by src/webui/webui.c and removed by `make clean`.
+WEBUI_DATA  = src/webui/page_data.h
+$(WEBUI_DATA): src/webui/index.html
+	od -An -v -tu1 $< | awk 'BEGIN { print "/** @file\n * @brief Generated from index.html by the Makefile: the web page bytes. */"; print "static const unsigned char webui_index_html[] = {" } \
+		{ for (i = 1; i <= NF; i++) { printf "%s,", $$i; if (++n % 20 == 0) printf "\n" } } \
+		END { print "\n};" }' > $@.tmp
+	mv $@.tmp $@
+
+src/webui/webui$(OBJEXT): $(WEBUI_DATA)
+
 $(S7_OBJ): third_party/s7/s7.c third_party/s7/s7.h
 	$(CC) $(S7_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -430,12 +441,12 @@ FUZZ_DIR      = build/fuzz
 FUZZ_NAMES    = $(patsubst tests/fuzz/fuzz_%.c,%,$(sort $(wildcard tests/fuzz/fuzz_*.c)))
 FUZZ_BINS     = $(addprefix $(FUZZ_DIR)/fuzz_,$(FUZZ_NAMES))
 FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/device/*.c src/util/*.c src/os/*_$(PLATFORM).c)) \
-		src/net/net_common.c src/net/net_control.c src/net/net_obs.c src/net/rtu_framer.c
+		src/net/net_common.c src/net/net_control.c src/net/net_obs.c src/net/rtu_framer.c src/webui/webui.c
 FUZZ_FLAGS    = -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
 		-DWITH_TLS=0 -DWITH_CONFIG=0 $(INC) -Itests/fuzz
 FUZZ_SECONDS ?= 60
 
-$(FUZZ_DIR)/fuzz_%: tests/fuzz/fuzz_%.c tests/fuzz/fuzz_common.h $(FUZZ_SRCS)
+$(FUZZ_DIR)/fuzz_%: tests/fuzz/fuzz_%.c tests/fuzz/fuzz_common.h $(FUZZ_SRCS) $(WEBUI_DATA)
 	@mkdir -p $(FUZZ_DIR)
 	$(FUZZ_CC) $(FUZZ_FLAGS) $< $(FUZZ_SRCS) -o $@ -lm
 
@@ -458,7 +469,7 @@ docs-fixtures:
 
 clean:
 	$(RM) -r $(DIST_DIR) build/docs build/docs-fixtures $(FUZZ_DIR)
-	rm -f $(REV_STAMP)
+	rm -f $(REV_STAMP) $(WEBUI_DATA) $(WEBUI_DATA).tmp
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(TESTS).times $(ASAN_TESTS).times \
 		python/mogbus/libmogbus.so mogbus mogbus.exe mogbus-tests mogbus-tests.exe mogbus-tests.exe.times mogbus.dll libmogbus.dll.a

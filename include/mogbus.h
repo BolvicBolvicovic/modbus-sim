@@ -717,6 +717,8 @@ struct mogbus_server_options_t
 	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint; NULL = off */
 	uint16_t	http_port;		/**< endpoint port, used when http_bind_address is set */
 	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
+	bool		http_ui;		/**< serve the web UI on `/` (needs the endpoint; implies http_control) */
+	const char*	http_allowed_hosts;	/**< extra Host names /api/ and the UI accept (loopback and the bind address always pass): up to 8 comma-separated names; NULL = none */
 };
 
 /**

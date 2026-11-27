@@ -545,6 +545,36 @@ class ControlApiTest(unittest.TestCase):
                 self.assertEqual(json.load(r), {"values": [55]})
 
 
+    def test_http_ui(self):
+        import urllib.error
+        import urllib.request
+        http_port = free_port()
+        with mogbus.serve(config_text=DEVICES, port=0, http_bind_address="127.0.0.1",
+                          http_port=http_port, http_ui=True,
+                          http_allowed_hosts=["sim.lab", "mogbus"]) as srv:
+            base = f"http://127.0.0.1:{http_port}"
+            with urllib.request.urlopen(base + "/", timeout=5) as r:
+                page = r.read().decode()
+                self.assertTrue(r.headers["Content-Type"].startswith("text/html"))
+                self.assertIn("frame-ancestors 'none'", r.headers["Content-Security-Policy"])
+            self.assertTrue(page.startswith("<!doctype html>"))
+            # http_ui implies the control API it uses.
+            with urllib.request.urlopen(base + "/api/devices", timeout=5) as r:
+                self.assertEqual(json.load(r)[0]["unit"], 7)
+            for host, ok in (("sim.lab", True), ("MOGBUS:80", True), ("evil.example", False)):
+                req = urllib.request.Request(base + "/api/devices", headers={"Host": host})
+                if ok:
+                    urllib.request.urlopen(req, timeout=5).close()
+                else:
+                    with self.assertRaises(urllib.error.HTTPError) as cm:
+                        urllib.request.urlopen(req, timeout=5)
+                    self.assertEqual(cm.exception.code, 403)
+        with self.assertRaisesRegex(MogbusError, "allowed hosts"):
+            with mogbus.serve(config_text=DEVICES, port=0, http_bind_address="127.0.0.1",
+                              http_port=free_port(), http_allowed_hosts="a b"):
+                pass
+
+
 class ServeHelperTest(unittest.TestCase):
     def test_read_only_points(self):
         with mogbus.Context() as ctx:

@@ -52,6 +52,8 @@ struct server_options_t
 	const char*	http_bind_address;	/**< HTTP health/metrics endpoint; NULL = off */
 	u16		http_port;
 	bool		http_control;		/**< serve the runtime control API under /api/ */
+	bool		http_ui;		/**< serve the web page on `/`; implies http_control */
+	const char*	http_allowed_hosts;	/**< extra Host names for /api/ and the page, comma-separated; NULL = none */
 	device_t**	devices;
 	u32		device_count;
 };

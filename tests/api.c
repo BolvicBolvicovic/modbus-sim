@@ -589,6 +589,7 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	dev = mogbus_add_device(ctx, 1, "http", err, sizeof(err));
 	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p, err, sizeof(err)));
 	ASSERT_EQ(o.http_bind_address == NULL && o.http_port == 9102);
+	ASSERT_EQ(!o.http_ui && o.http_allowed_hosts == NULL);
 	o.port              = ts_free_port();
 	o.http_bind_address = "127.0.0.1";
 	o.http_port         = ts_free_port();
@@ -621,6 +622,11 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	clash.http_bind_address = "localhost";
 	ASSERT_EQ(mogbus_server_create(ctx, &clash, err, sizeof(err), &status) == NULL);
 	ASSERT_EQ(status == MOGBUS_ERR_INVALID && strstr(err, "HTTP bind address") != NULL);
+	clash.http_bind_address = "127.0.0.1";
+	clash.http_allowed_hosts = "a b";
+	ASSERT_EQ(!mogbus_server_check(ctx, &clash, err, sizeof(err)) && strstr(err, "allowed hosts") != NULL);
+	clash.http_allowed_hosts = "sim.lab,mogbus";
+	ASSERT_EQ(mogbus_server_check(ctx, &clash, err, sizeof(err)));
 
 	mogbus_server_stop(server);
 	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);

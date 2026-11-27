@@ -93,8 +93,8 @@ join_keys(char* out, u32 out_size, const char* const* keys, u32 count)
 }
 
 bool
-form_check_keys(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
-		u32 count, const char* where)
+form_check_keys_repeat(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
+		       u32 count, const char* where, const char* repeatable)
 {
 	char		list[256];
 	s7_pointer	p = options;
@@ -111,7 +111,7 @@ form_check_keys(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
 		if (!key_is_allowed(head, allowed, count))
 			return form_fail(ctx, "%s: unknown option '%s'. Allowed: %s", where, head, list);
 
-		if (key_count(options, head) > 1)
+		if (key_count(options, head) > 1 && !(repeatable && strcmp(head, repeatable) == 0))
 			return form_fail(ctx, "%s: option '%s' is given more than once", where, head);
 	}
 
@@ -119,6 +119,13 @@ form_check_keys(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
 		return form_fail(ctx, "%s: malformed list (stray dot?)", where);
 
 	return true;
+}
+
+bool
+form_check_keys(form_ctx_t* ctx, s7_pointer options, const char* const* allowed,
+		u32 count, const char* where)
+{
+	return form_check_keys_repeat(ctx, options, allowed, count, where, NULL);
 }
 
 bool

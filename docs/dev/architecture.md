@@ -50,6 +50,7 @@ src/            the program, one folder per module (headers next to their .c fil
   config/       reads the config file, checks it, builds devices
   device/       data tables, points, ramps, value encoding, faults
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
+  webui/        the built-in browser page (index.html embedded as a byte array at build time)
   net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, ASCII-over-TCP, UDP, ASCII-over-UDP and RTU-over-UDP network loops; OpenSSL TLS wrapper or no-TLS stub
   api/          the public C API implementation (top layer)
   server/       transport-independent server facade and the config adapter
@@ -70,12 +71,13 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `rtu_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/wait-table connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
+| `src/webui` | `webui`, `index.html` | the web page served on `/` of the HTTP endpoint: `index.html` is turned into a C array by a Makefile rule (`od` and `awk`, no other tools) in the gitignored `page_data.h`; knows nothing of the other modules |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
 | `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
 | `src/api` | `mogbus.c`, `probe.c` | the public C API behind `include/mogbus.h` (see [Embedding mogbus in C](../user/library/library-start.md)): context, devices and points, server handles, logging, and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
 | `src/main.c` | | command line, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
-Dependencies point one way: `server → net → modbus → device → util → os`, `config → device → util`, every layer may also use `os`, and `os` includes no other module (only vlib),
+Dependencies point one way: `server → net → modbus → device → util → os`, `net → webui` (webui includes only util and os), `config → device → util`, every layer may also use `os`, and `os` includes no other module (only vlib),
 `server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `api → server_config, server, config, net, modbus, device, util, os` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
 `server/server_mode.h` (the transport enum) and `server/server_limits.h` (array limits and option defaults shared with `api`),
 each in its own header so config does not pull in `net`, and `api` does not need config for them.

@@ -27,6 +27,9 @@ enum
 	NET_OBS_HTTP_IN		= 1024,	/**< request head limit */
 	NET_OBS_HTTP_BODY	= 1024,	/**< request body limit (runtime control) */
 	NET_OBS_HTTP_OUT	= 32768,	/**< response limit, enough for 16 fully used devices */
+	NET_OBS_HOST_MAX	= 128,		/**< longest bind address kept for the Host check */
+	NET_OBS_HOSTS_MAX	= 256,		/**< allowed Host names, comma-separated, with the NUL */
+	NET_OBS_HOSTS_COUNT	= 8,		/**< most allowed Host names */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
 	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per wait */
 };
@@ -85,6 +88,11 @@ struct net_obs_t
 		bool	enabled;	/**< `/api/` answers; set by the server after net_obs_init() */
 		bool	tcp_like;	/**< transport has connections: the disconnect fault is valid */
 		bool	mbap;		/**< transport frames have no checksum: corrupt checksum is invalid */
+		bool	ui;		/**< `GET /` serves the web page; set after net_obs_init() */
+		/** HTTP bind address (the Host check accepts it unless it is a wildcard). */
+		char	bind[NET_OBS_HOST_MAX];
+		/** Extra Host names `/api/` and the page accept, comma-separated, case-insensitive. */
+		char	allowed_hosts[NET_OBS_HOSTS_MAX];
 	} control;
 
 	/** @brief HTTP endpoint listener and its connections. */
@@ -98,7 +106,9 @@ struct net_obs_t
 			u64	deadline_ms;
 			u32	in_len;
 			u32	out_len;
-			u32	out_sent;
+			u32	out_sent;	/**< bytes sent of `out` followed by `ext` */
+			const u8* ext;		/**< static body sent after `out` (the web page), or NULL */
+			u32	ext_len;
 			u32	head_len;	/**< 0 until the request head is complete */
 			u32	body_len;	/**< Content-Length */
 			bool	writing;
@@ -121,6 +131,14 @@ struct net_obs_t
  */
 s32	net_obs_init(net_obs_t* obs, const char* transport, device_t** devices, u32 device_count,
 		     const char* http_bind, u16 http_port);
+
+/**
+ * @brief Checks a comma-separated Host name list for `http_allowed_hosts`.
+ *
+ * At most NET_OBS_HOSTS_COUNT names of letters, digits, `.`, `-` and `_`, in fewer than
+ * NET_OBS_HOSTS_MAX characters in all. NULL and "" are valid (no names).
+ */
+bool	net_obs_hosts_valid(const char* list);
 
 /** @brief Closes the endpoint and its connections. Idempotent; NULL is ignored. */
 void	net_obs_close(net_obs_t* obs);

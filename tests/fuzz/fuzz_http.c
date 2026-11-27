@@ -4,7 +4,8 @@
  *        head and Content-Length parsing, routing, the JSON body reader, and the device and
  *        fault operations, all without sockets.
  *
- * The first input byte picks the transport rules (TCP-like, MBAP); the rest is the request.
+ * The first input byte picks the transport rules (TCP-like, MBAP) and the web page; the rest is
+ * the request. The endpoint is bound to a wildcard so the Host check accepts IP literals.
  * Invariant: a built response is a well-formed HTTP response whose Content-Length matches
  * its body (HEAD aside), and its length stays inside the connection's output buffer.
  */
@@ -29,10 +30,13 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		devices[0] = fuzz_device();
 		FUZZ_CHECK(net_obs_init(&obs, "tcp", devices, 1, NULL, 0) == 0);
 		obs.control.enabled = true;
+		snprintf(obs.control.bind, sizeof(obs.control.bind), "0.0.0.0");
+		snprintf(obs.control.allowed_hosts, sizeof(obs.control.allowed_hosts), "sim.test");
 		ready = true;
 	}
 	obs.control.tcp_like = data[0] & 1;
 	obs.control.mbap     = (data[0] & 2) != 0;
+	obs.control.ui       = (data[0] & 4) != 0;
 	data++;
 	size--;
 	if (size > sizeof(conn->in) - 1)
@@ -53,6 +57,6 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	body += 4;
 	FUZZ_CHECK(sscanf(strstr(conn->out, "Content-Length: ") + 16, "%u", &length) == 1);
 	if (strcmp(method, "HEAD") != 0)
-		FUZZ_CHECK(length == (u32)(conn->out + conn->out_len - body));
+		FUZZ_CHECK(length == (u32)(conn->out + conn->out_len - body) + conn->ext_len);
 	return 0;
 }

@@ -25,6 +25,7 @@ struct cli_t
 	bool		show_help;
 	bool		show_version;
 	bool		log_json;
+	bool		web;
 };
 
 static inline void
@@ -39,6 +40,8 @@ print_usage(void)
 	     "      --health         probe the server the config describes (FC 08 echo to its first\n"
 	     "                       device) and exit 0 if it answers, 1 if not\n"
 	     "      --timeout-ms N   --health reply timeout (default 2000)\n"
+	     "  -w, --web            serve the web UI (and the control API it uses) on the HTTP endpoint;\n"
+	     "                       without (server (http ...)) in the config: 127.0.0.1 port 9102\n"
 	     "  -v, --verbose        log every request\n"
 	     "      --log-format F   log lines as text (default) or json\n"
 	     "  -V, --version        print the version and exit\n"
@@ -83,6 +86,8 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->show_version = true;
 		else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--check") == 0)
 			cli->check_only = true;
+		else if (strcmp(arg, "-w") == 0 || strcmp(arg, "--web") == 0)
+			cli->web = true;
 		else if (strcmp(arg, "--health") == 0)
 			cli->health = true;
 		else if (strcmp(arg, "--timeout-ms") == 0)
@@ -251,7 +256,19 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 
 	if (options->http_bind_address)
 		printf("  HTTP /healthz, /readyz and /metrics on %s:%u%s\n", options->http_bind_address,
-		       options->http_port, options->http_control ? ", control on" : "");
+		       options->http_port, options->http_control || options->http_ui ? ", control on" : "");
+	if (options->http_bind_address && options->http_ui)
+	{
+		const char* host = options->http_bind_address;
+
+		/* A wildcard bind is reachable through loopback. */
+		if (strcmp(host, "0.0.0.0") == 0)
+			host = "127.0.0.1";
+		else if (strcmp(host, "::") == 0)
+			host = "::1";
+		printf("  web UI on http://%s%s%s:%u/\n", strchr(host, ':') ? "[" : "", host,
+		       strchr(host, ':') ? "]" : "", options->http_port);
+	}
 	for (size_t i = 0; i < count; i++)
 	{
 		mogbus_device_info_t info;
@@ -314,6 +331,16 @@ main(int argc, char** argv)
 	}
 
 	mogbus_config_server_options(ctx, &options);
+	if (cli.web)
+	{
+		if (!options.http_bind_address)
+		{
+			options.http_bind_address = "127.0.0.1";
+			options.http_port         = mogbus_server_options_defaults().http_port;
+		}
+		options.http_ui      = true;
+		options.http_control = true;
+	}
 	if (cli.health)
 	{
 		mogbus_device_info_t first;
@@ -349,7 +376,8 @@ main(int argc, char** argv)
 	mogbus_stop_on_signals(&g_server);
 
 	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
-	server = mogbus_server_create_from_config(ctx, error, sizeof(error), &failure);
+	server = cli.web ? mogbus_server_create(ctx, &options, error, sizeof(error), &failure) :
+			   mogbus_server_create_from_config(ctx, error, sizeof(error), &failure);
 	if (!server)
 	{
 		if (failure == MOGBUS_ERR_INVALID)

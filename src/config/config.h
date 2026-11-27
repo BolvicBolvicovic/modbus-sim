@@ -50,6 +50,8 @@ struct config_t
 	bool		http_enabled;		/**< (http ...): health, readiness and metrics endpoint */
 	u16		http_port;
 	bool		http_control;		/**< (http (control on)): runtime control API under /api/ */
+	bool		http_ui;		/**< (http (ui on)): web page on `/` (implies control) */
+	char		http_allowed_hosts[256];	/**< (http (allowed-host "NAME")): comma-separated, at most 8 */
 	char		http_bind_address[SERVER_BIND_MAX];
 	bool		tls_enabled;		/**< tcp mode only: wrap MBAP in TLS */
 	u32		tls_handshake_timeout_ms;	/**< TLS only: deadline from accept to handshake completion */

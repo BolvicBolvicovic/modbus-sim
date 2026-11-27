@@ -39,6 +39,7 @@
       "title": "Observability",
       "items": [
         "docs/user/observability/http-endpoint.md",
+        "docs/user/observability/web-ui.md",
         "docs/user/observability/logs.md",
         {
           "index": "docs/user/observability/metrics/metrics.md",
@@ -284,7 +285,9 @@
             {
               "title": "HTTP",
               "entries": [
-                "docs/user/config/server/http.md"
+                "docs/user/config/server/http.md",
+                "docs/user/config/server/http-ui.md",
+                "docs/user/config/server/http-allowed-host.md"
               ]
             },
             {
