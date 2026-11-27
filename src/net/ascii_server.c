@@ -51,7 +51,12 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 	u32			frame_len = 0;
 	device_t*		dev = NULL;
 	fault_decision_t	decision = { 0 };
+	u8			traced[MODBUS_ASCII_MAX_FRAME];
 
+	len = net_frame_rx(server->options.obs, NULL, frame, len, traced, sizeof(traced));
+	if (len == 0)
+		return;
+	frame = traced;
 	if (!modbus_ascii_decode(frame, len, decoded, &addr, &pdu, &pdu_len))
 	{
 		net_record_comm_error(server->options.obs, server->options.devices, server->options.device_count);
@@ -76,6 +81,10 @@ ascii_handle_frame(ascii_server_t* server, u64 now_ms, const u8* frame, u32 len)
 	/* A checksum fault only damages the emitted LRC; the PDU stays intact. */
 	if (decision.corrupt == FAULT_CORRUPT_CHECKSUM)
 		modbus_ascii_corrupt_lrc(server->pending.buf, frame_len);
+	frame_len = net_frame_trace(server->options.obs, NET_FRAME_SENT, NULL, server->pending.buf, frame_len,
+				    MODBUS_ASCII_MAX_FRAME);
+	if (frame_len == 0)
+		return;
 	server->pending.active = true;
 	server->pending.len = frame_len;
 	server->pending.sent = 0;

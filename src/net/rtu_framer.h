@@ -64,7 +64,8 @@ bool	rtu_framer_queue(rtu_framer_t* framer, u8 addr, const u8* pdu, u32 pdu_len,
  * @brief Executes one complete frame (CRC-checked here): broadcast handling, unit lookup,
  *        fault decision, and the reply queued into framer->pending.
  *
- * Used by datagram transports, where the datagram is the frame.
+ * Used by datagram transports, where the datagram is the frame. The caller has already shown the
+ * frame to the frame hook; the reply is shown to it here, and a drop leaves nothing queued.
  */
 void	rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms,
 				const u8* frame, u32 len);

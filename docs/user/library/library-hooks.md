@@ -151,6 +151,39 @@ if (a->target == MOGBUS_TARGET_FIFO)
 
 For FC 2B/0D, @ref mogbus_device_add_canopen_object "mogbus_device_add_canopen_object()" adds an object (node 1-127, index, subindex, 1-238 bytes), and @ref mogbus_device_read_canopen "mogbus_device_read_canopen()" and @ref mogbus_device_write_canopen "mogbus_device_write_canopen()" move bytes at an offset from the host. The pump station has none; the hook receives `MOGBUS_TARGET_CANOPEN` accesses with `node`, `index` and `subindex` when a client reads or writes one.
 
+## Watching and rewriting frames
+
+The hooks above work on requests the device understood. A *frame hook* (@ref mogbus_frame_fn "mogbus_frame_fn", installed per server with @ref mogbus_server_set_frame_hook "mogbus_server_set_frame_hook()") sees the transport frames themselves, so a host can log traffic, or rewrite and drop frames to test a client against corrupt or missing answers; fixed fault injection covers only fixed cases. It is the counterpart of pymodbus `trace_packet`. It works on every transport: TCP (also with TLS, as plaintext), UDP, RTU (PTY, device, fd), RTU over TCP and UDP, ASCII (PTY, device, fd), ASCII over TCP and UDP.
+
+```c
+static size_t
+trace(void* user, mogbus_server_t* server, mogbus_frame_t* f)
+{
+	(void)user;
+	(void)server;
+	printf("%s %s %zu bytes\n", f->direction == MOGBUS_FRAME_RECEIVED ? "rx" : "tx", f->peer, f->len);
+	if (f->direction == MOGBUS_FRAME_SENT && f->mode == MOGBUS_MODE_RTU_TCP)
+		f->data[f->len - 1] ^= 0xFF;	/* break the CRC of every answer */
+	return f->len;
+}
+
+mogbus_server_set_frame_hook(server, trace, NULL);
+```
+
+What the hook sees, as `mogbus_frame_t` (`direction`, `mode`, `peer`, `data`, `len`, `capacity`):
+
+- **Received**: once per complete frame as the transport delimits it, before any validation or decoding. That is the MBAP ADU (7-byte header plus PDU) for TCP and UDP (for UDP every datagram that is not empty or oversized, well formed or not), the RTU frame with unit id and CRC for the RTU modes, and the ASCII frame from the colon through CR LF for the ASCII modes. On RTU byte streams and RTU over TCP the CRC is what delimits a frame, so only frames with a valid CRC reach the hook (the hook can still break it); an RTU-over-UDP datagram is passed whole. Bytes the framer throws away before a frame exists (resynchronization garbage, partial-frame timeouts, CR, LF and spaces between ASCII frames) are not shown.
+- **Sent**: once per complete encoded response, after fault injection (a `corrupt` fault is already applied) and just before it is written or queued. With a `delay` fault the hook runs when the response is built, not when the delayed bytes leave. Nothing is shown when there is no response (broadcast, `drop` fault, listen-only, bad CRC, unknown unit).
+- `peer` is the client text of the request log line (`ip:port`); it is `""` on a serial byte stream. `data` holds `len` bytes and has room for `capacity`: 260 for MBAP, 256 for RTU and 513 for ASCII, so a rewrite may lengthen a frame up to that.
+
+The return value is the new length of the frame:
+
+- The length it was given (or another length up to `capacity`) lets the frame go on. A received frame is then validated and decoded exactly as if the rewritten bytes had arrived: the hook can corrupt a CRC or LRC, change a register address, change the unit id. On TCP a rewritten MBAP header that no longer fits the frame is ignored and counted as rejected; the connection stays open.
+- 0 drops the frame. A dropped received frame is treated as never received: no processing, no counters, no response. A dropped response is not sent; the TCP connection stays open and the metrics already recorded for the request are unchanged.
+- A value above `capacity` drops the frame like 0 and logs a warning.
+
+The hook runs on the thread that calls @ref mogbus_server_step "mogbus_server_step()" or @ref mogbus_server_run "mogbus_server_run()", must not block, and must not close or step the server; it may call `mogbus_device_*`. The frame and `peer` are valid only during the call. A server has one hook, a new one replaces it and NULL removes it. It is not part of a config, and HTTP endpoint traffic is not shown.
+
 ## Next
 
 - [Step 5: Observe, shut down, lifetimes and threading](library-lifetimes.md)

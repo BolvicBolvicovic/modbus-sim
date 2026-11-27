@@ -54,6 +54,29 @@ net_obs_init(net_obs_t* obs, const char* transport, device_t** devices, u32 devi
 	return 0;
 }
 
+u32
+net_frame_trace(net_obs_t* obs, net_frame_dir_t dir, const char* peer, u8* data, u32 len, u32 capacity)
+{
+	u32 out;
+
+	if (!obs || !obs->frame_fn)
+		return len;
+	out = obs->frame_fn(obs->frame_user, dir, peer, data, len, capacity);
+	if (out > capacity)
+	{
+		LOG_WARN("frame hook returned %u bytes for a %u byte frame buffer, frame dropped", out, capacity);
+		return 0;
+	}
+	return out;
+}
+
+u32
+net_frame_rx(net_obs_t* obs, const char* peer, const u8* frame, u32 len, u8* out, u32 capacity)
+{
+	memcpy(out, frame, len);
+	return net_frame_trace(obs, NET_FRAME_RECEIVED, peer, out, len, capacity);
+}
+
 void
 net_obs_close(net_obs_t* obs)
 {

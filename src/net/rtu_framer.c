@@ -138,8 +138,13 @@ rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
 	framer->fault_disconnect |= decision.disconnect;
 	if (decision.drop || resp_len == 0)
 		return;
-	(void)rtu_framer_queue(framer, addr, resp, resp_len, now_ms + decision.delay_ms,
-			       decision.corrupt == FAULT_CORRUPT_CHECKSUM);
+	if (!rtu_framer_queue(framer, addr, resp, resp_len, now_ms + decision.delay_ms,
+			      decision.corrupt == FAULT_CORRUPT_CHECKSUM))
+		return;
+	framer->pending.len = net_frame_trace(ctx->obs, NET_FRAME_SENT, ctx->peer, framer->pending.buf,
+					      framer->pending.len, MODBUS_RTU_MAX_FRAME);
+	if (framer->pending.len == 0)
+		pending_response_clear(&framer->pending);
 }
 
 bool
@@ -155,7 +160,11 @@ rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms
 		if (modbus_rtu_next_frame(framer->rx, framer->rx_len, &frame_len) ==
 		    MODBUS_RTU_FRAME_FOUND)
 		{
-			rtu_framer_handle_frame(framer, ctx, now_ms, framer->rx, frame_len);
+			u8	frame[MODBUS_RTU_MAX_FRAME];
+			u32	n = net_frame_rx(ctx->obs, ctx->peer, framer->rx, frame_len, frame, sizeof(frame));
+
+			if (n > 0)
+				rtu_framer_handle_frame(framer, ctx, now_ms, frame, n);
 			rtu_framer_consume(framer, frame_len);
 			clear_deferral(framer);
 			if (framer->pending.active)

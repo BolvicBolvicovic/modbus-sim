@@ -58,6 +58,8 @@ typedef enum mogbus_mode_t mogbus_mode_t;
 typedef enum mogbus_parity_t mogbus_parity_t;
 typedef enum mogbus_tls_version_t mogbus_tls_version_t;
 typedef struct mogbus_server_options_t mogbus_server_options_t;
+typedef enum mogbus_frame_direction_t mogbus_frame_direction_t;
+typedef struct mogbus_frame_t mogbus_frame_t;
 typedef enum mogbus_error_t mogbus_error_t;
 typedef enum mogbus_log_level_t mogbus_log_level_t;
 typedef enum mogbus_log_format_t mogbus_log_format_t;
@@ -1059,6 +1061,82 @@ MOGBUS_API size_t	mogbus_server_metrics(const mogbus_server_t* server, char* out
  * @return The path, borrowed from the server, or NULL in other modes.
  */
 MOGBUS_API const char*	mogbus_server_pty_name(const mogbus_server_t* server);
+
+/** @brief Which way a frame seen by a frame hook was going. */
+enum mogbus_frame_direction_t
+{
+	MOGBUS_FRAME_RECEIVED,	/**< a request frame, before it is validated or decoded */
+	MOGBUS_FRAME_SENT,	/**< a response frame, before it is written or queued */
+};
+
+/**
+ * @brief A transport frame, as seen by a frame hook.
+ *
+ * `data` is the frame as it travels on the wire: the MBAP ADU (7-byte header plus PDU) in
+ * MOGBUS_MODE_TCP and MOGBUS_MODE_UDP, the RTU frame (unit id, PDU, CRC) in the RTU modes, and the
+ * ASCII frame from the colon through CR LF in the ASCII modes. The hook may rewrite the bytes in
+ * place. New fields are appended, so older code that ignores them still works.
+ */
+struct mogbus_frame_t
+{
+	mogbus_frame_direction_t direction;	/**< received or sent */
+	mogbus_mode_t	mode;		/**< transport of the server */
+	const char*	peer;		/**< client text as in the request log line ("ip:port"); "" on a serial byte stream; valid only during the call */
+	uint8_t*	data;		/**< frame bytes; rewrite in place */
+	size_t		len;		/**< bytes in `data` */
+	size_t		capacity;	/**< most bytes `data` can hold: 260 (MBAP), 256 (RTU), 513 (ASCII) */
+};
+
+/**
+ * @brief Frame hook: sees every transport frame a server receives or sends and may rewrite or drop it.
+ *
+ * It runs on the thread that steps the server, may call the `mogbus_device_*` functions, must not
+ * close or step the server, and must not block. The frame and `peer` are valid only during the call.
+ *
+ * @param user Pointer given to mogbus_server_set_frame_hook().
+ * @param server Server that handled the frame.
+ * @param frame The frame; rewrite `data` in place (up to `capacity` bytes).
+ * @return The new frame length: @p frame->len to pass it on (rewritten or not), another length up
+ *         to `capacity` for a rewritten frame of that size, or 0 to drop the frame. A length above
+ *         `capacity` drops the frame and logs a warning.
+ */
+typedef size_t (*mogbus_frame_fn)(void* user, mogbus_server_t* server, mogbus_frame_t* frame);
+
+/**
+ * @brief Installs (or, with @p fn NULL, removes) the frame hook of a server.
+ *
+ * pymodbus offers `trace_packet`; this shows each frame the transport receives and sends, so a host
+ * can log traffic, rewrite a request or answer (a changed address, a corrupted checksum) or drop it.
+ *
+ * Received frames: called once per complete frame as the transport delimits it, before any validation
+ * or decoding: the MBAP ADU for TCP (also with TLS, as plaintext) and UDP (every datagram that is
+ * not empty or oversized, whether or not it is well formed), the RTU frame for the RTU modes
+ * (on byte streams and RTU-over-TCP only frames whose CRC is valid reach the hook, because the CRC is
+ * what delimits them; a UDP datagram is passed whole), the ASCII frame from the colon through CR LF
+ * for the ASCII modes. Bytes the framer discards before a frame exists (resynchronization garbage,
+ * partial-frame timeouts, CR/LF/space between frames) are not shown. The length the hook returns
+ * replaces the frame length, and the rewritten bytes are then validated and decoded exactly as if
+ * they had arrived (a hook can corrupt a CRC, change an address or a unit id). A TCP frame whose
+ * rewritten MBAP header is malformed is ignored and counted as rejected, and the connection stays open.
+ * Returning 0 drops the frame: it counts as never received (no processing, no counters, no response).
+ *
+ * Sent frames: called once per complete response frame, after fault injection (a corrupt fault is
+ * already applied) and just before it is written or queued; with a delay fault the hook runs when
+ * the response is built, not when the delayed bytes leave. It is not called when there is no
+ * response (broadcast, drop fault, listen-only, bad CRC, ...). Returning 0 drops the response: nothing is
+ * sent, the TCP connection stays open, and the metrics already recorded for the request are unchanged.
+ *
+ * The frame holds at most `capacity` bytes (the transport buffer: 260 for MBAP, 256 for RTU, 513 for
+ * ASCII), so a rewrite may lengthen it up to that. HTTP endpoint traffic is not shown. A server has
+ * one hook; a new one replaces it. The hook is not part of a config and is forgotten when the server
+ * is closed.
+ *
+ * @param server Server.
+ * @param fn Hook, or NULL to remove it.
+ * @param user Passed back to @p fn.
+ * @return false if @p server is NULL.
+ */
+MOGBUS_API bool		mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* user);
 
 /* ---- Logging (process-wide) ---- */
 

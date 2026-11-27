@@ -103,20 +103,38 @@ conn_consume(tcp_conn_t* conn, u32 size)
 
 /** @brief Runs the request found at the start of conn->rx and queues the response (if any). */
 static void
-handle_frame(tcp_server_t* server, tcp_conn_t* conn, const mbap_header_t* header, u64 now_ms)
+handle_frame(tcp_server_t* server, tcp_conn_t* conn, u32 frame_size, u64 now_ms)
 {
+	mbap_header_t		header   = { 0 };
+	u8			frame[MBAP_MAX_FRAME];
 	fault_decision_t	decision = { 0 };
-	u32			len = net_mbap_respond(server->options.obs, server->options.devices,
-						       server->options.device_count, &server->rng,
-						       now_ms, conn->base.peer, header,
-						       conn->rx + MBAP_HEADER_SIZE, conn->tx, &decision);
+	u32			len      = net_frame_rx(server->options.obs, conn->base.peer, conn->rx, frame_size,
+						       frame, sizeof(frame));
+
+	conn->base.last_activity_ms = now_ms;
+	if (len == 0)
+		return;
+	/* The hook may have rewritten the frame; the connection is framed by the original header. */
+	if (len >= MBAP_HEADER_SIZE)
+		mbap_decode(frame, &header);
+	if (len < MBAP_HEADER_SIZE + 1 ||
+	    !mbap_is_valid(&header) ||
+	    mbap_frame_size(&header) != len)
+	{
+		LOG_DEBUG("client %s frame is malformed after the frame hook (%u bytes), ignored",
+			  conn->base.peer, len);
+		net_obs_rejected(server->options.obs);
+		return;
+	}
+	len = net_mbap_respond(server->options.obs, server->options.devices, server->options.device_count,
+			       &server->rng, now_ms, conn->base.peer, &header, frame + MBAP_HEADER_SIZE,
+			       conn->tx, &decision);
 
 	if (decision.disconnect)
 	{
 		conn_close(server, conn);
 		return;
 	}
-	conn->base.last_activity_ms = now_ms;
 	if (len == 0)
 		return;
 
@@ -147,7 +165,7 @@ conn_process(tcp_server_t* server, tcp_conn_t* conn)
 		if (conn->rx_len < frame)
 			return;
 
-		handle_frame(server, conn, &header, os_now_ms());
+		handle_frame(server, conn, frame, os_now_ms());
 		if (!os_socket_valid(conn->base.fd))
 			return; /* a fault closed the connection */
 		conn_consume(conn, frame);

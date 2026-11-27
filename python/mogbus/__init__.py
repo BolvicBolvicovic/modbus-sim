@@ -2,7 +2,7 @@
 from ._lib import VERSION as __version__
 from .core import (
     Access, AccessKind, AccessTarget, ByteOrder, Context, CustomFunctionCode, Device, DeviceInfo, FaultInfo,
-    FaultKind, LogFormat, LogLevel,
+    FaultKind, Frame, FrameDirection, LogFormat, LogLevel,
     MogbusError, ClockField, Mode, Parity, Ramp, RampMode, RtuTiming, Served, Server, ServerOptions, Space,
     Status, TlsVersion, ValueType, WordOrder, library_version, probe, probe_or_raise, rtu_timing,
     serve, set_log_format, set_log_level, set_log_sink,
@@ -11,7 +11,7 @@ from .core import (
 __all__ = [
     "__version__", "Access", "AccessKind", "AccessTarget", "ByteOrder", "Context", "CustomFunctionCode", "Device",
     "DeviceInfo", "FaultInfo",
-    "ClockField", "FaultKind", "LogFormat", "LogLevel", "MogbusError", "Mode", "Parity", "Ramp", "RampMode",
+    "ClockField", "FaultKind", "Frame", "FrameDirection", "LogFormat", "LogLevel", "MogbusError", "Mode", "Parity", "Ramp", "RampMode",
     "RtuTiming", "Served", "Server", "ServerOptions", "Space", "Status", "TlsVersion",
     "ValueType", "WordOrder", "library_version", "probe", "probe_or_raise", "rtu_timing", "serve",
     "set_log_format", "set_log_level", "set_log_sink",

@@ -105,6 +105,8 @@ struct mogbus_server_t
 	server_t	server;
 	mogbus_t*	ctx;
 	bool		in_use;
+	mogbus_frame_fn	frame_fn;	/**< frame hook of the host, or NULL */
+	void*		frame_user;
 	/** @brief Copies of the option strings, so they outlive the caller's buffers. */
 	struct strings_t
 	{
@@ -914,8 +916,10 @@ create_server(mogbus_t* ctx, server_options_t o, char* err, size_t err_size, mog
 			o.bind_address ? o.bind_address : "", o.port);
 		goto fail;
 	}
-	s->ctx    = ctx;
-	s->in_use = true;
+	s->ctx        = ctx;
+	s->in_use     = true;
+	s->frame_fn   = NULL;
+	s->frame_user = NULL;
 	if (status)
 		*status = MOGBUS_OK;
 	return s;
@@ -1121,6 +1125,36 @@ mogbus_server_close(mogbus_server_t* server)
 		return;
 	server_close(&server->server);
 	server->in_use = false;
+}
+
+/** @brief Adapts the net-layer frame hook to the public one. */
+static u32
+frame_trampoline(void* user, net_frame_dir_t dir, const char* peer, u8* data, u32 len, u32 capacity)
+{
+	mogbus_server_t*	server = user;
+	mogbus_frame_t		frame  = {
+		.direction = dir == NET_FRAME_SENT ? MOGBUS_FRAME_SENT : MOGBUS_FRAME_RECEIVED,
+		.mode      = (mogbus_mode_t)server->server.mode,
+		.peer      = peer ? peer : "",
+		.data      = data,
+		.len       = len,
+		.capacity  = capacity,
+	};
+	size_t			out    = server->frame_fn(server->frame_user, server, &frame);
+
+	return out > capacity ? capacity + 1 : (u32)out;
+}
+
+bool
+mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* user)
+{
+	if (!server || !server->in_use)
+		return false;
+	server->frame_fn          = fn;
+	server->frame_user        = user;
+	server->server.obs.frame_fn   = fn ? frame_trampoline : NULL;
+	server->server.obs.frame_user = server;
+	return true;
 }
 
 const char*

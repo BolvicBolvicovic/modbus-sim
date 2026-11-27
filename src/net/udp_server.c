@@ -17,7 +17,7 @@
 
 /** @brief One datagram is one complete ADU: the MBAP length must account for every byte. */
 static void
-handle_datagram(udp_server_t* server, const net_udp_peer_t* peer, const u8* buf, u32 len)
+handle_datagram(udp_server_t* server, const net_udp_peer_t* peer, u8* buf, u32 len)
 {
 	mbap_header_t		header   = { 0 };
 	u8			out[MBAP_MAX_FRAME];
@@ -25,6 +25,9 @@ handle_datagram(udp_server_t* server, const net_udp_peer_t* peer, const u8* buf,
 	u64			now_ms   = os_now_ms();
 	u32			out_len;
 
+	len = net_frame_trace(server->options.obs, NET_FRAME_RECEIVED, peer->text, buf, len, MBAP_MAX_FRAME);
+	if (len == 0)
+		return;
 	if (len >= MBAP_HEADER_SIZE)
 		mbap_decode(buf, &header);
 	if (len < MBAP_HEADER_SIZE + 1 ||

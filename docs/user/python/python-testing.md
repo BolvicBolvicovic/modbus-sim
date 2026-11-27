@@ -136,6 +136,28 @@ simpler fixture around \ref mogbus::core::serve "serve()" with a config is in
 - Use faults from the control API (or from a config) to see how your client reacts to exceptions,
   delays, dropped replies and disconnects.
 
+## Watching and rewriting frames
+
+\ref mogbus::core::Server::set_frame_hook "Server.set_frame_hook()" shows every frame a server
+receives and sends (the counterpart of pymodbus `trace_packet`) and lets a test rewrite or drop
+them, which fixed faults cannot do. The hook gets a `Frame` (`direction`, `mode`, `peer`, `data`,
+`capacity`) and returns `None` to pass it on, the replacement bytes, or `b""` to drop it:
+
+```python
+def hook(frame):
+    log.append((frame.direction.name, frame.data.hex()))
+    if frame.direction == mogbus.FrameDirection.SENT:
+        return frame.data[:-1] + bytes([frame.data[-1] ^ 0xFF])   # the client sees a wrong last byte
+
+server.set_frame_hook(hook)
+```
+
+Received frames are shown before they are validated, so the rewritten bytes are handled as if they
+had arrived; sent frames are shown after fault injection and just before they are written. A
+replacement longer than `capacity` drops the frame and logs a warning, and an exception in the hook
+is printed and lets the frame through. The same rules per transport are in
+[Guard clients and keep records](../library/library-hooks.md#watching-and-rewriting-frames).
+
 ## Where next
 
 - The \ref core.py "Python API" is the complete reference.

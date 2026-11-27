@@ -93,7 +93,8 @@ bool		net_bind_addr(const char* bind_address, u16 port, os_addr_t* addr);
  *        the complete reply frame to `out` (MBAP_MAX_FRAME bytes): unknown units get exception 0x0B
  *        like every MBAP transport.
  *
- * Returns the frame length, or 0 when nothing is to be sent (no response or drop fault).
+ * Returns the frame length, or 0 when nothing is to be sent (no response, drop fault or the frame
+ * hook dropped it; the hook sees the finished frame).
  * `peer` is for logs.
  */
 u32		net_mbap_respond(net_obs_t* obs, device_t** devices, u32 count, rng_t* rng, u64 now_ms,

@@ -44,7 +44,7 @@ registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (deco
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
 `mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
-`mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, probe `mogbus_probe`,
+`mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, probe `mogbus_probe`,
 rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
 
 ## Limits
@@ -382,6 +382,35 @@ class Access:
     index: int = 0  # CANOPEN
     subindex: int = 0  # CANOPEN
     data: Optional[bytes] = None  # CANOPEN writes: the bytes about to be stored; reads: None
+
+
+class FrameDirection(enum.IntEnum):
+    """@brief Which way a Frame seen by a frame hook was going.
+    """
+    ## A request frame, before it is validated or decoded.
+    RECEIVED = 0
+    ## A response frame, before it is written or queued.
+    SENT = 1
+
+
+@dataclass
+class Frame:
+    """@brief A transport frame handed to a Server frame hook.
+
+    `data` is the frame as it travels on the wire: the MBAP ADU (7-byte header plus PDU) for the
+    TCP and UDP modes, the RTU frame (unit id, PDU, CRC) for the RTU modes, the ASCII frame from the
+    colon through CR LF for the ASCII modes.
+    @param direction RECEIVED or SENT.
+    @param mode The Mode of the server.
+    @param peer The client as in the request log line (`"ip:port"`), `""` on a serial byte stream.
+    @param data The frame bytes.
+    @param capacity The most bytes a replacement may have: 260 (MBAP), 256 (RTU) or 513 (ASCII).
+    """
+    direction: FrameDirection
+    mode: Mode
+    peer: str
+    data: bytes
+    capacity: int
 
 
 @dataclass
@@ -1163,6 +1192,7 @@ class Server:
         self._h = handle
         self._thread: Optional[threading.Thread] = None
         self._stopping = False
+        self._frame_ref = None  # the C callback object, alive while the frame hook is installed
         self.last_step_result: Optional[int] = None
 
     def _live(self):
@@ -1256,6 +1286,67 @@ class Server:
         """@brief The slave path of the PTY of an `rtu-pty` or `ascii-pty` server, else None.
         """
         return _decode(lib.mogbus_server_pty_name(self._live()))
+
+    @_locked
+    def set_frame_hook(self, hook: Optional[Callable[[Frame], Union[bytes, None]]]) -> None:
+        """@brief Runs `hook(frame)` for every frame this server receives or sends; None removes it.
+
+        pymodbus offers `trace_packet`; this shows each frame so a test can log traffic, rewrite a
+        request or an answer (a changed address, a corrupted checksum) or drop it. The hook returns None
+        to pass the frame on unchanged, or the replacement bytes; `b""` drops the frame. Replacement
+        bytes longer than `Frame.capacity` drop the frame and log a warning.
+
+        Received frames are shown once per complete frame as the transport delimits it, before any
+        validation: the MBAP ADU (TCP, UDP; TLS frames as plaintext), the RTU frame (on byte streams and
+        RTU over TCP only frames with a valid CRC, a UDP datagram whole), the ASCII frame from the colon
+        through CR LF. The replacement is validated and decoded as if it had arrived. A dropped request
+        counts as never received. Sent frames are shown once per complete response, after fault
+        injection and just before it is written (with a delay fault, when the response is built, not when
+        it leaves); nothing is shown when there is no response. A dropped response is not sent and the
+        TCP connection stays open.
+
+        The hook runs on the thread that steps the server with the context lock held, so it may call
+        the methods of the devices but must not close or step this server. An exception raised by the
+        hook is printed with its traceback and the frame passes unchanged. The hook is not part of a
+        config and a server has one; a new one replaces it.
+
+        ```python
+        def hook(frame):
+            print(frame.direction.name, frame.peer, frame.data.hex())
+            if frame.direction == mogbus.FrameDirection.SENT and frame.mode == mogbus.Mode.RTU_TCP:
+                return frame.data[:-1] + bytes([frame.data[-1] ^ 0xFF])   # break the CRC of every answer
+
+        server.set_frame_hook(hook)
+        ```
+        @param hook A callable taking a Frame and returning None or bytes; None removes the hook.
+        @throws MogbusError If the server is closed or the hook cannot be installed.
+        """
+        handle = self._live()
+        if hook is None:
+            if not lib.mogbus_server_set_frame_hook(handle, ctypes.cast(None, _lib.FRAME_FN), None):
+                raise MogbusError("cannot remove the frame hook")
+            self._frame_ref = None
+            return
+
+        def trampoline(_user, _server, frame):
+            f = frame.contents
+            try:
+                out = hook(Frame(FrameDirection(f.direction), Mode(f.mode), _decode(f.peer) or "",
+                                 ctypes.string_at(f.data, f.len), f.capacity))
+                if out is None:
+                    return f.len
+                out = bytes(out)
+                if len(out) <= f.capacity:
+                    ctypes.memmove(f.data, out, len(out))
+                return len(out)  # longer than the capacity: the library drops the frame and warns
+            except BaseException:  # an exception must not unwind into C
+                traceback.print_exc()
+                return f.len
+
+        ref = _lib.FRAME_FN(trampoline)
+        if not lib.mogbus_server_set_frame_hook(handle, ref, None):
+            raise MogbusError("cannot install the frame hook")
+        self._frame_ref = ref
 
     @_locked
     def metrics(self) -> str:

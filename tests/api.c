@@ -1,6 +1,7 @@
 /* Public C API (include/mogbus.h), driven in-process the way an embedding host would. */
 #define _GNU_SOURCE
 #include "vtest.h"
+#include "tests/tests_utils/test_case.h"
 #include "build_config.h"
 #include "mogbus.h"
 #include "modbus/ascii.h"
@@ -1876,3 +1877,306 @@ TEST(ApiFunctionCodeConflictsWithConfigAndSharesFaultsAndListenOnly)
 	unlink(path);
 }
 #endif
+
+/* ---- Frame hook ---- */
+
+enum frame_action_t
+{
+	FRAME_PASS,
+	FRAME_EDIT,	/* decode the PDU, set pdu[edit_index] = edit_value, encode again */
+	FRAME_DROP,
+	FRAME_TOO_LONG,
+	FRAME_BAD_CHECKSUM,
+};
+
+static struct frame_log_t
+{
+	unsigned		calls;
+	mogbus_frame_direction_t dir[8];
+	mogbus_mode_t		mode;
+	mogbus_server_t*	server;
+	char			peer[64];
+	size_t			len[8];
+	size_t			capacity;
+	struct frame_rule_t
+	{
+		enum frame_action_t	action;
+		unsigned		edit_index;
+		uint8_t			edit_value;
+	} rule[2];	/* by direction */
+	unsigned		long_warnings;
+} frame_log;
+
+static void
+frame_warn_sink(void* user, mogbus_log_level_t level, const char* message)
+{
+	(void)user;
+	if (level == MOGBUS_LOG_WARN && strstr(message, "frame hook returned"))
+		frame_log.long_warnings++;
+}
+
+/* Rewrites the PDU of a frame in any framing and encodes the frame again. */
+static size_t
+frame_edit_pdu(mogbus_frame_t* f, unsigned index, uint8_t value)
+{
+	u8		pdu[MODBUS_MAX_PDU];
+	u8		decoded[MODBUS_MAX_PDU + 2];
+	u8		addr = 0;
+	const u8*	in = NULL;
+	u32		n = 0;
+
+	switch (f->mode)
+	{
+	case MOGBUS_MODE_TCP:
+	case MOGBUS_MODE_UDP:
+		f->data[7 + index] = value;
+		return f->len;
+	case MOGBUS_MODE_RTU_TCP:
+	case MOGBUS_MODE_RTU_UDP:
+	case MOGBUS_MODE_RTU_FD:
+		if (!modbus_rtu_decode(f->data, (u32)f->len, &addr, &in, &n))
+			return 0;
+		memcpy(pdu, in, n);
+		pdu[index] = value;
+		return modbus_rtu_encode(f->data, addr, pdu, n);
+	default:
+		if (!modbus_ascii_decode(f->data, (u32)f->len, decoded, &addr, &in, &n))
+			return 0;
+		memcpy(pdu, in, n);
+		pdu[index] = value;
+		return modbus_ascii_encode(f->data, addr, pdu, n);
+	}
+}
+
+static size_t
+frame_hook(void* user, mogbus_server_t* server, mogbus_frame_t* f)
+{
+	const struct frame_rule_t* rule = &frame_log.rule[f->direction];
+
+	(void)user;
+	if (frame_log.calls < 8)
+	{
+		frame_log.dir[frame_log.calls] = f->direction;
+		frame_log.len[frame_log.calls] = f->len;
+	}
+	frame_log.calls++;
+	frame_log.mode     = f->mode;
+	frame_log.server   = server;
+	frame_log.capacity = f->capacity;
+	snprintf(frame_log.peer, sizeof(frame_log.peer), "%s", f->peer);
+	switch (rule->action)
+	{
+	case FRAME_EDIT:
+		return frame_edit_pdu(f, rule->edit_index, rule->edit_value);
+	case FRAME_DROP:
+		return 0;
+	case FRAME_TOO_LONG:
+		return f->capacity + 1;
+	case FRAME_BAD_CHECKSUM:
+		if (f->mode == MOGBUS_MODE_ASCII_TCP || f->mode == MOGBUS_MODE_ASCII_UDP ||
+		    f->mode == MOGBUS_MODE_ASCII_FD)
+			f->data[f->len - 4] = f->data[f->len - 4] == '0' ? '1' : '0';
+		else
+			f->data[f->len - 1] ^= 0xFF;
+		return f->len;
+	default:
+		return f->len;
+	}
+}
+
+/* Sends the read of holding register 0 of unit 1 in the framing of the mode. */
+static bool
+frame_send(mogbus_mode_t mode, int fd)
+{
+	switch (mode)
+	{
+	case MOGBUS_MODE_TCP:
+	case MOGBUS_MODE_UDP:
+		return ts_mbap_send(fd, 1, 7, READ_HOLDING, sizeof(READ_HOLDING));
+	case MOGBUS_MODE_RTU_TCP:
+	case MOGBUS_MODE_RTU_UDP:
+	case MOGBUS_MODE_RTU_FD:
+		return ts_rtu_send(fd, 1, READ_HOLDING, sizeof(READ_HOLDING), true);
+	default:
+		return ts_ascii_send(fd, 1, READ_HOLDING, sizeof(READ_HOLDING), true);
+	}
+}
+
+/* Sends the request, steps the server and returns the register value of the answer, or -1. */
+static int
+frame_roundtrip(mogbus_server_t* server, mogbus_mode_t mode, int fd)
+{
+	u8		raw[MODBUS_ASCII_MAX_FRAME];
+	u8		decoded[MODBUS_MAX_PDU + 2];
+	u8		pdu[MODBUS_MAX_PDU];
+	u8		addr = 0;
+	const u8*	in = pdu;
+	u32		n = 0;
+	s32		got = 0;
+	bool		ok = frame_send(mode, fd) && pump(server, fd);
+
+	if (!ok)
+		return -1;
+	switch (mode)
+	{
+	case MOGBUS_MODE_TCP:
+		ok = ts_mbap_recv(fd, 1, 7, pdu, &n, 1000);
+		break;
+	case MOGBUS_MODE_UDP:
+		ok = ts_udp_mbap_recv(fd, 1, 7, pdu, &n, 1000);
+		break;
+	case MOGBUS_MODE_RTU_TCP:
+	case MOGBUS_MODE_RTU_FD:
+		ok = ts_rtu_recv(fd, &addr, pdu, &n, 1000, true);
+		break;
+	case MOGBUS_MODE_ASCII_TCP:
+	case MOGBUS_MODE_ASCII_FD:
+		ok = ts_ascii_recv_response(fd, &addr, pdu, &n, 1000, true);
+		break;
+	default:
+		got = ts_udp_recv(fd, raw, sizeof(raw), 1000);
+		ok = got > 0;
+		if (ok && mode == MOGBUS_MODE_RTU_UDP)
+			ok = modbus_rtu_decode(raw, (u32)got, &addr, &in, &n);
+		else if (ok)
+			ok = modbus_ascii_decode(raw, (u32)got, decoded, &addr, &in, &n);
+		break;
+	}
+	if (!ok || n != 4)
+		return -1;
+	return (in[2] << 8) | in[3];
+}
+
+/* Steps the server for a while and reports whether the peer got nothing. */
+static bool
+frame_silent(mogbus_server_t* server, int fd)
+{
+	u64 until = os_now_ms() + 150;
+
+	while (os_now_ms() < until)
+		(void)mogbus_server_step(server, 1);
+	return ts_no_data(fd, 50);
+}
+
+TEST(ApiFrameHookSeesRewritesAndDropsFramesOnEveryTransport)
+{
+	static const struct
+	{
+		mogbus_mode_t	mode;
+		const char*	name;
+		bool		datagram;
+		bool		fd;
+		size_t		capacity;
+		size_t		req_len;
+		size_t		resp_len;
+	} modes[] = {
+		{ MOGBUS_MODE_TCP,       "tcp",       false, false, 260, 12, 11 },
+		{ MOGBUS_MODE_UDP,       "udp",       true,  false, 260, 12, 11 },
+		{ MOGBUS_MODE_RTU_TCP,   "rtu-tcp",   false, false, 256, 8,  7 },
+		{ MOGBUS_MODE_RTU_UDP,   "rtu-udp",   true,  false, 256, 8,  7 },
+		{ MOGBUS_MODE_RTU_FD,    "rtu-fd",    false, true,  256, 8,  7 },
+		{ MOGBUS_MODE_ASCII_TCP, "ascii-tcp", false, false, 513, 17, 15 },
+		{ MOGBUS_MODE_ASCII_UDP, "ascii-udp", true,  false, 513, 17, 15 },
+		{ MOGBUS_MODE_ASCII_FD,  "ascii-fd",  false, true,  513, 17, 15 },
+	};
+	static const struct
+	{
+		const char*		name;
+		struct frame_rule_t	rule[2];
+		int			value;		/* answer, or -1 for none */
+		unsigned		calls;
+		bool			warns;
+		bool			checksum;	/* frames with a checksum only */
+	} cases[] = {
+		{ "pass",        { { .action = FRAME_PASS }, { .action = FRAME_PASS } },                  0x1111, 2, false, false },
+		{ "rx-edit",     { { FRAME_EDIT, 2, 1 }, { .action = FRAME_PASS } },            0x2222, 2, false, false },
+		{ "tx-edit",     { { .action = FRAME_PASS }, { .action = FRAME_EDIT, 3, 0x99 } },         0x1199, 2, false, false },
+		{ "rx-drop",     { { .action = FRAME_DROP }, { .action = FRAME_PASS } },                  -1,     1, false, false },
+		{ "tx-drop",     { { .action = FRAME_PASS }, { .action = FRAME_DROP } },                  -1,     2, false, false },
+		{ "rx-too-long", { { .action = FRAME_TOO_LONG }, { .action = FRAME_PASS } },              -1,     1, true,  false },
+		{ "tx-too-long", { { .action = FRAME_PASS }, { .action = FRAME_TOO_LONG } },              -1,     2, true,  false },
+		{ "rx-bad-sum",  { { .action = FRAME_BAD_CHECKSUM }, { .action = FRAME_PASS } },          -1,     1, false, true  },
+	};
+	char name[64];
+
+	for (u32 m = 0; m < sizeof(modes) / sizeof(modes[0]); m++)
+	{
+		for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+		{
+			mogbus_t*	ctx = mogbus_create();
+			mogbus_device_t* dev = mogbus_add_device(ctx, 1, "frames", NULL, 0);
+			mogbus_point_t	p0 = holding(0, 0x1111);
+			mogbus_point_t	p1 = holding(1, 0x2222);
+			mogbus_server_options_t o = mogbus_server_options_defaults();
+			mogbus_server_t* server;
+			int		pair[2] = { -1, -1 };
+			int		fd;
+			unsigned	calls;
+
+			if (cases[c].checksum && (modes[m].mode == MOGBUS_MODE_TCP || modes[m].mode == MOGBUS_MODE_UDP))
+				continue;
+			snprintf(name, sizeof(name), "%s %s", modes[m].name, cases[c].name);
+			test_case = name;
+			memset(&frame_log, 0, sizeof(frame_log));
+			memcpy(frame_log.rule, cases[c].rule, sizeof(frame_log.rule));
+			ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p0, NULL, 0) &&
+				  mogbus_device_add_point(dev, &p1, NULL, 0));
+			o.mode = modes[m].mode;
+			o.frame_gap_ms = 2;
+			if (modes[m].fd)
+			{
+				ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+				o.fd = pair[1];
+				fd = pair[0];
+			}
+			else
+				o.port = ts_free_port();
+			server = mogbus_server_create(ctx, &o, NULL, 0, NULL);
+			ASSERT_EQ(server != NULL);
+			if (!modes[m].fd)
+			{
+				fd = modes[m].datagram ? ts_udp_loopback(o.port, AF_INET, 1000) :
+							 ts_connect_loopback(o.port, AF_INET, 1000);
+				ASSERT_EQ(fd >= 0);
+			}
+			ASSERT_EQ(!mogbus_server_set_frame_hook(NULL, frame_hook, &frame_log));
+			ASSERT_EQ(mogbus_server_set_frame_hook(server, frame_hook, &frame_log));
+			mogbus_set_log_sink(frame_warn_sink, NULL);
+
+			if (cases[c].value >= 0)
+				ASSERT_EQ(frame_roundtrip(server, modes[m].mode, fd) == cases[c].value);
+			else
+			{
+				ASSERT_EQ(frame_send(modes[m].mode, fd));
+				ASSERT_EQ(frame_silent(server, fd));
+			}
+			ASSERT_EQ(frame_log.calls == cases[c].calls);
+			ASSERT_EQ(frame_log.dir[0] == MOGBUS_FRAME_RECEIVED);
+			ASSERT_EQ(cases[c].calls < 2 || frame_log.dir[1] == MOGBUS_FRAME_SENT);
+			ASSERT_EQ(frame_log.mode == modes[m].mode && frame_log.server == server);
+			ASSERT_EQ(frame_log.capacity == modes[m].capacity);
+			ASSERT_EQ(frame_log.len[0] == modes[m].req_len ||
+				  cases[c].rule[0].action == FRAME_TOO_LONG);
+			ASSERT_EQ(cases[c].calls < 2 || frame_log.len[1] == modes[m].resp_len);
+			if (modes[m].fd)
+				ASSERT_EQ(frame_log.peer[0] == 0);
+			else
+				ASSERT_EQ(strncmp(frame_log.peer, "127.0.0.1:", 10) == 0);
+			ASSERT_EQ(frame_log.long_warnings == (cases[c].warns ? 1u : 0u));
+
+			/* The connection and the server are fine afterwards; removing the hook stops the calls. */
+			calls = frame_log.calls;
+			ASSERT_EQ(mogbus_server_set_frame_hook(server, NULL, NULL));
+			ASSERT_EQ(frame_roundtrip(server, modes[m].mode, fd) == 0x1111);
+			ASSERT_EQ(frame_log.calls == calls);
+
+			mogbus_set_log_sink(NULL, NULL);
+			close(fd);
+			mogbus_server_close(server);
+			if (modes[m].fd)
+				close(pair[1]);
+			mogbus_destroy(ctx);
+		}
+	}
+	test_case = 0;
+}

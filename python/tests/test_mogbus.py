@@ -126,6 +126,7 @@ class LayoutTest(unittest.TestCase):
         expected.update(mine("I", _lib.DeviceInfoC, [("faults[0]", _lib._FaultInfo),
                                                      ("custom_fcs[0]", _lib._CustomFc)]))
         expected.update(mine("A", _lib.AccessC, []))
+        expected.update(mine("FR", _lib.FrameC, []))
         for key in ("faults_count", "space_count"):
             self.assertIn(key, c)
         self.assertEqual(c.pop("faults_count"), (7,))
@@ -143,7 +144,8 @@ class LayoutTest(unittest.TestCase):
         for key, tag, cls in (("O", "mogbus_server_options_t", _lib.ServerOptionsC),
                               ("P", "mogbus_point_t", _lib.PointC),
                               ("I", "mogbus_device_info_t", _lib.DeviceInfoC),
-                              ("A", "mogbus_access_t", _lib.AccessC)):
+                              ("A", "mogbus_access_t", _lib.AccessC),
+                              ("FR", "mogbus_frame_t", _lib.FrameC)):
             want = header_fields(text, tag)
             have = set()
             for name, _ in cls._fields_:
@@ -151,7 +153,7 @@ class LayoutTest(unittest.TestCase):
                 for inner, icls in nested.get(key, {}).items():
                     if name == inner:
                         have.update(f"{inner}.{n.rstrip('_')}" for n, _ in icls._fields_)
-            laid_out = {re.sub(r"\[\d+\]", "", k[2:]) for k in c if k.startswith(key + ".")}
+            laid_out = {re.sub(r"\[\d+\]", "", k[len(key) + 1:]) for k in c if k.startswith(key + ".")}
             self.assertEqual(want, have, f"{tag}: header and ctypes fields differ")
             self.assertEqual(want, laid_out, f"{tag}: header and layout.c fields differ")
 
@@ -722,6 +724,63 @@ class AccessHookTest(unittest.TestCase):
                     dev.set_written_hook(None)
                     self.assertEqual(self.raw_write(sock, 1, 0, 4), 4)
                     self.assertEqual(len(seen), 2)
+
+    def test_frame_hook_sees_rewrites_and_drops_frames(self):
+        port = free_port()
+        seen = []
+        rule = {"rx": None, "tx": None}
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 0x1111)
+            dev.add_point("holding", 1, "u16", 0x2222)
+
+            def hook(frame):
+                seen.append(frame)
+                action = rule["rx" if frame.direction == mogbus.FrameDirection.RECEIVED else "tx"]
+                return action(frame) if action else None
+
+            with ctx.serve(port=port) as server:
+                server.start()
+                server.set_frame_hook(hook)
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5) as sock:
+                    self.assertEqual(mbap_read(sock, 1, 0), [0x1111])
+                    rx, tx = seen
+                    self.assertEqual((rx.direction, tx.direction), (mogbus.FrameDirection.RECEIVED,
+                                                                    mogbus.FrameDirection.SENT))
+                    self.assertEqual((rx.mode, rx.capacity), (mogbus.Mode.TCP, 260))
+                    self.assertTrue(rx.peer.startswith("127.0.0.1:"))
+                    self.assertEqual(rx.data[7:], bytes([3, 0, 0, 0, 1]))
+                    self.assertEqual(tx.data[7:], bytes([3, 2, 0x11, 0x11]))
+
+                    rule["rx"] = lambda f: f.data[:9] + b"\x01" + f.data[10:]  # read address 1 instead
+                    self.assertEqual(mbap_read(sock, 1, 0), [0x2222])
+                    rule["rx"] = None
+                    rule["tx"] = lambda f: f.data[:-1] + b"\x99"
+                    self.assertEqual(mbap_read(sock, 1, 0), [0x1199])
+
+                    # b"" drops, so does a replacement longer than the capacity; the connection survives.
+                    for kind, action in (("rx", lambda f: b""), ("tx", lambda f: b""),
+                                         ("rx", lambda f: bytes(f.capacity + 1)),
+                                         ("tx", lambda f: bytes(f.capacity + 1))):
+                        rule["rx"] = rule["tx"] = None
+                        rule[kind] = action
+                        with self.assertRaises(socket.timeout):
+                            mbap_read(sock, 1, 0)
+                    rule["rx"] = rule["tx"] = None
+
+                    # A raising hook lets the frame through.
+                    def boom(frame):
+                        raise RuntimeError("boom")
+
+                    rule["rx"] = boom
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(mbap_read(sock, 1, 0), [0x1111])
+                    rule["rx"] = None
+
+                    server.set_frame_hook(None)
+                    n = len(seen)
+                    self.assertEqual(mbap_read(sock, 1, 0), [0x1111])
+                    self.assertEqual(len(seen), n)
 
     def test_hook_veto_and_raising_hook(self):
         port = free_port()

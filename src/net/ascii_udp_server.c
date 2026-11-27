@@ -20,7 +20,7 @@
  *        terminator, trailing bytes or a second frame make it malformed.
  */
 static void
-handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8* buf, u32 len)
+handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, u8* buf, u32 len)
 {
 	u8			decoded[MODBUS_MAX_PDU + 2];
 	u8			addr     = 0;
@@ -35,6 +35,10 @@ handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8
 	fault_decision_t	decision = { 0 };
 	u64			now_ms   = os_now_ms();
 
+	len = net_frame_trace(server->options.obs, NET_FRAME_RECEIVED, peer->text, buf, len,
+			      MODBUS_ASCII_MAX_FRAME);
+	if (len == 0)
+		return;
 	if (modbus_ascii_scan(buf, len, &scan_len) != MODBUS_ASCII_SCAN_FRAME ||
 	    scan_len != len ||
 	    !modbus_ascii_decode(buf, len, decoded, &addr, &pdu, &pdu_len))
@@ -62,6 +66,10 @@ handle_datagram(ascii_udp_server_t* server, const net_udp_peer_t* peer, const u8
 	/* A checksum fault only damages the emitted LRC; the PDU stays intact. */
 	if (decision.corrupt == FAULT_CORRUPT_CHECKSUM)
 		modbus_ascii_corrupt_lrc(out, out_len);
+	out_len = net_frame_trace(server->options.obs, NET_FRAME_SENT, peer->text, out, out_len,
+				  MODBUS_ASCII_MAX_FRAME);
+	if (out_len == 0)
+		return;
 	(void)net_udp_send_at(&server->udp, peer, out, out_len, now_ms + decision.delay_ms, now_ms);
 }
 

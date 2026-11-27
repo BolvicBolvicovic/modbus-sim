@@ -112,7 +112,19 @@ class AccessC(ctypes.Structure):
     ]
 
 
+class FrameC(ctypes.Structure):
+    _fields_ = [
+        ("direction", ctypes.c_int),
+        ("mode", ctypes.c_int),
+        ("peer", ctypes.c_char_p),
+        ("data", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+        ("capacity", ctypes.c_size_t),
+    ]
+
+
 ACCESS_FN = ctypes.CFUNCTYPE(ctypes.c_uint8, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(AccessC))
+FRAME_FN = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(FrameC))
 WRITTEN_FN = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(AccessC))
 FUNCTION_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint8, ctypes.c_uint8,
                               ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint8),
@@ -210,6 +222,7 @@ _sig("mogbus_server_run", _c.c_int, _ptr)
 _sig("mogbus_server_close", None, _ptr)
 _sig("mogbus_server_metrics", _c.c_size_t, _ptr, _c.c_char_p, _c.c_size_t)
 _sig("mogbus_server_pty_name", _c.c_char_p, _ptr)
+_sig("mogbus_server_set_frame_hook", _c.c_bool, _ptr, FRAME_FN, _ptr)
 _sig("mogbus_set_log_sink", None, LOG_FN, _ptr)
 _sig("mogbus_set_log_level", None, _c.c_int)
 _sig("mogbus_set_log_format", None, _c.c_int)

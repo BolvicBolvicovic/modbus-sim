@@ -20,7 +20,7 @@
  *        frames) is rejected whole and counted like a bad frame on rtu-tcp.
  */
 static void
-handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, const u8* buf, u32 len)
+handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, u8* buf, u32 len)
 {
 	rtu_framer_t*		framer    = &server->framer;
 	rtu_framer_ctx_t	ctx       = {
@@ -34,6 +34,9 @@ handle_datagram(rtu_udp_server_t* server, const net_udp_peer_t* peer, const u8* 
 	u32			frame_len = 0;
 	u64			now_ms    = os_now_ms();
 
+	len = net_frame_trace(ctx.obs, NET_FRAME_RECEIVED, peer->text, buf, len, MODBUS_RTU_MAX_FRAME);
+	if (len == 0)
+		return;
 	if (modbus_rtu_next_frame(buf, len, &frame_len) != MODBUS_RTU_FRAME_FOUND ||
 	    frame_len != len)
 	{

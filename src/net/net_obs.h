@@ -16,6 +16,7 @@
 #include <stdbool.h>
 
 typedef enum net_result_t net_result_t;
+typedef enum net_frame_dir_t net_frame_dir_t;
 typedef struct net_obs_t net_obs_t;
 
 /** @brief Limits of the metrics and HTTP endpoint. */
@@ -44,6 +45,22 @@ enum net_result_t
 	NET_RESULT_COUNT,
 };
 
+/** @brief Direction of a frame shown to the frame hook. */
+enum net_frame_dir_t
+{
+	NET_FRAME_RECEIVED,
+	NET_FRAME_SENT,
+};
+
+/**
+ * @brief Frame hook: sees one transport frame and may rewrite it in place.
+ *
+ * `data` holds `len` bytes and has room for `capacity`. Returns the new length (0 drops the
+ * frame; above `capacity` it is dropped with a warning). `peer` is NULL on a byte stream.
+ */
+typedef u32 (*net_frame_fn)(void* user, net_frame_dir_t dir, const char* peer, u8* data, u32 len,
+			    u32 capacity);
+
 /** @brief Upper bounds of the response latency histogram, in milliseconds. */
 extern const u32 NET_OBS_LATENCY_MS[NET_OBS_LATENCY_BUCKETS];
 
@@ -59,6 +76,8 @@ struct net_obs_t
 	u32		device_count;
 	u64		start_unix_s;	/**< wall-clock start, for mogbus_start_time_seconds */
 	bool		ready;		/**< serving; false before start and once stopping */
+	net_frame_fn	frame_fn;	/**< frame hook, or NULL; set by the host after net_obs_init() */
+	void*		frame_user;
 
 	/** @brief Counters exposed on `/metrics`. */
 	struct net_metrics_t
@@ -157,6 +176,29 @@ void	net_obs_close(net_obs_t* obs);
  */
 void	net_obs_request(net_obs_t* obs, const char* peer, const device_t* dev, u8 unit, u8 fc,
 			const u8* resp, u32 resp_len, const fault_decision_t* decision);
+
+/**
+ * @brief Shows a frame to the frame hook of @p obs, which may rewrite it in place.
+ *
+ * @param obs Observability state; NULL or no hook returns @p len unchanged.
+ * @param dir Direction of the frame.
+ * @param peer Client description for logs, or NULL for a byte stream.
+ * @param data Frame bytes, with room for @p capacity.
+ * @param len Frame length.
+ * @param capacity Most bytes @p data can hold.
+ * @return The (possibly new) length; 0 when the hook dropped the frame or returned more than
+ *         @p capacity (WARN).
+ */
+u32	net_frame_trace(net_obs_t* obs, net_frame_dir_t dir, const char* peer, u8* data, u32 len,
+			u32 capacity);
+
+/**
+ * @brief Copies a received frame into @p out (room for @p capacity, at least @p len) and shows it to
+ *        the frame hook there, so the hook never overwrites bytes of the receive buffer.
+ *
+ * @return The length of the frame in @p out, 0 when dropped.
+ */
+u32	net_frame_rx(net_obs_t* obs, const char* peer, const u8* frame, u32 len, u8* out, u32 capacity);
 
 /** @brief Counts a frame that was rejected before reaching a device. NULL is ignored. */
 void	net_obs_rejected(net_obs_t* obs);

@@ -115,5 +115,5 @@ net_mbap_respond(net_obs_t* obs, device_t** devices, u32 count, rng_t* rng, u64 
 	reply.length = (u16)(pdu_len + 1);
 	mbap_encode(out, &reply);
 	memcpy(out + MBAP_HEADER_SIZE, pdu, pdu_len);
-	return MBAP_HEADER_SIZE + pdu_len;
+	return net_frame_trace(obs, NET_FRAME_SENT, peer, out, MBAP_HEADER_SIZE + pdu_len, MBAP_MAX_FRAME);
 }
