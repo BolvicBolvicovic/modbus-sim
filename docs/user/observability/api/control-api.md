@@ -69,5 +69,5 @@ curl -s -X DELETE http://127.0.0.1:9102/api/devices/1/faults/exception
 ## See also
 
 - [Health, readiness and metrics endpoint](../http-endpoint.md)
-- [Using the control API from Python](../../python/python-testing.md#runtime-control-over-http)
+- [Using the control API from Python](../../python/python-observe.md#step-7-logs-metrics-and-the-control-api)
 - [Config reference: http](../../config/server/index.md)

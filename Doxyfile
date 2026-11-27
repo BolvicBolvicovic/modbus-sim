@@ -5,14 +5,16 @@ PROJECT_NAME           = mogbus
 PROJECT_BRIEF          = Modbus device simulator
 PROJECT_LOGO           = docs/assets/mogbus-logo.svg
 OUTPUT_DIRECTORY       = build/docs
-INPUT                  = README.md CONTRIBUTING.md SECURITY.md NOTICE.md AGENTS.md docs/user docs/dev include src examples tests/fuzz
-FILE_PATTERNS          = *.c *.h *.md
+INPUT                  = README.md CONTRIBUTING.md SECURITY.md NOTICE.md AGENTS.md docs/user docs/dev include src examples tests/fuzz python/mogbus
+FILE_PATTERNS          = *.c *.h *.md *.py
 # Example READMEs are not site pages (older Doxygen also takes any README.md as a main page).
-EXCLUDE_PATTERNS       = */examples/*/README.md
+EXCLUDE_PATTERNS       = */examples/*/README.md */examples/*.py */examples/*/*.py */examples/*/*/*.py */python/mogbus/_lib.py */python/mogbus/__init__.py
 IMAGE_PATH             = docs/assets
 USE_MDFILE_AS_MAINPAGE = README.md
 RECURSIVE              = YES
 OPTIMIZE_OUTPUT_FOR_C  = YES
+# python/mogbus/core.py: its docstrings are Doxygen comments (tools/docs/build.py renders them as the Python API page).
+PYTHON_DOCSTRING       = NO
 EXTRACT_ALL            = NO
 EXTRACT_STATIC         = YES
 EXTRACT_LOCAL_CLASSES  = YES

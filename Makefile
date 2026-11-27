@@ -289,9 +289,12 @@ python-tests: $(LIB_SHARED)
 	build/py_layout > build/py_layout.txt
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) MOGBUS_LAYOUT=$(CURDIR)/build/py_layout.txt PYTHONPATH=python python3 -m unittest discover -s python/tests
 
-# examples/python/embed.py needs only the library; test_device.py needs pytest and is not run here.
+# embed.py, pump_station.py and the unittest tests need only the library; test_device.py, test_station.py
+# and conftest.py need pytest and are not run here.
 python-examples: $(LIB_SHARED)
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/embed.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/pump_station.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 -m unittest discover -s examples/python -p test_pump_station.py
 
 # Fast local build: make -j$(nproc) dev [tests|clean|...]. With no other goal,
 # `dev` builds the default binary; with extra goals it is just a mode switch.

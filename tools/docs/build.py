@@ -9,6 +9,8 @@ or by source order. Any broken link, page missing from the manifest or malformed
 entry fails the build (exit status 1). See docs/dev/docs.md.
 """
 import argparse
+import ast
+import copy
 import html
 import json
 import posixpath
@@ -104,6 +106,7 @@ class Page:
         self.anchors = set()
         self.body = ''
         self.parent = None      # index page for entries
+        self.api = None         # API reference pages: the manifest entry (site.apis) they belong to
         self.errors_from = None  # error index page: guide pages that also contribute rows
         self.__dict__.update(kw)
 
@@ -123,7 +126,7 @@ class Site:
         self.symbols = {}        # Doxygen refid -> url (API items)
         self.cur = None          # page being rendered (for error messages)
         self.nav = []            # [(section title, [node])]; node = dict
-        self.api = None
+        self.apis = []           # API reference entries of the manifest ({api|pyapi} items)
 
     # ---- errors -----------------------------------------------------------------------------
     def error(self, msg):
@@ -209,10 +212,13 @@ class Site:
                                 entries.append(e)
                         idx.groups.append((g['title'], lst))
                     nodes.append({'page': idx, 'children': entries})
-                elif 'api' in item:
-                    self.api = {'file': item['api'], 'title': item.get('title', 'C API'),
-                                'section': sec['title']}
-                    nodes.append({'api': True})
+                elif 'api' in item or 'pyapi' in item:
+                    py = 'pyapi' in item
+                    self.apis.append({'file': item['pyapi' if py else 'api'], 'py': py,
+                                      'title': item.get('title', 'Python API' if py else 'C API'),
+                                      'section': sec['title'], 'groups': item.get('groups', []),
+                                      'idx': len(self.apis)})
+                    nodes.append({'api': len(self.apis) - 1})
                 elif 'page' in item:
                     p = make(item['page'], 'guide', sec['title'], item.get('title'))
                     if p and item.get('errors'):
@@ -1109,30 +1115,36 @@ def site_xml(site, refid):
 
 
 def make_api_pages(site, rd):
-    cfg = site.api
-    if cfg is None:
-        return []
-    header = Path(cfg['file']).name
-    site.args.header = str(ROOT / cfg['file']) if not Path(cfg['file']).is_absolute() else cfg['file']
-    api = Api(site, header, cfg['title'])
-    if api.fcd is None:
-        return []
     pages = []
-    site.api_obj = api
-    over = Page(src=cfg['file'], kind='api', section=cfg['section'], title=cfg['title'],
-                url='api/index.html')
-    over.cd = api.fcd
-    pages.append(over)
-    for gname, gslug, ds in api.groups:
-        p = Page(src=cfg['file'], kind='api', section=cfg['title'], title=gname, url='api/%s.html' % gslug)
-        p.ds = ds
-        pages.append(p)
-    over.groups = api.groups
+    for cfg in site.apis:
+        if cfg['py']:
+            api = PyApi(site, cfg)
+            pages.extend(api.pages(rd))
+            continue
+        header = Path(cfg['file']).name
+        site.args.header = str(ROOT / cfg['file']) if not Path(cfg['file']).is_absolute() else cfg['file']
+        api = Api(site, header, cfg['title'])
+        if api.fcd is None:
+            continue
+        cfg['obj'] = api
+        over = Page(src=cfg['file'], kind='api', section=cfg['section'], title=cfg['title'],
+                    url='api/index.html', api=cfg)
+        over.cd = api.fcd
+        pages.append(over)
+        for gname, gslug, ds in api.groups:
+            p = Page(src=cfg['file'], kind='api', section=cfg['title'], title=gname,
+                     url='api/%s.html' % gslug, api=cfg)
+            p.ds = ds
+            pages.append(p)
+        over.groups = api.groups
     return pages
 
 
 def render_api(site, rd, page):
-    api = site.api_obj
+    if page.api['py']:
+        page.api['obj'].render(rd, page)
+        return
+    api = page.api['obj']
     if page.url == 'api/index.html':
         # overview: the header's file documentation, then a symbol list per group
         items = []
@@ -1179,25 +1191,424 @@ def render_api(site, rd, page):
         page.anchors.add(d['name'])
 
 
+# ---- Python API --------------------------------------------------------------------------------------
+
+class PyApi:
+    """The public classes and functions of a Python module. Names, signatures, fields and enum values
+    come from the source (ast); descriptions come from Doxygen's XML of the docstrings."""
+
+    def __init__(self, site, cfg):
+        self.s = site
+        self.cfg = cfg
+        cfg['obj'] = self
+        path = ROOT / cfg['file']
+        self.pkg = path.parent.name
+        self.mod = path.stem
+        self.qual = '%s::%s' % (self.pkg, self.mod)
+        self.tree = ast.parse(path.read_text())
+        self.cds = {}
+        for f in sorted(site.xml.glob('*.xml')):
+            if not f.name.startswith(('class' + self.pkg, 'namespace' + self.pkg, self.mod + '_8py')):
+                continue
+            for cd in ET.parse(f).getroot().findall('compounddef'):
+                self.cds[cd.findtext('compoundname')] = cd
+        self.fcd = self.cds.get(self.mod + '.py')
+        self.nscd = self.cds.get(self.qual)
+        if self.fcd is None or self.nscd is None:
+            site.error('Doxygen XML has no compound for %s' % cfg['file'])
+        self.items = {}
+        self.order = []
+        self.collect()
+
+    # ---- source analysis ------------------------------------------------------------------------
+    @staticmethod
+    def public(name):
+        return not name.startswith('_')
+
+    @staticmethod
+    def decorators(node):
+        return [ast.unparse(d).split('(')[0].split('.')[-1] for d in node.decorator_list]
+
+    def collect(self):
+        for node in self.tree.body:
+            if isinstance(node, ast.ClassDef) and self.public(node.name):
+                bases = [ast.unparse(b) for b in node.bases]
+                deco = self.decorators(node)
+                if any(b.split('.')[-1].endswith('Enum') for b in bases):
+                    kind = 'enum'
+                elif 'dataclass' in deco:
+                    kind = 'dataclass'
+                elif any(b.split('.')[-1] == 'NamedTuple' for b in bases):
+                    kind = 'namedtuple'
+                elif any(b.endswith('Exception') for b in bases):
+                    kind = 'exception'
+                else:
+                    kind = 'class'
+                it = dict(kind=kind, name=node.name, node=node, bases=bases, members=[], fields=[], values=[])
+                for sub in node.body:
+                    if isinstance(sub, ast.FunctionDef) and self.public(sub.name):
+                        dec = self.decorators(sub)
+                        mk = 'property' if 'property' in dec else 'classmethod' if 'classmethod' in dec else 'method'
+                        it['members'].append(dict(kind=mk, name=sub.name, node=sub))
+                    elif isinstance(sub, ast.AnnAssign) and kind in ('dataclass', 'namedtuple') and \
+                            isinstance(sub.target, ast.Name) and self.public(sub.target.id):
+                        it['fields'].append(sub)
+                    elif isinstance(sub, ast.Assign) and isinstance(sub.targets[0], ast.Name) and \
+                            self.public(sub.targets[0].id):
+                        if kind == 'enum':
+                            it['values'].append((sub.targets[0].id, ast.unparse(sub.value)))
+                        else:
+                            it['members'].append(dict(kind='attribute', name=sub.targets[0].id, node=sub))
+                self.items[node.name] = it
+                self.order.append(node.name)
+            elif isinstance(node, ast.FunctionDef) and self.public(node.name):
+                self.items[node.name] = dict(kind='function', name=node.name, node=node, members=[])
+                self.order.append(node.name)
+
+    def sig_args(self, node, skip):
+        a = node.args
+        out = []
+
+        def one(arg, default):
+            t = arg.arg
+            if arg.annotation is not None:
+                t += ': ' + ast.unparse(arg.annotation)
+            if default is not None:
+                t += (' = ' if arg.annotation is not None else '=') + ast.unparse(default)
+            return t
+
+        pos = a.posonlyargs + a.args
+        defs = [None] * (len(pos) - len(a.defaults)) + list(a.defaults)
+        for i, (arg, d) in enumerate(zip(pos, defs)):
+            if i < skip:
+                continue
+            out.append(one(arg, d))
+        if a.vararg:
+            out.append('*' + one(a.vararg, None))
+        elif a.kwonlyargs:
+            out.append('*')
+        for arg, d in zip(a.kwonlyargs, a.kw_defaults):
+            out.append(one(arg, d))
+        if a.kwarg:
+            out.append('**' + one(a.kwarg, None))
+        return out
+
+    def param_names(self, node, skip):
+        a = node.args
+        names = [x.arg for x in (a.posonlyargs + a.args)][skip:] + [x.arg for x in a.kwonlyargs]
+        if a.vararg:
+            names.append(a.vararg.arg)
+        if a.kwarg:
+            names.append(a.kwarg.arg)
+        return names
+
+    def sig(self, name, node, skip=0, prefix=''):
+        args = self.sig_args(node, skip)
+        ret = ' -> ' + ast.unparse(node.returns) if node.returns is not None else ''
+        one = '%s(%s)%s' % (name, ', '.join(args), ret)
+        if len(one) > 72 and args:
+            one = '%s(\n    %s)%s' % (name, ',\n    '.join(args), ret)
+        return prefix + one
+
+    # ---- Doxygen side ---------------------------------------------------------------------------
+    def member(self, cd, name):
+        found = [md for md in cd.iter('memberdef') if md.findtext('name') == name]
+        # Doxygen also lists the self.NAME assignments of a method body as variables of the same name.
+        return next((md for md in found if md.get('kind') == 'function'), found[0] if found else None)
+
+    def split(self, rd, el, what, need_brief=True):
+        """(brief html, plain brief, text items, parameter lists, returns html) of a described element."""
+        b = el.find('briefdescription')
+        bp = b.find('para') if b is not None else None
+        brief = rd.inline(bp).strip() if bp is not None else ''
+        plain_brief = plain(bp).strip() if bp is not None else ''
+        if not brief and need_brief:
+            self.s.error('%s: no docstring (a @brief line is required)' % what)
+        det = copy.deepcopy(el.find('detaileddescription')) if el.find('detaileddescription') is not None \
+            else ET.Element('detaileddescription')
+        lists, rets = [], []
+        for para in list(det.iter('para')):
+            for ch in list(para):
+                if ch.tag == 'parameterlist':
+                    para.remove(ch)
+                    lists.append(ch)
+                elif ch.tag == 'simplesect' and ch.get('kind') == 'return':
+                    para.remove(ch)
+                    rets.append(ch)
+        items = []
+        for c in det:
+            items.extend(rd.items(c) if c.tag == 'para' else rd.block(c))
+        rtxt = ''.join(rd.group(rd.items(r)) for r in rets)
+        return brief, plain_brief, items, lists, rtxt
+
+    def check_params(self, what, lists, wanted):
+        have = [plain(n).strip() for pl in lists if pl.get('kind') == 'param' for n in pl.iter('parametername')]
+        if sorted(have) != sorted(wanted):
+            self.s.error('%s: docstring parameters %s do not match the signature %s' %
+                         (what, have, wanted))
+
+    def tables(self, rd, lists):
+        return ''.join(rd.params(pl) for pl in lists if pl.get('kind') == 'param') + \
+               ''.join(rd.params(pl) for pl in lists if pl.get('kind') != 'param')
+
+    # ---- pages ----------------------------------------------------------------------------------
+    def pages(self, rd):
+        cfg = self.cfg
+        pages = []
+        seen = set()
+        groups = []
+        for g in cfg['groups']:
+            for n in g['items']:
+                if n not in self.items:
+                    self.s.error('%s: group %r lists %r, which is not a public name of %s' %
+                                 (cfg['title'], g['title'], n, cfg['file']))
+                elif n in seen:
+                    self.s.error('%s: %r is listed twice' % (cfg['title'], n))
+                seen.add(n)
+            groups.append((g['title'], slugify(g['title']), [n for n in g['items'] if n in self.items]))
+        for n in self.order:
+            if n not in seen:
+                self.s.error('%s: public name %r of %s is in no group of the manifest' % (cfg['title'], n, cfg['file']))
+        self.groups = groups
+        base = 'pyapi'
+        for cd in (self.fcd, self.nscd):
+            if cd is not None:
+                self.s.symbols[cd.get('id')] = base + '/index.html'
+        over = Page(src='docs/user/python/_', kind='api', section=cfg['section'], title=cfg['title'],
+                    url='%s/index.html' % base, api=cfg)
+        pages.append(over)
+        for title, slug, names in groups:
+            p = Page(src='docs/user/python/_', kind='api', section=cfg['title'], title=title,
+                     url='%s/%s.html' % (base, slug), api=cfg)
+            p.names = names
+            pages.append(p)
+            for n in names:
+                it = self.items[n]
+                url = '%s/%s.html#' % (base, slug)
+                it['url'] = url + n
+                cd = self.cds.get('%s::%s' % (self.qual, n))
+                if cd is not None:
+                    self.s.symbols[cd.get('id')] = url + n
+                    members = [m['name'] for m in it['members']] + [v[0] for v in it['values']]
+                    for md in cd.iter('memberdef'):
+                        mn = md.findtext('name')
+                        self.s.symbols[md.get('id')] = url + n + ('.' + mn if mn in members else '')
+                elif self.nscd is not None:
+                    md = self.member(self.nscd, n)
+                    if md is not None:
+                        self.s.symbols[md.get('id')] = url + n
+        return pages
+
+    def desc_cd(self, it):
+        if it['kind'] == 'function':
+            return self.member(self.nscd, it['name']) if self.nscd is not None else None
+        return self.cds.get('%s::%s' % (self.qual, it['name']))
+
+    def kindword(self, it):
+        return {'function': 'function', 'enum': 'enum', 'dataclass': 'class', 'namedtuple': 'class',
+                'exception': 'exception', 'class': 'class'}[it['kind']]
+
+    def render(self, rd, page):
+        if page.url.endswith('index.html'):
+            self.render_overview(rd, page)
+            return
+        page.summary = 'Python API: %s.' % page.title
+        names = page.names
+        page.body = '<ul class="chips jump">%s</ul>' % ''.join(
+            '<li><a href="#%s"><code>%s</code></a></li>' % (esc(n), esc(n)) for n in names)
+        for n in names:
+            page.body += self.render_item(rd, self.items[n])
+            page.headings.append((3, n, n))
+            page.anchors.add(n)
+
+    def render_overview(self, rd, page):
+        fcd = self.fcd
+        b = fcd.find('briefdescription')
+        page.summary = plain(b).strip() if b is not None else 'Python API of mogbus.'
+        parts = []
+        pend = []
+
+        def flush():
+            if pend:
+                parts.append(rd.group(pend))
+                pend.clear()
+
+        def walk(el):
+            for c in el:
+                if c.tag == 'para':
+                    pend.extend(rd.items(c))
+                elif c.tag.startswith('sect'):
+                    t = c.find('title')
+                    if t is not None:
+                        flush()
+                        text = plain(t).strip()
+                        hid = slugify(text)
+                        parts.append('<h2 id="%s">%s</h2>' % (esc(hid), esc(text)))
+                        page.headings.append((2, hid, text))
+                    walk(c)
+                elif c.tag != 'title':
+                    pend.extend(rd.block(c))
+
+        walk(fcd.find('detaileddescription'))
+        flush()
+        for title, slug, names in self.groups:
+            parts.append('<h2 id="%s">%s</h2>' % (esc(slug), esc(title)))
+            page.headings.append((2, slug, title))
+            rows = []
+            for n in names:
+                it = self.items[n]
+                cd = self.desc_cd(it)
+                brief = ''
+                if cd is not None and cd.find('briefdescription') is not None:
+                    brief = plain(cd.find('briefdescription')).strip()
+                rows.append('<tr><td class="pname"><a href="%s"><code>%s</code></a></td><td>%s</td><td>%s</td></tr>' %
+                            (esc(self.s.cur_root + it['url']), esc(n), self.kindword(it), esc(brief)))
+            parts.append('<div class="table-wrap"><table><thead><tr><th>Name</th><th>Kind</th><th>Summary</th>'
+                         '</tr></thead><tbody>%s</tbody></table></div>' % ''.join(rows))
+        page.body = ''.join(parts)
+
+    def sigblock(self, text):
+        return ('<aside class="ex"><div class="code in-ex" data-lang="python"><span class="code-lang">Python</span>'
+                '<button class="copy" type="button" aria-label="Copy code">Copy</button>'
+                '<pre><code data-lang="python" data-nohl>%s</code></pre></div></aside>' % esc(text))
+
+    def section(self, ident, title, brief, sig, body, cls='api-item api-fn'):
+        return ('<section class="%s" id="%s"><h3>%s<a class="anchor" href="#%s" aria-label="Link to this item">#</a></h3>'
+                '%s%s%s</section>' % (cls, esc(ident), esc(title), esc(ident),
+                                      '<p class="lead">%s</p>' % brief if brief else '', sig, body))
+
+    def render_item(self, rd, it):
+        name = it['name']
+        cd = self.desc_cd(it)
+        if cd is None:
+            self.s.error('%s: Doxygen has no documentation for %s' % (self.cfg['file'], name))
+            return ''
+        if it['kind'] == 'function':
+            return self.render_fn(rd, name, it['node'], cd, 0, '')
+        brief, _, items, lists, rtxt = self.split(rd, cd, name)
+        node = it['node']
+        kind = it['kind']
+        extra = ''
+        if kind == 'enum':
+            sigtxt = 'class %s(%s)' % (name, ', '.join(it['bases']))
+            rows = []
+            for vn, vv in it['values']:
+                md = self.member(cd, vn)
+                vb = ''
+                if md is None or md.find('briefdescription') is None or not plain(md.find('briefdescription')).strip():
+                    self.s.error('%s.%s: no doc comment (a ## line above the member)' % (name, vn))
+                else:
+                    vb = rd.group(rd.items(md.find('briefdescription')[0]), tight=True)
+                rows.append('<tr><td class="pname"><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>' %
+                            (esc(vn), esc(vv), vb))
+            extra = ('<div class="table-wrap"><table><thead><tr><th>Member</th><th>Value</th><th>Meaning</th></tr>'
+                     '</thead><tbody>%s</tbody></table></div>' % ''.join(rows))
+        elif kind in ('dataclass', 'namedtuple'):
+            fields = it['fields']
+            args = []
+            for f in fields:
+                t = '%s: %s' % (f.target.id, ast.unparse(f.annotation))
+                if f.value is not None:
+                    t += ' = ' + ast.unparse(f.value)
+                args.append(t)
+            one = '%s(%s)' % (name, ', '.join(args))
+            sigtxt = one if len(one) <= 72 else '%s(\n    %s)' % (name, ',\n    '.join(args))
+            self.check_params(name, lists, [f.target.id for f in fields])
+            docs = {}
+            for pl in lists:
+                if pl.get('kind') == 'param':
+                    for pi in pl.findall('parameteritem'):
+                        docs[plain(pi.find('parameternamelist')).strip()] = \
+                            rd.group(rd.items(pi.find('parameterdescription')), tight=True)
+            rows = []
+            for f in fields:
+                d = '' if f.value is None else ast.unparse(f.value)
+                rows.append('<tr><td class="pname"><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>' %
+                            (esc(f.target.id), esc(ast.unparse(f.annotation)), '<code>%s</code>' % esc(d) if d else '',
+                             docs.get(f.target.id, '')))
+            extra = ('<div class="params"><h4>Fields</h4><div class="table-wrap"><table><thead><tr><th>Field</th>'
+                     '<th>Type</th><th>Default</th><th>Meaning</th></tr></thead><tbody>%s</tbody></table></div></div>' %
+                     ''.join(rows))
+            lists = []
+        else:
+            sigtxt = 'class %s(%s)' % (name, ', '.join(it['bases'])) if it['bases'] else 'class %s' % name
+            init = next((s for s in node.body if isinstance(s, ast.FunctionDef) and s.name == '__init__'), None)
+            if init is not None:
+                have = [plain(n).strip() for pl in lists if pl.get('kind') == 'param' for n in pl.iter('parametername')]
+                wanted = self.param_names(init, 1)
+                if have or not wanted:
+                    self.check_params(name, lists, wanted)
+                    sigtxt += '\n' + self.sig(name, init, 1)
+        body = rd.group(items) + (self.tables(rd, lists) if lists else '') + extra
+        # members: a summary table here, a section per member after it
+        mrows = []
+        msecs = []
+        for m in it['members']:
+            mname = m['name']
+            md = self.member(cd, mname)
+            qn = '%s.%s' % (name, mname)
+            if md is None:
+                self.s.error('%s: Doxygen has no documentation for %s' % (self.cfg['file'], qn))
+                continue
+            if m['kind'] == 'attribute':
+                ab = plain(md.find('briefdescription')).strip() if md.find('briefdescription') is not None else ''
+                if not ab:
+                    self.s.error('%s: no doc comment (a ## line above the attribute)' % qn)
+                val = ast.unparse(m['node'].value)
+                mrows.append(('attribute', qn, mname, ab))
+                msecs.append(self.section(qn, qn, esc(ab), self.sigblock('%s.%s = %s' % (name, mname, val)), ''))
+                continue
+            fsec = self.render_fn(rd, qn, m['node'], md, 1, m['kind'])
+            _, pb, _, _, _ = self.split(rd, md, qn, need_brief=False)
+            mrows.append((m['kind'], qn, mname, pb))
+            msecs.append(fsec)
+        if mrows:
+            trs = ''.join('<tr><td class="pname"><a href="#%s"><code>%s</code></a></td><td>%s</td><td>%s</td></tr>' %
+                          (esc(qn), esc(mn), k, esc(b)) for k, qn, mn, b in mrows)
+            body += ('<div class="params"><h4>Members</h4><div class="table-wrap"><table><thead><tr><th>Name</th>'
+                     '<th>Kind</th><th>Summary</th></tr></thead><tbody>%s</tbody></table></div></div>' % trs)
+        title = '%s %s' % ({'enum': 'enum', 'exception': 'exception'}.get(kind, 'class'), name)
+        return self.section(name, title, brief, self.sigblock(sigtxt), body, 'api-item') + ''.join(msecs)
+
+    def render_fn(self, rd, qname, node, md, skip, mkind):
+        brief, _, items, lists, rtxt = self.split(rd, md, qname)
+        self.check_params(qname, lists, self.param_names(node, skip))
+        deco = ''
+        if mkind == 'property':
+            deco = '@property\n'
+        elif mkind == 'classmethod':
+            deco = '@classmethod\n'
+        elif 'contextmanager' in self.decorators(node):
+            deco = '# context manager: use it in a with statement\n'
+        if mkind == 'property':
+            sigtxt = deco + qname + (' -> ' + ast.unparse(node.returns) if node.returns is not None else '')
+        else:
+            sigtxt = self.sig(qname, node, skip, deco)
+        body = rd.group(items) + self.tables(rd, lists)
+        if rtxt:
+            body += '<div class="returns"><h4>Returns</h4>%s</div>' % rtxt
+        return self.section(qname, qname, brief, self.sigblock(sigtxt), body)
+
+
 # ---- layout ----------------------------------------------------------------------------------------
 
 def nav_html(site, cur):
     root = site.cur_root
     out = []
-    api_pages = [p for p in site.pages if p.kind == 'api']
     for stitle, nodes in site.nav:
         if stitle:
             out.append('<div class="nav-section">%s</div>' % esc(stitle))
         out.append('<ul>')
         for n in nodes:
             if 'api' in n:
+                api_pages = [p for p in site.pages if p.kind == 'api' and p.api['idx'] == n['api']]
                 parent = api_pages[0] if api_pages else None
                 if parent is None:
                     continue
                 kids = api_pages[1:]
-                open_ = ' open' if cur.kind == 'api' else ''
+                open_ = ' open' if cur.kind == 'api' and cur.api['idx'] == n['api'] else ''
                 out.append('<li><details%s><summary><a href="%s"%s>%s</a></summary><ul>' %
-                           (open_, esc(root + parent.url), cur_attr(cur, parent), esc(site.api['title'])))
+                           (open_, esc(root + parent.url), cur_attr(cur, parent), esc(site.apis[n['api']]['title'])))
                 for k in kids:
                     out.append('<li><a href="%s"%s>%s</a></li>' % (esc(root + k.url), cur_attr(cur, k), esc(k.title)))
                 out.append('</ul></details></li>')
@@ -1283,7 +1694,7 @@ def flat_order(site):
     for _, nodes in site.nav:
         for n in nodes:
             if 'api' in n:
-                out.extend(p for p in site.pages if p.kind == 'api')
+                out.extend(p for p in site.pages if p.kind == 'api' and p.api['idx'] == n['api'])
             else:
                 out.append(n['page'])
                 out.extend(n.get('children') or [])

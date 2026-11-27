@@ -28,3 +28,13 @@ def meter():
                       http_port=http_port, http_control=True) as srv:
         srv.http_port = http_port
         yield srv
+
+
+@pytest.fixture
+def station():
+    """The pump station of pump_station.py: served on free ports, closed after the test."""
+    import pump_station
+    mogbus.set_log_level("off")
+    with pump_station.running_station() as st:
+        yield st
+    mogbus.set_log_level("info")

@@ -40,7 +40,8 @@ unknown reference section or a reference entry out of order fail the build.
   overrides the title.
 - `{"index": path, "entries": [...]}` (or `"groups": [{"title", "entries"}]`) declares a reference
   index and its entry pages. The entries become children of the index in the navigation.
-- `{"api": "include/mogbus.h"}` generates the C API pages (see below).
+- `{"api": "include/mogbus.h"}` generates the C API pages and `{"pyapi": "python/mogbus/core.py",
+  "groups": [{"title", "items": [names]}]}` the Python API pages (see below).
 - Every page Doxygen sees (`INPUT` in the `Doxyfile`) must be listed, otherwise the build fails
   naming the file. A new page therefore needs a manifest line.
 - URLs follow the path: `docs/user/x.md` becomes `user/x.html`, `README.md` is `index.html`, other
@@ -125,6 +126,27 @@ in parentheses after the name is dropped from the title). Each function is a blo
 anchor equal to its name: signature in the right column, brief, details, parameter table and return
 value from `@param` and `@return`. Macros are one table per group; enums, structs and opaque typedefs
 get their own blocks. A new group needs only a new marker comment.
+
+## Python API pages
+
+`python/mogbus/core.py` is rendered as `pyapi/index.html` (the module docstring, which is a Doxygen
+`@file` comment, and a table per group) and one page per `groups` entry of the manifest. Doxygen reads
+the docstrings (`PYTHON_DOCSTRING = NO`, so `@brief`, `@param`, `@return`, `@throws` and Markdown
+work; `_lib.py` and `__init__.py` are excluded and `_private` names are skipped). Names, signatures,
+dataclass fields and enum values come from the source through `ast`, because Doxygen parses type
+annotations badly; descriptions come from Doxygen's XML. Rules, each a build error when broken:
+
+- every public class, function and method has a `@brief`; every parameter of the signature has a
+  `@param` and nothing else is documented; enum members and class attributes have a `##` comment
+  line above them;
+- dataclass and `NamedTuple` fields are documented with `@param` in the class docstring (Doxygen
+  does not see fields without a default);
+- every public name is listed in exactly one manifest group.
+
+A class page block lists its members in a table and each member follows as its own block with the
+anchor `Class.member`. Markdown pages link to Python symbols with `\ref mogbus::core::Device::add_point
+"Device.add_point()"` and to the overview with `\ref core.py "Python API"`; relative `.md` links
+inside a docstring are relative to the `.py` file.
 
 ## Search and theme
 

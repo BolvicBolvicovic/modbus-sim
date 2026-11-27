@@ -126,9 +126,10 @@
         "docs/user/library/library-hooks.md",
         "docs/user/library/library-lifetimes.md",
         "docs/user/python/python-start.md",
-        "docs/user/python/python-api.md",
-        "docs/user/python/python-threading.md",
-        "docs/user/python/python-testing.md"
+        "docs/user/python/python-process.md",
+        "docs/user/python/python-observe.md",
+        "docs/user/python/python-testing.md",
+        "docs/user/python/python-threading.md"
       ]
     },
     {
@@ -447,6 +448,16 @@
         {
           "api": "include/mogbus.h",
           "title": "C API"
+        },
+        {
+          "pyapi": "python/mogbus/core.py",
+          "title": "Python API",
+          "groups": [
+            {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
+            {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing"]},
+            {"title": "Logging and errors", "items": ["set_log_level", "set_log_format", "set_log_sink", "library_version", "MogbusError", "Status"]},
+            {"title": "Enumerations", "items": ["Space", "ValueType", "WordOrder", "ByteOrder", "RampMode", "ClockField", "AccessKind", "AccessTarget", "Mode", "Parity", "TlsVersion", "FaultKind", "LogLevel", "LogFormat"]}
+          ]
         }
       ]
     },
