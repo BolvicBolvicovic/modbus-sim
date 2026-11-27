@@ -531,9 +531,119 @@ access_trampoline(void* user, device_t* dev, const device_access_t* in)
 		.count         = in->count,
 		.values        = in->values,
 		.function_code = in->function_code,
+		.target        = (mogbus_access_target_t)in->target,
+		.file          = in->file_no,
+		.node          = in->node_id,
+		.subindex      = in->subindex,
+		.index         = in->index,
+		.data          = in->data,
+		.data_len      = in->data_len,
 	};
 
 	return hook->fn(hook->user, (mogbus_device_t*)dev, &access);
+}
+
+bool
+mogbus_device_add_file_record(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
+			      const uint16_t* values, char* err, size_t err_size)
+{
+	const char*	error = NULL;
+
+	if (!handle ||
+	    !values)
+	{
+		set_err(err, err_size, "device and values are required");
+		return false;
+	}
+	error = device_add_file_record((device_t*)handle, file, record, count, values);
+	if (error)
+		set_err(err, err_size, "%s", error);
+	return !error;
+}
+
+bool
+mogbus_device_read_file_records(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
+				uint16_t* out)
+{
+	if (!handle ||
+	    !out)
+		return false;
+	return device_read_file_records((device_t*)handle, file, record, count, out);
+}
+
+bool
+mogbus_device_write_file_records(mogbus_device_t* handle, uint16_t file, uint16_t record, uint16_t count,
+				 const uint16_t* values)
+{
+	if (!handle ||
+	    !values)
+		return false;
+	return device_write_file_records((device_t*)handle, file, record, count, values);
+}
+
+bool
+mogbus_device_add_fifo(mogbus_device_t* handle, uint16_t address, uint16_t count, const uint16_t* values,
+		       char* err, size_t err_size)
+{
+	const char*	error = NULL;
+
+	if (!handle ||
+	    (count > 0 && !values))
+	{
+		set_err(err, err_size, "device and values are required");
+		return false;
+	}
+	error = device_add_fifo((device_t*)handle, address, count, values);
+	if (error)
+		set_err(err, err_size, "%s", error);
+	return !error;
+}
+
+bool
+mogbus_device_set_fifo(mogbus_device_t* handle, uint16_t address, uint16_t count, const uint16_t* values)
+{
+	if (!handle ||
+	    (count > 0 && !values))
+		return false;
+	return device_set_fifo((device_t*)handle, address, count, values);
+}
+
+bool
+mogbus_device_add_canopen_object(mogbus_device_t* handle, uint8_t node, uint16_t index, uint8_t subindex,
+				 uint16_t length, const uint8_t* data, char* err, size_t err_size)
+{
+	const char*	error = NULL;
+
+	if (!handle ||
+	    !data)
+	{
+		set_err(err, err_size, "device and data are required");
+		return false;
+	}
+	error = device_add_canopen_object((device_t*)handle, node, index, subindex, length, data);
+	if (error)
+		set_err(err, err_size, "%s", error);
+	return !error;
+}
+
+bool
+mogbus_device_read_canopen(mogbus_device_t* handle, uint8_t node, uint16_t index, uint8_t subindex,
+			   uint16_t offset, uint16_t count, uint8_t* out)
+{
+	if (!handle ||
+	    !out)
+		return false;
+	return device_canopen_read((device_t*)handle, node, index, subindex, offset, count, out);
+}
+
+bool
+mogbus_device_write_canopen(mogbus_device_t* handle, uint8_t node, uint16_t index, uint8_t subindex,
+			    uint16_t offset, uint16_t count, const uint8_t* data)
+{
+	if (!handle ||
+	    !data)
+		return false;
+	return device_canopen_write((device_t*)handle, node, index, subindex, offset, count, data);
 }
 
 bool
@@ -569,7 +679,7 @@ mogbus_device_set_access_hook(mogbus_device_t* handle, mogbus_access_fn fn, void
 		return true;
 	}
 	/* The holder is allocated once per device and reused by later calls. */
-	hook = dev->access_fn == access_trampoline ? dev->access_user : ARENA_PUSH_ARRAY(dev->arena, struct access_hook_t, 1);
+	hook = dev->access_fn == access_trampoline ? dev->access_user : ARENA_PUSH_ARRAY_ALIGNED(dev->arena, struct access_hook_t, 1, _Alignof(struct access_hook_t));
 	if (!hook)
 		return false;
 	hook->fn         = fn;

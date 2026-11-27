@@ -26,6 +26,7 @@ typedef struct device_canopen_object_t device_canopen_object_t;
 typedef enum custom_action_t custom_action_t;
 typedef struct device_custom_fc_t device_custom_fc_t;
 typedef struct device_access_t device_access_t;
+typedef enum access_target_t access_target_t;
 typedef struct device_t device_t;
 
 #define DEVICE_NAME_MAX		64
@@ -232,15 +233,31 @@ struct device_custom_fc_t
 /** @brief One simulated Modbus device (one unit id). */
 struct machine_system_t; /* defined in device/machine.h */
 
+/** @brief What a device_access_t touches. */
+enum access_target_t
+{
+	ACCESS_TABLE,		/**< a range of one of the four tables */
+	ACCESS_FILE_RECORD,	/**< one FC 14/15 sub-request */
+	ACCESS_FIFO,		/**< an FC 18 queue read */
+	ACCESS_CANOPEN,		/**< an FC 2B/0D object transfer */
+};
+
 /** @brief One Modbus client access handed to a device's access hook. */
 struct device_access_t
 {
 	bool		write;		/**< a write (values set) rather than a read */
-	space_kind_t	space;
-	u32		address;
-	u32		count;		/**< registers or bits */
+	space_kind_t	space;		/**< ACCESS_TABLE only */
+	u32		address;	/**< first address; record number; FIFO address; CANopen start offset */
+	u32		count;		/**< registers, bits, records or CANopen bytes; 0 for FIFO */
 	const u16*	values;		/**< writes: the values about to be stored; reads: NULL */
 	u8		function_code;
+	access_target_t	target;
+	u16		file_no;	/**< ACCESS_FILE_RECORD */
+	u8		node_id;	/**< ACCESS_CANOPEN */
+	u16		index;		/**< ACCESS_CANOPEN */
+	u8		subindex;	/**< ACCESS_CANOPEN */
+	const u8*	data;		/**< ACCESS_CANOPEN writes: the bytes about to be stored; reads: NULL */
+	u32		data_len;	/**< bytes in `data` */
 };
 
 /** @brief One simulated device: its tables, points, faults, machines and counters. */
@@ -466,6 +483,13 @@ const char*	device_add_fifo(device_t* dev, u16 address, u16 count, const u16* va
  * the FIFO is not defined.
  */
 bool		device_read_fifo(const device_t* dev, u16 address, u16* count, u16* out);
+
+/**
+ * @brief Replaces the contents of the FIFO queue at `address` with `count` values.
+ *
+ * Fails if the FIFO is not defined or `count` is above DEVICE_MAX_FIFO_VALUES.
+ */
+bool		device_set_fifo(device_t* dev, u16 address, u16 count, const u16* values);
 
 /**
  * @brief Adds a CANopen object.

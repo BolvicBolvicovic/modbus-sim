@@ -125,6 +125,7 @@ class LayoutTest(unittest.TestCase):
         expected.update(mine("P", _lib.PointC, [("ramp", _lib._Ramp)]))
         expected.update(mine("I", _lib.DeviceInfoC, [("faults[0]", _lib._FaultInfo),
                                                      ("custom_fcs[0]", _lib._CustomFc)]))
+        expected.update(mine("A", _lib.AccessC, []))
         for key in ("faults_count", "space_count"):
             self.assertIn(key, c)
         self.assertEqual(c.pop("faults_count"), (7,))
@@ -141,7 +142,8 @@ class LayoutTest(unittest.TestCase):
                   "I": {"faults": _lib._FaultInfo, "custom_fcs": _lib._CustomFc}}
         for key, tag, cls in (("O", "mogbus_server_options_t", _lib.ServerOptionsC),
                               ("P", "mogbus_point_t", _lib.PointC),
-                              ("I", "mogbus_device_info_t", _lib.DeviceInfoC)):
+                              ("I", "mogbus_device_info_t", _lib.DeviceInfoC),
+                              ("A", "mogbus_access_t", _lib.AccessC)):
             want = header_fields(text, tag)
             have = set()
             for name, _ in cls._fields_:
@@ -677,6 +679,153 @@ class AccessHookTest(unittest.TestCase):
                         self.assertEqual(mbap_read(sock, 1, 0), ("exception", 4))
                         self.assertEqual(self.raw_write(sock, 1, 0, 9), ("exception", 4))
                     self.assertEqual(dev.read("holding", 0), [1])
+
+
+def mbap_pdu(sock, unit, pdu):
+    """Sends one PDU over MBAP and returns the response PDU."""
+    sock.sendall(struct.pack(">HHHB", 1, 0, len(pdu) + 1, unit) + pdu)
+    reply = b""
+    while len(reply) < 8:
+        chunk = sock.recv(512)
+        if not chunk:
+            raise EOFError("connection closed")
+        reply += chunk
+    length = struct.unpack(">H", reply[4:6])[0]
+    while len(reply) < 6 + length:
+        reply += sock.recv(512)
+    return reply[7:6 + length]
+
+
+class AccessTargetsTest(unittest.TestCase):
+    """The host API and the access hook for file records, FIFO queues and CANopen objects."""
+
+    def device(self, ctx):
+        dev = ctx.add_device(1)
+        dev.add_file_record(1, 0, [10, 20, 30])
+        dev.add_file_record(2, 5, [40])
+        dev.add_fifo(0x100, [1, 2, 3])
+        dev.add_canopen_object(5, 0x6041, 0, b"\x01\x02\x03\x04")
+        return dev
+
+    def test_host_functions(self):
+        with mogbus.Context() as ctx:
+            dev = self.device(ctx)
+            self.assertEqual(dev.read_file_records(1, 1, 2), [20, 30])
+            dev.write_file_records(1, 0, [7, 8])
+            dev.write_file_records(2, 5, 9)
+            self.assertEqual(dev.read_file_records(1, 0, 3), [7, 8, 30])
+            self.assertEqual(dev.read_file_records(2, 5), [9])
+            with self.assertRaises(MogbusError):
+                dev.write_file_records(1, 2, [1, 2])  # record 3 is undefined
+            self.assertEqual(dev.read_file_records(1, 2), [30])
+            with self.assertRaises(MogbusError):
+                dev.add_file_record(1, 2, [5])  # overlaps
+            dev.set_fifo(0x100, [5, 6])
+            dev.set_fifo(0x100)
+            with self.assertRaises(MogbusError):
+                dev.set_fifo(0x101, [1])
+            with self.assertRaises(MogbusError):
+                dev.set_fifo(0x100, range(32))
+            with self.assertRaises(MogbusError):
+                dev.add_fifo(0x100)
+            dev.write_canopen(5, 0x6041, 0, b"\xAA\xBB", offset=1)
+            self.assertEqual(dev.read_canopen(5, 0x6041, 0, 4), b"\x01\xAA\xBB\x04")
+            with self.assertRaises(MogbusError):
+                dev.write_canopen(5, 0x6041, 0, b"\x00\x00", offset=3)
+            with self.assertRaises(MogbusError):
+                dev.read_canopen(5, 0x6041, 1, 1)
+            with self.assertRaises(MogbusError):
+                dev.add_canopen_object(5, 0x6041, 0, b"\x00")
+
+    def serve_and_run(self, ctx, fn):
+        port = free_port()
+        with ctx.serve(port=port).start():
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                fn(sock)
+
+    def test_file_record_hook(self):
+        seen = []
+        with mogbus.Context() as ctx:
+            dev = self.device(ctx)
+
+            def hook(access):
+                seen.append(access)
+                if access.target != mogbus.AccessTarget.FILE_RECORD:
+                    return None
+                if access.kind == mogbus.AccessKind.READ:
+                    dev.write_file_records(access.file, access.address, 99)  # refresh
+                elif access.address == 1:
+                    return 6  # veto the second sub-request
+
+            dev.set_access_hook(hook)
+
+            def run(sock):
+                read = bytes([0x14, 14, 6, 0, 1, 0, 1, 0, 1, 6, 0, 2, 0, 5, 0, 1])
+                self.assertEqual(mbap_pdu(sock, 1, read),
+                                 bytes([0x14, 8, 3, 6, 0, 99, 3, 6, 0, 99]))
+                self.assertEqual([(a.kind, a.file, a.address, a.count, a.values) for a in seen],
+                                 [(mogbus.AccessKind.READ, 1, 1, 1, None),
+                                  (mogbus.AccessKind.READ, 2, 5, 1, None)])
+                seen.clear()
+                write = bytes([0x15, 18, 6, 0, 1, 0, 0, 0, 1, 0, 77, 6, 0, 1, 0, 1, 0, 1, 0, 88])
+                self.assertEqual(mbap_pdu(sock, 1, write), bytes([0x95, 6]))
+                self.assertEqual([(a.address, a.values) for a in seen], [(0, [77]), (1, [88])])
+                self.assertEqual(dev.read_file_records(1, 0), [10])  # nothing written
+            self.serve_and_run(ctx, run)
+
+    def test_fifo_hook(self):
+        with mogbus.Context() as ctx:
+            dev = self.device(ctx)
+            seen = []
+
+            def hook(access):
+                seen.append(access)
+                if access.target == mogbus.AccessTarget.FIFO:
+                    dev.set_fifo(access.address, [7, 8])
+
+            dev.set_access_hook(hook)
+
+            def run(sock):
+                self.assertEqual(mbap_pdu(sock, 1, bytes([0x18, 1, 0])),
+                                 bytes([0x18, 0, 6, 0, 2, 0, 7, 0, 8]))
+                self.assertEqual((seen[0].target, seen[0].address, seen[0].function_code),
+                                 (mogbus.AccessTarget.FIFO, 0x100, 0x18))
+            self.serve_and_run(ctx, run)
+
+    def test_canopen_hook(self):
+        with mogbus.Context() as ctx:
+            dev = self.device(ctx)
+            seen = []
+            veto = {"on": False}
+
+            def hook(access):
+                seen.append(access)
+                if access.target != mogbus.AccessTarget.CANOPEN:
+                    return None
+                if access.kind == mogbus.AccessKind.READ:
+                    dev.write_canopen(access.node, access.index, access.subindex, b"\xAB")
+                elif veto["on"]:
+                    return 2
+
+            dev.set_access_hook(hook)
+
+            def run(sock):
+                read = bytes([0x2B, 0x0D, 0, 0, 5, 0x60, 0x41, 0, 0, 0, 0, 2])
+                self.assertEqual(mbap_pdu(sock, 1, read), read + b"\xAB\x02")
+                a = seen[0]
+                self.assertEqual((a.target, a.kind, a.node, a.index, a.subindex, a.address, a.count, a.data),
+                                 (mogbus.AccessTarget.CANOPEN, mogbus.AccessKind.READ, 5, 0x6041, 0, 0, 2, None))
+                write = bytes([0x2B, 0x0D, 1, 0, 5, 0x60, 0x41, 0, 0, 2, 0, 2, 0x11, 0x22])
+                veto["on"] = True
+                self.assertEqual(mbap_pdu(sock, 1, write),
+                                 bytes([0xAB, 0xFF, 0x00, 0x06, 0x0D, 0xCE, 0x20, 0x00, 0x00, 0x08]))
+                self.assertEqual((seen[-1].kind, seen[-1].address, seen[-1].data),
+                                 (mogbus.AccessKind.WRITE, 2, b"\x11\x22"))
+                self.assertEqual(dev.read_canopen(5, 0x6041, 0, 4), b"\xAB\x02\x03\x04")
+                veto["on"] = False
+                self.assertEqual(mbap_pdu(sock, 1, write)[:2], bytes([0x2B, 0x0D]))
+                self.assertEqual(dev.read_canopen(5, 0x6041, 0, 4), b"\xAB\x02\x11\x22")
+            self.serve_and_run(ctx, run)
 
 
 class LockTest(unittest.TestCase):

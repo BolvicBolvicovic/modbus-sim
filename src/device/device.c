@@ -824,20 +824,32 @@ device_add_fifo(device_t* dev, u16 address, u16 count, const u16* values)
 	if (dev->fifo_count >= DEVICE_MAX_FIFOS)
 		return "too many FIFO queues on one device";
 
-	if (count > 0)
-	{
-		copy = ARENA_PUSH_ARRAY(dev->arena, u16, count);
-		if (!copy)
-			return "out of memory while storing FIFO queue values";
-		for (u32 i = 0; i < count; i++)
-			copy[i] = values[i];
-	}
+	/* Full capacity, so device_set_fifo() never needs the arena. */
+	copy = ARENA_PUSH_ARRAY(dev->arena, u16, DEVICE_MAX_FIFO_VALUES);
+	if (!copy)
+		return "out of memory while storing FIFO queue values";
+	for (u32 i = 0; i < count; i++)
+		copy[i] = values[i];
 
 	fifo = &dev->fifos[dev->fifo_count++];
 	fifo->address = address;
 	fifo->count   = count;
 	fifo->values  = copy;
 	return NULL;
+}
+
+bool
+device_set_fifo(device_t* dev, u16 address, u16 count, const u16* values)
+{
+	device_fifo_t*	fifo = find_fifo(dev, address);
+
+	if (!fifo ||
+	    count > DEVICE_MAX_FIFO_VALUES)
+		return false;
+	for (u32 i = 0; i < count; i++)
+		fifo->values[i] = values[i];
+	fifo->count = count;
+	return true;
 }
 
 bool

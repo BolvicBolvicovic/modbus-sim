@@ -52,6 +52,7 @@ typedef struct mogbus_point_t mogbus_point_t;
 typedef enum mogbus_fault_kind_t mogbus_fault_kind_t;
 typedef struct mogbus_device_info_t mogbus_device_info_t;
 typedef enum mogbus_access_kind_t mogbus_access_kind_t;
+typedef enum mogbus_access_target_t mogbus_access_target_t;
 typedef struct mogbus_access_t mogbus_access_t;
 typedef enum mogbus_mode_t mogbus_mode_t;
 typedef enum mogbus_parity_t mogbus_parity_t;
@@ -462,15 +463,36 @@ enum mogbus_access_kind_t
 	MOGBUS_ACCESS_WRITE,	/**< a client is about to write a range */
 };
 
-/** @brief A Modbus client access to a device's tables, as seen by an access hook. */
+/** @brief What a Modbus client access touches. */
+enum mogbus_access_target_t
+{
+	MOGBUS_TARGET_TABLE,		/**< a range of one of the four tables (the original behaviour) */
+	MOGBUS_TARGET_FILE_RECORD,	/**< one sub-request of FC 14 (read) or 15 (write) */
+	MOGBUS_TARGET_FIFO,		/**< an FC 18 FIFO queue read */
+	MOGBUS_TARGET_CANOPEN,		/**< an FC 2B/0D CANopen object read or write */
+};
+
+/**
+ * @brief A Modbus client access, as seen by an access hook.
+ *
+ * `target` says which fields are meaningful. The fields from `target` on are only set for the
+ * non-table targets (zero for tables); they are appended so older code that ignores them still works.
+ */
 struct mogbus_access_t
 {
 	mogbus_access_kind_t kind;	/**< read or write */
-	mogbus_space_t	space;		/**< table touched */
-	uint32_t	address;	/**< first address */
-	uint32_t	count;		/**< number of registers or bits */
-	const uint16_t*	values;		/**< writes: the raw registers (bits as 0/1) about to be stored; reads: NULL */
-	uint8_t		function_code;	/**< function code of the request (0x03, 0x10, 0x17, ...) */
+	mogbus_space_t	space;		/**< TABLE: table touched */
+	uint32_t	address;	/**< TABLE: first address; FILE_RECORD: first record; FIFO: pointer address; CANOPEN: first byte offset in the object */
+	uint32_t	count;		/**< TABLE: registers or bits; FILE_RECORD: records; FIFO: 0; CANOPEN: bytes */
+	const uint16_t*	values;		/**< TABLE and FILE_RECORD writes: the raw registers (bits as 0/1) about to be stored; reads: NULL */
+	uint8_t		function_code;	/**< function code of the request (0x03, 0x10, 0x14, 0x2B, ...) */
+	mogbus_access_target_t target;	/**< what is touched; MOGBUS_TARGET_TABLE (0) for the four tables */
+	uint16_t	file;		/**< FILE_RECORD: file number */
+	uint8_t		node;		/**< CANOPEN: node id */
+	uint8_t		subindex;	/**< CANOPEN: object subindex */
+	uint16_t	index;		/**< CANOPEN: object index */
+	const uint8_t*	data;		/**< CANOPEN writes: the bytes about to be stored; reads: NULL */
+	uint32_t	data_len;	/**< CANOPEN writes: bytes in `data` (equal to `count`); reads: 0 */
 };
 
 /**
@@ -494,8 +516,11 @@ typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogb
  * defined and writable (writes), never host calls (mogbus_device_write(), mogbus_device_set_value(),
  * the HTTP control API or machines). Covered (hex codes): FC 01-04 (before the table is read), 05, 06, 0F, 10,
  * 16 (the masked result) and 17 (write hook first, then the read hook once the write is applied),
- * and the `registers` action of user-defined function codes. Not covered: file records (FC 14, 15),
- * FIFO (FC 18), CANopen, diagnostics and identification. A device has one hook; a new one replaces it.
+ * the `registers` action of user-defined function codes, file records (FC 14 read hook once per
+ * sub-request before the response is built; FC 15 write hook for every sub-request before anything is
+ * written), FIFO (FC 18, before the queue is read) and CANopen objects (FC 2B/0D, before the object is read
+ * or written; a veto is answered as the extended failure `CE 0x08000020`). Not covered: diagnostics and
+ * identification. A device has one hook; a new one replaces it.
  *
  * @param dev Device.
  * @param fn Hook, or NULL to remove it.
@@ -503,6 +528,126 @@ typedef uint8_t (*mogbus_access_fn)(void* user, mogbus_device_t* dev, const mogb
  * @return false if @p dev is NULL or out of memory.
  */
 MOGBUS_API bool		mogbus_device_set_access_hook(mogbus_device_t* dev, mogbus_access_fn fn, void* user);
+
+/**
+ * @brief Adds file records to a device, as `(file N (record R (values ...)))` does in a config.
+ *
+ * Clients read them with FC 14 and write them with FC 15. Records of one file must not overlap.
+ *
+ * @param dev Device.
+ * @param file File number, 1-65535.
+ * @param record First record number; @p record + @p count - 1 must be at most 9999.
+ * @param count Number of records, 1-126.
+ * @param values @p count initial register values; copied.
+ * @param err Buffer for an error message; may be NULL.
+ * @param err_size Size of @p err; 0 discards the message.
+ * @return false for a NULL argument or an invalid range, an overlap, too many files (16) or records
+ *         per file (64), or out of memory.
+ */
+MOGBUS_API bool		mogbus_device_add_file_record(mogbus_device_t* dev, uint16_t file, uint16_t record,
+						      uint16_t count, const uint16_t* values,
+						      char* err, size_t err_size);
+
+/**
+ * @brief Reads @p count consecutive file records starting at @p record (host side, no hook).
+ * @param dev Device.
+ * @param file File number.
+ * @param record First record number.
+ * @param count Number of records.
+ * @param out Receives @p count values.
+ * @return false if the file or any record is not defined, @p count is 0 or @p out is NULL.
+ */
+MOGBUS_API bool		mogbus_device_read_file_records(mogbus_device_t* dev, uint16_t file, uint16_t record,
+							uint16_t count, uint16_t* out);
+
+/**
+ * @brief Writes @p count consecutive file records starting at @p record (host side, no hook).
+ * @param dev Device.
+ * @param file File number.
+ * @param record First record number.
+ * @param count Number of records.
+ * @param values @p count values to store.
+ * @return false if the file or any record is not defined, @p count is 0 or @p values is NULL;
+ *         nothing is written then.
+ */
+MOGBUS_API bool		mogbus_device_write_file_records(mogbus_device_t* dev, uint16_t file, uint16_t record,
+							 uint16_t count, const uint16_t* values);
+
+/**
+ * @brief Adds a FIFO queue that clients read with FC 18 at @p address.
+ * @param dev Device.
+ * @param address FIFO pointer address.
+ * @param count Initial number of values, 0-31.
+ * @param values @p count values; copied; may be NULL when @p count is 0.
+ * @param err Buffer for an error message; may be NULL.
+ * @param err_size Size of @p err; 0 discards the message.
+ * @return false for a duplicate address, too many values or queues (16), or out of memory.
+ */
+MOGBUS_API bool		mogbus_device_add_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
+					       const uint16_t* values, char* err, size_t err_size);
+
+/**
+ * @brief Replaces the contents of the FIFO queue at @p address (host side, no hook).
+ *
+ * Typically called from an access hook to refresh the queue just before a client reads it.
+ *
+ * @param dev Device.
+ * @param address FIFO pointer address of an existing queue.
+ * @param count New number of values, 0-31.
+ * @param values @p count values; copied; may be NULL when @p count is 0.
+ * @return false if no queue is defined at @p address or @p count is above 31.
+ */
+MOGBUS_API bool		mogbus_device_set_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
+					       const uint16_t* values);
+
+/**
+ * @brief Adds a CANopen object served by FC 2B/0D, as `(canopen-object ...)` does in a config.
+ * @param dev Device.
+ * @param node Node id, 1-127.
+ * @param index Object index.
+ * @param subindex Object subindex.
+ * @param length Object size in bytes, 1-238; fixed for the object's lifetime.
+ * @param data @p length initial bytes; copied.
+ * @param err Buffer for an error message; may be NULL.
+ * @param err_size Size of @p err; 0 discards the message.
+ * @return false for an invalid node or length, a duplicate (node, index, subindex), too many
+ *         objects (64) or a NULL argument.
+ */
+MOGBUS_API bool		mogbus_device_add_canopen_object(mogbus_device_t* dev, uint8_t node, uint16_t index,
+							 uint8_t subindex, uint16_t length, const uint8_t* data,
+							 char* err, size_t err_size);
+
+/**
+ * @brief Reads @p count bytes at @p offset of a CANopen object (host side, no hook).
+ * @param dev Device.
+ * @param node Node id.
+ * @param index Object index.
+ * @param subindex Object subindex.
+ * @param offset First byte.
+ * @param count Number of bytes.
+ * @param out Receives @p count bytes.
+ * @return false if the object does not exist or the range is outside its length.
+ */
+MOGBUS_API bool		mogbus_device_read_canopen(mogbus_device_t* dev, uint8_t node, uint16_t index,
+						   uint8_t subindex, uint16_t offset, uint16_t count, uint8_t* out);
+
+/**
+ * @brief Writes @p count bytes at @p offset of a CANopen object (host side, no hook).
+ *
+ * The object keeps its length, as for a client write.
+ *
+ * @param dev Device.
+ * @param node Node id.
+ * @param index Object index.
+ * @param subindex Object subindex.
+ * @param offset First byte.
+ * @param count Number of bytes.
+ * @param data @p count bytes to store.
+ * @return false if the object does not exist or the range is outside its length.
+ */
+MOGBUS_API bool		mogbus_device_write_canopen(mogbus_device_t* dev, uint8_t node, uint16_t index,
+						    uint8_t subindex, uint16_t offset, uint16_t count,
+						    const uint8_t* data);
 
 /* ---- Server ---- */
 

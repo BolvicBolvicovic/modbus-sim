@@ -31,7 +31,7 @@ modbus_exception(u8* resp, u8 function, u8 code)
 static u8
 access_read(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count)
 {
-	device_access_t	access = { false, space, address, count, NULL, fc };
+	device_access_t	access = { .space = space, .address = address, .count = count, .function_code = fc };
 
 	return dev->access_fn ? dev->access_fn(dev->access_user, dev, &access) : 0;
 }
@@ -45,7 +45,7 @@ access_read(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count)
 static u8
 access_write(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count, const u16* values)
 {
-	device_access_t	access = { true, space, address, count, values, fc };
+	device_access_t	access = { .write = true, .space = space, .address = address, .count = count, .values = values, .function_code = fc };
 	u16		scratch[MB_MAX_WRITE_BITS];
 
 	if (!dev->access_fn)
@@ -54,6 +54,13 @@ access_write(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count, c
 	    !device_range_writable(dev, space, address, count))
 		return EXC_ILLEGAL_DATA_ADDRESS;
 	return dev->access_fn(dev->access_user, dev, &access);
+}
+
+/** @brief Runs the host's hook for a non-table target (already validated); 0 or an exception. */
+static u8
+access_call(device_t* dev, const device_access_t* access)
+{
+	return dev->access_fn ? dev->access_fn(dev->access_user, dev, access) : 0;
 }
 
 /* --- reads --- */
@@ -339,6 +346,16 @@ read_fifo_queue(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	address = get_be16(req + 1);
 	if (!device_read_fifo(dev, address, &count, values))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+	if (dev->access_fn)
+	{
+		device_access_t	access = { .function_code = req[0], .target = ACCESS_FIFO, .address = address };
+		u8		code   = access_call(dev, &access);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+		/* The hook may have replaced the queue. */
+		device_read_fifo(dev, address, &count, values);
+	}
 
 	resp[0] = req[0];
 	put_be16(resp + 1, (u16)(2 + 2 * (u32)count));
@@ -406,6 +423,30 @@ read_file_record_available(device_t* dev, const u8* req, u32 subreq_count)
 	return true;
 }
 
+/* Calls the read hook once per sub-request, in order; the first nonzero return wins. */
+static u8
+read_file_record_hooks(device_t* dev, const u8* req, u32 subreq_count)
+{
+	if (!dev->access_fn)
+		return 0;
+	for (u32 i = 0; i < subreq_count; i++)
+	{
+		const u8*	sr     = req + 2 + i * 7;
+		device_access_t	access = {
+			.function_code = req[0],
+			.target        = ACCESS_FILE_RECORD,
+			.file_no       = get_be16(sr + 1),
+			.address       = get_be16(sr + 3),
+			.count         = get_be16(sr + 5),
+		};
+		u8		code   = access_call(dev, &access);
+
+		if (code)
+			return code;
+	}
+	return 0;
+}
+
 static u32
 read_file_record_build(device_t* dev, const u8* req, u32 subreq_count, u32 resp_data_len, u8* resp)
 {
@@ -440,12 +481,17 @@ read_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
 	u32	subreq_count  = 0;
 	u32	resp_data_len = 0;
+	u8	code          = 0;
 
 	if (!read_file_record_shape_ok(req, req_len, &subreq_count, &resp_data_len))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	if (!read_file_record_available(dev, req, subreq_count))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	code = read_file_record_hooks(dev, req, subreq_count);
+	if (code)
+		return modbus_exception(resp, req[0], code);
 
 	return read_file_record_build(dev, req, subreq_count, resp_data_len, resp);
 }
@@ -514,6 +560,40 @@ write_file_record_can_write(device_t* dev, const u8* req, u32 byte_count)
 	return true;
 }
 
+/* Calls the write hook for every sub-request before anything is written; the first nonzero return wins. */
+static u8
+write_file_record_hooks(device_t* dev, const u8* req, u32 byte_count)
+{
+	u32	offset = 2;
+
+	if (!dev->access_fn)
+		return 0;
+	while (offset < 2 + byte_count)
+	{
+		const u8*	sr      = req + offset;
+		u16		rec_len = get_be16(sr + 5);
+		u16		values[MODBUS_MAX_PDU / 2];
+		device_access_t	access  = {
+			.write         = true,
+			.values        = values,
+			.function_code = req[0],
+			.target        = ACCESS_FILE_RECORD,
+			.file_no       = get_be16(sr + 1),
+			.address       = get_be16(sr + 3),
+			.count         = rec_len,
+		};
+		u8		code    = 0;
+
+		for (u32 i = 0; i < rec_len; i++)
+			values[i] = get_be16(sr + 7 + i * 2);
+		code = access_call(dev, &access);
+		if (code)
+			return code;
+		offset += 7 + (u32)rec_len * 2;
+	}
+	return 0;
+}
+
 static bool
 write_file_record_apply(device_t* dev, const u8* req, u32 byte_count)
 {
@@ -541,12 +621,17 @@ static u32
 write_file_record(device_t* dev, const u8* req, u32 req_len, u8* resp)
 {
 	u32	byte_count = 0;
+	u8	code       = 0;
 
 	if (!write_file_record_shape_ok(req, req_len, &byte_count))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_VALUE);
 
 	if (!write_file_record_can_write(dev, req, byte_count))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
+
+	code = write_file_record_hooks(dev, req, byte_count);
+	if (code)
+		return modbus_exception(resp, req[0], code);
 
 	/* All-or-nothing validated above; return value guards future read-only records. */
 	if (!write_file_record_apply(dev, req, byte_count))
@@ -1017,6 +1102,26 @@ canopen_service(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	end = (u32)r.start + r.count;
 	if (end > obj->length)
 		return canopen_service_exception(resp, CANOPEN_ERR_LENGTH_TOO_HIGH);
+
+	if (dev->access_fn)
+	{
+		device_access_t	access = {
+			.write         = r.write,
+			.address       = r.start,
+			.count         = r.count,
+			.function_code = req[0],
+			.target        = ACCESS_CANOPEN,
+			.node_id       = r.node,
+			.index         = r.index,
+			.subindex      = r.subindex,
+			.data          = r.write ? req + r.data_offset : NULL,
+			.data_len      = r.write ? r.count : 0,
+		};
+
+		/* The hook's code has no CANopen equivalent: any veto is one abort code. */
+		if (access_call(dev, &access))
+			return canopen_service_exception(resp, CANOPEN_ERR_ACCESS_REFUSED);
+	}
 
 	resp_len = 12 + (r.has_network_id ? 1 : 0);
 	if (r.write)

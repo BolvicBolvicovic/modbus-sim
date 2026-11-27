@@ -55,6 +55,7 @@ No objects: every transfer fails with `CE 0xFFFF000B`.
 | `0xFFFF000B` | the object does not exist |
 | `0xFFFF0011` | invalid count or length (`count = 0`, or `count` does not match the data) |
 | `0x06070012` | the requested length exceeds the configured object |
+| `0x08000020` | an [access hook](../library/library-access-hook.md) refused the read or write (library only) |
 | `0xFFFF001E` | the response is too large for a Modbus PDU |
 | `0xFFFF1003` | the service is not supported (command addressing) |
 

@@ -67,8 +67,19 @@ else raises `MogbusError` listing the valid names.
 (function codes and ordering as in the [C access hook](../library/library-access-hook.md)); `None`
 removes it. `access` is a `mogbus.Access` with `kind` (`mogbus.AccessKind.READ` or `WRITE`), `space`
 (`mogbus.Space`), `address`, `count`, `values` (list of ints for writes, `None` for reads) and
-`function_code`. Return `None` (or 0) to continue, or an exception code (1-255) to answer it; a
-vetoed write changes nothing. Host calls such as `set_value()` and `write()` never reach it.
+`function_code`, plus `target` (`mogbus.AccessTarget.TABLE`, `FILE_RECORD`, `FIFO` or `CANOPEN`) and the
+fields the other targets use: `file` (file records; `address` is the first record), `node`, `index`,
+`subindex` (CANopen; `address` is the byte offset and `count` the bytes) and `data` (`bytes` of a
+CANopen write, else `None`). Check `target` first: a hook written for tables is also called for the
+others. Return `None` (or 0) to continue, or an exception code (1-255) to answer it; a vetoed write
+changes nothing, and a CANopen veto is answered as the failure `CE 0x08000020`. Host calls such as
+`set_value()` and `write()` never reach it.
+
+File records, FIFO queues and CANopen objects are built and changed from the host with
+`dev.add_file_record(file, record, values)`, `read_file_records(file, record, count=1)`,
+`write_file_records(file, record, values)`, `add_fifo(address, values=())`, `set_fifo(address, values=())`,
+`add_canopen_object(node, index, subindex, data)`, `read_canopen(node, index, subindex, count, offset=0)`
+and `write_canopen(node, index, subindex, data, offset=0)`; failures raise `MogbusError`.
 
 ```python
 def hook(access):

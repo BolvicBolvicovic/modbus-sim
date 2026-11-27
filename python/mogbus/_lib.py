@@ -100,6 +100,13 @@ class AccessC(ctypes.Structure):
         ("count", ctypes.c_uint32),
         ("values", ctypes.POINTER(ctypes.c_uint16)),
         ("function_code", ctypes.c_uint8),
+        ("target", ctypes.c_int),
+        ("file", ctypes.c_uint16),
+        ("node", ctypes.c_uint8),
+        ("subindex", ctypes.c_uint8),
+        ("index", ctypes.c_uint16),
+        ("data", ctypes.POINTER(ctypes.c_uint8)),
+        ("data_len", ctypes.c_uint32),
     ]
 
 
@@ -168,6 +175,20 @@ _sig("mogbus_device_get_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_ch
 _sig("mogbus_device_set_string", _c.c_bool, _ptr, _c.c_int, _c.c_uint32, _c.c_char_p)
 _sig("mogbus_device_set_any_unit", _c.c_bool, _ptr, _c.c_bool)
 _sig("mogbus_device_set_access_hook", _c.c_bool, _ptr, ACCESS_FN, _ptr)
+_sig("mogbus_device_add_file_record", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16), *_err)
+_sig("mogbus_device_read_file_records", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16))
+_sig("mogbus_device_write_file_records", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16))
+_sig("mogbus_device_add_fifo", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _p(_c.c_uint16), *_err)
+_sig("mogbus_device_set_fifo", _c.c_bool, _ptr, _c.c_uint16, _c.c_uint16, _p(_c.c_uint16))
+_sig("mogbus_device_add_canopen_object", _c.c_bool, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
+     _c.c_uint16, _p(_c.c_uint8), *_err)
+_sig("mogbus_device_read_canopen", _c.c_bool, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
+     _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
+_sig("mogbus_device_write_canopen", _c.c_bool, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint8,
+     _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
 _sig("mogbus_server_options_defaults", ServerOptionsC)
 _sig("mogbus_server_create", _ptr, _ptr, _p(ServerOptionsC), *_err, _p(_c.c_int))
 _sig("mogbus_server_create_from_config", _ptr, _ptr, *_err, _p(_c.c_int))

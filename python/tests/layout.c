@@ -13,6 +13,7 @@ main(void)
 	typedef mogbus_server_options_t O;
 	typedef mogbus_point_t P;
 	typedef mogbus_device_info_t I;
+	typedef mogbus_access_t A;
 
 	SIZE(O);
 	F(O, mode); F(O, bind_address); F(O, port); F(O, path); F(O, fd); F(O, seed);
@@ -33,6 +34,9 @@ main(void)
 	F(I, faults[0].present); F(I, faults[0].scheduled); F(I, faults[0].percent);
 	F(I, faults[0].delay_ms); F(I, faults[0].exception_code);
 	F(I, custom_fcs[0].code); F(I, custom_fcs[0].name);
+	SIZE(A);
+	F(A, kind); F(A, space); F(A, address); F(A, count); F(A, values); F(A, function_code);
+	F(A, target); F(A, file); F(A, node); F(A, subindex); F(A, index); F(A, data); F(A, data_len);
 	printf("faults_count %d\n", MOGBUS_FAULT_KIND_COUNT);
 	printf("space_count %d\n", MOGBUS_SPACE_COUNT);
 	return 0;

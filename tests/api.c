@@ -1262,3 +1262,311 @@ TEST(ApiSixtyFourBitByteOrderAndStringPoints)
 	ASSERT_EQ(!mogbus_device_add_point(dev, &p, err, sizeof(err)));
 	mogbus_destroy(ctx);
 }
+
+/* ---- host API for file records, FIFO queues and CANopen objects, and their hook ---- */
+
+static struct target_log_t
+{
+	int		calls;
+	mogbus_access_t	seen[8];
+	uint16_t	values[8][4];
+	uint8_t		data[8][4];
+	int		veto_call;	/* 1-based call that answers `answer`; 0 = never */
+	uint8_t		answer;
+	bool		refresh;	/* reads: replace the target's content first */
+} target_log;
+
+static uint8_t
+target_hook(void* user, mogbus_device_t* dev, const mogbus_access_t* a)
+{
+	int	n = target_log.calls++;
+
+	(void)user;
+	if (n < 8)
+	{
+		target_log.seen[n] = *a;
+		if (a->target == MOGBUS_TARGET_FILE_RECORD &&
+		    a->values)
+			memcpy(target_log.values[n], a->values, a->count * sizeof(uint16_t));
+		if (a->target == MOGBUS_TARGET_CANOPEN &&
+		    a->data)
+			memcpy(target_log.data[n], a->data, a->data_len);
+	}
+	if (target_log.veto_call == n + 1)
+		return target_log.answer;
+	if (target_log.refresh &&
+	    a->kind == MOGBUS_ACCESS_READ)
+	{
+		uint16_t	fifo[2]   = { 7, 8 };
+		uint16_t	record[1] = { 99 };
+		uint8_t		bytes[2]  = { 0xAB, 0xCD };
+
+		if (a->target == MOGBUS_TARGET_FIFO)
+			(void)mogbus_device_set_fifo(dev, (uint16_t)a->address, 2, fifo);
+		else if (a->target == MOGBUS_TARGET_FILE_RECORD)
+			(void)mogbus_device_write_file_records(dev, a->file, (uint16_t)a->address, 1, record);
+		else if (a->target == MOGBUS_TARGET_CANOPEN)
+			(void)mogbus_device_write_canopen(dev, a->node, a->index, a->subindex, 0, 2, bytes);
+	}
+	return 0;
+}
+
+static mogbus_device_t*
+target_device(mogbus_t** ctx)
+{
+	mogbus_device_t*	dev    = NULL;
+	uint16_t		file1[] = { 10, 20, 30 };
+	uint16_t		file2[] = { 40 };
+	uint16_t		fifo[]  = { 1, 2, 3 };
+	uint8_t			obj[]   = { 1, 2, 3, 4 };
+	char			err[128];
+
+	*ctx = mogbus_create();
+	dev  = mogbus_add_device(*ctx, 1, "targets", NULL, 0);
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 1, 0, 3, file1, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 2, 5, 1, file2, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_fifo(dev, 0x0100, 3, fifo, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 0, 4, obj, err, sizeof(err)));
+	memset(&target_log, 0, sizeof(target_log));
+	ASSERT_EQ(mogbus_device_set_access_hook(dev, target_hook, NULL));
+	return dev;
+}
+
+TEST(ApiHostFileRecordFifoAndCanopenFunctions)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev = mogbus_add_device(ctx, 1, "host", NULL, 0);
+	char		err[128] = "";
+	uint16_t	in[3]  = { 1, 2, 3 };
+	uint16_t	out[3] = { 0 };
+	uint8_t		bin[4] = { 9, 8, 7, 6 };
+	uint8_t		bout[4] = { 0 };
+
+	/* file records */
+	ASSERT_EQ(mogbus_device_add_file_record(dev, 3, 10, 3, in, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 3, 11, 2, out) && out[0] == 2 && out[1] == 3);
+	ASSERT_EQ(mogbus_device_write_file_records(dev, 3, 10, 2, in + 1));
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 3, 10, 3, out) && out[0] == 2 && out[1] == 3 && out[2] == 3);
+	ASSERT_EQ(!mogbus_device_add_file_record(dev, 3, 12, 2, in, err, sizeof(err)));	/* overlap */
+	ASSERT_EQ(strstr(err, "overlaps") != NULL);
+	ASSERT_EQ(!mogbus_device_add_file_record(dev, 0, 0, 1, in, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_file_record(dev, 4, 9999, 2, in, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_file_record(dev, 4, 0, 0, in, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_file_record(dev, 4, 0, 1, NULL, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_file_record(NULL, 4, 0, 1, in, NULL, 0));
+	ASSERT_EQ(!mogbus_device_read_file_records(dev, 3, 12, 2, out));	/* record 13 is undefined */
+	ASSERT_EQ(!mogbus_device_read_file_records(dev, 9, 0, 1, out));
+	ASSERT_EQ(!mogbus_device_write_file_records(dev, 3, 12, 2, in));
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 3, 12, 1, out) && out[0] == 3);	/* untouched */
+	ASSERT_EQ(!mogbus_device_read_file_records(dev, 3, 10, 0, out));
+
+	/* FIFO */
+	ASSERT_EQ(mogbus_device_add_fifo(dev, 7, 0, NULL, err, sizeof(err)));	/* empty queue */
+	ASSERT_EQ(mogbus_device_set_fifo(dev, 7, 3, in));
+	ASSERT_EQ(!mogbus_device_add_fifo(dev, 7, 1, in, err, sizeof(err)));	/* duplicate */
+	ASSERT_EQ(strstr(err, "already defined") != NULL);
+	ASSERT_EQ(!mogbus_device_set_fifo(dev, 8, 1, in));
+	ASSERT_EQ(!mogbus_device_set_fifo(dev, 7, 32, in));
+	ASSERT_EQ(!mogbus_device_add_fifo(dev, 9, 32, in, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_set_fifo(dev, 7, 0, NULL));
+
+	/* CANopen */
+	ASSERT_EQ(mogbus_device_add_canopen_object(dev, 5, 0x6041, 1, 4, bin, err, sizeof(err)));
+	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 1, 1, 2, bout) && bout[0] == 8 && bout[1] == 7);
+	ASSERT_EQ(mogbus_device_write_canopen(dev, 5, 0x6041, 1, 2, 2, bin));
+	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 1, 0, 4, bout));
+	ASSERT_EQ(bout[0] == 9 && bout[1] == 8 && bout[2] == 9 && bout[3] == 8);
+	ASSERT_EQ(!mogbus_device_write_canopen(dev, 5, 0x6041, 1, 3, 2, bin));	/* past the length */
+	ASSERT_EQ(!mogbus_device_read_canopen(dev, 5, 0x6041, 1, 0, 5, bout));
+	ASSERT_EQ(!mogbus_device_read_canopen(dev, 5, 0x6041, 2, 0, 1, bout));
+	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 5, 0x6041, 1, 4, bin, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 0, 0x6041, 2, 4, bin, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 128, 0x6041, 2, 4, bin, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 5, 0x6041, 2, 0, bin, err, sizeof(err)));
+	ASSERT_EQ(!mogbus_device_add_canopen_object(dev, 5, 0x6041, 2, 239, bin, err, sizeof(err)));
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookFileRecordReadRunsPerSubRequestAndRefreshes)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = target_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_READ_FILE_RECORD, 14,
+			  6, 0, 1, 0, 1, 0, 2,		/* file 1, records 1-2 */
+			  6, 0, 2, 0, 5, 0, 1 };	/* file 2, record 5 */
+
+	target_log.refresh = true;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 2 + 5 + 3 + 2);
+	ASSERT_EQ(target_log.calls == 2);
+	ASSERT_EQ(target_log.seen[0].target == MOGBUS_TARGET_FILE_RECORD &&
+		  target_log.seen[0].kind == MOGBUS_ACCESS_READ &&
+		  target_log.seen[0].file == 1 &&
+		  target_log.seen[0].address == 1 &&
+		  target_log.seen[0].count == 2 &&
+		  target_log.seen[0].values == NULL &&
+		  target_log.seen[0].function_code == FC_READ_FILE_RECORD);
+	ASSERT_EQ(target_log.seen[1].file == 2 && target_log.seen[1].address == 5 && target_log.seen[1].count == 1);
+	/* the hook rewrote record 1 and record 5 before the response was built */
+	ASSERT_EQ(resp[0] == FC_READ_FILE_RECORD && resp[1] == 10);
+	ASSERT_EQ(resp[2] == 5 && resp[3] == 6 && resp[4] == 0 && resp[5] == 99 && resp[6] == 0 && resp[7] == 30);
+	ASSERT_EQ(resp[8] == 3 && resp[9] == 6 && resp[10] == 0 && resp[11] == 99);
+
+	/* a veto on the second sub-request answers that exception */
+	memset(&target_log, 0, sizeof(target_log));
+	target_log.veto_call = 2;
+	target_log.answer    = 6;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 2 && resp[0] == (FC_READ_FILE_RECORD | 0x80) && resp[1] == 6);
+	ASSERT_EQ(target_log.calls == 2);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookFileRecordSkippedForInvalidRequests)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = target_device(&ctx);
+	u8		resp[260];
+	u8		bad_record[] = { FC_READ_FILE_RECORD, 14,
+				 6, 0, 1, 0, 1, 0, 1,
+				 6, 0, 1, 0, 3, 0, 1 };	/* file 1 has no record 3 */
+	u8		bad_shape[] = { FC_READ_FILE_RECORD, 7, 5, 0, 1, 0, 0, 0, 1 };
+	u8		bad_write[] = { FC_WRITE_FILE_RECORD, 18,
+				6, 0, 1, 0, 0, 0, 1, 0, 7,
+				6, 0, 1, 0, 3, 0, 1, 0, 8 };
+
+	ASSERT_EQ(hook_pdu(dev, bad_record, sizeof(bad_record), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(hook_pdu(dev, bad_shape, sizeof(bad_shape), resp) == 2 && resp[1] == 3);
+	ASSERT_EQ(hook_pdu(dev, bad_write, sizeof(bad_write), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(target_log.calls == 0);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookFileRecordWriteVetoWritesNothing)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = target_device(&ctx);
+	u8		resp[260];
+	u8		req[] = { FC_WRITE_FILE_RECORD, 18,
+			  6, 0, 1, 0, 0, 0, 1, 0, 77,		/* file 1, record 0 = 77 */
+			  6, 0, 1, 0, 1, 0, 1, 0, 88 };	/* file 1, record 1 = 88 */
+	uint16_t	out[3];
+
+	target_log.veto_call = 2;
+	target_log.answer    = 4;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 2 && resp[0] == (FC_WRITE_FILE_RECORD | 0x80) && resp[1] == 4);
+	ASSERT_EQ(target_log.calls == 2);
+	ASSERT_EQ(target_log.seen[0].kind == MOGBUS_ACCESS_WRITE &&
+		  target_log.seen[0].target == MOGBUS_TARGET_FILE_RECORD &&
+		  target_log.seen[0].file == 1 &&
+		  target_log.seen[0].address == 0 &&
+		  target_log.seen[0].count == 1 &&
+		  target_log.values[0][0] == 77);
+	ASSERT_EQ(target_log.values[1][0] == 88 && target_log.seen[1].address == 1);
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 1, 0, 3, out));
+	ASSERT_EQ(out[0] == 10 && out[1] == 20 && out[2] == 30);
+
+	memset(&target_log, 0, sizeof(target_log));
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == sizeof(req) && memcmp(resp, req, sizeof(req)) == 0);
+	ASSERT_EQ(target_log.calls == 2);
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 1, 0, 3, out));
+	ASSERT_EQ(out[0] == 77 && out[1] == 88 && out[2] == 30);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookFifoRefreshesBeforeTheRead)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = target_device(&ctx);
+	u8		resp[260];
+	u8		req[]     = { FC_READ_FIFO_QUEUE, 0x01, 0x00 };
+	u8		missing[] = { FC_READ_FIFO_QUEUE, 0x02, 0x00 };
+
+	ASSERT_EQ(hook_pdu(dev, missing, sizeof(missing), resp) == 2 && resp[1] == 2);
+	ASSERT_EQ(target_log.calls == 0);
+
+	target_log.refresh = true;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 5 + 4);
+	ASSERT_EQ(target_log.calls == 1 &&
+		  target_log.seen[0].target == MOGBUS_TARGET_FIFO &&
+		  target_log.seen[0].kind == MOGBUS_ACCESS_READ &&
+		  target_log.seen[0].address == 0x0100 &&
+		  target_log.seen[0].function_code == FC_READ_FIFO_QUEUE);
+	ASSERT_EQ(resp[3] == 0 && resp[4] == 2 && resp[6] == 7 && resp[8] == 8);
+
+	memset(&target_log, 0, sizeof(target_log));
+	target_log.veto_call = 1;
+	target_log.answer    = 6;
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 2 && resp[0] == (FC_READ_FIFO_QUEUE | 0x80) && resp[1] == 6);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiAccessHookCanopenReadRefreshesAndWriteVetoUsesAbortCode)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = target_device(&ctx);
+	u8		resp[260];
+	u8		read[]  = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00, 5, 0x60, 0x41, 0,
+				    0, 0, 0, 4 };
+	u8		write[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x01, 0x00, 5, 0x60, 0x41, 0,
+				    0, 1, 0, 2, 0x11, 0x22 };
+	u8		missing[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D, 0x00, 0x00, 5, 0x60, 0x42, 0,
+				      0, 0, 0, 1 };
+	u8		out[4];
+
+	ASSERT_EQ(hook_pdu(dev, missing, sizeof(missing), resp) == 10 && resp[6] == 0x0B);
+	ASSERT_EQ(target_log.calls == 0);
+
+	target_log.refresh = true;
+	ASSERT_EQ(hook_pdu(dev, read, sizeof(read), resp) == 12 + 4);
+	ASSERT_EQ(target_log.calls == 1 &&
+		  target_log.seen[0].target == MOGBUS_TARGET_CANOPEN &&
+		  target_log.seen[0].kind == MOGBUS_ACCESS_READ &&
+		  target_log.seen[0].node == 5 &&
+		  target_log.seen[0].index == 0x6041 &&
+		  target_log.seen[0].subindex == 0 &&
+		  target_log.seen[0].address == 0 &&
+		  target_log.seen[0].count == 4 &&
+		  target_log.seen[0].data == NULL &&
+		  target_log.seen[0].function_code == FC_ENCAPSULATED_INTERFACE_TRANSPORT);
+	ASSERT_EQ(resp[12] == 0xAB && resp[13] == 0xCD && resp[14] == 3 && resp[15] == 4);
+
+	memset(&target_log, 0, sizeof(target_log));
+	target_log.veto_call = 1;
+	target_log.answer    = 6;
+	ASSERT_EQ(hook_pdu(dev, write, sizeof(write), resp) == 10);
+	{
+		const u8 want[] = { 0xAB, 0xFF, 0x00, 0x06, 0x0D, 0xCE, 0x20, 0x00, 0x00, 0x08 };
+
+		ASSERT_EQ(memcmp(resp, want, sizeof(want)) == 0);
+	}
+	ASSERT_EQ(target_log.seen[0].kind == MOGBUS_ACCESS_WRITE &&
+		  target_log.seen[0].address == 1 &&
+		  target_log.seen[0].count == 2 &&
+		  target_log.seen[0].data_len == 2 &&
+		  target_log.data[0][0] == 0x11 &&
+		  target_log.data[0][1] == 0x22);
+	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 0, 0, 4, out));
+	ASSERT_EQ(out[0] == 0xAB && out[1] == 0xCD && out[2] == 3 && out[3] == 4);	/* the read refresh, not the vetoed write */
+
+	memset(&target_log, 0, sizeof(target_log));
+	ASSERT_EQ(hook_pdu(dev, write, sizeof(write), resp) == 12);
+	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 0, 0, 4, out));
+	ASSERT_EQ(out[0] == 0xAB && out[1] == 0x11 && out[2] == 0x22 && out[3] == 4);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiHostCallsNeverRunTheTargetHook)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = target_device(&ctx);
+	uint16_t	word = 1;
+	uint8_t		byte = 1;
+
+	ASSERT_EQ(mogbus_device_write_file_records(dev, 1, 0, 1, &word));
+	ASSERT_EQ(mogbus_device_read_file_records(dev, 1, 0, 1, &word));
+	ASSERT_EQ(mogbus_device_set_fifo(dev, 0x0100, 1, &word));
+	ASSERT_EQ(mogbus_device_write_canopen(dev, 5, 0x6041, 0, 0, 1, &byte));
+	ASSERT_EQ(mogbus_device_read_canopen(dev, 5, 0x6041, 0, 0, 1, &byte));
+	ASSERT_EQ(target_log.calls == 0);
+	mogbus_destroy(ctx);
+}

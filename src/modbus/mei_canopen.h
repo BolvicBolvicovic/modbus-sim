@@ -32,6 +32,7 @@ enum canopen_error_code
 	CANOPEN_ERR_OBJECT_NOT_FOUND     = 0xFFFF000Bu,
 	CANOPEN_ERR_INVALID_COUNT        = 0xFFFF0011u,
 	CANOPEN_ERR_LENGTH_TOO_HIGH      = 0x06070012u,
+	CANOPEN_ERR_ACCESS_REFUSED       = 0x08000020u,	/**< the access hook vetoed: data cannot be transferred or stored to the application */
 	CANOPEN_ERR_RESPONSE_TOO_LARGE   = 0xFFFF001Eu,
 	CANOPEN_ERR_SERVICE_NOT_SUPPORTED = 0xFFFF1003u,
 };

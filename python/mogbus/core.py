@@ -41,6 +41,13 @@ class AccessKind(enum.IntEnum):
     WRITE = 1
 
 
+class AccessTarget(enum.IntEnum):
+    TABLE = 0
+    FILE_RECORD = 1
+    FIFO = 2
+    CANOPEN = 3
+
+
 class ValueType(enum.IntEnum):
     U16 = 0
     S16 = 1
@@ -185,8 +192,16 @@ class Access:
     space: Space
     address: int
     count: int  # registers or bits
-    values: Optional[List[int]]  # writes: the raw values about to be stored (bits as 0/1); reads: None
+    values: Optional[List[int]]  # TABLE/FILE_RECORD writes: the raw values about to be stored (bits as 0/1); reads: None
     function_code: int
+    # What is touched. For FILE_RECORD, `address` is the first record and `count` the records; for
+    # FIFO, `address` is the queue address; for CANOPEN, `address` is the byte offset and `count` the bytes.
+    target: AccessTarget = AccessTarget.TABLE
+    file: int = 0  # FILE_RECORD: file number
+    node: int = 0  # CANOPEN
+    index: int = 0  # CANOPEN
+    subindex: int = 0  # CANOPEN
+    data: Optional[bytes] = None  # CANOPEN writes: the bytes about to be stored; reads: None
 
 
 @dataclass
@@ -463,7 +478,9 @@ class Device:
         """Runs hook(access) on every Modbus client read or write of this device; None removes it.
 
         Return None (or 0) to let the request go on, or a Modbus exception code (1-255) to answer
-        it instead; a vetoed write changes nothing. The hook runs on the thread that steps the
+        it instead; a vetoed write changes nothing. Besides the tables, it runs for file records
+        (FC 14, 15), FIFO queues (FC 18) and CANopen objects (FC 2B/0D); see Access.target. A CANopen
+        veto is answered as the extended failure `CE 0x08000020` whatever code the hook returns. The hook runs on the thread that steps the
         server with the context lock held (the lock is reentrant, so it may call the methods of
         this device, e.g. set_value() to refresh a value before a read). An exception raised by
         the hook is printed and answered with exception 04. Host calls never reach the hook; see
@@ -480,10 +497,12 @@ class Device:
             try:
                 a = access.contents
                 values = None
-                if a.kind == AccessKind.WRITE:
+                if a.kind == AccessKind.WRITE and a.values:
                     values = [a.values[i] for i in range(a.count)]
+                data = ctypes.string_at(a.data, a.data_len) if a.data else None
                 code = hook(Access(AccessKind(a.kind), Space(a.space), a.address, a.count, values,
-                                   a.function_code))
+                                   a.function_code, AccessTarget(a.target), a.file, a.node, a.index,
+                                   a.subindex, data))
                 code = 0 if code is None else int(code)
                 if not 0 <= code <= 255:
                     raise ValueError(f"exception code {code} is not in 0..255")
@@ -496,6 +515,99 @@ class Device:
         if not lib.mogbus_device_set_access_hook(handle, ref, None):
             raise MogbusError("cannot install the access hook (out of memory)")
         self._access_ref = ref
+
+    @_locked
+    def add_file_record(self, file, record, values: Sequence[int]) -> None:
+        """Adds file records `record`.. of file `file` (FC 14/15) with these initial register values (1-126)."""
+        file = _u(file, "file", 65536)
+        record = _u(record, "record", 65536)
+        values = [_u(v, "register value", 65536) for v in values]
+        arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
+        err = _err_buf()
+        if not lib.mogbus_device_add_file_record(self._live(), file, record, len(values), arr, err, ERR_SIZE):
+            raise MogbusError(_msg(err, "cannot add file record"))
+
+    @_locked
+    def read_file_records(self, file, record, count=1) -> List[int]:
+        """The values of `count` consecutive file records (host side: no access hook)."""
+        file = _u(file, "file", 65536)
+        record = _u(record, "record", 65536)
+        count = _u(count, "count", 65536)
+        out = (ctypes.c_uint16 * max(count, 1))()
+        if not lib.mogbus_device_read_file_records(self._live(), file, record, count, out):
+            raise MogbusError(f"cannot read {count} record(s) at file {file} record {record}: "
+                              "a record is undefined")
+        return list(out)[:count]
+
+    @_locked
+    def write_file_records(self, file, record, values: Union[int, Sequence[int]]) -> None:
+        """Writes consecutive file records (host side: no access hook); all or nothing."""
+        if isinstance(values, int):
+            values = [values]
+        file = _u(file, "file", 65536)
+        record = _u(record, "record", 65536)
+        values = [_u(v, "register value", 65536) for v in values]
+        arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
+        if not lib.mogbus_device_write_file_records(self._live(), file, record, len(values), arr):
+            raise MogbusError(f"cannot write {len(values)} record(s) at file {file} record {record}: "
+                              "a record is undefined")
+
+    @_locked
+    def add_fifo(self, address, values: Sequence[int] = ()) -> None:
+        """Adds a FIFO queue read by FC 18 at `address` with up to 31 initial values."""
+        address = _u(address, "address", 65536)
+        values = [_u(v, "register value", 65536) for v in values]
+        arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
+        err = _err_buf()
+        if not lib.mogbus_device_add_fifo(self._live(), address, len(values), arr, err, ERR_SIZE):
+            raise MogbusError(_msg(err, "cannot add FIFO"))
+
+    @_locked
+    def set_fifo(self, address, values: Sequence[int] = ()) -> None:
+        """Replaces the contents of the FIFO queue at `address` (up to 31 values; host side)."""
+        address = _u(address, "address", 65536)
+        values = [_u(v, "register value", 65536) for v in values]
+        arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
+        if not lib.mogbus_device_set_fifo(self._live(), address, len(values), arr):
+            raise MogbusError(f"no FIFO is defined at {address}, or more than 31 values")
+
+    @_locked
+    def add_canopen_object(self, node, index, subindex, data: bytes) -> None:
+        """Adds a CANopen object (FC 2B/0D) of fixed length len(data) (1-238 bytes), node 1-127."""
+        node = _u(node, "node", 256)
+        index = _u(index, "index", 65536)
+        subindex = _u(subindex, "subindex", 256)
+        data = bytes(data)
+        arr = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
+        err = _err_buf()
+        if not lib.mogbus_device_add_canopen_object(self._live(), node, index, subindex, len(data), arr,
+                                                    err, ERR_SIZE):
+            raise MogbusError(_msg(err, "cannot add CANopen object"))
+
+    @_locked
+    def read_canopen(self, node, index, subindex, count, offset=0) -> bytes:
+        """`count` bytes at `offset` of a CANopen object (host side: no access hook)."""
+        node = _u(node, "node", 256)
+        index = _u(index, "index", 65536)
+        subindex = _u(subindex, "subindex", 256)
+        count = _u(count, "count", 65536)
+        offset = _u(offset, "offset", 65536)
+        out = (ctypes.c_uint8 * max(count, 1))()
+        if not lib.mogbus_device_read_canopen(self._live(), node, index, subindex, offset, count, out):
+            raise MogbusError("no such CANopen object, or the range is outside it")
+        return bytes(out)[:count]
+
+    @_locked
+    def write_canopen(self, node, index, subindex, data: bytes, offset=0) -> None:
+        """Writes bytes at `offset` of a CANopen object; its length never changes (host side)."""
+        node = _u(node, "node", 256)
+        index = _u(index, "index", 65536)
+        subindex = _u(subindex, "subindex", 256)
+        offset = _u(offset, "offset", 65536)
+        data = bytes(data)
+        arr = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
+        if not lib.mogbus_device_write_canopen(self._live(), node, index, subindex, offset, len(data), arr):
+            raise MogbusError("no such CANopen object, or the range is outside it")
 
     @_locked
     def get_string(self, space, address) -> str:
