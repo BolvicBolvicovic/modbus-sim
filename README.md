@@ -36,7 +36,8 @@ profiles and change what you need.
   chance or by schedule.
 - **Observable:** health and readiness endpoints, Prometheus metrics, JSON logs, and a runtime
   control API.
-- **Embeddable:** a small C library and a Python package for tests and scripts.
+- **Embeddable:** a small C library and a Python package for tests and scripts, with a Modbus client
+  (master) in both to read and write any server over every transport.
 - **Easy to deploy:** one binary, a hardened Docker image and Kubernetes manifests.
 
 See [What mogbus does](docs/user/features.md) for the full table.

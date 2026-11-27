@@ -1,7 +1,7 @@
 """Python bindings for the mogbus Modbus device simulator (ctypes over libmogbus.so)."""
 from ._lib import VERSION as __version__
 from .core import (
-    Access, AccessKind, AccessTarget, ByteOrder, Context, CustomFunctionCode, Device, DeviceInfo, FaultInfo,
+    Access, AccessKind, Client, ModbusException, AccessTarget, ByteOrder, Context, CustomFunctionCode, Device, DeviceInfo, FaultInfo,
     FaultKind, Frame, FrameDirection, LogFormat, LogLevel,
     MogbusError, ClockField, Mode, Parity, PointInfo, Ramp, RampMode, RtuTiming, Served, Server, ServerOptions, Space,
     Status, TlsVersion, ValueType, WordOrder, library_version, probe, probe_or_raise, rtu_timing,
@@ -9,7 +9,7 @@ from .core import (
 )
 
 __all__ = [
-    "__version__", "Access", "AccessKind", "AccessTarget", "ByteOrder", "Context", "CustomFunctionCode", "Device",
+    "__version__", "Client", "ModbusException", "Access", "AccessKind", "AccessTarget", "ByteOrder", "Context", "CustomFunctionCode", "Device",
     "DeviceInfo", "FaultInfo",
     "ClockField", "FaultKind", "Frame", "FrameDirection", "LogFormat", "LogLevel", "MogbusError", "Mode", "Parity", "PointInfo", "Ramp", "RampMode",
     "RtuTiming", "Served", "Server", "ServerOptions", "Space", "Status", "TlsVersion",

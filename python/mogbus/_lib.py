@@ -94,6 +94,22 @@ class ServerOptionsC(ctypes.Structure):
     ]
 
 
+class ClientOptionsC(ctypes.Structure):
+    _fields_ = [
+        ("mode", ctypes.c_int),
+        ("host", ctypes.c_char_p),
+        ("port", ctypes.c_uint16),
+        ("path", ctypes.c_char_p),
+        ("baud", ctypes.c_uint32),
+        ("data_bits", ctypes.c_uint32),
+        ("parity", ctypes.c_int),
+        ("stop_bits", ctypes.c_uint32),
+        ("tls_enabled", ctypes.c_bool),
+        ("timeout_ms", ctypes.c_uint32),
+        ("retries", ctypes.c_uint32),
+    ]
+
+
 class AccessC(ctypes.Structure):
     _fields_ = [
         ("kind", ctypes.c_int),
@@ -217,6 +233,32 @@ _sig("mogbus_server_create_from_config", _ptr, _ptr)
 _sig("mogbus_config_server_options", _c.c_bool, _ptr, _p(ServerOptionsC))
 _sig("mogbus_server_check", _c.c_int, _ptr, _p(ServerOptionsC))
 _sig("mogbus_probe", _c.c_int, _p(ServerOptionsC), _c.c_uint8, _c.c_uint32)
+_sig("mogbus_client_options_defaults", ClientOptionsC)
+_sig("mogbus_client_open", _ptr, _p(ClientOptionsC))
+_sig("mogbus_client_close", None, _ptr)
+_sig("mogbus_client_last_error", _c.c_char_p, _ptr)
+_sig("mogbus_client_last_exception", _c.c_uint8, _ptr)
+_sig("mogbus_client_connect", _c.c_int, _ptr)
+_sig("mogbus_client_request", _c.c_int, _ptr, _c.c_uint8, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_client_read_coils", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
+_sig("mogbus_client_read_discrete_inputs", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint8))
+_sig("mogbus_client_read_holding_registers", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16))
+_sig("mogbus_client_read_input_registers", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16))
+_sig("mogbus_client_write_coil", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_bool)
+_sig("mogbus_client_write_register", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16)
+_sig("mogbus_client_write_coils", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
+_sig("mogbus_client_write_registers", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16))
+_sig("mogbus_client_mask_write_register", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
+     _c.c_uint16)
+_sig("mogbus_client_read_write_registers", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
+     _p(_c.c_uint16), _c.c_uint16, _c.c_uint16, _p(_c.c_uint16))
+_sig("mogbus_client_read_device_id", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_size_t))
 _sig("mogbus_rtu_timing", None, _c.c_uint32, _c.c_uint32, _p(_c.c_uint32), _p(_c.c_uint32))
 _sig("mogbus_now_ms", _c.c_uint64)
 _sig("mogbus_server_step", _c.c_int, _ptr, _c.c_int)
