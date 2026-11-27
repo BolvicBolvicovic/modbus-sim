@@ -20,6 +20,7 @@ The start-up summary (and `--check`) prints the address, for example
 
 ## What it shows and edits
 
+- **Header**: the mogbus logo (icon and wordmark, inlined in the page; the icon is also the favicon).
 - **Device**: the selector lists the devices (`/api/devices`).
 - **Points**: one tab per table (`coil`, `discrete`, `input`, `holding`) lists the configured points
   from [List points](api/api-list-points.md): address, type (strings show their register count), kind
