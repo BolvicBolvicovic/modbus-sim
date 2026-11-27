@@ -550,8 +550,11 @@ parse_top_level_form(form_ctx_t* ctx, s7_pointer form, arena_t* arena, u64 now_m
 		return parse_server(ctx, form, config);
 	}
 
+	if (strcmp(head, "define-action") == 0)
+		return config_action_define(ctx, form);
+
 	if (strcmp(head, "device") != 0)
-		return form_fail(ctx, "unknown top-level form '%s'. Use (server ...) or (device ...)", head);
+		return form_fail(ctx, "unknown top-level form '%s'. Use (server ...), (define-action ...) or (device ...)", head);
 
 	if (config->device_count >= SERVER_MAX_DEVICES)
 		return form_fail(ctx, "too many devices (max %d)", SERVER_MAX_DEVICES);
@@ -579,7 +582,8 @@ parse_forms(form_ctx_t* ctx, s7_pointer forms, arena_t* arena, config_t* config)
 		device_t* dev = config->devices[i];
 
 		device_seed_machines(dev, config->seed);
-		if (!config_machine_finalize(ctx, dev))
+		if (!config_machine_finalize(ctx, dev) ||
+		    !config_action_finalize(ctx, dev))
 			return false;
 	}
 

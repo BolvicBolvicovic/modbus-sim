@@ -48,3 +48,4 @@ point's configured type.
 
 - [statements](statements.md)
 - [transition](transition.md)
+- [point actions](../actions/index.md), where `self` also names the attached point

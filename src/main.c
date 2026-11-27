@@ -194,6 +194,8 @@ fault_text(const mogbus_device_info_t* info, char* buf, size_t size)
 	return used == 0 ? "none" : buf;
 }
 
+static const char* const space_names[] = { "coil", "discrete", "input", "holding" };
+
 static void
 print_rtu_timing(const mogbus_server_options_t* options)
 {
@@ -302,6 +304,26 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 		for (uint32_t f = 0; f < info.custom_fc_count; f++)
 			printf("           function code 0x%02X%s%s\n", info.custom_fcs[f].code,
 			       info.custom_fcs[f].name[0] ? " " : "", info.custom_fcs[f].name);
+		for (uint32_t a = 0;; a++)
+		{
+			mogbus_action_t action;
+
+			if (!mogbus_device_action_at(mogbus_device_at(ctx, i), a, &action))
+				break;
+			printf("           %s %u %s%s%s", space_names[action.space], action.address,
+			       action.on_write ? "on-write" : "on-read",
+			       action.name[0] ? " " : "", action.name);
+			for (uint32_t p = 0; p < action.param_count; p++)
+			{
+				if (action.params[p].is_bool)
+					printf(" (%s %s)", action.params[p].name,
+					       action.params[p].flag ? "#t" : "#f");
+				else
+					printf(" (%s %g)", action.params[p].name,
+					       action.params[p].number);
+			}
+			putchar('\n');
+		}
 	}
 }
 
@@ -319,8 +341,6 @@ static uint64_t g_shown[MOGBUS_MAX_DEVICES][SHOW_MAX_POINTS];
 static void
 show_registers(mogbus_t* ctx, bool all, bool json)
 {
-	static const char* const space_names[] = { "coil", "discrete", "input", "holding" };
-
 	for (size_t d = 0; d < mogbus_device_count(ctx) && d < MOGBUS_MAX_DEVICES; d++)
 	{
 		mogbus_device_t*	dev = mogbus_device_at(ctx, d);

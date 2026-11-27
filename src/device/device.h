@@ -241,6 +241,7 @@ struct device_custom_fc_t
 
 /** @brief One simulated Modbus device (one unit id). */
 struct machine_system_t; /* defined in device/machine.h */
+struct action_system_t; /* defined in device/action.h */
 
 /** @brief What a device_access_t touches. */
 enum access_target_t
@@ -321,6 +322,7 @@ struct device_t
 	u32		extended_id_count;
 	space_t		spaces[SPACE_COUNT];
 	struct machine_system_t* machines; /**< up to MACHINE_MAX_MACHINES, arena-backed */
+	struct action_system_t* actions; /**< point actions (on-read/on-write), arena-backed, NULL when none */
 	/** @brief Host hook run on Modbus client reads/writes (NULL: none); returns 0 or an exception code. */
 	u8		(*access_fn)(void* user, device_t* dev, const device_access_t* access);
 	void*		access_user;
@@ -422,6 +424,15 @@ bool		device_client_write(device_t* dev, space_kind_t space, u32 address, u32 qt
  */
 bool		device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* out);
 bool		device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in);
+
+/**
+ * @brief device_set_point() with host-write semantics, used by point actions.
+ *
+ * The point becomes POINT_STATIC like after a client write (a machine-driven point stays
+ * machine-driven) and no hook, machine on-write handler or action runs.
+ */
+bool		device_set_point_host(device_t* dev, space_kind_t space, u32 address,
+				      const val_t* in);
 
 /**
  * @brief Reads a string point as text, up to its first NUL byte.

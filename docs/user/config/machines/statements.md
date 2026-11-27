@@ -37,5 +37,6 @@ matching types. At most 128 statements per machine, nested ones included.
 
 ## See also
 
+- [point actions](../actions/index.md), which use the same statements on a single point
 - [expressions](expressions.md)
 - [point ownership](points.md)

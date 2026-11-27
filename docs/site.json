@@ -445,6 +445,22 @@
             }
           ]
         },
+        {
+          "index": "docs/user/config/actions/index.md",
+          "title": "Point actions",
+          "groups": [
+            {
+              "title": "Point actions",
+              "entries": [
+                "docs/user/config/actions/define-action.md",
+                "docs/user/config/actions/param.md",
+                "docs/user/config/actions/on-read.md",
+                "docs/user/config/actions/on-write.md",
+                "docs/user/config/actions/self.md"
+              ]
+            }
+          ]
+        },
         {"page": "docs/user/config/errors.md", "errors": true, "errors_from": ["docs/user/config/format.md"]},
         "docs/user/command-line.md",
         {

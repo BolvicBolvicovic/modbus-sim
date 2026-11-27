@@ -54,6 +54,7 @@ typedef enum mogbus_clock_field_t mogbus_clock_field_t;
 typedef struct mogbus_point_t mogbus_point_t;
 typedef enum mogbus_fault_kind_t mogbus_fault_kind_t;
 typedef struct mogbus_device_info_t mogbus_device_info_t;
+typedef struct mogbus_action_t mogbus_action_t;
 typedef enum mogbus_access_kind_t mogbus_access_kind_t;
 typedef enum mogbus_access_target_t mogbus_access_target_t;
 typedef struct mogbus_access_t mogbus_access_t;
@@ -399,6 +400,38 @@ struct mogbus_device_info_t
 		const char*	name;		/**< borrowed; "" when unnamed */
 	} custom_fcs[8];
 };
+
+/** @brief One point action (`on-read` or `on-write`) of a device, from a config file. */
+struct mogbus_action_t
+{
+	mogbus_space_t	space;		/**< table of the attached point */
+	uint32_t	address;	/**< address of the attached point */
+	bool		on_write;	/**< runs after a client write instead of before a client read */
+	const char*	name;		/**< borrowed; the define-action name, "" for an inline body */
+	uint32_t	param_count;	/**< parameters of the action (at most 16) */
+	/** @brief One parameter with its current value. */
+	struct
+	{
+		const char*	name;	/**< borrowed */
+		bool		is_bool;	/**< `flag` is the value, otherwise `number` */
+		bool		flag;
+		double		number;
+	} params[16];
+};
+
+/**
+ * @brief Describes the point action at an index of the device's actions.
+ *
+ * Actions come only from a config file (`on-read` and `on-write` point options) and are ordered
+ * by space, address, then read before write.
+ *
+ * @param dev Device.
+ * @param index Position of the action.
+ * @param out Receives the description.
+ * @return false if @p dev or @p out is NULL or @p index is past the last action.
+ */
+MOGBUS_API bool		mogbus_device_action_at(const mogbus_device_t* dev, uint32_t index,
+						mogbus_action_t* out);
 
 /**
  * @brief Makes a device also answer every unit id that no device of the context has.
