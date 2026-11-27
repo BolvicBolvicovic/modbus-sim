@@ -417,9 +417,9 @@ only outstanding work is listed here.
 
 ### Adoption (gaps compared with pymodbus as a server/simulator)
 
-- pymodbus importer coverage: the `timestamp`, `reset` and custom actions, several devices per file,
-  and answering any unit id (a pymodbus server does, a mogbus device answers its own only). Why:
-  each unsupported item turns into a warning and a manual edit after importing (see
+- pymodbus importer coverage: custom Python actions (code, cannot be imported) and the `reset`
+  action (a per-register server reboot; mogbus only has `(fault (kind restart) ...)` by percent).
+  Why: each one turns into a warning and a manual edit after importing (see
   `docs/user/import/import-pymodbus-servers.md`).
 - Access hooks for the file record (FC 14/15), FIFO (FC 18) and CANopen (FC 2B/0D) paths, which
   the per-device access hook does not cover yet. Why: a host that computes values on demand can't

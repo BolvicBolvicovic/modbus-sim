@@ -17,13 +17,14 @@ Anything else gets a warning and no server section.
 
 ## Not supported
 
-- The actions `timestamp` and `reset`, and custom actions: the initial value is kept as a static
-  value and a warning is written. Actions on `bits` and strings likewise.
+- The action `reset` (see [the reset action](import-pymodbus.md)) and custom Python actions: the
+  initial value is kept as a static value and a warning is written. Actions on `bits` and strings
+  likewise. (`timestamp` on registers is mapped to clock points.)
 - `invalid`: ignored. Every address without a point already answers exception 02 in mogbus.
 - `type exception` (rejecting requests that split a 32-bit value) and the pymodbus HTTP interface.
-- A pymodbus server answers every unit id; mogbus answers the unit id of the device only.
-- Several devices in one file: one device is imported per run (`--device NAME`); to serve several
-  devices, run the importer once for each and merge the `(device ...)` forms by hand.
+- A pymodbus server with a `device_id` answers that unit id only, and the importer follows it; without
+  one it answers every unit id and the importer writes `(any-unit on)` (`--exact-unit` omits it).
+  With `--all-devices` only the assigned unit ids answer.
 - Bit addresses above coil 65535.
 
 ## See also

@@ -5,7 +5,6 @@
 ;
 ; Notes:
 ;   pymodbus serves one register array for all tables: every register is emitted in both the holding and the input table, every bit cell in both the coil and the discrete table.
-;   the pymodbus server answers every unit id; mogbus answers unit 1 only (--unit-id)
 ;
 ; Warnings:
 ;   pymodbus uint16 at cell 11: increment starts at 50 but minval is 0; the ramp starts at minval
@@ -15,6 +14,7 @@
 (device
   (name "plant")
   (unit-id 1)
+  (any-unit on)
   (vendor-name "Example Co")
   (product-code "EX-1")
   (product-name "Example simulator")

@@ -1,7 +1,7 @@
 # Importing a pymodbus simulator file
 
 ```bash
-./tools/mogbus_import.py pymodbus SETUP.json [--device NAME] [--server-name NAME] [--no-server]
+./tools/mogbus_import.py pymodbus SETUP.json [--device NAME | --all-devices] [--server-name NAME] [--no-server] [--exact-unit]
 ```
 
 This reads the JSON configuration of the pymodbus 3.x simulator (`server_list` and `device_list`; the
@@ -10,6 +10,11 @@ file `pymodbus/server/simulator/setup.json` is the reference). It was checked ag
 ## Options
 
 - `--device NAME` picks a `device_list` entry (default: the first, with a warning if there are more).
+- `--all-devices` imports every `device_list` entry into one config, each as its own `(device ...)`
+  named after its key, with consecutive unit ids starting at `--unit-id` (or the `device_id` of the
+  server, or 1). It excludes `--device`. With more than one device `(any-unit on)` is not written and a
+  warning says that only these unit ids answer; with a single device it behaves like the default.
+- `--exact-unit` leaves out `(any-unit on)`, so the device answers only its own unit id.
 - `--server-name NAME` picks the `server_list` entry (default: the first, warning likewise).
 - `--no-server` omits the `(server ...)` section.
 - `--action-ms N` sets the step time of increments and random values (default 1000).
@@ -27,14 +32,47 @@ file `pymodbus/server/simulator/setup.json` is the reference). It was checked ag
 | `action` `increment` | `(ramp (from min) (to max) (step 1) (every-ms N) (mode wrap))`; min and max from `parameters` (`minval`, `maxval`), else the start value and the type maximum (`float32`: 16777216) |
 | `action` `random` | `(static middle)` plus `(noise (amplitude half-range) (every-ms N))` over `minval`..`maxval` (default 1..65536) |
 | `action` `uptime` | a ramp from 1 that counts seconds and holds at the type maximum |
+| `action` `timestamp` | seven `u16` [`(clock FIELD)`](../config/behaviours/clock.md) points: cell A year, A+1 month, A+2 day, A+3 weekday (Monday 1), A+4 hour, A+5 minute, A+6 second, local time; see below |
+| `action` `reset` | a warning, the initial value stays static; see below |
 | `repeat` | the copied cells |
 | `identity` of the server | `vendor-name`, `product-code`, `vendor-url`, `product-name`, `model-name`, `major-minor-revision` |
 | `server_list` entry | `(server ...)`, see [servers](import-pymodbus-servers.md) |
-| `device_id` of the server | the unit id (otherwise `--unit-id`, default 1) |
+| `device_id` of the server | the unit id, and no `(any-unit on)` (otherwise `--unit-id`, default 1) |
+| a server without `device_id` | `(any-unit on)` on the device: it answers every unit id like pymodbus; `--exact-unit` omits it |
+| `device_list` entries | one device per run (`--device`), or all with `--all-devices` |
 
 `increment` and `random` in pymodbus change the value on every read; mogbus values depend on time, so
 the importer approximates them with one step per `--action-ms`. An increment whose start value differs
 from `minval` starts at `minval`, with a warning.
+
+## The timestamp action
+
+pymodbus declares it as `"action": "timestamp"` on a `uint16` entry (it also works on the first cell of
+a `uint32` or `float32`). When a client reads that cell, pymodbus overwrites the seven cells from
+there on with year, month, weekday and so on, so the six following cells have to exist in the file
+(declared as plain `uint16` cells, usually in the same range) and are rewritten whatever they hold.
+The importer makes the seven cells at A..A+6 clock points and warns about every declared cell it
+replaces and about cells that are not declared. A range such as `[A, A+6]` with the action puts the
+action on every cell; the importer keeps one block starting at A and warns about the others.
+
+Two differences remain. pymodbus writes the month as 0-11 (`month - 1`), a `(clock month)` point
+shows 1-12; the importer warns, and the client has to subtract 1 (or ignore it). pymodbus refreshes
+the seven cells only when the first cell is read; mogbus clock points are correct whichever cell is
+read.
+
+## The reset action
+
+In pymodbus, reading a cell with `"action": "reset"` raises and reboots the server. mogbus has no
+register tied to a restart: the importer keeps the initial value static and warns. The nearest
+feature is `(fault (kind restart) (percent N))`, which resets the device state on a share of the
+requests rather than on access to one register; see [restart](../config/faults/restart.md).
+
+## Several devices
+
+`--all-devices` writes every `device_list` entry as a device of the same config. pymodbus answers
+every unit id with the first device; mogbus routes by exact unit id, so a client has to use the ids
+the importer assigned (`unit-id` lines and the warning). Without the option only one device is
+imported.
 
 ## Shared blocks
 

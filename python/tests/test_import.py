@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -45,7 +46,7 @@ class ImportCase(unittest.TestCase):
     def points(self, out):
         """Non-comment lines of the device body, whitespace collapsed."""
         lines = [" ".join(ln.split()) for ln in out.splitlines()
-                 if ln.strip().startswith("(") and not ln.strip().startswith(("(device", "(name", "(unit-id", "(server"))]
+                 if ln.strip().startswith("(") and not ln.strip().startswith(("(device", "(name", "(unit-id", "(server", "(any-unit"))]
         # the last point carries the closing parenthesis of the device
         while lines and lines[-1].count(")") > lines[-1].count("("):
             lines[-1] = lines[-1][:-1]
@@ -568,11 +569,42 @@ class Pymodbus(ImportCase):
         self.assertIn("(ramp (from 1) (to 4294967295) (step 1) (every-ms 1000) (mode hold))", "\n".join(pts))
 
     def test_unsupported_actions_warn_and_keep_the_value(self):
-        for action in ("timestamp", "reset", "my_custom"):
-            with self.subTest(action=action):
-                pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 9, "action": action}]}))
-                self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
-                self.assertIn("action '%s' has no mogbus equivalent" % action, err)
+        pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "my_custom"}]}))
+        self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
+        self.assertIn("action 'my_custom' has no mogbus equivalent", err)
+
+    def test_reset_warns_and_names_the_restart_fault(self):
+        pts, _, err = self.body(pm_doc({"uint16": [{"addr": 1, "value": 9, "action": "reset"}]}))
+        self.assertIn("(holding 1 (access read-only) (static 9)", "\n".join(pts))
+        self.assertIn("action 'reset' reboots the pymodbus server", err)
+        self.assertIn("(fault (kind restart)", err)
+        self.assertIn("not per register", err)
+
+    def test_timestamp_becomes_seven_clock_points(self):
+        doc = pm_doc({"uint16": [{"addr": [10, 16], "action": "timestamp"}], "write": [[10, 16]]})
+        pts, out, err = self.body(doc)
+        fields = ("year", "month", "day", "weekday", "hour", "minute", "second")
+        for k, f in enumerate(fields):
+            self.assertTrue(any(p.startswith("(holding %d (clock %s)" % (10 + k, f)) for p in pts), f)
+            self.assertTrue(any(p.startswith("(input %d (clock %s)" % (10 + k, f)) for p in pts), f)
+        self.assertIn("month as 0-11", err)
+        self.assertEqual(err.count("month as 0-11"), 1)
+        self.assertIn("pymodbus cells 11, 12, 13, 14, 15, 16: timestamp action inside", err)
+        if mogbus_bin():
+            path = self.write("ts.scm", out)
+            r = subprocess.run([mogbus_bin(), "--check", path], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_timestamp_single_cell_overrides_and_missing_cells(self):
+        doc = pm_doc({"uint16": [{"addr": 5, "action": "timestamp"}, {"addr": 7, "value": 3}]})
+        pts, _, err = self.body(doc)
+        self.assertIn("(holding 11 (access read-only) (clock second)", "\n".join(pts))
+        self.assertIn("replace the declared cells 7", err)
+        self.assertIn("cells 6, 8, 9, 10, 11 are not declared", err)
+
+    def test_timestamp_on_a_string_warns(self):
+        _, _, err = self.body(pm_doc({"string": [{"addr": [0, 3], "value": "abcd", "action": "timestamp"}]}))
+        self.assertIn("action 'timestamp' on a string is not supported", err)
 
     def test_bits_action_warns(self):
         _, _, err = self.body(pm_doc({"bits": [{"addr": 0, "value": 1, "action": "increment"}]}))
@@ -655,6 +687,41 @@ class Pymodbus(ImportCase):
         self.assertIn("(unit-id 1)", out)
         code, out, _ = self.pm(pm_doc(servers=servers), "--no-server")
         self.assertNotIn("(server", out)
+
+    def test_any_unit_by_default_and_exact_unit(self):
+        doc = pm_doc({"uint16": [{"addr": 1, "value": 5}]})
+        code, out, _ = self.pm(doc)
+        self.assertIn("(any-unit on)", out)
+        code, out, _ = self.pm(doc, "--exact-unit")
+        self.assertNotIn("any-unit", out)
+        servers = {"a": {"comm": "tcp", "host": "h", "port": 1, "framer": "socket", "device_id": 9}}
+        code, out, _ = self.pm(pm_doc(servers=servers))
+        self.assertNotIn("(any-unit", out)
+        self.assertIn("(unit-id 9)", out)
+
+    def test_all_devices(self):
+        doc = pm_doc({"uint16": [{"addr": 1, "value": 11}]})
+        second = pm_doc({"uint16": [{"addr": 2, "value": 22}]})["device_list"]["dev"]
+        doc["device_list"]["second"] = second
+        doc["device_list"]["third"] = second
+        code, out, err = self.pm(doc, "--all-devices", "--unit-id", "5")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(re.findall(r'\(name "(\w+)"\)', out), ["dev", "second", "third"])
+        self.assertEqual(re.findall(r"\(unit-id (\d+)\)", out), ["5", "6", "7"])
+        self.assertNotIn("any-unit", out)
+        self.assertIn("(holding 2 (access read-only) (static 22)", out)
+        self.assertIn("3 devices", err)
+        self.assertIn("unit ids 5-7", err)
+        code, out, _ = self.pm(pm_doc({"uint16": [{"addr": 1, "value": 11}]}), "--all-devices")
+        self.assertIn("(any-unit on)", out)
+        code, _, err = self.pm(doc, "--all-devices", "--device", "dev")
+        self.assertEqual(code, 1)
+        self.assertIn("exclude each other", err)
+        if mogbus_bin():
+            code, out, _ = self.pm(doc, "--all-devices")
+            r = subprocess.run([mogbus_bin(), "--check", self.write("multi.scm", out)],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_strict(self):
         code, _, _ = self.pm(pm_doc({"uint16": [{"addr": 1, "action": "reset"}]}), "--strict")

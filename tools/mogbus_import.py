@@ -34,6 +34,8 @@ NET_MODES = ("tcp", "rtu-tcp", "ascii-tcp", "udp", "rtu-udp", "ascii-udp")
 DEVICE_MODES = ("rtu-device", "ascii-device")
 PTY_MODES = ("rtu-pty", "ascii-pty")
 
+CLOCK_FIELDS = ("year", "month", "day", "weekday", "hour", "minute", "second")
+
 LAYOUTS = {"ABCD": ("high-first", "big"), "CDAB": ("low-first", "big"),
            "BADC": ("high-first", "little"), "DCBA": ("low-first", "little")}
 LAYOUT_DIGITS = {"1234": "ABCD", "3412": "CDAB", "2143": "BADC", "4321": "DCBA"}
@@ -135,6 +137,7 @@ class Result:
     device_items: list = field(default_factory=list)
     server: str = ""
     info: list = field(default_factory=list)
+    more: list = field(default_factory=list)   # further devices of a multi-device config
 
 
 # ---------------------------------------------------------------- formatting
@@ -232,13 +235,16 @@ def server_form(mode, port=None, bind=None, path=None, baud=None, extra=()):
 
 
 def render_config(res, rep, tool_line):
+    npts = sum(len(d.points) for d in [res] + res.more)
     out = ["; " + tool_line, "; Source: " + res.source,
-           "; %d points. Review the notes and warnings below, then check it with:" % len(res.points),
+           "; %d points. Review the notes and warnings below, then check it with:" % npts,
            ";   ./mogbus --check THIS-FILE.scm"]
-    if res.info:
+    infos = [i for d in [res] + res.more for i in d.info]
+    infos = [i for k, i in enumerate(infos) if i not in infos[:k]]
+    if infos:
         out.append(";")
         out.append("; Notes:")
-        out.extend(";   " + i for i in res.info)
+        out.extend(";   " + i for i in infos)
     if rep.warnings:
         out.append(";")
         out.append("; Warnings:")
@@ -246,19 +252,22 @@ def render_config(res, rep, tool_line):
     out.append("")
     if res.server:
         out += [res.server, ""]
-    out.append("(device")
-    out.append("  (name %s)" % q(res.name[:63]))
-    out.append("  (unit-id %d)" % res.unit_id)
-    for item in res.device_items:
-        out.append("  " + item)
-    for table in TABLES:
-        pts = sorted((p for p in res.points if p.table == table), key=lambda p: p.addr)
-        if not pts:
-            continue
-        out += ["", "  ; " + TABLE_TITLE[table]]
-        for p in pts:
-            out.extend("  " + ln for ln in render_point(p))
-    out[-1] += ")"
+    for k, dev in enumerate([res] + res.more):
+        if k:
+            out.append("")
+        out.append("(device")
+        out.append("  (name %s)" % q(dev.name[:63]))
+        out.append("  (unit-id %d)" % dev.unit_id)
+        for item in dev.device_items:
+            out.append("  " + item)
+        for table in TABLES:
+            pts = sorted((p for p in dev.points if p.table == table), key=lambda p: p.addr)
+            if not pts:
+                continue
+            out += ["", "  ; " + TABLE_TITLE[table]]
+            for p in pts:
+                out.extend("  " + ln for ln in render_point(p))
+        out[-1] += ")"
     return "\n".join(out) + "\n"
 
 
@@ -803,17 +812,84 @@ def convert_pymodbus(args, rep):
         rep.error("no device_list: this is not a pymodbus simulator configuration")
         return None
     names = list(devices)
-    if args.device:
+    if args.all_devices and args.device:
+        rep.error("--all-devices and --device exclude each other")
+        return None
+    if args.all_devices:
+        picked = names
+    elif args.device:
         if args.device not in devices:
             rep.error("no device %r in device_list (have: %s)" % (args.device, ", ".join(names)))
             return None
-        dname = args.device
+        picked = [args.device]
     else:
-        dname = names[0]
+        picked = names[:1]
         if len(names) > 1:
-            rep.warn("device_list has %d devices; using %r, ignoring %s (--device NAME picks one)"
-                     % (len(names), dname, ", ".join(repr(n) for n in names[1:])))
-    dev = devices[dname]
+            rep.warn("device_list has %d devices; using %r, ignoring %s (--device NAME picks one, "
+                     "--all-devices imports them all)"
+                     % (len(names), picked[0], ", ".join(repr(n) for n in names[1:])))
+
+    # server first: its device_id and identity apply to the devices
+    server = ""
+    device_items = []
+    exact = args.exact_unit
+    first_unit = args.unit_id or 1
+    info = []
+    ident = {"VendorName": "vendor-name", "ProductCode": "product-code", "VendorUrl": "vendor-url",
+             "ProductName": "product-name", "ModelName": "model-name",
+             "MajorMinorRevision": "major-minor-revision",
+             "UserApplicationName": "user-application-name"}
+    servers = data.get("server_list")
+    if isinstance(servers, dict) and servers and not args.no_server:
+        sname = args.server_name or next(iter(servers))
+        if sname not in servers:
+            rep.error("no server %r in server_list (have: %s)" % (sname, ", ".join(servers)))
+        else:
+            if not args.server_name and len(servers) > 1:
+                rep.warn("server_list has %d entries; using %r (--server-name NAME picks one, "
+                         "--no-server omits the section)" % (len(servers), sname))
+            srv = servers[sname]
+            server = pm_server(srv, sname, rep)
+            if "device_id" in srv:
+                exact = True
+                if not args.unit_id:
+                    first_unit = int(srv["device_id"])
+            idn = srv.get("identity")
+            if isinstance(idn, dict):
+                for k, v in idn.items():
+                    if k in ident:
+                        device_items.append("(%s %s)" % (ident[k], q(v)))
+    multi = len(picked) > 1
+    any_unit = not exact and not multi
+    if any_unit:
+        device_items.insert(0, "(any-unit on)")
+    elif multi:
+        rep.warn("%d devices: a pymodbus server answers every unit id, mogbus answers only the "
+                 "unit ids %d-%d (--unit-id picks the first)"
+                 % (len(picked), first_unit, first_unit + len(picked) - 1))
+    else:
+        info.append("only unit %d is answered (%s)" % (
+            first_unit, "--exact-unit" if args.exact_unit else "the pymodbus server has a device_id"))
+
+    results = []
+    for k, dname in enumerate(picked):
+        res = pm_device(devices[dname], dname, args, rep)
+        if res is None:
+            return None
+        res.unit_id = first_unit + k
+        res.device_items = list(device_items)
+        results.append(res)
+    res = results[0]
+    if multi:
+        res.source = "pymodbus simulator file %s, devices %s" % (
+            os.path.basename(args.file), ", ".join(repr(n) for n in picked))
+    res.more = results[1:]
+    res.server = server
+    res.info = info + res.info
+    return res
+
+
+def pm_device(dev, dname, args, rep):
     setup = dev.get("setup", {})
     shared = bool(setup.get("shared blocks", False))
     sizes = {k: int(setup.get(k + " size", 0)) for k in ("co", "di", "ir", "hr")}
@@ -896,40 +972,52 @@ def convert_pymodbus(args, rep):
             else:
                 cells.pop(i, None)
 
+    # pymodbus runs a timestamp action on read of its cell and writes the 7 cells from there on
+    # (cells declared elsewhere keep their place in the array but get time values); mogbus
+    # clock points own A..A+6.
+    owner = {}
+    shadowed = {}
+    for i, c in sorted(cells.items()):
+        if c.action != "timestamp" or c.type not in ("uint16", "uint32", "float32"):
+            continue
+        what = "pymodbus %s at cell %d" % (c.type, i)
+        if i in owner:
+            shadowed.setdefault(owner[i], []).append(i)
+            continue
+        over = [k for k in range(i, i + 7) if k in cells and
+                (k > i or c.type != "uint16") and cells[k].action != "timestamp"]
+        if over:
+            rep.warn("%s: timestamp covers cells %d-%d; the clock points replace the declared "
+                     "cells %s" % (what, i, i + 6, ", ".join(str(k) for k in over)))
+        missing = [k for k in range(i + 1, i + 7) if k not in cells]
+        if missing:
+            rep.warn("%s: timestamp cells %s are not declared; pymodbus rejects reads of them, "
+                     "mogbus serves the clock there" % (what, ", ".join(str(k) for k in missing)))
+        rep.warn("%s: pymodbus writes the month as 0-11, a (clock month) point shows 1-12; "
+                 "subtract 1 on the client or accept the difference" % what)
+        for f, field_name in enumerate(CLOCK_FIELDS):
+            old = cells.get(i + f)
+            cells[i + f] = Cell("clock", f, None, field_name, old.access if old else c.access)
+            owner[i + f] = i
+        k = i + 7
+        while k in cells and cells[k].type == "next":
+            del cells[k]       # second half of a 32-bit value that began inside the block
+            k += 1
+
+    for start, ks in shadowed.items():
+        rep.warn("pymodbus cells %s: timestamp action inside the timestamp block of cell %d; pymodbus "
+                 "would write shifted time values from each of them, mogbus keeps the one block"
+                 % (", ".join(map(str, ks)), start))
+
     pts = pm_points(cells, shared, sizes, args, rep)
     if len(sum(([p] * p.count for p in pts), [])) > MAX_POINTS:
         rep.error("more than %d points; a mogbus device holds at most %d" % (MAX_POINTS, MAX_POINTS))
-    res = Result(name=args.name or dname, unit_id=args.unit_id or 1, points=pts,
+    res = Result(name=args.name if args.name and not args.all_devices else dname, unit_id=1, points=pts,
                  source="pymodbus simulator file %s, device %r" % (os.path.basename(args.file), dname))
     if setup.get("shared blocks"):
         res.info.append("pymodbus serves one register array for all tables: every register is "
                         "emitted in both the holding and the input table, every bit cell in both "
                         "the coil and the discrete table.")
-    ident = {"VendorName": "vendor-name", "ProductCode": "product-code", "VendorUrl": "vendor-url",
-             "ProductName": "product-name", "ModelName": "model-name",
-             "MajorMinorRevision": "major-minor-revision",
-             "UserApplicationName": "user-application-name"}
-    servers = data.get("server_list")
-    if isinstance(servers, dict) and servers and not args.no_server:
-        sname = args.server_name or next(iter(servers))
-        if sname not in servers:
-            rep.error("no server %r in server_list (have: %s)" % (sname, ", ".join(servers)))
-        else:
-            if not args.server_name and len(servers) > 1:
-                rep.warn("server_list has %d entries; using %r (--server-name NAME picks one, "
-                         "--no-server omits the section)" % (len(servers), sname))
-            srv = servers[sname]
-            res.server = pm_server(srv, sname, rep)
-            if "device_id" in srv and not args.unit_id:
-                res.unit_id = int(srv["device_id"])
-            elif "device_id" not in srv:
-                res.info.append("the pymodbus server answers every unit id; mogbus answers unit %d "
-                                "only (--unit-id)" % res.unit_id)
-            idn = srv.get("identity")
-            if isinstance(idn, dict):
-                for k, v in idn.items():
-                    if k in ident:
-                        res.device_items.append("(%s %s)" % (ident[k], q(v)))
     return res
 
 
@@ -1011,6 +1099,11 @@ def pm_behaviour(p, ctype, value, action, params, args, rep, where):
     elif action == "uptime":
         p.extra = [ramp_text(1, tmax, 1000, "hold")]
         p.value = None
+    elif action == "reset":
+        rep.warn("%s: action 'reset' reboots the pymodbus server when the cell is read; mogbus has no "
+                 "register that restarts the device. The nearest feature is (fault (kind restart) "
+                 "(percent N)), which fires per request, not per register; the initial value is "
+                 "kept static" % where)
     else:
         rep.warn("%s: action %r has no mogbus equivalent; the initial value is kept static" %
                  (where, action))
@@ -1048,7 +1141,9 @@ def pm_points(cells, shared, sizes, args, rep):
         c = cells[i]
         if c.type == "next":
             continue
-        if c.type == "bits":
+        if c.type == "clock":
+            items.append(("clock", i, 1, c, None))
+        elif c.type == "bits":
             items.append(("bits", i, 1, c, None))
         elif c.type == "uint16":
             items.append(("u16", i, 1, c, [c.value]))
@@ -1069,7 +1164,8 @@ def pm_points(cells, shared, sizes, args, rep):
     pts = []
     for kind, idx, width, c, words in items:
         where = "pymodbus %s at cell %d" % ({"bits": "bits", "u16": "uint16", "u32": "uint32",
-                                              "float32": "float32", "string": "string"}[kind], idx)
+                                              "float32": "float32", "string": "string",
+                                              "clock": "timestamp"}[kind], idx)
         if kind == "bits":
             targets = bit_target(idx)
             if not targets:
@@ -1095,7 +1191,11 @@ def pm_points(cells, shared, sizes, args, rep):
         for table, addr in targets:
             p = Point(table=table, addr=addr, label=where, src="pymodbus " + where.split()[1],
                       first=idx, last=idx, read_only=table == "holding" and not c.access)
-            if kind == "string":
+            if kind == "clock":
+                p.type = "u16"
+                p.extra = ["(clock %s)" % c.params]
+                p.src = "pymodbus timestamp (%s)" % c.params
+            elif kind == "string":
                 raw = b"".join(w.to_bytes(2, "big") for w in words)
                 p.type, p.length, p.padding = "string", width, "space"
                 p.value = raw.decode("ascii", "replace").rstrip(" ") if c.action is None else \
@@ -1176,6 +1276,10 @@ def build_parser():
     p = sub.add_parser("pymodbus", help="a pymodbus simulator JSON configuration")
     common(p)
     p.add_argument("--device", help="device_list entry to import (default: the first)")
+    p.add_argument("--all-devices", action="store_true",
+                   help="import every device_list entry, with consecutive unit ids from --unit-id")
+    p.add_argument("--exact-unit", action="store_true",
+                   help="do not write (any-unit on): answer only the unit id of the device")
     p.add_argument("--server-name", help="server_list entry to import (default: the first)")
     p.add_argument("--no-server", action="store_true", help="do not write a (server ...) section")
     p.add_argument("--action-ms", type=int, default=1000,
