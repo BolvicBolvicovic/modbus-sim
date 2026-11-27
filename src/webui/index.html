@@ -51,6 +51,7 @@ input { width: 9rem; }
 <button id="pause" type="button" aria-pressed="false">Pause</button>
 <button id="refresh" type="button">Refresh now</button>
 <label>Refresh every <select id="every"></select></label>
+<span id="rate" class="muted"></span>
 <span id="info" class="muted"></span>
 </div>
 <div id="message" role="status" aria-live="polite"></div>
@@ -71,8 +72,19 @@ input { width: 9rem; }
 </div>
 </div>
 <div id="plotview" hidden>
+<div class="bar">
+<button id="zoomout" type="button" aria-label="Zoom out">&minus;</button>
+<button id="zoomin" type="button" aria-label="Zoom in">+</button>
+<span id="winlabel" class="muted"></span>
+</div>
 <div id="plot"></div>
 <div id="legend" class="legend"></div>
+<div class="bar" style="margin-top:8px">
+<label>Add point <select id="padd_space"></select></label>
+<input id="padd" list="padd_list" placeholder="address or type" autocomplete="off" aria-label="Point to add">
+<datalist id="padd_list"></datalist>
+<button id="padd_go" type="button">Add</button>
+</div>
 </div>
 
 <div class="panel" id="editor">
@@ -118,7 +130,7 @@ input { width: 9rem; }
   "use strict";
   var SPACES = ["coil", "discrete", "input", "holding"];
   var KINDS = ["delay", "drop", "exception", "corrupt", "disconnect", "restart", "sensor-disconnect"];
-  var PAGE = 50, EVERY_MS = 1000, MAX_SERIES = 8, KEEP = 3000, WINDOW_MS = 300000;
+  var PAGE = 50, EVERY_MS = 1000, MAX_SERIES = 8, KEEP = 30000, WINDOW_MS = 300000;
   var st = { unit: null, space: "holding", all: [], page: 0, paused: false, busy: false, gen: 0, view: "table", sel: [] };
   var $ = function (id) { return document.getElementById(id); };
 
@@ -236,23 +248,28 @@ input { width: 9rem; }
     }
     return null;
   }
+  function addSeries(space, pt) {
+    var i, used = {};
+    if (st.sel.length >= MAX_SERIES) {
+      say("message", "At most " + MAX_SERIES + " points can be plotted; remove one first");
+      return false;
+    }
+    st.sel.forEach(function (x) { used[x.c] = true; });
+    for (i = 0; used[i]; i++) { }
+    st.sel.push({ space: space, pt: pt, c: i, buf: [], last: "" });
+    say("message", "", false);
+    refresh();
+    return true;
+  }
+  function selChanged() { syncChecks(); fillAdd(); requestDraw(); }
   function toggleSeries(space, pt, cb) {
-    var ser = findSeries(space, pt.address), i, used = {};
+    var ser = findSeries(space, pt.address);
     if (!cb.checked) {
       if (ser) { st.sel.splice(st.sel.indexOf(ser), 1); }
     } else if (!ser) {
-      if (st.sel.length >= MAX_SERIES) {
-        cb.checked = false;
-        say("message", "At most " + MAX_SERIES + " points can be plotted; remove one first");
-        return;
-      }
-      st.sel.forEach(function (x) { used[x.c] = true; });
-      for (i = 0; used[i]; i++) { }
-      st.sel.push({ space: space, pt: pt, c: i, buf: [], last: "" });
-      say("message", "", false);
-      refresh();
+      addSeries(space, pt);
     }
-    drawPlot();
+    selChanged();
   }
   function syncChecks() {
     rows.forEach(function (row) {
@@ -289,7 +306,12 @@ input { width: 9rem; }
     });
     function sample(ser, t, v, text) {
       ser.buf.push({ t: t, v: v });
-      while (ser.buf.length > KEEP || (ser.buf.length && ser.buf[0].t < t - WINDOW_MS)) { ser.buf.shift(); }
+      /* Trim in batches: a shift() per sample would be quadratic at 10 ms. */
+      if (ser.buf.length > KEEP + 500 || ser.buf[0].t < t - WINDOW_MS - 5000) {
+        var cut = Math.max(0, ser.buf.length - KEEP), n = 0;
+        while (n < ser.buf.length && ser.buf[n].t < t - WINDOW_MS) { n++; }
+        ser.buf.splice(0, Math.max(cut, n));
+      }
       ser.last = text;
     }
     st.busy = true;
@@ -315,7 +337,7 @@ input { width: 9rem; }
           if (it.ser) { sample(it.ser, t, null, "error"); }
         });
       });
-    })).then(function () { st.busy = false; drawPlot(); }, function () { st.busy = false; });
+    })).then(function () { st.busy = false; ticked(); requestDraw(); }, function () { st.busy = false; });
     if (Date.now() - faultsAt >= 1000) { loadFaults(); }
   }
 
@@ -350,30 +372,130 @@ input { width: 9rem; }
       rm.setAttribute("aria-label", "Remove " + ser.space + " " + ser.pt.address + " from the plot");
       rm.addEventListener("click", function () {
         st.sel.splice(st.sel.indexOf(ser), 1);
-        syncChecks();
-        drawPlot();
+        selChanged();
       });
       item.appendChild(rm);
       legend.appendChild(item);
     });
   }
 
+  /* The plot is a strip chart: "now" is pinned at the right edge and a fixed window slides under it.
+     Drawing is decoupled from sampling: samples and zoom only mark the chart dirty, and one animation
+     frame draws it; while the plot is on screen and not paused it redraws every frame to keep sliding. */
+  /* Add point: the plottable points of one table, fetched once per device and table. */
+  var pcache = {};
+  function tablePoints(space) {
+    var k = st.unit + ":" + space, unit = st.unit, acc = [];
+    if (pcache[k]) { return Promise.resolve(pcache[k]); }
+    function more(from) {
+      return api("GET", "/api/devices/" + unit + "/points?space=" + space + "&limit=200&from=" + from).then(function (j) {
+        acc = acc.concat(j.points);
+        if (j.next !== null) { return more(j.next); }
+        if (unit === st.unit) { pcache[k] = acc; }
+        return acc;
+      });
+    }
+    return more(0);
+  }
+  function pointLabel(space, pt) { return space + " " + pt.address + " \u00b7 " + pt.type + " \u00b7 " + pt.kind; }
+  function fillAdd() {
+    var space = $("padd_space").value, list = $("padd_list"), unit = st.unit;
+    clear(list);
+    if (unit === null || !space) { return; }
+    tablePoints(space).then(function (pts) {
+      if (unit !== st.unit || space !== $("padd_space").value) { return; }
+      clear(list);
+      pts.forEach(function (pt) {
+        var o;
+        if (pt.type === "string" || findSeries(space, pt.address) !== null) { return; }
+        o = el("option");
+        o.value = String(pt.address);
+        o.label = pointLabel(space, pt);
+        list.appendChild(o);
+      });
+    }).catch(function (e) { say("message", "Cannot list points: " + e.message); });
+  }
+  function addFromSearch() {
+    var space = $("padd_space").value, text = $("padd").value.trim().toLowerCase();
+    if (st.unit === null) { return; }
+    tablePoints(space).then(function (pts) {
+      var ok = pts.filter(function (pt) { return pt.type !== "string"; }), hit;
+      hit = ok.filter(function (pt) { return String(pt.address) === text; });
+      if (!hit.length && text !== "") {
+        hit = ok.filter(function (pt) { return pointLabel(space, pt).toLowerCase().indexOf(text) >= 0; });
+      }
+      if (!hit.length) { say("message", "No " + space + " point matches \"" + text + "\"", true); return; }
+      if (hit.length > 1) { say("message", hit.length + " " + space + " points match; type more of the address", true); return; }
+      if (findSeries(space, hit[0].address) !== null) { say("message", pointLabel(space, hit[0]) + " is already plotted", true); return; }
+      if (addSeries(space, hit[0])) { $("padd").value = ""; selChanged(); }
+    }).catch(function (e) { say("message", "Cannot list points: " + e.message); });
+  }
+
+  var WINDOWS = [1000, 2000, 5000, 10000, 30000, 60000, 120000, 300000], win = 4;
+  function fmtSpan(ms) { return ms >= 60000 ? ms / 60000 + " min" : ms / 1000 + " s"; }
+  function setWindow(i) {
+    win = Math.max(0, Math.min(WINDOWS.length - 1, i));
+    try { localStorage.setItem("mogbus.window", String(WINDOWS[win])); } catch (e) { /* storage unavailable */ }
+    $("winlabel").textContent = "window " + fmtSpan(WINDOWS[win]);
+    $("zoomin").disabled = win === 0;
+    $("zoomout").disabled = win === WINDOWS.length - 1;
+    requestDraw();
+  }
+  /* Achieved sampling rate: completed ticks of the last second, shown a few times a second. */
+  var ticks = [], rateAt = 0;
+  function ticked() {
+    var t = Date.now();
+    ticks.push(t);
+    while (ticks[0] < t - 1000) { ticks.shift(); }
+    if (t - rateAt >= 250) { rateAt = t; $("rate").textContent = "\u2248 " + ticks.length + " samples/s"; }
+  }
+
+  var raf = null, dirty = false, frozenNow = 0, frames = 0;
+  function sliding() { return st.view === "plot" && !st.paused && !document.hidden && st.sel.length > 0; }
+  function frame() {
+    raf = null;
+    if (dirty || sliding()) { dirty = false; frames++; drawPlot(); }
+    if (sliding()) { raf = requestAnimationFrame(frame); }
+  }
+  function requestDraw() {
+    dirty = true;
+    if (raf === null) { raf = requestAnimationFrame(frame); }
+  }
+  window.mogbusFrames = function () { return frames; };
+
   function drawPlot() {
     var host = $("plot"), W = Math.max(320, host.clientWidth || 720), H = 300, L = 56, R = 10, T = 10, B = 24;
-    var now = Date.now(), first = now, span, t0, lo = Infinity, hi = -Infinity, s, i, y, step;
+    var now = st.paused ? frozenNow : Date.now(), span = WINDOWS[win], t0 = now - span, lo = Infinity, hi = -Infinity, s, i, y, step, plotW = W - L - R;
+    var all = [];
     if (st.view !== "plot") { return; }
     clear(host);
     if (legendKey !== st.sel.map(function (x) { return x.space + x.pt.address; }).join()) { buildLegend(); }
     st.sel.forEach(function (ser) { ser.valEl.textContent = ser.last === "" ? "-" : ser.last; });
-    if (!st.sel.length) { host.appendChild(el("p", "Tick Plot on points in the table to plot them", "muted")); return; }
-    /* The time axis grows with the oldest sample, from 10 s up to the 5-minute window. */
-    st.sel.forEach(function (ser) { if (ser.buf.length) { first = Math.min(first, ser.buf[0].t); } });
-    span = Math.min(WINDOW_MS, Math.max(10000, now - first));
-    t0 = now - span;
+    if (!st.sel.length) { host.appendChild(el("p", "Tick Plot on points in the table, or add one below, to plot them", "muted")); return; }
+    function px(t) { return L + (t - t0) / span * plotW; }
+    /* One pass per series: the visible samples, reduced to the minimum and maximum of every pixel column. */
     st.sel.forEach(function (ser) {
-      ser.buf.forEach(function (p) {
-        if (p.v !== null && p.t >= t0) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v); }
-      });
+      var buf = ser.buf, a = 0, b = buf.length, m, segs = [], cur = null, col = -1, mn = null, mx = null, p, x;
+      while (a < b) { m = (a + b) >> 1; if (buf[m].t < t0) { a = m + 1; } else { b = m; } }
+      function flush() {
+        if (mn === null) { return; }
+        if (mn === mx) { cur.push(mn); }
+        else if (mn.t < mx.t) { cur.push(mn, mx); }
+        else { cur.push(mx, mn); }
+        mn = mx = null;
+      }
+      for (; a < buf.length && buf[a].t <= now; a++) {
+        p = buf[a];
+        if (p.v === null) { flush(); cur = null; col = -1; continue; }
+        if (!cur) { cur = []; segs.push(cur); }
+        x = Math.floor(px(p.t));
+        if (x !== col) { flush(); col = x; mn = mx = p; }
+        else { if (p.v < mn.v) { mn = p; } if (p.v > mx.v) { mx = p; } }
+        if (p.v < lo) { lo = p.v; }
+        if (p.v > hi) { hi = p.v; }
+      }
+      flush();
+      all.push(segs);
     });
     if (lo > hi) { lo = 0; hi = 1; }
     if (lo === hi) { lo -= 1; hi += 1; }
@@ -381,38 +503,37 @@ input { width: 9rem; }
     lo = Math.floor(lo / step) * step;
     hi = Math.ceil(hi / step) * step;
     if (lo === hi) { hi = lo + step; }
-    function px(t) { return L + (t - t0) / span * (W - L - R); }
     function py(v) { return T + (hi - v) / (hi - lo) * (H - T - B); }
-    s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Plot of the selected points over the last " + Math.round(span / 1000) + " seconds" });
+    s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Plot of the selected points over the last " + fmtSpan(span) });
     for (i = 0; lo + i * step <= hi + step / 2; i++) {
       y = lo + i * step;
       s.appendChild(svg("line", { x1: L, x2: W - R, y1: py(y), y2: py(y), "class": "grid" }));
       s.appendChild(svg("text", { x: L - 4, y: py(y) + 4, "text-anchor": "end", "class": "tick" }, fmt(y)));
     }
-    step = nice(span / 1000, 5);
-    for (i = 0; i * step * 1000 <= span; i++) {
-      var x = px(now - i * step * 1000);
+    /* Gridlines sit at absolute multiples of the step, so they slide with the data; labels count back from now. */
+    step = nice(span, 5);
+    for (i = Math.ceil(t0 / step); i * step <= now; i++) {
+      var x = px(i * step), r = now - i * step;
+      if (x < L) { continue; }
       s.appendChild(svg("line", { x1: x, x2: x, y1: T, y2: H - B, "class": "grid" }));
-      s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": i === 0 ? "end" : "middle", "class": "tick" },
-        i === 0 ? "now" : "-" + fmt(i * step) + "s"));
+      if (x < W - R - 34) {
+        s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": "middle", "class": "tick" },
+          "-" + (step >= 1000 ? Math.round(r / 1000) + "s" : Math.round(r / 10) * 10 + "ms")));
+      }
     }
-    st.sel.forEach(function (ser) {
-      var color = "var(--c" + ser.c + ")", step = isBit(ser.space), segs = [], cur = null, d;
-      ser.buf.forEach(function (p) {
-        if (p.v === null || p.t < t0) { cur = null; return; }
-        if (!cur) { cur = []; segs.push(cur); }
-        cur.push([px(p.t), py(p.v)]);
-      });
-      segs.forEach(function (seg) {
-        var e, k;
+    s.appendChild(svg("text", { x: W - R, y: H - 8, "text-anchor": "end", "class": "tick" }, "now"));
+    st.sel.forEach(function (ser, n) {
+      var color = "var(--c" + ser.c + ")", bit = isBit(ser.space);
+      all[n].forEach(function (seg) {
+        var e, k, d;
         if (seg.length === 1) {
-          e = svg("circle", { cx: seg[0][0], cy: seg[0][1], r: 2 });
+          e = svg("circle", { cx: px(seg[0].t), cy: py(seg[0].v), r: 2 });
           e.style.fill = color;
         } else {
-          d = "M" + seg[0][0].toFixed(1) + " " + seg[0][1].toFixed(1);
+          d = "M" + px(seg[0].t).toFixed(1) + " " + py(seg[0].v).toFixed(1);
           for (k = 1; k < seg.length; k++) {
-            if (step) { d += "H" + seg[k][0].toFixed(1) + "V" + seg[k][1].toFixed(1); }
-            else { d += "L" + seg[k][0].toFixed(1) + " " + seg[k][1].toFixed(1); }
+            if (bit) { d += "H" + px(seg[k].t).toFixed(1) + "V" + py(seg[k].v).toFixed(1); }
+            else { d += "L" + px(seg[k].t).toFixed(1) + " " + py(seg[k].v).toFixed(1); }
           }
           e = svg("path", { d: d, "class": "line" });
           e.style.stroke = color;
@@ -498,13 +619,17 @@ input { width: 9rem; }
     st.paused = !st.paused;
     this.textContent = st.paused ? "Resume" : "Pause";
     this.setAttribute("aria-pressed", String(st.paused));
+    frozenNow = Date.now();
+    ticks = [];
+    $("rate").textContent = "";
+    requestDraw();
   });
   $("refresh").addEventListener("click", refresh);
   $("prev").addEventListener("click", function () { st.page--; render(); });
   $("next").addEventListener("click", function () { st.page++; render(); });
-  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; st.sel = []; drawPlot(); loadPoints(); });
+  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; st.sel = []; pcache = {}; requestDraw(); loadPoints(); fillAdd(); });
 
-  var EVERY = [100, 250, 500, 1000, 2000, 5000, 10000], every = EVERY_MS, timer = null;
+  var EVERY = [10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000], every = EVERY_MS, timer = null;
   function schedule() {
     if (timer !== null) { clearInterval(timer); }
     timer = setInterval(function () { if (!st.paused && !document.hidden && st.unit !== null) { refresh(); } }, every);
@@ -524,6 +649,26 @@ input { width: 9rem; }
       try { localStorage.setItem("mogbus.every", String(every)); } catch (e) { /* storage unavailable */ }
       if (st.unit !== null) { schedule(); }
     });
+    var savedWin = null;
+    try { savedWin = Number(localStorage.getItem("mogbus.window")); } catch (e) { savedWin = null; }
+    if (WINDOWS.indexOf(savedWin) >= 0) { win = WINDOWS.indexOf(savedWin); }
+    $("zoomin").addEventListener("click", function () { setWindow(win - 1); });
+    $("zoomout").addEventListener("click", function () { setWindow(win + 1); });
+    setWindow(win);
+    var wheelAt = 0;
+    $("plot").addEventListener("wheel", function (ev) {
+      var now = Date.now();
+      ev.preventDefault();
+      if (Math.abs(ev.deltaY) < 4 || now - wheelAt < 120) { return; }
+      wheelAt = now;
+      setWindow(win + (ev.deltaY < 0 ? -1 : 1));
+    }, { passive: false });
+    document.addEventListener("visibilitychange", requestDraw);
+    SPACES.forEach(function (s) { var o = el("option", s); o.value = s; $("padd_space").appendChild(o); });
+    $("padd_space").value = st.space;
+    $("padd_space").addEventListener("change", fillAdd);
+    $("padd_go").addEventListener("click", addFromSearch);
+    $("padd").addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); addFromSearch(); } });
     var t = $("tabs");
     SPACES.forEach(function (s) {
       var b = el("button", s);
@@ -532,6 +677,8 @@ input { width: 9rem; }
       b.setAttribute("aria-selected", String(s === st.space));
       b.addEventListener("click", function () {
         st.space = s; st.page = 0;
+        $("padd_space").value = s;
+        fillAdd();
         Array.prototype.forEach.call(t.children, function (c) { c.setAttribute("aria-selected", String(c === b)); });
         loadPoints();
       });
@@ -547,7 +694,7 @@ input { width: 9rem; }
         Array.prototype.forEach.call($("views").children, function (c) { c.setAttribute("aria-selected", String(c === b)); });
         $("tableview").hidden = v !== "table";
         $("plotview").hidden = v !== "plot";
-        drawPlot();
+        requestDraw();
       });
       $("views").appendChild(b);
     });
@@ -567,6 +714,7 @@ input { width: 9rem; }
     if (!devices.length) { return; }
     st.unit = devices[0].unit;
     loadPoints();
+    fillAdd();
     schedule();
   }).catch(function (e) { say("message", "Cannot read /api/devices: " + e.message); });
 }());

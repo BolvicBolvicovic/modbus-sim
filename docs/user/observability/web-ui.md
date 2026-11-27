@@ -30,13 +30,21 @@ The start-up summary (and `--check`) prints the address, for example
   points ticked in the `Plot` column of the list (strings cannot be plotted). Up to 8 points, of any
   table, can be plotted; the selection belongs to the device and is cleared when you switch device.
   Each series is sampled on every refresh, wherever it is (another page or table), in both views, and
-  keeps the samples of the last 5 minutes (at most 3000); the time axis grows with the samples up to 5 minutes, and the vertical
-  axis scales to the plotted values, bits as steps, and a gap where a read failed. The legend gives colour,
-  table and address, type, latest value, and a `×` button to remove the series. Samples are
-  kept in the browser only and are lost on reload.
+  keeps the samples of the last 5 minutes (at most 30 000). The chart is a strip chart: `now` is pinned
+  at the right edge and a fixed time window slides under it, so data enters on the right and leaves on
+  the left (an empty left part means there is not that much history yet). The window is chosen with the
+  `-`/`+` buttons or the mouse wheel over the chart (1 s, 2 s, 5 s, 10 s, 30 s by default, 1 min, 2 min
+  or 5 min, remembered in the browser); time gridlines sit at absolute times and slide with the data,
+  labelled back from now. The vertical axis scales to the plotted values, bits as steps, and a gap where
+  a read failed. Dense series are reduced to the minimum and maximum of every pixel column, and drawing
+  runs once per animation frame, independent of the sampling rate. `Pause` freezes the view. The legend
+  gives colour, table and address, type, latest value, and a `×` button to remove the series. Below it,
+  `Add point` picks a table and searches its points by address or label (for example `holding 10 ·
+  float32 · ramp`); `Add` or Enter plots the single match (an exact address wins) and the point's
+  checkbox in the list follows. Samples are kept in the browser only and are lost on reload.
 - **Refresh**: the visible page and the plotted points are read again every second by default (the
-  `Refresh every` selector offers 100 ms, 250 ms, 500 ms, 1 s, 2 s, 5 s and 10 s, applies at once to
-  both views and is remembered in the browser; a read still running makes the next tick skip), one raw read per run of adjacent points
+  `Refresh every` selector offers 10 ms, 20 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s, 2 s, 5 s and 10 s, applies at once to
+  both views and is remembered in the browser; a read still running makes the next tick skip, and the achieved rate is shown next to the selector), one raw read per run of adjacent points
   (at most 125 registers or 2000 bits), only while the browser tab is visible. `Pause` stops it and
   `Refresh now` reads once. Switching device or table, or paging, reloads the list.
 - **Write**: pick an address (click it in the list) and either set the decoded value of the point
