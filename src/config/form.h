@@ -22,8 +22,7 @@ typedef struct form_ctx_t form_ctx_t;
 struct form_ctx_t
 {
 	s7_scheme*	sc;
-	char*		err;
-	u32		err_size;
+	char		err[1024];	/**< message of the first failure; config_load copies it to config_t.error */
 	arena_t*	scratch;	/**< temporary storage for copied form text */
 	void*		machine_state;	/**< opaque config_machine parser state */
 };

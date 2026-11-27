@@ -12,18 +12,17 @@
  */
 
 static void
-tls_unavailable(char* err, u32 err_size)
+tls_unavailable(char* error, u32 size)
 {
-	if (err && err_size)
-		snprintf(err, err_size, "%s", "built without TLS support");
+	snprintf(error, size, "%s", "built without TLS support");
 }
 
 bool
-net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config, char* err, u32 err_size)
+net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config)
 {
 	(void)config;
 	memset(ctx, 0, sizeof(*ctx));
-	tls_unavailable(err, err_size);
+	tls_unavailable(ctx->error, sizeof(ctx->error));
 	return false;
 }
 
@@ -34,13 +33,11 @@ net_tls_ctx_close(net_tls_ctx_t* ctx)
 }
 
 net_tls_conn_t*
-net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms,
-		 char* err, u32 err_size)
+net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms)
 {
-	(void)ctx;
 	(void)fd;
 	(void)handshake_deadline_ms;
-	tls_unavailable(err, err_size);
+	tls_unavailable(ctx->error, sizeof(ctx->error));
 	return NULL;
 }
 
@@ -88,33 +85,30 @@ net_tls_conn_peer_subject(const net_tls_conn_t* conn, char* buf, u32 size)
 }
 
 net_tls_status_t
-net_tls_conn_handshake(net_tls_conn_t* conn, char* err, u32 err_size)
+net_tls_conn_handshake(net_tls_conn_t* conn)
 {
-	(void)conn;
-	tls_unavailable(err, err_size);
+	tls_unavailable(conn->error, sizeof(conn->error));
 	return NET_TLS_ERROR;
 }
 
 net_tls_status_t
-net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len, char* err, u32 err_size)
+net_tls_conn_read(net_tls_conn_t* conn, void* buf, int size, int* len)
 {
-	(void)conn;
 	(void)buf;
 	(void)size;
 	if (len)
 		*len = 0;
-	tls_unavailable(err, err_size);
+	tls_unavailable(conn->error, sizeof(conn->error));
 	return NET_TLS_ERROR;
 }
 
 net_tls_status_t
-net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len, char* err, u32 err_size)
+net_tls_conn_write(net_tls_conn_t* conn, const void* buf, int size, int* len)
 {
-	(void)conn;
 	(void)buf;
 	(void)size;
 	if (len)
 		*len = 0;
-	tls_unavailable(err, err_size);
+	tls_unavailable(conn->error, sizeof(conn->error));
 	return NET_TLS_ERROR;
 }

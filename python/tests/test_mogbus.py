@@ -398,6 +398,15 @@ class ConfigTest(unittest.TestCase):
                 with self.assertRaises(MogbusError):
                     ctx.load_config(Path(tmp) / "missing.scm")
 
+    def test_load_config_error_carries_the_loader_message(self):
+        with mogbus.Context() as ctx, tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "bad.scm"
+            bad.write_text("(device (unit-id 1) (holding 0 (statik 1)))")
+            with self.assertRaisesRegex(MogbusError, "unknown option 'statik'") as caught:
+                ctx.load_config(bad)
+            self.assertEqual(caught.exception.status, mogbus.Status.CONFIG)
+            self.assertEqual(len(ctx.devices), 0)
+
     def test_check_server_and_status(self):
         with mogbus.Context() as ctx:
             ctx.add_device(1).add_point("holding", 0)

@@ -27,17 +27,18 @@ If you loaded a config, @ref mogbus_config_server_options "mogbus_config_server_
 @ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport:
 
 ```c
-if (!mogbus_server_check(ctx, &options, err, sizeof(err))) { ... }
-server = mogbus_server_create(ctx, &options, err, sizeof(err), &status);
+if (mogbus_server_check(ctx, &options) != MOGBUS_OK) { ... }
+server = mogbus_server_create(ctx, &options);
 if (!server)
 {
-	fprintf(stderr, "server (status %d): %s\n", (int)status, err);
+	fprintf(stderr, "server (status %d): %s\n", (int)mogbus_last_error_code(ctx),
+		mogbus_last_error(ctx));
 	goto done;
 }
 g_server = server;
 ```
 
-On failure `status` (@ref mogbus_error_t "mogbus_error_t") tells why: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The binary maps serial to exit status 1 and listen to 2. A TLS server needs a build with TLS; without it creation fails with an error.
+On failure @ref mogbus_last_error_code "mogbus_last_error_code(ctx)" (a @ref mogbus_error_t "mogbus_error_t") tells why and @ref mogbus_last_error "mogbus_last_error(ctx)" has the text; `mogbus_server_check()` returns the code itself: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). The binary maps serial to exit status 1 and listen to 2. A TLS server needs a build with TLS; without it creation fails with an error.
 
 ## The loop
 
@@ -60,12 +61,12 @@ One thread does everything. Requests are answered inside `mogbus_server_step`, s
 
 ## Check that it answers
 
-@ref mogbus_probe "mogbus_probe()" is what `mogbus --health` uses: one FC 08 Return Query Data request to a unit of a server, true for the echo or a Modbus exception. It blocks with a deadline, so the thread that steps the server cannot call it. The example forks and probes from the child while the parent keeps stepping:
+@ref mogbus_probe "mogbus_probe()" is what `mogbus --health` uses: one FC 08 Return Query Data request to a unit of a server, `MOGBUS_OK` for the echo or a Modbus exception (on failure the message is `mogbus_last_error(NULL)`). It blocks with a deadline, so the thread that steps the server cannot call it. The example forks and probes from the child while the parent keeps stepping:
 
 ```c
 pid_t pid = fork();
 if (pid == 0)
-	_exit(mogbus_probe(options, unit, 2000, err, sizeof(err)) ? 0 : 1);
+	_exit(mogbus_probe(options, unit, 2000) == MOGBUS_OK ? 0 : 1);
 for (...)
 {
 	if (waitpid(pid, &status, WNOHANG) == pid) return WIFEXITED(status) && WEXITSTATUS(status) == 0;

@@ -325,15 +325,13 @@ server_run(server_t* server, const server_options_t* options)
 }
 
 bool
-server_check_tls(const server_options_t* options, char* err, u32 err_size)
+server_check_tls(const server_options_t* options, net_tls_ctx_t* tls)
 {
-	net_tls_ctx_t ctx;
-
 	if (!options->tls_enabled)
 		return true;
-	memset(&ctx, 0, sizeof(ctx));
-	if (!net_tls_ctx_init(&ctx, &options->tls, err, err_size))
+	memset(tls, 0, sizeof(*tls));
+	if (!net_tls_ctx_init(tls, &options->tls))
 		return false;
-	net_tls_ctx_close(&ctx);
+	net_tls_ctx_close(tls);
 	return true;
 }

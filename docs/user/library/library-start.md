@@ -57,7 +57,7 @@ cc -Iinclude examples/tutorial/pump_station.c libmogbus.a -lm -lssl -lcrypto -o 
 Build options:
 
 - `WITH_TLS=auto|0|1` (default `auto`): OpenSSL support, see [Build from source](../building.md). A `WITH_TLS=0` build has no OpenSSL dependency; creating a server with `tls_enabled` then fails with an error.
-- `WITH_CONFIG=1|0` (default `1`): `0` leaves out the config file loader and the vendored s7, so the libraries serve only devices built in code. The header and the exported symbols are identical, so the ABI does not change: @ref mogbus_load_config "mogbus_load_config()" returns false and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" returns NULL, both with the error `built without config support`. Combine freely with `WITH_TLS=0`.
+- `WITH_CONFIG=1|0` (default `1`): `0` leaves out the config file loader and the vendored s7, so the libraries serve only devices built in code. The header and the exported symbols are identical, so the ABI does not change: @ref mogbus_load_config "mogbus_load_config()" returns `MOGBUS_ERR_UNSUPPORTED` and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" returns NULL, both with the message `built without config support` in `mogbus_last_error()`. Combine freely with `WITH_TLS=0`.
 
 The current version is 0.0.1 (`MOGBUS_VERSION_*`, @ref mogbus_version "mogbus_version()"). The tutorial program is POSIX (it uses `fork` and `poll`); the library API is the same in the [native Windows build](../windows/windows-native.md).
 

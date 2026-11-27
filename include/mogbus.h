@@ -31,8 +31,11 @@
  *  - The library never installs signal handlers. A TLS server writes to its
  *    sockets through OpenSSL, which can raise SIGPIPE when a client vanishes:
  *    a host that uses TLS must ignore SIGPIPE (signal(SIGPIPE, SIG_IGN)).
- *  - err/err_size arguments are optional (NULL or 0 discards the message).
- *    When given, the message is always NUL-terminated.
+ *  - A fallible call reports failure one way only. Calls that return a pointer (constructors)
+ *    return NULL; calls that return mogbus_error_t return the code. In both cases the text of the
+ *    failure is kept by the context: mogbus_last_error() (and mogbus_last_error_code() after a
+ *    NULL return). Only mogbus_probe(), which has no context, keeps its text per thread
+ *    (mogbus_last_error(NULL)). Successful calls leave the last error alone.
  */
 #ifndef MOGBUS_H
 #define MOGBUS_H
@@ -117,6 +120,51 @@ MOGBUS_API mogbus_t*	mogbus_create(void);
 MOGBUS_API void		mogbus_destroy(mogbus_t* ctx);
 
 /**
+ * @brief Status of a fallible call (see mogbus_last_error()).
+ *
+ * The `mogbus` binary maps MOGBUS_ERR_SERIAL to exit status 1 and MOGBUS_ERR_LISTEN to 2. A TLS
+ * setup failure is also logged at WARN, like the transports log their own start-up errors.
+ */
+enum mogbus_error_t
+{
+	MOGBUS_OK,		/**< no error */
+	MOGBUS_ERR_INVALID,	/**< bad argument or options, no devices, or a limit reached */
+	MOGBUS_ERR_SERIAL,	/**< the serial device or PTY could not be opened */
+	MOGBUS_ERR_LISTEN,	/**< the listener could not start (port in use) or TLS setup failed */
+	MOGBUS_ERR_CONFIG,	/**< a config file could not be read or is invalid */
+	MOGBUS_ERR_UNSUPPORTED,	/**< the library was built without config support */
+	MOGBUS_ERR_NOMEM,	/**< the context arena is exhausted */
+	MOGBUS_ERR_PROBE,	/**< mogbus_probe(): connection, send or reply failure */
+};
+
+/**
+ * @brief Message of the most recent failed call on a context.
+ *
+ * Every failing call that takes the context (or a device of it) overwrites it; a successful call
+ * leaves it unchanged. The pointer stays valid until the next failing call on @p ctx or
+ * mogbus_destroy(). A call that returns mogbus_error_t gives the code directly, so use this only
+ * for the text; a constructor that returns NULL gives code and text through the context
+ * (mogbus_last_error_code(), this function).
+ *
+ * @param ctx Context; NULL gives the message of the last failed mogbus_probe() of the calling
+ *        thread.
+ * @return The message, "" if nothing failed yet.
+ */
+MOGBUS_API const char*	mogbus_last_error(const mogbus_t* ctx);
+
+/**
+ * @brief Code of the most recent failed call on a context.
+ *
+ * For calls that return NULL on failure (mogbus_add_device(), mogbus_server_create(),
+ * mogbus_server_create_from_config()). Calls that return mogbus_error_t report the code
+ * themselves.
+ *
+ * @param ctx Context.
+ * @return The code, MOGBUS_OK if nothing failed yet.
+ */
+MOGBUS_API mogbus_error_t	mogbus_last_error_code(const mogbus_t* ctx);
+
+/**
  * @brief Loads a config file into the context.
  *
  * Adds the file's devices and remembers its (server ...) section for
@@ -126,11 +174,11 @@ MOGBUS_API void		mogbus_destroy(mogbus_t* ctx);
  *
  * @param ctx Context.
  * @param path Config file path.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return true on success.
+ * @return MOGBUS_OK, MOGBUS_ERR_CONFIG for a bad file, too many devices or a unit id already in
+ *         use, MOGBUS_ERR_NOMEM, or MOGBUS_ERR_UNSUPPORTED in a build without config support. The
+ *         message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_load_config(mogbus_t* ctx, const char* path, char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_load_config(mogbus_t* ctx, const char* path);
 
 /* ---- Devices ---- */
 
@@ -272,12 +320,10 @@ struct mogbus_point_t
  * @param ctx Context.
  * @param unit_id Modbus unit id; must not be in use.
  * @param name Device name, copied, at most 63 bytes; NULL means "unnamed".
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return The device, or NULL on a duplicate unit id or when MOGBUS_MAX_DEVICES is reached.
+ * @return The device, or NULL on a duplicate unit id, a too long name or when MOGBUS_MAX_DEVICES
+ *         is reached (mogbus_last_error_code() and mogbus_last_error() say why).
  */
-MOGBUS_API mogbus_device_t*	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name,
-						  char* err, size_t err_size);
+MOGBUS_API mogbus_device_t*	mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name);
 
 /**
  * @brief Finds a device by unit id, including devices loaded from config.
@@ -377,13 +423,11 @@ MOGBUS_API bool		mogbus_device_info(const mogbus_device_t* dev, mogbus_device_in
  * @brief Adds a point to a device.
  * @param dev Device.
  * @param point Point description; copied.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return false for an invalid point: type does not fit the space, overlapping or out-of-range
- *         address, bad ramp.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for an invalid point: type does not fit the space,
+ *         overlapping or out-of-range address, bad ramp. The message is in mogbus_last_error()
+ *         of the device's context.
  */
-MOGBUS_API bool		mogbus_device_add_point(mogbus_device_t* dev, const mogbus_point_t* point,
-						char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_device_add_point(mogbus_device_t* dev, const mogbus_point_t* point);
 
 /**
  * @brief Reads consecutive raw 16-bit values of a table.
@@ -684,14 +728,12 @@ MOGBUS_API bool		mogbus_device_add_function_code(mogbus_device_t* dev, uint8_t c
  * @param record First record number; @p record + @p count - 1 must be at most 9999.
  * @param count Number of records, 1-126.
  * @param values @p count initial register values; copied.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return false for a NULL argument or an invalid range, an overlap, too many files (16) or records
- *         per file (64), or out of memory.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL argument or an invalid range, an overlap,
+ *         too many files (16) or records per file (64), or out of memory. The message is in
+ *         mogbus_last_error() of the device's context.
  */
-MOGBUS_API bool		mogbus_device_add_file_record(mogbus_device_t* dev, uint16_t file, uint16_t record,
-						      uint16_t count, const uint16_t* values,
-						      char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_device_add_file_record(mogbus_device_t* dev, uint16_t file, uint16_t record,
+							      uint16_t count, const uint16_t* values);
 
 /**
  * @brief Reads @p count consecutive file records starting at @p record (host side, no hook).
@@ -727,12 +769,11 @@ MOGBUS_API bool		mogbus_device_write_file_records(mogbus_device_t* dev, uint16_t
  * @param address FIFO pointer address.
  * @param count Initial number of values, 0-31.
  * @param values @p count values; copied; may be NULL when @p count is 0.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return false for a duplicate address, too many values or queues (16), or out of memory.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a duplicate address, too many values or queues
+ *         (16), or out of memory. The message is in mogbus_last_error() of the device's context.
  */
-MOGBUS_API bool		mogbus_device_add_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
-					       const uint16_t* values, char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_device_add_fifo(mogbus_device_t* dev, uint16_t address, uint16_t count,
+						       const uint16_t* values);
 
 /**
  * @brief Replaces the contents of the FIFO queue at @p address (host side, no hook).
@@ -756,14 +797,12 @@ MOGBUS_API bool		mogbus_device_set_fifo(mogbus_device_t* dev, uint16_t address, 
  * @param subindex Object subindex.
  * @param length Object size in bytes, 1-238; fixed for the object's lifetime.
  * @param data @p length initial bytes; copied.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return false for an invalid node or length, a duplicate (node, index, subindex), too many
- *         objects (64) or a NULL argument.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for an invalid node or length, a duplicate (node,
+ *         index, subindex), too many objects (64) or a NULL argument. The message is in
+ *         mogbus_last_error() of the device's context.
  */
-MOGBUS_API bool		mogbus_device_add_canopen_object(mogbus_device_t* dev, uint8_t node, uint16_t index,
-							 uint8_t subindex, uint16_t length, const uint8_t* data,
-							 char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_device_add_canopen_object(mogbus_device_t* dev, uint8_t node, uint16_t index,
+								 uint8_t subindex, uint16_t length, const uint8_t* data);
 
 /**
  * @brief Reads @p count bytes at @p offset of a CANopen object (host side, no hook).
@@ -888,45 +927,27 @@ struct mogbus_server_options_t
 MOGBUS_API mogbus_server_options_t	mogbus_server_options_defaults(void);
 
 /**
- * @brief Why a server could not be created (see mogbus_server_create()).
- *
- * The `mogbus` binary maps MOGBUS_ERR_SERIAL to exit status 1 and MOGBUS_ERR_LISTEN to 2. A TLS
- * setup failure is also logged at WARN, like the transports log their own start-up errors.
- */
-enum mogbus_error_t
-{
-	MOGBUS_OK,		/**< no error */
-	MOGBUS_ERR_INVALID,	/**< bad options, no devices, or a limit reached */
-	MOGBUS_ERR_SERIAL,	/**< the serial device or PTY could not be opened */
-	MOGBUS_ERR_LISTEN,	/**< the listener could not start (port in use) or TLS setup failed */
-};
-
-/**
  * @brief Starts a server for every device the context has now.
  *
  * Devices added later are not served.
  *
  * @param ctx Context with at least one device.
  * @param options Server settings; strings are copied.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @param status Receives MOGBUS_OK or the reason for the failure; may be NULL.
  * @return The server, or NULL if the options are invalid or the transport cannot start (port in
- *         use, serial device missing, TLS files unreadable, no devices, MOGBUS_MAX_SERVERS reached).
+ *         use, serial device missing, TLS files unreadable, no devices, MOGBUS_MAX_SERVERS
+ *         reached). The reason is in mogbus_last_error_code() (MOGBUS_ERR_INVALID,
+ *         MOGBUS_ERR_SERIAL, MOGBUS_ERR_LISTEN) and its text in mogbus_last_error().
  */
-MOGBUS_API mogbus_server_t*	mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* options,
-						     char* err, size_t err_size, mogbus_error_t* status);
+MOGBUS_API mogbus_server_t*	mogbus_server_create(mogbus_t* ctx, const mogbus_server_options_t* options);
 
 /**
  * @brief Starts a server with the (server ...) section of the last mogbus_load_config().
  * @param ctx Context with a loaded config.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @param status Receives MOGBUS_OK or the reason for the failure; may be NULL.
- * @return The server, or NULL (no config loaded, no config support, or see mogbus_server_create()).
+ * @return The server, or NULL (no config loaded, MOGBUS_ERR_UNSUPPORTED without config support,
+ *         or see mogbus_server_create()); the reason is in mogbus_last_error_code() and
+ *         mogbus_last_error().
  */
-MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config(mogbus_t* ctx, char* err, size_t err_size,
-								 mogbus_error_t* status);
+MOGBUS_API mogbus_server_t*	mogbus_server_create_from_config(mogbus_t* ctx);
 
 /**
  * @brief Returns the (server ...) section of the last mogbus_load_config() as options.
@@ -944,12 +965,10 @@ MOGBUS_API bool		mogbus_config_server_options(const mogbus_t* ctx, mogbus_server
  *
  * @param ctx Context.
  * @param options Server settings.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return true if mogbus_server_create() would accept the options.
+ * @return MOGBUS_OK if mogbus_server_create() would accept the options, else MOGBUS_ERR_INVALID
+ *         or MOGBUS_ERR_LISTEN (TLS setup); the message is in mogbus_last_error().
  */
-MOGBUS_API bool		mogbus_server_check(const mogbus_t* ctx, const mogbus_server_options_t* options,
-					    char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_server_check(mogbus_t* ctx, const mogbus_server_options_t* options);
 
 /**
  * @brief Checks that a server answers: one FC 08 Return Query Data round trip.
@@ -965,13 +984,13 @@ MOGBUS_API bool		mogbus_server_check(const mogbus_t* ctx, const mogbus_server_op
  * @param options Settings of the server to probe, e.g. from mogbus_config_server_options().
  * @param unit_id Unit to ask; not 0 (broadcast is never answered).
  * @param timeout_ms Time to wait for the reply.
- * @param err Buffer for an error message; may be NULL.
- * @param err_size Size of @p err; 0 discards the message.
- * @return true for the echo or a Modbus exception reply; false on a timeout, a refused
- *         connection, a malformed reply, a serial or fd mode, or unit 0.
+ * @return MOGBUS_OK for the echo or a Modbus exception reply; MOGBUS_ERR_INVALID for a serial or
+ *         fd mode, unit 0, a bind address that is not an IP address or NULL options;
+ *         MOGBUS_ERR_PROBE for a timeout, a refused connection or a malformed reply. With no
+ *         context the message is kept per thread: mogbus_last_error(NULL).
  */
-MOGBUS_API bool		mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id,
-				     uint32_t timeout_ms, char* err, size_t err_size);
+MOGBUS_API mogbus_error_t	mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id,
+					     uint32_t timeout_ms);
 
 /**
  * @brief Computes the RTU timing a server would use.

@@ -25,7 +25,7 @@ library differs from the package. library_version() returns the version of the l
 
 ## Errors
 
-Every failure raises MogbusError with the message of the C error buffer; a failed server creation
+Every failure raises MogbusError with the message of `mogbus_last_error`; a failure of the C library
 also sets `MogbusError.status`. Invalid arguments (a name that is not valid, a number out of
 range, a closed context) raise it too, before the C library is called.
 
@@ -74,15 +74,12 @@ from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Se
 from . import _lib
 from ._lib import lib
 
-ERR_SIZE = 512
-
-
 class MogbusError(Exception):
     """@brief A failed mogbus call.
 
     Raised for every error of the library and for invalid arguments.
-    @param message The message of the C error buffer, or a description of the invalid argument.
-    @param status The Status of a failed server creation (`INVALID`, `SERIAL`, `LISTEN`), else None.
+    @param message The message of `mogbus_last_error`, or a description of the invalid argument.
+    @param status The Status the C library reported, else None for an invalid argument.
     """
 
     def __init__(self, message: str, status: Optional["Status"] = None):
@@ -277,7 +274,7 @@ class FaultKind(enum.IntEnum):
 
 
 class Status(enum.IntEnum):
-    """@brief Why a server could not be created; see MogbusError.status.
+    """@brief Why a call of the C library failed; see MogbusError.status.
     """
     ## No error.
     OK = 0
@@ -287,6 +284,14 @@ class Status(enum.IntEnum):
     SERIAL = 2
     ## The port could not be bound.
     LISTEN = 3
+    ## A config file could not be read or is invalid.
+    CONFIG = 4
+    ## The library was built without config support.
+    UNSUPPORTED = 5
+    ## The context arena is exhausted.
+    NOMEM = 6
+    ## A probe could not connect, send or get a valid reply.
+    PROBE = 7
 
 
 class LogLevel(enum.IntEnum):
@@ -624,12 +629,11 @@ class RtuTiming(NamedTuple):
     gap_ms: int
 
 
-def _err_buf():
-    return ctypes.create_string_buffer(ERR_SIZE)
-
-
-def _msg(buf, default):
-    return buf.value.decode(errors="replace") or default
+def _fail(handle, code, default):
+    """Builds the MogbusError for a failed call: the message the C library kept for `handle`
+    (None for the context-free probe), with `code` as its status."""
+    msg = lib.mogbus_last_error(handle)
+    return MogbusError(msg.decode(errors="replace") if msg else default, Status(code))
 
 
 def _locked(method):
@@ -731,9 +735,9 @@ class Device:
             p.ramp.step = float(r.step)
             p.ramp.every_ms = _u(r.every_ms, "ramp every_ms", 1 << 32)
             p.ramp.mode = int(_coerce(RampMode, r.mode, "ramp mode"))
-        err = _err_buf()
-        if not lib.mogbus_device_add_point(self._live(), ctypes.byref(p), err, ERR_SIZE):
-            raise MogbusError(_msg(err, "cannot add point"))
+        code = lib.mogbus_device_add_point(self._live(), ctypes.byref(p))
+        if code:
+            raise _fail(self._ctx._h, code, "cannot add point")
 
     @_locked
     def read(self, space, address, count=1) -> List[int]:
@@ -996,9 +1000,9 @@ class Device:
         record = _u(record, "record", 65536)
         values = [_u(v, "register value", 65536) for v in values]
         arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
-        err = _err_buf()
-        if not lib.mogbus_device_add_file_record(self._live(), file, record, len(values), arr, err, ERR_SIZE):
-            raise MogbusError(_msg(err, "cannot add file record"))
+        code = lib.mogbus_device_add_file_record(self._live(), file, record, len(values), arr)
+        if code:
+            raise _fail(self._ctx._h, code, "cannot add file record")
 
     @_locked
     def read_file_records(self, file, record, count=1) -> List[int]:
@@ -1046,9 +1050,9 @@ class Device:
         address = _u(address, "address", 65536)
         values = [_u(v, "register value", 65536) for v in values]
         arr = (ctypes.c_uint16 * max(len(values), 1))(*values)
-        err = _err_buf()
-        if not lib.mogbus_device_add_fifo(self._live(), address, len(values), arr, err, ERR_SIZE):
-            raise MogbusError(_msg(err, "cannot add FIFO"))
+        code = lib.mogbus_device_add_fifo(self._live(), address, len(values), arr)
+        if code:
+            raise _fail(self._ctx._h, code, "cannot add FIFO")
 
     @_locked
     def set_fifo(self, address, values: Sequence[int] = ()) -> None:
@@ -1077,10 +1081,9 @@ class Device:
         subindex = _u(subindex, "subindex", 256)
         data = bytes(data)
         arr = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
-        err = _err_buf()
-        if not lib.mogbus_device_add_canopen_object(self._live(), node, index, subindex, len(data), arr,
-                                                    err, ERR_SIZE):
-            raise MogbusError(_msg(err, "cannot add CANopen object"))
+        code = lib.mogbus_device_add_canopen_object(self._live(), node, index, subindex, len(data), arr)
+        if code:
+            raise _fail(self._ctx._h, code, "cannot add CANopen object")
 
     @_locked
     def read_canopen(self, node, index, subindex, count, offset=0) -> bytes:
@@ -1434,9 +1437,9 @@ class Context:
         """
         with self._lock:
             self._check_open()
-            err = _err_buf()
-            if not lib.mogbus_load_config(self._h, _text(os.fspath(path)), err, ERR_SIZE):
-                raise MogbusError(_msg(err, "cannot load config"))
+            code = lib.mogbus_load_config(self._h, _text(os.fspath(path)))
+            if code:
+                raise _fail(self._h, code, "cannot load config")
 
     def add_device(self, unit_id: int, name: Optional[str] = None) -> Device:
         """@brief Adds an empty device.
@@ -1448,10 +1451,9 @@ class Context:
         with self._lock:
             self._check_open()
             unit_id = _u(unit_id, "unit_id", 256)
-            err = _err_buf()
-            handle = lib.mogbus_add_device(self._h, unit_id, _text(name), err, ERR_SIZE)
+            handle = lib.mogbus_add_device(self._h, unit_id, _text(name))
             if not handle:
-                raise MogbusError(_msg(err, "cannot add device"))
+                raise _fail(self._h, lib.mogbus_last_error_code(self._h), "cannot add device")
             return self._device(handle)
 
     def find_device(self, unit_id: int) -> Optional[Device]:
@@ -1501,10 +1503,10 @@ class Context:
         with self._lock:
             self._check_open()
             c, keep = options._to_c()
-            err = _err_buf()
-            if not lib.mogbus_server_check(self._h, ctypes.byref(c), err, ERR_SIZE):
-                raise MogbusError(_msg(err, "invalid server options"))
+            code = lib.mogbus_server_check(self._h, ctypes.byref(c))
             del keep
+            if code:
+                raise _fail(self._h, code, "invalid server options")
 
     def serve(self, options: Optional[ServerOptions] = None, **overrides) -> Server:
         """@brief Creates a server for every device the context has now.
@@ -1520,12 +1522,9 @@ class Context:
         with self._lock:
             self._check_open()
             c, keep = options._to_c()
-            err = _err_buf()
-            status = ctypes.c_int(0)
-            handle = lib.mogbus_server_create(self._h, ctypes.byref(c), err, ERR_SIZE,
-                                              ctypes.byref(status))
+            handle = lib.mogbus_server_create(self._h, ctypes.byref(c))
             del keep
-            return self._new_server(handle, err, status)
+            return self._new_server(handle)
 
     def serve_config(self) -> Server:
         """@brief Creates a server from the `(server ...)` section of the loaded config.
@@ -1534,15 +1533,11 @@ class Context:
         """
         with self._lock:
             self._check_open()
-            err = _err_buf()
-            status = ctypes.c_int(0)
-            handle = lib.mogbus_server_create_from_config(self._h, err, ERR_SIZE,
-                                                          ctypes.byref(status))
-            return self._new_server(handle, err, status)
+            return self._new_server(lib.mogbus_server_create_from_config(self._h))
 
-    def _new_server(self, handle, err, status):
+    def _new_server(self, handle):
         if not handle:
-            raise MogbusError(_msg(err, "cannot create server"), Status(status.value))
+            raise _fail(self._h, lib.mogbus_last_error_code(self._h), "cannot create server")
         server = Server(self, handle)
         self._servers.append(server)
         return server
@@ -1586,12 +1581,11 @@ def probe_or_raise(options: ServerOptions, unit_id: int, timeout_ms: int = 2000)
     @throws MogbusError On a timeout, a refused connection, a malformed reply, a serial or fd mode, or unit 0.
     """
     c, keep = options._to_c()
-    err = _err_buf()
-    ok = lib.mogbus_probe(ctypes.byref(c), _u(unit_id, "unit_id", 256),
-                          _u(timeout_ms, "timeout_ms", 1 << 32), err, ERR_SIZE)
+    code = lib.mogbus_probe(ctypes.byref(c), _u(unit_id, "unit_id", 256),
+                            _u(timeout_ms, "timeout_ms", 1 << 32))
     del keep
-    if not ok:
-        raise MogbusError(_msg(err, "probe failed"))
+    if code:
+        raise _fail(None, code, "probe failed")
 
 
 def rtu_timing(baud: int, frame_gap_ms: int = 0) -> RtuTiming:

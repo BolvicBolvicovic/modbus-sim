@@ -292,8 +292,6 @@ main(int argc, char** argv)
 	mogbus_t*	ctx     = NULL;
 	mogbus_server_t* server = NULL;
 	mogbus_server_options_t options;
-	mogbus_error_t	failure = MOGBUS_OK;
-	char		error[512];
 	int		status  = 1;
 
 	if (!parse_args(argc, argv, &cli))
@@ -324,9 +322,9 @@ main(int argc, char** argv)
 		return 1;
 	}
 
-	if (!mogbus_load_config(ctx, cli.config_path, error, sizeof(error)))
+	if (mogbus_load_config(ctx, cli.config_path) != MOGBUS_OK)
 	{
-		fprintf(stderr, "%s: %s\n", cli.config_path, error);
+		fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
 		goto cleanup;
 	}
 
@@ -351,10 +349,9 @@ main(int argc, char** argv)
 			fprintf(stderr, "%s: no device to probe\n", cli.config_path);
 			goto cleanup;
 		}
-		if (!mogbus_probe(&options, first.unit_id, cli.timeout_ms ? cli.timeout_ms : 2000,
-				  error, sizeof(error)))
+		if (mogbus_probe(&options, first.unit_id, cli.timeout_ms ? cli.timeout_ms : 2000) != MOGBUS_OK)
 		{
-			fprintf(stderr, "unhealthy: %s\n", error);
+			fprintf(stderr, "unhealthy: %s\n", mogbus_last_error(NULL));
 			goto cleanup;
 		}
 		status = 0;
@@ -363,9 +360,9 @@ main(int argc, char** argv)
 	print_summary(ctx, &options);
 	if (cli.check_only)
 	{
-		if (!mogbus_server_check(ctx, &options, error, sizeof(error)))
+		if (mogbus_server_check(ctx, &options) != MOGBUS_OK)
 		{
-			fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path, error);
+			fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path, mogbus_last_error(ctx));
 			goto cleanup;
 		}
 		puts("config OK");
@@ -376,12 +373,13 @@ main(int argc, char** argv)
 	mogbus_stop_on_signals(&g_server);
 
 	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
-	server = cli.web ? mogbus_server_create(ctx, &options, error, sizeof(error), &failure) :
-			   mogbus_server_create_from_config(ctx, error, sizeof(error), &failure);
+	server = cli.web ? mogbus_server_create(ctx, &options) : mogbus_server_create_from_config(ctx);
 	if (!server)
 	{
+		mogbus_error_t failure = mogbus_last_error_code(ctx);
+
 		if (failure == MOGBUS_ERR_INVALID)
-			fprintf(stderr, "%s: %s\n", cli.config_path, error);
+			fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
 		status = failure == MOGBUS_ERR_SERIAL ? 1 : 2;
 		goto cleanup;
 	}
