@@ -15,6 +15,7 @@
 #include "net/rtu_udp_server.h"
 #include "net/tcp_server.h"
 #include "net/udp_server.h"
+#include "server/server_limits.h"
 #include "server/server_mode.h"
 #include "os/os_serial.h"
 #include "vlib/c_types.h"
@@ -32,6 +33,7 @@ typedef struct server_t server_t;
  */
 struct server_options_t
 {
+	const char*	id;			/**< names the server in logs and device assignments; NULL = none */
 	server_mode_t	mode;
 	const char*	bind_address;		/**< TCP-family and UDP modes */
 	u16		port;			/**< TCP-family and UDP modes */
@@ -79,6 +81,8 @@ struct server_t
 		rtu_udp_server_t	rtu_udp;
 	};
 	net_obs_t	obs;		/**< metrics, request logs and the HTTP endpoint */
+	char		id[SERVER_ID_MAX];	/**< log prefix; "" = none */
+	bool		done;		/**< a group step saw it finish (stopped, or its byte stream ended) */
 	int		fd;		/**< opened by init in PTY/device modes, else -1 */
 	int		slave_fd;	/**< PTY slave kept open, else -1 */
 	char		pty_name[128];
@@ -94,6 +98,18 @@ s32	server_init(server_t* server, const server_options_t* options);
 
 /** @brief One poll iteration (see NET_STEP_* in net/net_common.h). */
 s32	server_step(server_t* server, s32 max_wait_ms);
+
+/**
+ * @brief One poll iteration of several servers with a single wait (see net_poll_group_t).
+ *
+ * @param servers Servers to step; NULL entries and servers that already finished are skipped.
+ * @param count Number of entries in @p servers.
+ * @param group Scratch for the shared wait, caller-owned.
+ * @param max_wait_ms Longest wait; negative = until the nearest deadline of any server (at most 1 s).
+ * @return NET_STEP_CONTINUE while some server is live, NET_STEP_DONE once every one has finished
+ *         (or when there is none), NET_STEP_ERROR if a wait or a server failed.
+ */
+s32	server_group_step(server_t** servers, u32 count, net_poll_group_t* group, s32 max_wait_ms);
 
 /** @brief Asks the server to stop; async-signal-safe, the next step returns NET_STEP_DONE. */
 void	server_stop(server_t* server);

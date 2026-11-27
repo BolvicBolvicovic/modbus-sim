@@ -20,8 +20,13 @@
                   (s7 reads text)
 ```
 
-0. `main` turns the loaded config into `server_options_t` (`server_config`) and runs `server`, which
-   picks the transport below; a host can build the options itself and skip `config`.
+0. `main` turns each loaded `(server ...)` into a `server_options_t` (`server_config`), creates one
+   `mogbus_server_t` per section and runs them all with `mogbus_run` (one `os_wait` over the fds of every
+   live server, `mogbus_step`); each `server` picks the transport below; a host can build the options
+   itself and skip `config`. A server `id` (`(id "NAME")`) names a server; a device lists its servers
+   with `(servers ...)` (`device_t.servers`, `device_serves()`), and a server serves only those devices.
+   Unit ids are unique per server, which the config loader, `mogbus_device_add_server` and
+   `mogbus_server_create` check.
 1. At start-up, `config` reads the Scheme file with s7, **without evaluating it**, and builds
    `device_t` objects (data tables plus a list of points).
 2. `net/tcp_server` (Modbus TCP MBAP, optionally TLS-wrapped via `net/net_tls`), `net/rtu_server` (RTU CRC-framed byte stream),
@@ -143,7 +148,7 @@ Headers sit next to their `.c` files.
   (the config file text, released right after loading). Each server (`tcp_server_t`, `rtu_server_t`, ...,
   including its TLS session pool) is a caller-owned struct: a stack local in `main`, but a host may use
   static or arena storage. It must not move between init and close.
-- A library host gets one arena per `mogbus_t` context (`src/api`) holding devices and server slots; `mogbus_destroy` releases it.
+- A library host gets one arena per `mogbus_t` context (`src/api`) holding devices and server slots; `mogbus_destroy` releases it. The context arena owns every server too (no arena per server): a device can serve several servers, so it must outlive them all.
 - Request handling uses fixed-size stack buffers. Nothing is allocated per request.
 - Exception: the s7 interpreter allocates internally. It exists only while the config is read
   and is freed with `s7_free` (s7 keeps a few hundred bytes of interned strings; that is

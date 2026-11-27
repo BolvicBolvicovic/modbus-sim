@@ -64,7 +64,7 @@ rtu_udp_server_step(rtu_udp_server_t* server, s32 max_wait_ms)
 	int		timeout = 1000;
 	u64		now_ms  = os_now_ms();
 
-	if (server->stop)
+	if (net_stop_requested(server->options.obs, server->stop))
 		return NET_STEP_DONE;
 
 	net_udp_flush_due(&server->udp, now_ms);

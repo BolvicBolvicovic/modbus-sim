@@ -4,6 +4,8 @@
  */
 #include "server/server.h"
 #include "server/server_limits.h"
+#include "os/os_error.h"
+#include "os/os_wait.h"
 #include "util/log.h"
 #include <stdio.h>
 #include <string.h>
@@ -25,13 +27,16 @@ static const char* const MODE_NAMES[] = {
 	[SERVER_MODE_RTU_UDP]      = "rtu-udp",
 };
 
-s32
-server_init(server_t* server, const server_options_t* options)
+static s32
+server_open(server_t* server, const server_options_t* options)
 {
 	s32 rc = 0;
 	int fd = options->fd;
 
 	memset(server, 0, sizeof(*server));
+	if (options->id)
+		snprintf(server->id, sizeof(server->id), "%s", options->id);
+	log_set_prefix(server->id);
 	server->mode     = options->mode;
 	server->fd       = -1;
 	server->slave_fd = -1;
@@ -231,7 +236,16 @@ server_init(server_t* server, const server_options_t* options)
 }
 
 s32
-server_step(server_t* server, s32 max_wait_ms)
+server_init(server_t* server, const server_options_t* options)
+{
+	s32 rc = server_open(server, options);
+
+	log_set_prefix(NULL);
+	return rc;
+}
+
+static s32
+step_transport(server_t* server, s32 max_wait_ms)
 {
 	switch (server->mode)
 	{
@@ -249,6 +263,94 @@ server_step(server_t* server, s32 max_wait_ms)
 		case SERVER_MODE_ASCII_FD:	return ascii_server_step(&server->ascii, max_wait_ms);
 	}
 	return NET_STEP_ERROR;
+}
+
+s32
+server_step(server_t* server, s32 max_wait_ms)
+{
+	s32 rc;
+
+	log_set_prefix(server->id);
+	rc = step_transport(server, max_wait_ms);
+	log_set_prefix(NULL);
+	return rc;
+}
+
+s32
+server_group_step(server_t** servers, u32 count, net_poll_group_t* group, s32 max_wait_ms)
+{
+	u32	live   = 0;
+	s32	result = NET_STEP_CONTINUE;
+	int	timeout;
+	int	rc;
+
+	group->phase      = NET_POLL_GATHER;
+	group->count      = 0;
+	group->timeout_ms = -1;
+	for (u32 i = 0; i < count; i++)
+	{
+		server_t* s = servers[i];
+
+		if (!s ||
+		    s->done)
+			continue;
+		s->obs.group = group;
+		switch (server_step(s, max_wait_ms))
+		{
+			case NET_STEP_DONE:	s->done = true; break;
+			case NET_STEP_ERROR:	result = NET_STEP_ERROR; break;
+			default:		live++; break;
+		}
+	}
+	if (live > 0 &&
+	    result == NET_STEP_CONTINUE)
+	{
+		timeout = group->timeout_ms < 0 ? 1000 : group->timeout_ms;
+		if (max_wait_ms >= 0 &&
+		    max_wait_ms < timeout)
+			timeout = max_wait_ms;
+		rc = os_wait(group->entries, group->count, timeout);
+		if (rc < 0 &&
+		    !os_interrupted())
+		{
+			LOG_WARN("poll failed: %s", os_last_error_text());
+			result = NET_STEP_ERROR;
+		}
+		else if (rc >= 0)
+		{
+			/* Each step runs again and reads the revents of its entries. */
+			group->phase = NET_POLL_REPLAY;
+			live         = 0;
+			for (u32 i = 0; i < count; i++)
+			{
+				server_t* s = servers[i];
+
+				if (!s ||
+				    s->done)
+					continue;
+				switch (server_step(s, 0))
+				{
+					case NET_STEP_DONE:	s->done = true; break;
+					case NET_STEP_ERROR:	result = NET_STEP_ERROR; break;
+					default:		live++; break;
+				}
+			}
+		}
+	}
+	for (u32 i = 0; i < count; i++)
+	{
+		if (servers[i])
+			servers[i]->obs.group = NULL;
+	}
+	if (result == NET_STEP_ERROR)
+		return result;
+	for (u32 i = 0; i < count; i++)
+	{
+		if (servers[i] &&
+		    !servers[i]->done)
+			return NET_STEP_CONTINUE;
+	}
+	return NET_STEP_DONE;
 }
 
 void
@@ -275,6 +377,7 @@ server_stop(server_t* server)
 void
 server_close(server_t* server)
 {
+	log_set_prefix(server->id);
 	switch (server->mode)
 	{
 		case SERVER_MODE_TCP:		tcp_server_close(&server->tcp); break;
@@ -297,6 +400,7 @@ server_close(server_t* server)
 		os_serial_close(server->fd);
 	server->slave_fd = -1;
 	server->fd       = -1;
+	log_set_prefix(NULL);
 }
 
 const char*

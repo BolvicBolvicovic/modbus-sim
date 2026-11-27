@@ -509,8 +509,8 @@ TEST(ApiLastErrorKeepsTheMostRecentFailure)
 	ASSERT_EQ(mogbus_last_error(ctx)[0] == '\0' && mogbus_last_error_code(ctx) == MOGBUS_OK);
 	dev = mogbus_add_device(ctx, 1, "a");
 	ASSERT_EQ(dev != NULL);
-	ASSERT_EQ(mogbus_add_device(ctx, 1, "b") == NULL);
-	ASSERT_EQ(mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID && strstr(mogbus_last_error(ctx), "unit id 1"));
+	ASSERT_EQ(mogbus_device_add_server(dev, "") == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID && mogbus_last_error(ctx)[0] != '\0');
 	/* A call that returns the code reports it itself, and its text replaces the previous one. */
 	ASSERT_EQ(mogbus_load_config(ctx, "/nonexistent/mogbus.scm") != MOGBUS_OK);
 	ASSERT_EQ(mogbus_last_error(ctx)[0] != '\0');
@@ -533,8 +533,15 @@ TEST(ApiRejectsBadInput)
 	dev = mogbus_add_device(ctx, 1, NULL);
 	ASSERT_EQ(dev != NULL);
 
-	ASSERT_EQ(mogbus_add_device(ctx, 1, "again") == NULL);
-	ASSERT_EQ(strstr(mogbus_last_error(ctx), "unit id 1") != NULL);
+	/* The same unit id is accepted (another server may use it) but one server cannot serve both. */
+	ASSERT_EQ(mogbus_add_device(ctx, 1, "again") != NULL);
+	{
+		mogbus_server_options_t o = mogbus_server_options_defaults();
+
+		o.port = ts_free_port();
+		ASSERT_EQ(mogbus_server_create(ctx, &o) == NULL);
+		ASSERT_EQ(strstr(mogbus_last_error(ctx), "unit id 1") != NULL);
+	}
 	memset(name, 'x', sizeof(name) - 1);
 	name[sizeof(name) - 1] = '\0';
 	ASSERT_EQ(mogbus_add_device(ctx, 2, name) == NULL && strstr(mogbus_last_error(ctx), "too long"));
@@ -562,7 +569,7 @@ TEST(ApiRejectsBadInput)
 	p.space = (mogbus_space_t)9;
 	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
 
-	for (int unit = 3; unit < MOGBUS_MAX_DEVICES + 1; unit++)
+	for (int unit = 3; unit < MOGBUS_MAX_DEVICES; unit++)
 		ASSERT_EQ(mogbus_add_device(ctx, (uint8_t)unit, NULL) != NULL);
 	ASSERT_EQ(mogbus_add_device(ctx, 100, NULL) == NULL);
 	ASSERT_EQ(strstr(mogbus_last_error(ctx), "too many devices") != NULL);
@@ -2193,3 +2200,193 @@ TEST(ApiFrameHookSeesRewritesAndDropsFramesOnEveryTransport)
 	}
 	test_case = 0;
 }
+
+/* Steps every server of the context until fd is readable. */
+static bool
+pump_context(mogbus_t* ctx, int fd)
+{
+	u64 deadline = os_now_ms() + 2000;
+
+	while (os_now_ms() < deadline)
+	{
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+
+		(void)mogbus_step(ctx, 1);
+		if (poll(&pfd, 1, 0) > 0)
+			return true;
+	}
+	return false;
+}
+
+/* One FC 03 read of holding register 0 over MBAP; returns the value, -1 for no reply and -2
+ * (exception code in *exception) for an exception. */
+static int
+mbap_read(mogbus_t* ctx, int fd, bool udp, u8 unit, u8* exception)
+{
+	u8	pdu[MODBUS_MAX_PDU];
+	u32	len = 0;
+	u16	tid = ts_next_tid();
+
+	if (!ts_mbap_send(fd, unit, tid, READ_HOLDING, sizeof(READ_HOLDING)) ||
+	    !pump_context(ctx, fd) ||
+	    !(udp ? ts_udp_mbap_recv(fd, unit, tid, pdu, &len, 1000) :
+		    ts_mbap_recv(fd, unit, tid, pdu, &len, 1000)))
+		return -1;
+	if (pdu[0] & 0x80)
+	{
+		*exception = pdu[1];
+		return -2;
+	}
+	return (pdu[2] << 8) | pdu[3];
+}
+
+TEST(ApiServersServeTheirAssignedDevicesTogether)
+{
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* one;
+	mogbus_device_t* two;
+	mogbus_point_t	p1 = holding(0, 11);
+	mogbus_point_t	p2 = holding(0, 22);
+	mogbus_server_options_t a = mogbus_server_options_defaults();
+	mogbus_server_options_t b = mogbus_server_options_defaults();
+	mogbus_server_options_t none = mogbus_server_options_defaults();
+	mogbus_server_t* sa;
+	mogbus_server_t* sb;
+	u8		exception = 0;
+	int		tcp;
+	int		udp;
+
+	ASSERT_EQ(ctx != NULL);
+	one = mogbus_add_device(ctx, 1, "one");
+	two = mogbus_add_device(ctx, 2, "two");
+	ASSERT_EQ(one != NULL && two != NULL);
+	ASSERT_EQ(mogbus_device_add_point(one, &p1) == MOGBUS_OK && mogbus_device_add_point(two, &p2) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_server_at(one, 0) == NULL);
+
+	/* Bad assignments. */
+	ASSERT_EQ(mogbus_device_add_server(one, "") == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_device_add_server(one, "0123456789012345678901234567890123456789") == MOGBUS_ERR_INVALID &&
+		  strstr(mogbus_last_error(ctx), "too long") != NULL);
+
+	ASSERT_EQ(mogbus_device_add_server(one, "tcp") == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_server(one, "tcp") == MOGBUS_OK);	/* twice is fine */
+	ASSERT_EQ(mogbus_device_add_server(two, "udp") == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_server(one, "udp") == MOGBUS_OK);	/* served by both */
+	ASSERT_EQ(strcmp(mogbus_device_server_at(one, 0), "tcp") == 0 &&
+		  strcmp(mogbus_device_server_at(one, 1), "udp") == 0 &&
+		  mogbus_device_server_at(one, 2) == NULL);
+
+	/* A second unit 1 may exist, on another server only. */
+	{
+		mogbus_device_t* dup = mogbus_add_device(ctx, 1, "dup");
+
+		ASSERT_EQ(dup != NULL);
+		ASSERT_EQ(mogbus_device_add_server(dup, "tcp") == MOGBUS_ERR_INVALID &&
+			  strstr(mogbus_last_error(ctx), "unit id 1") != NULL);
+		ASSERT_EQ(mogbus_device_add_server(dup, "other") == MOGBUS_OK);
+	}
+
+	a.id   = "tcp";
+	a.port = ts_free_port();
+	b.id   = "udp";
+	b.mode = MOGBUS_MODE_UDP;
+	b.port = ts_free_port();
+
+	/* A server needs devices that list its id; a server without id serves the unassigned ones. */
+	none.id   = "nobody";
+	none.port = ts_free_port();
+	ASSERT_EQ(mogbus_server_create(ctx, &none) == NULL && strstr(mogbus_last_error(ctx), "nobody") != NULL);
+	none.id = NULL;
+	ASSERT_EQ(mogbus_server_create(ctx, &none) == NULL && mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_server_check(ctx, &none) == MOGBUS_ERR_INVALID);
+	none.id = "";
+	ASSERT_EQ(mogbus_server_create(ctx, &none) == NULL);
+
+	ASSERT_EQ(mogbus_step(ctx, 0) == MOGBUS_STEP_DONE);	/* no server yet */
+	sa = mogbus_server_create(ctx, &a);
+	sb = mogbus_server_create(ctx, &b);
+	ASSERT_EQ(sa != NULL && sb != NULL);
+	ASSERT_EQ(mogbus_server_create(ctx, &a) == NULL && strstr(mogbus_last_error(ctx), "already exists") != NULL);
+
+	tcp = ts_connect_loopback(a.port, AF_INET, 1000);
+	udp = ts_udp_loopback(b.port, AF_INET, 1000);
+	ASSERT_EQ(tcp >= 0 && udp >= 0);
+
+	/* One mogbus_step() serves both transports; unit 1 is on both, unit 2 only on UDP. */
+	ASSERT_EQ(mbap_read(ctx, tcp, false, 1, &exception) == 11);
+	ASSERT_EQ(mbap_read(ctx, udp, true, 1, &exception) == 11);
+	ASSERT_EQ(mbap_read(ctx, udp, true, 2, &exception) == 22);
+	ASSERT_EQ(mbap_read(ctx, tcp, false, 2, &exception) == -2 && exception == 0x0B);
+
+	/* The shared device shows a host write on both transports. */
+	ASSERT_EQ(mogbus_device_set_value(one, MOGBUS_HOLDING, 0, 33));
+	ASSERT_EQ(mbap_read(ctx, tcp, false, 1, &exception) == 33);
+	ASSERT_EQ(mbap_read(ctx, udp, true, 1, &exception) == 33);
+
+	/* A server closed on its own leaves the others running; mogbus_stop() ends the combined step. */
+	ASSERT_EQ(mogbus_step(ctx, 0) == MOGBUS_STEP_CONTINUE);
+	mogbus_server_close(sb);
+	ASSERT_EQ(mbap_read(ctx, tcp, false, 1, &exception) == 33);
+	mogbus_stop(ctx);
+	ASSERT_EQ(mogbus_step(ctx, 0) == MOGBUS_STEP_DONE);
+	ASSERT_EQ(mogbus_run(ctx) == 0);
+	close(tcp);
+	close(udp);
+	mogbus_destroy(ctx);
+}
+
+#if WITH_CONFIG
+TEST(ApiLoadsSeveralServersFromAConfig)
+{
+	char		path[] = "/tmp/mogbus-api-XXXXXX";
+	char		text[1024];
+	int		cfd = mkstemp(path);
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_server_options_t o;
+	mogbus_server_t* s0;
+	mogbus_server_t* s1;
+	u16		tcp_port = ts_free_port();
+	u16		udp_port = ts_free_port();
+	u8		exception = 0;
+	int		tcp;
+	int		udp;
+
+	ASSERT_EQ(cfd >= 0 && ctx != NULL);
+	ASSERT_EQ(mogbus_config_server_count(ctx) == 0);
+	snprintf(text, sizeof(text),
+		 "(server (id \"t\") (mode tcp) (port %u))\n"
+		 "(server (id \"u\") (mode udp) (port %u))\n"
+		 "(device (name \"a\") (unit-id 1) (servers \"t\") (holding 0 (static 5)))\n"
+		 "(device (name \"b\") (unit-id 1) (servers \"u\") (holding 0 (static 6)))\n",
+		 tcp_port, udp_port);
+	ASSERT_EQ(write(cfd, text, strlen(text)) == (ssize_t)strlen(text));
+	close(cfd);
+
+	ASSERT_EQ(mogbus_load_config(ctx, path) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_config_server_count(ctx) == 2);
+	ASSERT_EQ(mogbus_config_server_options_at(ctx, 1, &o) && strcmp(o.id, "u") == 0 &&
+		  o.mode == MOGBUS_MODE_UDP && o.port == udp_port);
+	ASSERT_EQ(mogbus_config_server_options(ctx, &o) && strcmp(o.id, "t") == 0);
+	ASSERT_EQ(!mogbus_config_server_options_at(ctx, 2, &o));
+	ASSERT_EQ(mogbus_server_create_from_config_at(ctx, 2) == NULL &&
+		  mogbus_last_error_code(ctx) == MOGBUS_ERR_INVALID);
+
+	/* The same unit id on different servers coexists; loading the file again would not. */
+	ASSERT_EQ(mogbus_device_count(ctx) == 2);
+	ASSERT_EQ(mogbus_load_config(ctx, path) != MOGBUS_OK && strstr(mogbus_last_error(ctx), "unit id 1") != NULL);
+	ASSERT_EQ(mogbus_device_count(ctx) == 2);
+
+	s0 = mogbus_server_create_from_config(ctx);
+	s1 = mogbus_server_create_from_config_at(ctx, 1);
+	ASSERT_EQ(s0 != NULL && s1 != NULL);
+	tcp = ts_connect_loopback(tcp_port, AF_INET, 1000);
+	udp = ts_udp_loopback(udp_port, AF_INET, 1000);
+	ASSERT_EQ(tcp >= 0 && udp >= 0);
+	ASSERT_EQ(mbap_read(ctx, tcp, false, 1, &exception) == 5);
+	ASSERT_EQ(mbap_read(ctx, udp, true, 1, &exception) == 6);
+	close(tcp);
+	close(udp);
+	mogbus_destroy(ctx);
+	unlink(path);
+}
+#endif

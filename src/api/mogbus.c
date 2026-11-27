@@ -106,11 +106,14 @@ struct mogbus_server_t
 	server_t	server;
 	mogbus_t*	ctx;
 	bool		in_use;
+	device_t*	devices[SERVER_MAX_DEVICES];	/**< the devices this server serves, fixed at creation */
+	u32		device_count;
 	mogbus_frame_fn	frame_fn;	/**< frame hook of the host, or NULL */
 	void*		frame_user;
 	/** @brief Copies of the option strings, so they outlive the caller's buffers. */
 	struct strings_t
 	{
+		char	id[SERVER_ID_MAX];
 		char	bind[SERVER_BIND_MAX];
 		char	http_bind[SERVER_BIND_MAX];
 		char	http_hosts[NET_OBS_HOSTS_MAX];
@@ -128,9 +131,10 @@ struct mogbus_t
 {
 	arena_t*	arena;
 #if WITH_CONFIG
-	config_t	config;		/**< last loaded file: server section only is used */
+	config_t	config;		/**< last loaded file: server sections only are used */
 	bool		has_config;
 #endif
+	net_poll_group_t group;		/**< scratch of the shared wait of mogbus_step() */
 	device_t*	devices[SERVER_MAX_DEVICES];
 	u32		device_count;
 	mogbus_server_t* servers[MOGBUS_MAX_SERVERS];
@@ -213,6 +217,20 @@ find_device(const mogbus_t* ctx, u8 unit)
 	return NULL;
 }
 
+/** @brief The first device that has the unit id of `dev` and shares a server with it, or NULL. */
+static device_t*
+device_conflict(const mogbus_t* ctx, const device_t* dev)
+{
+	for (u32 i = 0; i < ctx->device_count; i++)
+	{
+		if (ctx->devices[i] != dev &&
+		    ctx->devices[i]->unit_id == dev->unit_id &&
+		    device_shares_server(ctx->devices[i], dev))
+			return ctx->devices[i];
+	}
+	return NULL;
+}
+
 #if WITH_CONFIG
 mogbus_error_t
 mogbus_load_config(mogbus_t* ctx, const char* path)
@@ -236,7 +254,7 @@ mogbus_load_config(mogbus_t* ctx, const char* path)
 	}
 	for (u32 i = 0; i < loaded.device_count; i++)
 	{
-		if (find_device(ctx, loaded.devices[i]->unit_id))
+		if (device_conflict(ctx, loaded.devices[i]))
 		{
 			fail(ctx, MOGBUS_ERR_CONFIG, "unit id %u is already used by another device",
 			     loaded.devices[i]->unit_id);
@@ -249,7 +267,8 @@ mogbus_load_config(mogbus_t* ctx, const char* path)
 			continue;
 		for (u32 j = 0; j < ctx->device_count; j++)
 		{
-			if (!ctx->devices[j]->any_unit)
+			if (!ctx->devices[j]->any_unit ||
+			    !device_shares_server(ctx->devices[j], loaded.devices[i]))
 				continue;
 			fail(ctx, MOGBUS_ERR_CONFIG,
 			     "devices '%s' and '%s' both set any-unit; only one device may answer every unit id",
@@ -292,11 +311,6 @@ mogbus_add_device(mogbus_t* ctx, uint8_t unit_id, const char* name)
 		fail(ctx, MOGBUS_ERR_INVALID, "too many devices (max %d per context)", SERVER_MAX_DEVICES);
 		return NULL;
 	}
-	if (find_device(ctx, unit_id))
-	{
-		fail(ctx, MOGBUS_ERR_INVALID, "unit id %u is already used by another device", unit_id);
-		return NULL;
-	}
 	if (name && strlen(name) >= DEVICE_NAME_MAX)
 	{
 		fail(ctx, MOGBUS_ERR_INVALID, "device name is too long (max %d bytes)", DEVICE_NAME_MAX - 1);
@@ -319,6 +333,40 @@ mogbus_device_t*
 mogbus_find_device(mogbus_t* ctx, uint8_t unit_id)
 {
 	return (mogbus_device_t*)find_device(ctx, unit_id);
+}
+
+mogbus_error_t
+mogbus_device_add_server(mogbus_device_t* handle, const char* id)
+{
+	device_t*	dev   = (device_t*)handle;
+	mogbus_t*	ctx   = dev->owner;
+	u32		count = dev->server_count;
+	const char*	error = device_add_server(dev, id);
+
+	if (error)
+		return fail(ctx, MOGBUS_ERR_INVALID, "%s", error);
+	if (dev->server_count != count)
+	{
+		/* Another device with this unit id may already be served by `id`. */
+		device_t* other = device_conflict(ctx, dev);
+
+		if (other)
+		{
+			dev->server_count = count;
+			return fail(ctx, MOGBUS_ERR_INVALID,
+				    "unit id %u of device '%s' is already used by device '%s' on server '%s'",
+				    dev->unit_id, dev->name, other->name, id);
+		}
+	}
+	return MOGBUS_OK;
+}
+
+const char*
+mogbus_device_server_at(const mogbus_device_t* handle, size_t index)
+{
+	const device_t* dev = (const device_t*)handle;
+
+	return index < dev->server_count ? dev->servers[index] : NULL;
 }
 
 size_t
@@ -826,14 +874,47 @@ copy_string(mogbus_t* ctx, char* dst, size_t cap, const char* src, const char* w
  * `o` is repointed at the copies. Opens nothing.
  */
 static mogbus_error_t
-validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st)
+validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st, device_t** devices, u32* count)
 {
 	bool ok = true;
 
-	if (ctx->device_count == 0)
+	*count = 0;
+	for (u32 i = 0; i < ctx->device_count; i++)
 	{
-		return fail(ctx, MOGBUS_ERR_INVALID, "the context has no devices to serve");
+		if (device_serves(ctx->devices[i], o->id))
+			devices[(*count)++] = ctx->devices[i];
 	}
+	if (ctx->device_count == 0)
+		return fail(ctx, MOGBUS_ERR_INVALID, "the context has no devices to serve");
+	if (*count == 0 &&
+	    o->id)
+		return fail(ctx, MOGBUS_ERR_INVALID,
+			    "no device is assigned to server '%s'; see mogbus_device_add_server()", o->id);
+	if (*count == 0)
+		return fail(ctx, MOGBUS_ERR_INVALID,
+			    "every device is assigned to a named server; a server without id serves the devices that list none");
+	for (u32 i = 0; i < *count; i++)
+	{
+		for (u32 j = 0; j < i; j++)
+		{
+			if (devices[j]->unit_id == devices[i]->unit_id)
+				return fail(ctx, MOGBUS_ERR_INVALID,
+					    "unit id %u is used by devices '%s' and '%s' of the same server; "
+					    "assign them to different servers with mogbus_device_add_server()",
+					    devices[i]->unit_id, devices[j]->name, devices[i]->name);
+		}
+	}
+	if (o->id &&
+	    !o->id[0])
+		return fail(ctx, MOGBUS_ERR_INVALID, "server id must not be empty");
+	for (u32 i = 0; o->id && i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use &&
+		    strcmp(ctx->servers[i]->strings.id, o->id) == 0)
+			return fail(ctx, MOGBUS_ERR_INVALID, "a server with id '%s' already exists", o->id);
+	}
+	o->id = copy_string(ctx, st->id, sizeof(st->id), o->id, "server id", &ok);
 	if ((o->mode == SERVER_MODE_RTU_DEVICE || o->mode == SERVER_MODE_ASCII_DEVICE) &&
 	    (!o->path || !o->path[0]))
 	{
@@ -916,7 +997,7 @@ create_server(mogbus_t* ctx, server_options_t o)
 		return NULL;
 	}
 
-	error = validate_options(ctx, &o, &s->strings);
+	error = validate_options(ctx, &o, &s->strings, s->devices, &s->device_count);
 	if (error != MOGBUS_OK)
 	{
 		/* A server that fails on TLS has always logged it; keep that for log readers. */
@@ -925,8 +1006,8 @@ create_server(mogbus_t* ctx, server_options_t o)
 		return NULL;
 	}
 
-	o.devices      = ctx->devices;
-	o.device_count = ctx->device_count;
+	o.devices      = s->devices;
+	o.device_count = s->device_count;
 	rc = server_init(&s->server, &o);
 	if (rc != 0)
 	{
@@ -958,6 +1039,7 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 		return false;
 	}
 	*o = (server_options_t){
+		.id                       = in->id,
 		.mode                     = (server_mode_t)in->mode,
 		.bind_address             = in->bind_address ? in->bind_address : "127.0.0.1",
 		.http_bind_address        = in->http_bind_address,
@@ -1007,34 +1089,56 @@ mogbus_server_check(mogbus_t* ctx, const mogbus_server_options_t* in)
 {
 	server_options_t	o;
 	struct strings_t	strings;
+	device_t*		devices[SERVER_MAX_DEVICES];
+	u32			count;
 
 	if (!options_from_public(ctx, in, &o))
 		return MOGBUS_ERR_INVALID;
-	return validate_options(ctx, &o, &strings);
+	return validate_options(ctx, &o, &strings, devices, &count);
 }
 
 #if WITH_CONFIG
+size_t
+mogbus_config_server_count(const mogbus_t* ctx)
+{
+	return ctx->has_config ? ctx->config.server_count : 0;
+}
+
 mogbus_server_t*
-mogbus_server_create_from_config(mogbus_t* ctx)
+mogbus_server_create_from_config_at(mogbus_t* ctx, size_t index)
 {
 	if (!ctx->has_config)
 	{
 		fail(ctx, MOGBUS_ERR_INVALID, "no config loaded; call mogbus_load_config first");
 		return NULL;
 	}
-	return create_server(ctx, server_options_from_config(&ctx->config));
+	if (index >= ctx->config.server_count)
+	{
+		fail(ctx, MOGBUS_ERR_INVALID, "the config has %u server%s, no server %zu", ctx->config.server_count,
+		     ctx->config.server_count == 1 ? "" : "s", index);
+		return NULL;
+	}
+	return create_server(ctx, server_options_from_config(&ctx->config, (u32)index));
+}
+
+mogbus_server_t*
+mogbus_server_create_from_config(mogbus_t* ctx)
+{
+	return mogbus_server_create_from_config_at(ctx, 0);
 }
 
 bool
-mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
+mogbus_config_server_options_at(const mogbus_t* ctx, size_t index, mogbus_server_options_t* out)
 {
 	/* The config lives in the (non-const) context; the options only read it. */
 	server_options_t	o;
 
-	if (!ctx->has_config)
+	if (!ctx->has_config ||
+	    index >= ctx->config.server_count)
 		return false;
-	o = server_options_from_config((config_t*)&ctx->config);
+	o = server_options_from_config((config_t*)&ctx->config, (u32)index);
 	*out = (mogbus_server_options_t){
+		.id                             = o.id,
 		.mode                           = (mogbus_mode_t)o.mode,
 		.bind_address                   = o.bind_address,
 		.port                           = o.port,
@@ -1066,12 +1170,41 @@ mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
 	};
 	return true;
 }
+
+bool
+mogbus_config_server_options(const mogbus_t* ctx, mogbus_server_options_t* out)
+{
+	return mogbus_config_server_options_at(ctx, 0, out);
+}
 #else
+size_t
+mogbus_config_server_count(const mogbus_t* ctx)
+{
+	(void)ctx;
+	return 0;
+}
+
+mogbus_server_t*
+mogbus_server_create_from_config_at(mogbus_t* ctx, size_t index)
+{
+	(void)index;
+	fail(ctx, MOGBUS_ERR_UNSUPPORTED, "built without config support");
+	return NULL;
+}
+
 mogbus_server_t*
 mogbus_server_create_from_config(mogbus_t* ctx)
 {
-	fail(ctx, MOGBUS_ERR_UNSUPPORTED, "built without config support");
-	return NULL;
+	return mogbus_server_create_from_config_at(ctx, 0);
+}
+
+bool
+mogbus_config_server_options_at(const mogbus_t* ctx, size_t index, mogbus_server_options_t* out)
+{
+	(void)ctx;
+	(void)index;
+	(void)out;
+	return false;
 }
 
 bool
@@ -1095,15 +1228,30 @@ mogbus_server_stop(mogbus_server_t* server)
 	server_stop(&server->server);
 }
 
+void
+mogbus_stop(mogbus_t* ctx)
+{
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			server_stop(&ctx->servers[i]->server);
+	}
+}
+
 static mogbus_server_t* volatile* g_stop_slot;
+static mogbus_t* volatile* g_stop_ctx_slot;
 
 static void
 stop_from_signal(void)
 {
-	mogbus_server_t* server = g_stop_slot ? *g_stop_slot : NULL;
+	mogbus_server_t*	server = g_stop_slot ? *g_stop_slot : NULL;
+	mogbus_t*		ctx    = g_stop_ctx_slot ? *g_stop_ctx_slot : NULL;
 
 	if (server)
 		mogbus_server_stop(server);
+	if (ctx)
+		mogbus_stop(ctx);
 }
 
 void
@@ -1111,6 +1259,43 @@ mogbus_stop_on_signals(mogbus_server_t* volatile* slot)
 {
 	g_stop_slot = slot;
 	os_console_on_stop(stop_from_signal);
+}
+
+void
+mogbus_stop_context_on_signals(mogbus_t* volatile* slot)
+{
+	g_stop_ctx_slot = slot;
+	os_console_on_stop(stop_from_signal);
+}
+
+int
+mogbus_step(mogbus_t* ctx, int max_wait_ms)
+{
+	server_t*	servers[MOGBUS_MAX_SERVERS] = { NULL };
+
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			servers[i] = &ctx->servers[i]->server;
+	}
+	return server_group_step(servers, MOGBUS_MAX_SERVERS, &ctx->group, max_wait_ms);
+}
+
+int
+mogbus_run(mogbus_t* ctx)
+{
+	int rc;
+
+	while ((rc = mogbus_step(ctx, -1)) == MOGBUS_STEP_CONTINUE)
+		;
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			server_close(&ctx->servers[i]->server);
+	}
+	return rc == MOGBUS_STEP_ERROR ? 1 : 0;
 }
 
 int

@@ -27,7 +27,7 @@ produce an error message.
 ## Overall shape
 
 ```scheme
-(server ...)    ; optional, at most once
+(server ...)    ; optional; several, each with (id "NAME"), run together
 
 (device ...)    ; one or more
 (device ...)

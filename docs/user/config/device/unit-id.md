@@ -21,7 +21,8 @@ none (required, at most once per device)
 In `tcp` and `udp` the range is 0-255. In RTU and ASCII modes it is 1-247: `0` is broadcast and
 `248-255` are reserved by the Modbus serial specification. In `rtu-pty`, `rtu-device`, `rtu-tcp`,
 `ascii-pty`, `ascii-device` and `ascii-tcp` modes unit ids 0 and 248-255 are rejected at startup and
-by `--check`. (`ascii-udp` and `rtu-udp` also use 1-247.) Unit ids must be unique across devices.
+by `--check`. (`ascii-udp` and `rtu-udp` also use 1-247.) Unit ids must be unique among the devices of one server; with several servers the same id may
+be used on different ones (see [servers](servers.md)).
 
 ## Errors
 
@@ -40,5 +41,6 @@ by `--check`. (`ascii-udp` and `rtu-udp` also use 1-247.) Unit ids must be uniqu
 ## See also
 
 - [any-unit](any-unit.md)
+- [servers](servers.md)
 - [mode](../server/mode.md)
 - [broadcast-execute](../server/broadcast-execute.md)
