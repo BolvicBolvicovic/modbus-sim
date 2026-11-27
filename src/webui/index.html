@@ -316,7 +316,7 @@ input { width: 9rem; }
         });
       });
     })).then(function () { st.busy = false; drawPlot(); }, function () { st.busy = false; });
-    loadFaults();
+    if (Date.now() - faultsAt >= 1000) { loadFaults(); }
   }
 
   var SVGNS = "http://www.w3.org/2000/svg";
@@ -326,15 +326,50 @@ input { width: 9rem; }
     if (text !== undefined) { e.textContent = String(text); }
     return e;
   }
-  function fmt(v) { return String(Number(v.toPrecision(4))); }
+  function fmt(v) { return String(Number(v.toPrecision(6))); }
+  /* Round tick step (1, 2 or 5 times a power of ten) giving about n intervals over span. */
+  function nice(span, n) {
+    var raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag;
+  }
+
+  /* Rebuilt only when the selection changes, so a click on a remove button is never lost to a redraw. */
+  var legendKey = null;
+  function buildLegend() {
+    var legend = $("legend");
+    clear(legend);
+    legendKey = st.sel.map(function (x) { return x.space + x.pt.address; }).join();
+    st.sel.forEach(function (ser) {
+      var item = el("span", "", "item"), sw = el("span", "", "sw"), rm = el("button", "\u00d7");
+      sw.style.background = "var(--c" + ser.c + ")";
+      item.appendChild(sw);
+      item.appendChild(el("span", ser.space + " " + ser.pt.address + " (" + ser.pt.type + ")"));
+      ser.valEl = el("span", "-", "num");
+      item.appendChild(ser.valEl);
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove " + ser.space + " " + ser.pt.address + " from the plot");
+      rm.addEventListener("click", function () {
+        st.sel.splice(st.sel.indexOf(ser), 1);
+        syncChecks();
+        drawPlot();
+      });
+      item.appendChild(rm);
+      legend.appendChild(item);
+    });
+  }
 
   function drawPlot() {
-    var host = $("plot"), legend = $("legend"), W = 720, H = 300, L = 56, R = 10, T = 10, B = 24;
-    var now = Date.now(), t0 = now - WINDOW_MS, lo = Infinity, hi = -Infinity, s, i, y;
+    var host = $("plot"), W = Math.max(320, host.clientWidth || 720), H = 300, L = 56, R = 10, T = 10, B = 24;
+    var now = Date.now(), first = now, span, t0, lo = Infinity, hi = -Infinity, s, i, y, step;
     if (st.view !== "plot") { return; }
     clear(host);
-    clear(legend);
+    if (legendKey !== st.sel.map(function (x) { return x.space + x.pt.address; }).join()) { buildLegend(); }
+    st.sel.forEach(function (ser) { ser.valEl.textContent = ser.last === "" ? "-" : ser.last; });
     if (!st.sel.length) { host.appendChild(el("p", "Tick Plot on points in the table to plot them", "muted")); return; }
+    /* The time axis grows with the oldest sample, from 10 s up to the 5-minute window. */
+    st.sel.forEach(function (ser) { if (ser.buf.length) { first = Math.min(first, ser.buf[0].t); } });
+    span = Math.min(WINDOW_MS, Math.max(10000, now - first));
+    t0 = now - span;
     st.sel.forEach(function (ser) {
       ser.buf.forEach(function (p) {
         if (p.v !== null && p.t >= t0) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v); }
@@ -342,20 +377,24 @@ input { width: 9rem; }
     });
     if (lo > hi) { lo = 0; hi = 1; }
     if (lo === hi) { lo -= 1; hi += 1; }
-    else { y = (hi - lo) * 0.05; lo -= y; hi += y; }
-    function px(t) { return L + (t - t0) / WINDOW_MS * (W - L - R); }
+    step = nice(hi - lo, 4);
+    lo = Math.floor(lo / step) * step;
+    hi = Math.ceil(hi / step) * step;
+    if (lo === hi) { hi = lo + step; }
+    function px(t) { return L + (t - t0) / span * (W - L - R); }
     function py(v) { return T + (hi - v) / (hi - lo) * (H - T - B); }
-    s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Plot of the selected points over the last 5 minutes", preserveAspectRatio: "none" });
-    for (i = 0; i <= 4; i++) {
-      y = lo + (hi - lo) * i / 4;
+    s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Plot of the selected points over the last " + Math.round(span / 1000) + " seconds" });
+    for (i = 0; lo + i * step <= hi + step / 2; i++) {
+      y = lo + i * step;
       s.appendChild(svg("line", { x1: L, x2: W - R, y1: py(y), y2: py(y), "class": "grid" }));
       s.appendChild(svg("text", { x: L - 4, y: py(y) + 4, "text-anchor": "end", "class": "tick" }, fmt(y)));
     }
-    for (i = 0; i <= 5; i++) {
-      var x = L + i * (W - L - R) / 5;
+    step = nice(span / 1000, 5);
+    for (i = 0; i * step * 1000 <= span; i++) {
+      var x = px(now - i * step * 1000);
       s.appendChild(svg("line", { x1: x, x2: x, y1: T, y2: H - B, "class": "grid" }));
-      s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": i === 0 ? "start" : (i === 5 ? "end" : "middle"), "class": "tick" },
-        i === 5 ? "now" : "-" + (300 - i * 60) + "s"));
+      s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": i === 0 ? "end" : "middle", "class": "tick" },
+        i === 0 ? "now" : "-" + fmt(i * step) + "s"));
     }
     st.sel.forEach(function (ser) {
       var color = "var(--c" + ser.c + ")", step = isBit(ser.space), segs = [], cur = null, d;
@@ -380,26 +419,14 @@ input { width: 9rem; }
         }
         s.appendChild(e);
       });
-      var item = el("span", "", "item"), sw = el("span", "", "sw"), rm = el("button", "×");
-      sw.style.background = color;
-      item.appendChild(sw);
-      item.appendChild(el("span", ser.space + " " + ser.pt.address + " (" + ser.pt.type + ")"));
-      item.appendChild(el("span", ser.last === "" ? "-" : ser.last, "num"));
-      rm.type = "button";
-      rm.setAttribute("aria-label", "Remove " + ser.space + " " + ser.pt.address + " from the plot");
-      rm.addEventListener("click", function () {
-        st.sel.splice(st.sel.indexOf(ser), 1);
-        syncChecks();
-        drawPlot();
-      });
-      item.appendChild(rm);
-      legend.appendChild(item);
     });
     host.appendChild(s);
   }
 
+  var faultsAt = 0;
   function loadFaults() {
     var gen = st.gen;
+    faultsAt = Date.now();
     api("GET", base() + "/faults").then(function (j) {
       var body = $("faults");
       if (gen !== st.gen) { return; }

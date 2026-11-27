@@ -30,8 +30,8 @@ The start-up summary (and `--check`) prints the address, for example
   points ticked in the `Plot` column of the list (strings cannot be plotted). Up to 8 points, of any
   table, can be plotted; the selection belongs to the device and is cleared when you switch device.
   Each series is sampled on every refresh, wherever it is (another page or table), in both views, and
-  keeps the samples of the last 5 minutes (at most 3000); the chart shows the last 5 minutes (`-300s` to `now`) with an
-  auto-scaled vertical axis, bits as steps, and a gap where a read failed. The legend gives colour,
+  keeps the samples of the last 5 minutes (at most 3000); the time axis grows with the samples up to 5 minutes, and the vertical
+  axis scales to the plotted values, bits as steps, and a gap where a read failed. The legend gives colour,
   table and address, type, latest value, and a `×` button to remove the series. Samples are
   kept in the browser only and are lost on reload.
 - **Refresh**: the visible page and the plotted points are read again every second by default (the
