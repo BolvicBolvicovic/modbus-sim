@@ -4,7 +4,7 @@
 # See docs/user/deployment/docker.md.
 
 # Debian 13 (trixie), pinned by tag and by the digest of the multi-arch index. The runtime stage
-# uses the same release, so the libssl it loads matches the one the binary was linked against.
+# (distroless, Debian 13 too) ships the same libssl3t64 major, so the binary runs as linked.
 FROM debian:trixie-20261123@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2 AS build
 
 RUN apt-get update && \
@@ -16,7 +16,7 @@ COPY . .
 # Default prod build: -O2, fortified, PIE, relro/now; WITH_TLS=1 fails if OpenSSL is missing.
 RUN make -j"$(nproc)" WITH_TLS=1
 
-FROM debian:trixie-20261123-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
+FROM gcr.io/distroless/base-debian13:latest@sha256:1eb7e763df3f75a0d0eab87368f04e1bc61ce268caf3f2cbae765fa8fd4fd3e8
 
 ARG VERSION=0.0.1
 LABEL org.opencontainers.image.title="mogbus" \
@@ -24,13 +24,11 @@ LABEL org.opencontainers.image.title="mogbus" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/BolvicBolvicovic/mogbus" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.base.name="docker.io/library/debian:trixie-20261123-slim"
+      org.opencontainers.image.base.name="gcr.io/distroless/base-debian13:latest"
 
-# Only the OpenSSL runtime library: mogbus reads its own TLS files from the config and needs
-# no system CA bundle.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends libssl3t64 && \
-    rm -rf /var/lib/apt/lists/*
+# distroless/base-debian13 is built from the same Debian 13 packages as the build stage: glibc,
+# libssl3t64 and its libz/libzstd, no shell and no package manager. mogbus reads its own TLS
+# files from the config and needs no system CA bundle.
 
 COPY --from=build /src/mogbus /usr/local/bin/mogbus
 COPY --from=build /src/profiles /usr/share/mogbus/profiles

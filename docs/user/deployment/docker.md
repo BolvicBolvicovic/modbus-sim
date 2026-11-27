@@ -57,13 +57,16 @@ modes create a pseudo-terminal that exists only inside the container. Neither ca
 
 The image is multi-stage. The build stage (`debian:trixie`, pinned by tag and by digest) installs
 clang, make, pkg-config and libssl-dev and runs the normal prod `make` (hardened `-O2`, PIE,
-`WITH_TLS=1`). The runtime stage is `debian:trixie-slim` (same release, so the `libssl3t64` it
-installs matches the library the binary was linked against) with nothing added but that library.
+`WITH_TLS=1`). The runtime stage is `gcr.io/distroless/base-debian13` (pinned by digest), about
+10 MB compressed and 29 MB on disk against 85 MB for `debian:trixie-slim`. It is built from the
+same Debian 13 packages (glibc, `libssl3t64`), so the binary runs as linked, and it contains no
+shell, package manager or other tools: `docker exec` has nothing to run except `mogbus` itself
+(for example `docker exec CONTAINER /usr/local/bin/mogbus --health /etc/mogbus/mogbus.scm`). The
+image sets the numeric user `10001:10001` itself rather than distroless's `nonroot` (65532).
 
-A distroless base would be smaller, but keeping the builder's distribution gives an exact libssl ABI
-match and a shell for `docker exec` debugging. No system CA bundle is installed because mogbus reads
-only the CA files named in its own config. To move to a newer base, change the tag and digest in both
-`FROM` lines and the `base.name` label.
+The system CA bundle shipped in the base is not used: mogbus reads only the CA files named in its
+own config. To move to a newer base, change the digest in the runtime `FROM` line (and the build
+stage's tag and digest together if the Debian release changes) and the `base.name` label.
 
 ## See also
 
