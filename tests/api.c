@@ -1258,7 +1258,7 @@ TEST(ApiEnumeratesDevicesAndDescribesThem)
 		"  (fault (kind exception) (code 6) (percent 10))\n"
 		"  (fault (kind drop) (schedule (step (after-ms 100) (count 2))))\n"
 		"  (fault (kind sensor-disconnect) (percent 100)))\n"
-		"(device (unit-id 9) (holding 0))\n"));
+		"(device (unit-id 9) (holding 0) (input 0 (sine (offset 5) (amplitude 1) (period-ms 1000))))\n"));
 	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
 	{
 		mogbus_device_t* extra = mogbus_add_device(ctx, 11, "code", err, sizeof(err));
@@ -1297,7 +1297,10 @@ TEST(ApiEnumeratesDevicesAndDescribesThem)
 		ASSERT_EQ(mogbus_device_point_at(mogbus_device_at(ctx, 0), 0, &pt));
 		ASSERT_EQ(pt.space == MOGBUS_COIL && pt.address == 0 && pt.type == MOGBUS_TYPE_BOOL);
 		ASSERT_EQ(mogbus_device_point_at(mogbus_device_at(ctx, 0), 6, &pt));
-		ASSERT_EQ(pt.space == MOGBUS_HOLDING && pt.address == 2 && pt.type == MOGBUS_TYPE_U16);
+		ASSERT_EQ(pt.space == MOGBUS_HOLDING && pt.address == 2 && pt.type == MOGBUS_TYPE_U16 &&
+			  pt.kind == MOGBUS_POINT_STATIC);
+		ASSERT_EQ(mogbus_device_point_at(mogbus_device_at(ctx, 1), 1, &pt));
+		ASSERT_EQ(pt.space == MOGBUS_INPUT && pt.kind == MOGBUS_POINT_MODEL);
 		ASSERT_EQ(!mogbus_device_point_at(NULL, 0, &pt) &&
 			  !mogbus_device_point_at(mogbus_device_at(ctx, 0), 0, NULL));
 	}

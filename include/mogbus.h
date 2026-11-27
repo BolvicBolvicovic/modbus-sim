@@ -187,6 +187,8 @@ enum mogbus_point_kind_t
 	MOGBUS_POINT_STATIC,	/**< `value` until a client writes another one */
 	MOGBUS_POINT_RAMP,	/**< follows `ramp` over time (registers only) */
 	MOGBUS_POINT_CLOCK,	/**< shows `clock_field` of the wall clock (integer registers only) */
+	MOGBUS_POINT_MODEL,	/**< follows a config model (sine, lag, noise); reported by mogbus_device_point_at() only */
+	MOGBUS_POINT_MACHINE,	/**< driven by a config machine; reported by mogbus_device_point_at() only */
 };
 
 /** @brief Which wall-clock value a MOGBUS_POINT_CLOCK point shows. */
@@ -379,9 +381,8 @@ MOGBUS_API bool		mogbus_device_info(const mogbus_device_t* dev, mogbus_device_in
  * The index runs from 0 to the sum of mogbus_device_info() `point_count` minus one. Only the
  * layout fields are filled (`space`, `address`, `type`, `word_order`, `byte_order`, `length`,
  * `read_only`, `clock_field`, `clock_utc`); `value`, `ramp` and `text` are zero, and read the
- * current value with mogbus_device_get_value() or mogbus_device_get_string(). `kind` is
- * MOGBUS_POINT_RAMP or MOGBUS_POINT_CLOCK for those points and MOGBUS_POINT_STATIC for every other
- * one, including model and machine points.
+ * current value with mogbus_device_get_value() or mogbus_device_get_string(). `kind` also takes
+ * MOGBUS_POINT_MODEL and MOGBUS_POINT_MACHINE for points a config made that way.
  *
  * @param dev Device.
  * @param index Position of the point.

@@ -517,7 +517,9 @@ main(int argc, char** argv)
 		{
 			int64_t	wait = next - now_ms();
 
-			if (wait <= 0)
+			/* wall clock: a backwards jump must not postpone the next print */
+			if (wait <= 0 ||
+			    wait > cli.show_ms)
 			{
 				show_registers(ctx, all, cli.log_json);
 				all  = false;

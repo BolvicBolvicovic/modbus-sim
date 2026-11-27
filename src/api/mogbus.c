@@ -371,8 +371,10 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 	out->type        = (mogbus_value_type_t)point->type;
 	out->word_order  = (mogbus_word_order_t)point->order;
 	out->byte_order  = (mogbus_byte_order_t)point->byte_order;
-	out->kind        = point->kind == POINT_RAMP  ? MOGBUS_POINT_RAMP :
-			   point->kind == POINT_CLOCK ? MOGBUS_POINT_CLOCK : MOGBUS_POINT_STATIC;
+	out->kind        = point->kind == POINT_RAMP    ? MOGBUS_POINT_RAMP :
+			   point->kind == POINT_CLOCK   ? MOGBUS_POINT_CLOCK :
+			   point->kind == POINT_MODEL   ? MOGBUS_POINT_MODEL :
+			   point->kind == POINT_MACHINE ? MOGBUS_POINT_MACHINE : MOGBUS_POINT_STATIC;
 	out->length      = point->length;
 	out->read_only   = point->read_only;
 	out->clock_field = (mogbus_clock_field_t)point->clock_field;
