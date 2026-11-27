@@ -69,6 +69,7 @@ s64		os_serial_read(os_serial_t fd, void* buf, u32 len);
 /** @brief Writes up to len bytes: bytes written or -1. */
 s64		os_serial_write(os_serial_t fd, const void* buf, u32 len);
 
+/** @brief Closes a serial handle; the caller must not use it afterwards. */
 void		os_serial_close(os_serial_t fd);
 
 #endif
