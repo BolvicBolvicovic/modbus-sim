@@ -28,6 +28,11 @@ typedef struct device_custom_fc_t device_custom_fc_t;
 typedef struct device_access_t device_access_t;
 typedef enum access_target_t access_target_t;
 typedef struct device_t device_t;
+/**
+ * @brief Host callback of a user-defined function code: returns 0 to reply with `reply[0..*reply_len)`
+ *        (at most `cap` bytes), 1-255 to answer that exception, DEVICE_CUSTOM_NO_RESPONSE for silence.
+ */
+typedef int (*device_custom_fn_t)(void* user, device_t* dev, u8 unit, u8 code, const u8* data, u32 len, u8* reply, u32 cap, u32* reply_len);
 
 #define DEVICE_NAME_MAX		64
 #define DEVICE_ID_OBJECT_MAX	244	/**< 7-byte MEI header + 2-byte object header + value <= MODBUS_MAX_PDU */
@@ -119,6 +124,7 @@ struct space_t
 #define DEVICE_MAX_FILE_SEGMENTS	64
 #define DEVICE_MAX_RECORD_VALUES	126
 #define DEVICE_MAX_FIFOS		16
+#define DEVICE_CUSTOM_NO_RESPONSE	(-1)	/**< device_custom_fn_t result: send nothing */
 #define DEVICE_MAX_CUSTOM_FCS		8	/**< user-defined function codes per device */
 #define DEVICE_MAX_CUSTOM_CASES		16	/**< (on ...) cases per user-defined code */
 #define DEVICE_CUSTOM_PREFIX_MAX	16	/**< request bytes an (on "...") case matches */
@@ -208,13 +214,16 @@ enum custom_action_t
  *        after the function code).
  *
  * A case matches when the request data starts with its prefix; an empty prefix matches every
- * request. A request no case matches gets exception 03 (illegal data value).
+ * request. A request no case matches gets exception 03 (illegal data value). A code the host defines
+ * has `fn` set and no cases: `fn` answers every request (see device_custom_fn_t).
  */
 struct device_custom_fc_t
 {
 	u8		code;			/**< 1-127, not a function code mogbus implements */
 	char		name[DEVICE_NAME_MAX];	/**< for logs and summaries; may be empty */
 	u32		case_count;
+	device_custom_fn_t fn;			/**< host callback (NULL: the cases answer) */
+	void*		user;			/**< passed to `fn` */
 	/** @brief One `(on ...)` case of a user-defined function code. */
 	struct device_custom_case_t
 	{
@@ -318,6 +327,7 @@ struct device_t
 	/** @brief Host hook run after a Modbus client write was applied (NULL: none); the access carries the stored values. */
 	void		(*written_fn)(void* user, device_t* dev, const device_access_t* access);
 	void*		written_user;
+	u8		request_unit;		/**< unit id of the request being handled, set by net_handle_pdu() */
 };
 
 /**

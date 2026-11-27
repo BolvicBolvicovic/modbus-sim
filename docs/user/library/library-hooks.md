@@ -80,6 +80,21 @@ In the self-test, a refused setpoint leaves the event counter alone and an accep
   ok   the post-write hook logged the setpoint event
 ```
 
+## A vendor function code
+
+Some devices answer function codes the standard does not define. The pump station answers the vendor code 0x41, "read station status block", with a block computed from the live values at request time. @ref mogbus_device_add_function_code "mogbus_device_add_function_code()" defines it with a callback (@ref mogbus_function_fn "mogbus_function_fn"), the programmable counterpart of the config's `(function-code ...)`:
+
+```c
+mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st);
+```
+
+`status_block` gets the request data (one byte, the block id) and writes the reply data: block id, mode, flags (high, low, running), level in cm, outflow in 0.1 m3/h and the hook's refusal count, read with `mogbus_device_get_value()` and `mogbus_device_read()`. It returns 0 to reply, a Modbus exception code to refuse (an unknown block id answers 3) or `MOGBUS_FUNCTION_NO_RESPONSE` for silence. The request counts in the diagnostic counters and metrics like any other, and faults and listen-only apply. See [user-defined function codes](../modbus/user-defined-function-codes.md#programmable-from-c-and-python) for the rules (1-127, not built in, 8 per device).
+
+```text
+  ok   FC 0x41 returns the status block computed from the live values
+  ok   FC 0x41 with an unknown block id: exception 03
+```
+
 ## Targets
 
 `target` is `MOGBUS_TARGET_TABLE` (0) unless the request reaches another store, and the fields a target does not use are zero. Code that handles only tables must check it, because the other targets also reach hooks written before they existed; the example's hook starts with that dispatch.

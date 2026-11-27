@@ -31,7 +31,10 @@ u32
 net_handle_pdu(net_obs_t* obs, const char* peer, device_t* dev, u8 unit, rng_t* rng, u64 now_ms,
 	       const u8* req, u32 req_len, u8* resp, fault_decision_t* decision)
 {
-	u32 len = modbus_handle_request(dev, rng, now_ms, req, req_len, resp, decision);
+	u32 len;
+
+	dev->request_unit = unit;
+	len = modbus_handle_request(dev, rng, now_ms, req, req_len, resp, decision);
 
 	net_obs_request(obs, peer, dev, unit, req[0], resp, len, decision);
 	return len;

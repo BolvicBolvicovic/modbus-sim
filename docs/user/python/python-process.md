@@ -224,6 +224,30 @@ first, and a read does not consume it.
 > `(fifo ...)` form in a config file) and host-built storage here; clients can write file records
 > (function code 0x15) unless your hook vetoes them.
 
+## A vendor function code
+
+A device can also answer function codes the standard does not define, such as the vendor codes of commercial PLCs. \ref mogbus::core::Device::add_function_code "Device.add_function_code(code, callback)" defines one with a Python callback that gets the request data and returns the reply. The station answers 0x41, "read station status block", with a block computed from the live values when the request arrives:
+
+```python
+def status(request):
+    if request != b"\x01":
+        return 3                                  # an int is a Modbus exception code
+    flags = process.high | (process.low << 1) | (process.pump << 2)
+    return struct.pack(">BBBHHH", 1, int(dev.get_value("holding", MODE)), flags,
+                       round(dev.get_value("input", LEVEL) * 100),
+                       round(dev.get_value("input", OUTFLOW) * 10), policy.refused)
+
+dev.add_function_code(0x41, status)
+```
+
+The callback returns bytes (the reply data, at most 252), an int (an exception code) or None (no response); an exception raised inside it is printed and answered with exception 04. Like the access hook it runs on the server thread with the lock held, so it may read the device. The client side is one call:
+
+```python
+block = plc.call(struct.pack(">BB", FC_STATUS_BLOCK, 1))
+```
+
+The request goes through the same path as any other: faults, listen-only, counters and metrics apply. See [user-defined function codes](../modbus/user-defined-function-codes.md#programmable-from-c-and-python) for the rules.
+
 Next: [Threads, locks and shutdown](python-threading.md) runs this model beside the server, and
 [Logs, metrics, configs and runtime control](python-observe.md) shows what the station reports about
 itself.

@@ -41,6 +41,7 @@ enum
 	LOG_FILE        = 1,	/* file 1: record 1 = event counter, records 2-100 = ring of codes */
 	LOG_RECORDS     = 100,
 	FIFO_MAX        = 31,
+	FC_STATUS_BLOCK = 0x41,	/* vendor function code: read the station status block */
 };
 
 /** @brief Values of the mode register. */
@@ -454,6 +455,8 @@ self_test(mogbus_server_t* server, const mogbus_server_options_t* options, struc
 	uint8_t		read_log[] = { 0x14, 7, 6, 0, LOG_FILE, 0, 1, 0, 1 };
 	uint8_t		write_log[] = { 0x15, 9, 6, 0, LOG_FILE, 0, 2, 0, 1, 0, 9 };
 	uint8_t		read_fifo[] = { 0x18, 0, FIFO_ADDRESS };
+	uint8_t		read_status[] = { FC_STATUS_BLOCK, 1 };
+	uint8_t		read_status_bad[] = { FC_STATUS_BLOCK, 9 };
 
 	if (fd < 0 || connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0)
 	{
@@ -511,6 +514,12 @@ self_test(mogbus_server_t* server, const mogbus_server_options_t* options, struc
 	check(exchange(server, fd, unit, read_fifo, sizeof(read_fifo), r) > 4 && pdu[0] == 0x18 &&
 	      (pdu[3] << 8 | pdu[4]) == FIFO_MAX, "FC 18 returns the last 31 level samples");
 
+	check(exchange(server, fd, unit, read_status, sizeof(read_status), r) == 12 && pdu[0] == FC_STATUS_BLOCK &&
+	      pdu[1] == 1 && pdu[2] == MODE_OFF && (pdu[3] & 1) && (pdu[4] << 8 | pdu[5]) > 400 &&
+	      (pdu[8] << 8 | pdu[9]) == 3, "FC 0x41 returns the status block computed from the live values");
+	check(exchange(server, fd, unit, read_status_bad, sizeof(read_status_bad), r) == 2 &&
+	      is_exception(pdu, FC_STATUS_BLOCK, 3), "FC 0x41 with an unknown block id: exception 03");
+
 	write_mode[4] = MODE_AUTO;
 	check(exchange(server, fd, unit, write_mode, sizeof(write_mode), r) == 5, "FC 06 switches back to auto");
 	check(mogbus_device_get_string(st->dev, MOGBUS_HOLDING, HOLD_SITE, text, sizeof(text)) &&
@@ -518,6 +527,51 @@ self_test(mogbus_server_t* server, const mogbus_server_options_t* options, struc
 	check(st->refused == 3 && st->accepted >= 5, "the hook counted its vetoes and accepted writes");
 	close(fd);
 	return g_failed ? 1 : 0;
+}
+
+/**
+ * @brief Vendor function code 0x41, "read station status block": the reply is computed from the live
+ *        values when the request arrives, as a vendor PLC would.
+ *
+ * Request data: one byte, the block id (1). Reply data: block id, mode, flags (bit 0 high, 1 low,
+ * 2 running), level in cm (u16), outflow in 0.1 m3/h (u16), refused and accepted writes (u16 each).
+ */
+static int
+status_block(void* user, mogbus_device_t* dev, uint8_t unit_id, uint8_t function_code,
+	     const uint8_t* data, size_t len, uint8_t* reply, size_t reply_cap, size_t* reply_len)
+{
+	const struct station*	st = user;
+	double			mode = 0, level = 0, outflow = 0;
+	uint16_t		fields[4];
+	uint8_t			discrete[3] = { 0 };
+	uint16_t		bits[3];
+
+	(void)unit_id;
+	(void)function_code;
+	if (len != 1 ||
+	    data[0] != 1 ||
+	    reply_cap < 11)
+		return 3;				/* exception 03: unknown block */
+	mogbus_device_get_value(dev, MOGBUS_HOLDING, HOLD_MODE, &mode);
+	mogbus_device_get_value(dev, MOGBUS_INPUT, IN_LEVEL, &level);
+	mogbus_device_get_value(dev, MOGBUS_INPUT, IN_OUTFLOW, &outflow);
+	mogbus_device_read(dev, MOGBUS_DISCRETE, DISC_HIGH, 3, bits);
+	for (int i = 0; i < 3; i++)
+		discrete[0] |= (uint8_t)((bits[i] ? 1 : 0) << i);
+	fields[0] = (uint16_t)(level * 100.0 + 0.5);
+	fields[1] = (uint16_t)(outflow * 10.0 + 0.5);
+	fields[2] = (uint16_t)st->refused;
+	fields[3] = (uint16_t)st->accepted;
+	reply[0] = 1;
+	reply[1] = (uint8_t)mode;
+	reply[2] = discrete[0];
+	for (int i = 0; i < 4; i++)
+	{
+		reply[3 + 2 * i] = (uint8_t)(fields[i] >> 8);
+		reply[4 + 2 * i] = (uint8_t)fields[i];
+	}
+	*reply_len = 11;
+	return 0;
 }
 
 static void
@@ -627,6 +681,11 @@ main(int argc, char** argv)
 	}
 	mogbus_device_set_access_hook(st.dev, on_access, &st);
 	mogbus_device_set_written_hook(st.dev, on_written, &st);
+	if (!mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st))
+	{
+		fprintf(stderr, "cannot define function code 0x%02X\n", FC_STATUS_BLOCK);
+		goto done;
+	}
 
 	if (test)
 	{

@@ -8,6 +8,7 @@
 #include "modbus/rtu.h"
 #include "net/rtu_framer.h"
 #include "os/os_time.h"
+#include "util/rng.h"
 #include "tests/tests_utils/test_support.h"
 #include <poll.h>
 #include <signal.h>
@@ -1745,3 +1746,189 @@ TEST(ApiHostCallsNeverRunTheTargetHook)
 	ASSERT_EQ(target_log.calls == 0);
 	mogbus_destroy(ctx);
 }
+
+/* ---- Programmable user-defined function codes ---- */
+
+static struct function_log
+{
+	int		calls;
+	uint8_t		unit;
+	uint8_t		code;
+	size_t		len;
+	uint8_t		data[8];
+	int		result;
+	size_t		reply_len;
+} fn_log;
+
+/* Replies with the request data reversed, plus a live holding value; the first data byte picks
+ * the other outcomes. */
+static int
+station_fn(void* user, mogbus_device_t* dev, uint8_t unit, uint8_t code, const uint8_t* data,
+	   size_t len, uint8_t* reply, size_t reply_cap, size_t* reply_len)
+{
+	double v = 0;
+
+	fn_log.calls++;
+	fn_log.unit = unit;
+	fn_log.code = code;
+	fn_log.len  = len;
+	memcpy(fn_log.data, data, len < sizeof(fn_log.data) ? len : sizeof(fn_log.data));
+	if (user)
+		(*(int*)user)++;
+	if (len > 0 && data[0] == 0xE0)
+		return data[1];
+	if (len > 0 && data[0] == 0xE1)
+		return MOGBUS_FUNCTION_NO_RESPONSE;
+	if (len > 0 && data[0] == 0xE2)
+	{
+		memset(reply, 0xAB, reply_cap);
+		*reply_len = reply_cap;
+		return 0;
+	}
+	if (len > 0 && data[0] == 0xE3)
+	{
+		*reply_len = reply_cap + 1;
+		return 0;
+	}
+	if (len > 0 && data[0] == 0xE4)
+		return 300;
+	(void)mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &v);
+	for (size_t i = 0; i < len; i++)
+		reply[i] = data[len - 1 - i];
+	reply[len]     = (uint8_t)v;
+	*reply_len     = len + 1;
+	return fn_log.result;
+}
+
+static mogbus_device_t*
+function_device(mogbus_t** ctx, int* user)
+{
+	mogbus_device_t* dev = NULL;
+	mogbus_point_t	p = holding(0, 7);
+	char		err[128];
+
+	*ctx = mogbus_create();
+	dev  = mogbus_add_device(*ctx, 1, "fn", NULL, 0);
+	(void)mogbus_device_add_point(dev, &p, err, sizeof(err));
+	memset(&fn_log, 0, sizeof(fn_log));
+	ASSERT_EQ(mogbus_device_add_function_code(dev, 0x41, station_fn, user));
+	return dev;
+}
+
+TEST(ApiFunctionCodeAnswersWithTheCallbackReply)
+{
+	mogbus_t*	ctx = NULL;
+	int		count = 0;
+	mogbus_device_t* dev = function_device(&ctx, &count);
+	u8		resp[MODBUS_MAX_PDU];
+	const u8	req[] = { 0x41, 1, 2, 3 };
+	mogbus_device_info_t info;
+
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 5);
+	ASSERT_EQ(resp[0] == 0x41 && resp[1] == 3 && resp[2] == 2 && resp[3] == 1 && resp[4] == 7);
+	ASSERT_EQ(count == 1 && fn_log.code == 0x41 && fn_log.len == 3 && fn_log.data[0] == 1);
+	mogbus_device_set_value(dev, MOGBUS_HOLDING, 0, 9);
+	ASSERT_EQ(hook_pdu(dev, req, sizeof(req), resp) == 5 && resp[4] == 9);
+	ASSERT_EQ(mogbus_device_info(dev, &info));
+	ASSERT_EQ(info.custom_fc_count == 1 && info.custom_fcs[0].code == 0x41 && info.custom_fcs[0].name[0] == 0);
+	ASSERT_EQ(((device_t*)dev)->message_count == 2 && ((device_t*)dev)->com_event_count == 2);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiFunctionCodeExceptionNoResponseAndBrokenCallbacks)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = function_device(&ctx, NULL);
+	u8		resp[MODBUS_MAX_PDU];
+	const u8	exc[]   = { 0x41, 0xE0, 6 };
+	const u8	silent[] = { 0x41, 0xE1 };
+	const u8	full[]  = { 0x41, 0xE2 };
+	const u8	over[]  = { 0x41, 0xE3 };
+	const u8	bad[]   = { 0x41, 0xE4 };
+	const u8	empty[] = { 0x41 };
+
+	ASSERT_EQ(hook_pdu(dev, exc, sizeof(exc), resp) == 2);
+	ASSERT_EQ(resp[0] == 0xC1 && resp[1] == 6);
+	ASSERT_EQ(((device_t*)dev)->diag_exception_count == 1);
+	ASSERT_EQ(hook_pdu(dev, silent, sizeof(silent), resp) == 0);
+	ASSERT_EQ(hook_pdu(dev, full, sizeof(full), resp) == MODBUS_MAX_PDU);
+	ASSERT_EQ(resp[0] == 0x41 && resp[1] == 0xAB && resp[252] == 0xAB);
+	ASSERT_EQ(hook_pdu(dev, over, sizeof(over), resp) == 2);	/* too long: exception 04 */
+	ASSERT_EQ(resp[0] == 0xC1 && resp[1] == 4);
+	ASSERT_EQ(hook_pdu(dev, bad, sizeof(bad), resp) == 2);	/* result 300 */
+	ASSERT_EQ(resp[0] == 0xC1 && resp[1] == 4);
+	ASSERT_EQ(hook_pdu(dev, empty, sizeof(empty), resp) == 2);
+	ASSERT_EQ(resp[0] == 0x41 && resp[1] == 7 && fn_log.len == 0);
+	mogbus_destroy(ctx);
+}
+
+static int
+noop_fn(void* user, mogbus_device_t* dev, uint8_t unit, uint8_t code, const uint8_t* data,
+	size_t len, uint8_t* reply, size_t reply_cap, size_t* reply_len)
+{
+	(void)user; (void)dev; (void)unit; (void)code; (void)data; (void)len; (void)reply; (void)reply_cap;
+	*reply_len = 0;
+	return 0;
+}
+
+TEST(ApiFunctionCodeRejectsBuiltinDuplicatesAndTheLimit)
+{
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = function_device(&ctx, NULL);
+
+	ASSERT_EQ(!mogbus_device_add_function_code(NULL, 0x42, noop_fn, NULL));
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 0x42, NULL, NULL));
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 0, noop_fn, NULL));
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 128, noop_fn, NULL));
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 0x03, noop_fn, NULL));	/* built in */
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 0x2B, noop_fn, NULL));
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 0x41, noop_fn, NULL));	/* duplicate */
+	for (uint8_t c = 0x42; c <= 0x48; c++)
+		ASSERT_EQ(mogbus_device_add_function_code(dev, c, noop_fn, NULL));
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 0x49, noop_fn, NULL));	/* ninth */
+	mogbus_destroy(ctx);
+}
+
+#if WITH_CONFIG
+TEST(ApiFunctionCodeConflictsWithConfigAndSharesFaultsAndListenOnly)
+{
+	char		path[] = "/tmp/mogbus-api-XXXXXX";
+	mogbus_t*	ctx = mogbus_create();
+	mogbus_device_t* dev = NULL;
+	mogbus_device_info_t info;
+	char		err[256] = "";
+	u8		resp[MODBUS_MAX_PDU];
+	const u8	req[] = { 0x41, 5 };
+	const u8	cfg[] = { 0x42, 1 };
+	fault_decision_t decision;
+	rng_t		rng;
+
+	ASSERT_EQ(write_config(path,
+		"(device (unit-id 1) (holding 0 (static 7))\n"
+		"  (function-code 66 (name \"cfg\") (on \"01\" (reply \"AA\")))\n"
+		"  (fault (kind exception) (code 6) (percent 100)))\n"));
+	ASSERT_EQ(mogbus_load_config(ctx, path, err, sizeof(err)));
+	dev = mogbus_find_device(ctx, 1);
+	ASSERT_EQ(!mogbus_device_add_function_code(dev, 66, noop_fn, NULL));	/* defined by config */
+	ASSERT_EQ(mogbus_device_add_function_code(dev, 0x41, station_fn, NULL));
+	ASSERT_EQ(mogbus_device_info(dev, &info) && info.custom_fc_count == 2);
+	ASSERT_EQ(info.custom_fcs[0].code == 66 && strcmp(info.custom_fcs[0].name, "cfg") == 0);
+	ASSERT_EQ(info.custom_fcs[1].code == 0x41 && info.custom_fcs[1].name[0] == 0);
+	rng_seed(&rng, 1);
+	ASSERT_EQ(modbus_handle_request((device_t*)dev, &rng, 0, req, sizeof(req), resp, &decision) > 0);
+	ASSERT_EQ(decision.exception_code == 6);	/* the fault still replaces the answer */
+	ASSERT_EQ(modbus_handle_request((device_t*)dev, &rng, 0, cfg, sizeof(cfg), resp, &decision) == 2);
+	ASSERT_EQ(decision.exception_code == 6);
+	/* listen-only: no call, no response */
+	{
+		const u8 listen[] = { 0x08, 0x00, 0x04, 0x00, 0x00 };
+		int	 before   = fn_log.calls;
+
+		ASSERT_EQ(modbus_handle_pdu((device_t*)dev, 0, listen, sizeof(listen), resp) == 0);
+		ASSERT_EQ(modbus_handle_pdu((device_t*)dev, 0, req, sizeof(req), resp) == 0);
+		ASSERT_EQ(fn_log.calls == before);
+	}
+	mogbus_destroy(ctx);
+	unlink(path);
+}
+#endif

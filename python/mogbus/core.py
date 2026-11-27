@@ -42,7 +42,7 @@ The classes mirror `mogbus.h`: Context is `mogbus_create`/`mogbus_destroy`, Cont
 Device.add_point `mogbus_device_add_point`, Device.read/write `mogbus_device_read/write` (raw
 registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (decoded),
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
-`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.info `mogbus_device_info`, Context.serve
+`mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
 `mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, probe `mogbus_probe`,
 rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
@@ -626,6 +626,7 @@ class Device:
         self._h = handle
         self._access_ref = None  # the C callback object, alive while the hook is installed
         self._written_ref = None  # same for the post-write hook
+        self._function_refs = []  # C callback objects of add_function_code(), alive as long as the device
 
     def _live(self):
         self._ctx._check_open()
@@ -898,6 +899,61 @@ class Device:
         if not lib.mogbus_device_set_written_hook(handle, ref, None):
             raise MogbusError("cannot install the written hook (out of memory)")
         self._written_ref = ref
+
+    def add_function_code(self, code: int, callback: Callable[[bytes], Union[bytes, int, None]]) -> None:
+        """@brief Answers the user-defined function code `code` by calling `callback(request)`.
+
+        Like `(function-code CODE ...)` in a config, with code in place of the cases: unit routing,
+        faults, listen-only, the FC 08 counters, metrics and the access log treat the request as any
+        other. `request` is the bytes after the function code. The callback returns bytes (at most 252)
+        to answer with that reply data, an int (1-255) to answer that Modbus exception, or None to send no
+        response. Anything else, a reply that is too long, or an exception raised by the callback is
+        answered with exception 04 (an exception is also printed with its traceback). With the server's
+        `broadcast-execute` the callback runs for a broadcast and its reply is dropped.
+
+        It runs on the thread that steps the server with the context lock held. The lock is reentrant,
+        so the callback may call the methods of this device, for example get_value() to build a reply from
+        live values. A code cannot be removed or redefined; it counts toward the limit of 8 per device and
+        appears in info() with an empty name.
+
+        ```python
+        def status(request):
+            if request[:1] != b"\x01":
+                return 3                                  # illegal data value
+            return struct.pack(">H", int(dev.get_value("holding", 0)))
+
+        dev.add_function_code(0x41, status)
+        ```
+        @param code Function code, 1-127 and not one mogbus implements.
+        @param callback A callable taking the request data and returning bytes, an exception code or None.
+        @throws MogbusError If the code is invalid, built in, already defined, over the limit or out of memory.
+        """
+        code = _u(code, "function code", 128)
+
+        def trampoline(_user, _dev, _unit, _code, data, length, reply, reply_cap, reply_len):
+            try:
+                result = callback(ctypes.string_at(data, length) if length else b"")
+                if result is None:
+                    return -1
+                if isinstance(result, int) and not isinstance(result, bool):
+                    if not 1 <= result <= 255:
+                        raise ValueError(f"exception code {result} is not in 1..255")
+                    return result
+                result = bytes(result)
+                if len(result) > reply_cap:
+                    raise ValueError(f"reply of {len(result)} bytes is longer than {reply_cap}")
+                ctypes.memmove(reply, result, len(result))
+                reply_len[0] = len(result)
+                return 0
+            except BaseException:  # an exception must not unwind into C
+                traceback.print_exc()
+                return 4
+
+        ref = _lib.FUNCTION_FN(trampoline)
+        if not lib.mogbus_device_add_function_code(self._live(), code, ref, None):
+            raise MogbusError(f"cannot add function code 0x{code:02X} (not 1-127, built in, already defined, "
+                              "or the device has 8)")
+        self._function_refs.append(ref)
 
     @_locked
     def add_file_record(self, file, record, values: Sequence[int]) -> None:

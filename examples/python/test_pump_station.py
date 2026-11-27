@@ -6,6 +6,7 @@ pump_station.running_station(); simulated time only moves when the test calls pr
 
     MOGBUS_LIB=$PWD/libmogbus.so PYTHONPATH=python python3 -m unittest discover -s examples/python -p 'test_pump_station.py'
 """
+import struct
 import unittest
 
 import mogbus
@@ -102,6 +103,22 @@ class PumpStationTest(unittest.TestCase):
         self.assertEqual(read_status(self.plc)["setpoint"], 3.5)  # unchanged
         self.assertEqual(self.station.policy.refused, 1)
         self.assertEqual([entry[2] for entry in self.station.policy.audit], [ps.SETPOINT])
+
+    def test_status_block_is_computed_per_request(self):
+        def status():
+            reply = self.plc.call(struct.pack(">BB", ps.FC_STATUS_BLOCK, 1))
+            return struct.unpack(">BBBHHH", reply[1:])
+
+        self.assertEqual(status(), (1, ps.AUTO, 0, 200, 0, 0))
+        self.run_until(lambda: self.station.process.pump)
+        block_id, mode, flags, level_cm, outflow, refused = status()
+        self.assertEqual((mode, flags & 4, outflow), (ps.AUTO, 4, int(ps.PUMP_FLOW * 10)))
+        self.assertEqual(level_cm, round(self.plc.read_f32(4, ps.LEVEL) * 100))
+        self.assertFalse(raise_setpoint(self.plc, 10.0))
+        self.assertEqual(status()[-1], 1)                       # the hook's refusal count
+        with self.assertRaises(ModbusException) as raised:
+            self.plc.call(struct.pack(">BB", ps.FC_STATUS_BLOCK, 2))
+        self.assertEqual(raised.exception.code, 3)
 
     def test_site_name_is_read_only(self):
         with self.assertRaises(ModbusException) as raised:

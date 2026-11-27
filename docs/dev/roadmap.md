@@ -29,9 +29,6 @@ outstanding work is listed here. When an item is done, document it there and rem
   - Tests on `windows-latest` (unit, Python, interop), native COM tests with com0com.
   - OpenSSL (or Schannel) for TLS.
   - Windows release artifacts.
-- Simulator actions in Python: a programmable callback for user-defined function codes (today
-  they are config-only pattern matching). Why: custom pymodbus `ModbusPDU` subclasses can run
-  arbitrary logic.
 - Frame trace hooks: a host callback that sees, and may rewrite, each received and sent frame. Why:
   pymodbus has `trace_packet`/`trace_pdu`/`trace_connect`; fault injection covers only fixed cases.
 - asyncio integration for the Python package. Why: `Server.start()` steps on a background thread, so

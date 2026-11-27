@@ -9,6 +9,7 @@
 #include "mogbus.h"
 #include "build_config.h"
 #include "device/device.h"
+#include "modbus/pdu.h"
 #include "net/net_obs.h"
 #include "net/rtu_framer.h"
 #include "os/os_console.h"
@@ -1168,4 +1169,48 @@ mogbus_server_metrics(const mogbus_server_t* server, char* out, size_t size)
 	if (!server || !server->in_use || !out || size == 0)
 		return 0;
 	return net_obs_render_metrics(&server->server.obs, out, size > UINT32_MAX ? UINT32_MAX : (u32)size);
+}
+
+/** @brief The host's callback and user pointer of one user-defined function code. */
+struct function_hook_t
+{
+	mogbus_function_fn fn;
+	void*		user;
+};
+
+static int
+function_trampoline(void* user, device_t* dev, u8 unit, u8 code, const u8* data, u32 len,
+		    u8* reply, u32 cap, u32* reply_len)
+{
+	const struct function_hook_t*	hook = user;
+	size_t				out  = 0;
+	int				result = hook->fn(hook->user, (mogbus_device_t*)dev, unit, code, data, len,
+							  reply, cap, &out);
+
+	*reply_len = out > cap ? cap + 1 : (u32)out;
+	return result;
+}
+
+bool
+mogbus_device_add_function_code(mogbus_device_t* handle, uint8_t code, mogbus_function_fn fn, void* user)
+{
+	device_t*		dev  = (device_t*)handle;
+	struct function_hook_t*	hook = NULL;
+	device_custom_fc_t	entry = { 0 };
+
+	if (!dev ||
+	    !fn ||
+	    code < 1 ||
+	    code > 127 ||
+	    modbus_fc_is_builtin(code))
+		return false;
+	hook = ARENA_PUSH_ARRAY_ALIGNED(dev->arena, struct function_hook_t, 1, _Alignof(struct function_hook_t));
+	if (!hook)
+		return false;
+	hook->fn   = fn;
+	hook->user = user;
+	entry.code = code;
+	entry.fn   = function_trampoline;
+	entry.user = hook;
+	return device_add_custom_fc(dev, &entry) == NULL;
 }

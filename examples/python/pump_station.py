@@ -31,6 +31,7 @@ LEVEL, OUTFLOW, CURRENT, INFLOW, RUN_SECONDS = 0, 2, 4, 6, 10   # input register
 EVENT_FILE, ALARM_FIFO = 1, 100               # file records and FIFO queue
 
 OFF, AUTO, MANUAL = 0, 1, 2
+FC_STATUS_BLOCK = 0x41                        # vendor function code: read the station status block
 (EV_HIGH_ON, EV_HIGH_OFF, EV_LOW_ON, EV_LOW_OFF, EV_PUMP_ON, EV_PUMP_OFF, EV_SETPOINT) = range(1, 8)
 EVENT_RECORDS = 10                            # the event log keeps the last 10 events
 SETPOINT_RANGE = (0.5, 4.5)                   # metres; anything else is refused
@@ -185,6 +186,24 @@ class Policy:
             self.process.event(EV_SETPOINT)
 
 
+def add_status_block(dev, process, policy):
+    """Defines the vendor function code 0x41, "read station status block", computed at request time.
+
+    Request data: one byte, the block id (1). Reply data: block id, mode, flags (bit 0 high alarm,
+    1 low alarm, 2 pump running), level in cm (u16), outflow in 0.1 m3/h (u16), refused writes (u16).
+    An unknown block id is answered with exception 03.
+    """
+    def status(request):
+        if request != b"\x01":
+            return 3
+        flags = process.high | (process.low << 1) | (process.pump << 2)
+        return struct.pack(">BBBHHH", 1, int(dev.get_value("holding", MODE)), flags,
+                           round(dev.get_value("input", LEVEL) * 100),
+                           round(dev.get_value("input", OUTFLOW) * 10), policy.refused)
+
+    dev.add_function_code(FC_STATUS_BLOCK, status)
+
+
 class Station:
     """A station served on loopback, for tests: see running_station()."""
 
@@ -215,6 +234,7 @@ def running_station():
         policy = Policy(dev, process)
         dev.set_access_hook(policy)
         dev.set_written_hook(policy.written)
+        add_status_block(dev, process, policy)
         dev.set_value("input", INFLOW, 40.0)        # no ramp: the same level curve on every run
         options = mogbus.ServerOptions(port=free_port(), http_bind_address="127.0.0.1",
                                        http_port=free_port(), http_control=True)
@@ -269,6 +289,7 @@ def main():
     policy = Policy(dev, process)
     dev.set_access_hook(policy)
     dev.set_written_hook(policy.written)
+    add_status_block(dev, process, policy)
     options = mogbus.ServerOptions(port=free_port(), http_bind_address="127.0.0.1", http_port=free_port(),
                                    http_control=True)
     ctx.check_server(options)
@@ -338,6 +359,19 @@ def main():
         print("event log (file 1):", plc.file_records(EVENT_FILE, 0, EVENT_RECORDS))
         print("alarm FIFO:", plc.fifo(ALARM_FIFO))
         check("the FIFO holds both alarms, oldest first", plc.fifo(ALARM_FIFO) == [EV_HIGH_ON, EV_LOW_ON])
+
+        # Vendor function code: the status block is computed when the request arrives.
+        heading("5b. A vendor function code")
+        block = plc.call(struct.pack(">BB", FC_STATUS_BLOCK, 1))
+        block_id, mode, flags, level_cm, outflow, refused = struct.unpack(">BBBHHH", block[1:])
+        print(f"status block: mode {mode}, flags {flags:03b}, level {level_cm / 100} m, "
+              f"outflow {outflow / 10} m3/h, {refused} refused writes")
+        check("the status block follows the live values",
+              block_id == 1 and refused == 2 and flags & 2 and level_cm == round(plc.read_f32(4, LEVEL) * 100))
+        try:
+            plc.call(struct.pack(">BB", FC_STATUS_BLOCK, 9))
+        except ModbusException as exc:
+            check("an unknown block id is answered with exception 03", exc.code == 3)
 
         # Step 6: the process on a thread, while the server answers clients.
         heading("6. The process on a thread")

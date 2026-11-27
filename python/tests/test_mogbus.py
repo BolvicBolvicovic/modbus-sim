@@ -762,6 +762,44 @@ def mbap_pdu(sock, unit, pdu):
     return reply[7:6 + length]
 
 
+class FunctionCodeTest(unittest.TestCase):
+    def test_reply_exception_silence_and_errors(self):
+        port = free_port()
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", value=7)
+
+            def status(request):
+                if request == b"\x00":
+                    return None
+                if request == b"\x01":
+                    return 6
+                if request == b"\x02":
+                    raise RuntimeError("boom")
+                if request == b"\x03":
+                    return b"x" * 253
+                return bytes(reversed(request)) + bytes([int(dev.get_value("holding", 0))])  # reentrant
+
+            dev.add_function_code(0x41, status)
+            self.assertEqual([c.code for c in dev.info().custom_function_codes], [0x41])
+            with self.assertRaises(mogbus.MogbusError):
+                dev.add_function_code(0x41, status)
+            with self.assertRaises(mogbus.MogbusError):
+                dev.add_function_code(0x03, status)
+            with self.assertRaises(mogbus.MogbusError):
+                dev.add_function_code(0, status)
+            with ctx.serve(port=port).start():
+                with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                    self.assertEqual(mbap_pdu(sock, 1, bytes([0x41, 1, 2])), bytes([0x41, 2, 1, 7]))
+                    self.assertEqual(mbap_pdu(sock, 1, bytes([0x41, 1])), bytes([0xC1, 6]))
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(mbap_pdu(sock, 1, bytes([0x41, 2])), bytes([0xC1, 4]))
+                        self.assertEqual(mbap_pdu(sock, 1, bytes([0x41, 3])), bytes([0xC1, 4]))
+                    sock.settimeout(0.3)
+                    with self.assertRaises(socket.timeout):
+                        mbap_pdu(sock, 1, bytes([0x41, 0]))   # no response
+
+
 class AccessTargetsTest(unittest.TestCase):
     """The host API and the access hook for file records, FIFO queues and CANopen objects."""
 

@@ -42,7 +42,27 @@ None: any code that is not built in gets exception 01.
   `exception`, `corrupt`, `disconnect` and `restart` apply. `sensor-disconnect` affects only
   function codes 02 and 04.
 - A user-defined code changes no device state: `(registers ...)` only reads.
-- Codes are config-only: the C API cannot define them, but `mogbus_device_info()` lists them.
+- The `(on ...)` patterns are config-only; a host program can define a code answered by a callback instead (below). `mogbus_device_info()` lists both kinds.
+
+### Programmable from C and Python
+
+When fixed replies are not enough (a status block computed from live values, a counter, a checksum over the request), the host defines the code with a callback. In C:
+
+```c
+int status(void* user, mogbus_device_t* dev, uint8_t unit_id, uint8_t code,
+           const uint8_t* data, size_t len, uint8_t* reply, size_t reply_cap, size_t* reply_len);
+
+mogbus_device_add_function_code(dev, 0x41, status, &state);
+```
+
+The callback gets the request data and fills `reply` (at most 252 bytes) and `*reply_len`. It returns 0 to answer with that reply, 1 to 255 to answer that exception, or `MOGBUS_FUNCTION_NO_RESPONSE` for silence; any other return value, or a longer reply, is answered with exception 04. In Python, @ref mogbus::core::Device::add_function_code "Device.add_function_code(code, callback)" takes `callback(request) -> bytes | int | None`: bytes are the reply, an int is the exception code and None is no response; an exception raised by the callback is printed and answered with exception 04.
+
+- The same rules as a config code apply to the code number: 1 to 127, not built in, not defined twice on a device, and the same limit of 8 per device; a code cannot be removed. The call fails (false, `MogbusError`) otherwise.
+- The request goes through the same path: unit routing, faults, listen-only, the diagnostic counters, metrics and the access log. With `broadcast-execute` on, the callback runs once per device for a broadcast (`unit_id` is 0) and its reply is dropped.
+- The callback runs on the thread that steps the server and must not block. It may call the other device functions, for example to read the live values it reports (the [C tutorial](../library/library-hooks.md#a-vendor-function-code) and the [Python tutorial](../python/python-process.md#a-vendor-function-code) build a station status block this way).
+- `mogbus_device_info()` lists such a code with an empty name.
+
+See @ref mogbus_device_add_function_code "mogbus_device_add_function_code()" and @ref mogbus_function_fn "mogbus_function_fn".
 
 ## Errors
 

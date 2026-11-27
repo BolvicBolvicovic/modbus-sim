@@ -1297,6 +1297,23 @@ custom_respond(device_t* dev, const device_custom_fc_t* fc, const u8* req, u32 r
 	const u8*	data     = req + 1;
 	u32		data_len = req_len - 1;
 
+	if (fc->fn)
+	{
+		u32 reply_len = 0;
+		int result    = fc->fn(fc->user, dev, dev->request_unit, fc->code, data, data_len,
+				       resp + 1, MODBUS_MAX_PDU - 1, &reply_len);
+
+		if (result == DEVICE_CUSTOM_NO_RESPONSE)
+			return 0;
+		if (result >= 1 && result <= 255)
+			return modbus_exception(resp, fc->code, (u8)result);
+		/* Any other result, or a reply longer than the PDU, is a broken callback. */
+		if (result != 0 || reply_len > MODBUS_MAX_PDU - 1)
+			return modbus_exception(resp, fc->code, EXC_SLAVE_DEVICE_FAILURE);
+		resp[0] = fc->code;
+		return 1 + reply_len;
+	}
+
 	for (u32 i = 0; i < fc->case_count; i++)
 	{
 		const struct device_custom_case_t* c = &fc->cases[i];

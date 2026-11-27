@@ -44,7 +44,7 @@ diagnostic counters of FC 08/0x0B/0x0C, [metrics](../../observability/http-endpo
 a user-defined request like any other). A `sensor-disconnect` fault changes only FC 02 and 04 reads,
 not user-defined codes. See [Modbus support](../../modbus/function-codes.md).
 
-Codes are config-only: the C API cannot add them yet, but `mogbus_device_info()` lists them.
+The patterns are config-only. A host program that needs logic instead of patterns defines the code with a callback: see [user-defined function codes](../../modbus/user-defined-function-codes.md#programmable-from-c-and-python). `mogbus_device_info()` lists both kinds.
 
 ## Errors
 

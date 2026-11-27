@@ -322,8 +322,9 @@ enum mogbus_fault_kind_t
  * mogbus_fault_kind_t and only those configured on the device itself are listed. A fault fires
  * on `percent` of the responses, or by a fixed schedule when `scheduled` is set (percent is
  * then meaningless). delay_ms is set for MOGBUS_FAULT_DELAY and exception_code for
- * MOGBUS_FAULT_EXCEPTION. Faults and user-defined function codes come only from a config loaded
- * with mogbus_load_config(); the C API cannot add them.
+ * MOGBUS_FAULT_EXCEPTION. Faults come only from a config loaded with mogbus_load_config(); the C API
+ * cannot add them. User-defined function codes come from the config or from
+ * mogbus_device_add_function_code(); the latter are listed with an empty name.
  */
 struct mogbus_device_info_t
 {
@@ -340,7 +341,7 @@ struct mogbus_device_info_t
 		uint32_t	delay_ms;	/**< MOGBUS_FAULT_DELAY only */
 		uint8_t		exception_code;	/**< MOGBUS_FAULT_EXCEPTION only */
 	} faults[MOGBUS_FAULT_KIND_COUNT];	/**< indexed by mogbus_fault_kind_t */
-	uint32_t	custom_fc_count;	/**< user-defined function codes, from (function-code ...) */
+	uint32_t	custom_fc_count;	/**< user-defined function codes, from (function-code ...) or mogbus_device_add_function_code() */
 	/** @brief One user-defined function code of the device. */
 	struct
 	{
@@ -610,6 +611,64 @@ typedef void (*mogbus_written_fn)(void* user, mogbus_device_t* dev, const mogbus
  * @return false if @p dev is NULL or out of memory.
  */
 MOGBUS_API bool		mogbus_device_set_written_hook(mogbus_device_t* dev, mogbus_written_fn fn, void* user);
+
+/**
+ * @name User-defined function codes with a callback
+ * @{
+ */
+
+/** @brief mogbus_function_fn result: send no response (the request still counts and is logged). */
+enum { MOGBUS_FUNCTION_NO_RESPONSE = -1 };
+
+/** @brief Largest reply data of a mogbus_function_fn: the 253-byte PDU less the function code. */
+enum { MOGBUS_FUNCTION_REPLY_MAX = 252 };
+
+/**
+ * @brief Callback that answers a user-defined function code (see mogbus_device_add_function_code()).
+ *
+ * It runs on the thread that steps the server and may call the other `mogbus_device_*` functions on
+ * the same device; it must not block. `data` is valid only during the call.
+ *
+ * @param user Pointer given to mogbus_device_add_function_code().
+ * @param dev Device answering.
+ * @param unit_id Unit id of the request (the device's own, or the one an any-unit device
+ *        received; 0 for a broadcast executed on every device).
+ * @param function_code The function code (1-127).
+ * @param data Request data: the bytes after the function code.
+ * @param len Bytes in @p data.
+ * @param reply Buffer for the reply data, the bytes after the function code.
+ * @param reply_cap Size of @p reply, MOGBUS_FUNCTION_REPLY_MAX.
+ * @param reply_len Set to the bytes written to @p reply when returning 0.
+ * @return 0 to answer with `reply[0..*reply_len)`; 1-255 to answer that Modbus exception;
+ *         MOGBUS_FUNCTION_NO_RESPONSE for silence. Any other value, or `*reply_len` above
+ *         @p reply_cap, is answered as exception 04 (slave device failure).
+ */
+typedef int (*mogbus_function_fn)(void* user, mogbus_device_t* dev, uint8_t unit_id,
+				  uint8_t function_code, const uint8_t* data, size_t len,
+				  uint8_t* reply, size_t reply_cap, size_t* reply_len);
+
+/**
+ * @brief Defines a user-defined function code answered by a callback.
+ *
+ * Works like `(function-code CODE ...)` in a config, with the callback in place of the cases: the
+ * request goes through the same unit routing, faults, listen-only, FC 08 counters, metrics, access
+ * log and (with `broadcast-execute`) broadcast handling, where the callback runs once per device
+ * and its reply is dropped. A callback's reply is limited to MOGBUS_FUNCTION_REPLY_MAX bytes.
+ * Codes share the limit of 8 per device with the config ones. The code is listed by
+ * mogbus_device_info() with an empty name. It is not part of a config, cannot be removed and does not
+ * survive mogbus_destroy().
+ *
+ * @param dev Device.
+ * @param code Function code, 1-127 and not one mogbus implements.
+ * @param fn Callback; must not be NULL.
+ * @param user Passed back to @p fn.
+ * @return false if @p dev or @p fn is NULL, the code is out of range, built in or already defined on
+ *         the device (by config or by this function), the device already has 8 codes, or memory
+ *         ran out.
+ */
+MOGBUS_API bool		mogbus_device_add_function_code(mogbus_device_t* dev, uint8_t code, mogbus_function_fn fn, void* user);
+
+/** @} */
 
 /**
  * @brief Adds file records to a device, as `(file N (record R (values ...)))` does in a config.
