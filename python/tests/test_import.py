@@ -579,8 +579,7 @@ class Pymodbus(ImportCase):
         self.assertIn("(holding 1 (access read-only) (static 9) (degradation (fail-after-ms 0))",
                       "\n".join(pts))
         self.assertIn("(input 1 (static 9) (degradation (fail-after-ms 0))", "\n".join(pts))
-        self.assertIn("function code 0x00", err)
-        self.assertNotIn("reboots", err)
+        self.assertEqual(err.strip(), "")
         if mogbus_bin():
             r = subprocess.run([mogbus_bin(), "--check", str(self.write("reset.scm", out))],
                                capture_output=True, text=True)

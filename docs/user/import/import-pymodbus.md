@@ -70,8 +70,8 @@ a device restart. On a `bits` cell the same is applied to the 16 coil and discre
 because pymodbus also runs the action on bit reads.
 
 One difference remains: pymodbus puts function code 0x00 in that reply (a pymodbus quirk, so the
-function byte is 0x80), while mogbus answers with the request's function code. The importer writes one
-warning about it.
+function byte is 0x80), while mogbus answers with the request's function code. Clients normally check
+only the exception code, so the importer does not warn about it.
 
 ## Several devices
 

@@ -1069,12 +1069,6 @@ def pm_server(srv, sname, rep):
 RESET_DEGRADATION = "(degradation (fail-after-ms 0))"
 
 
-def reset_note(rep):
-    """pymodbus answers a read of a reset cell with exception 04 under function code 0x00."""
-    rep.warn("action 'reset': pymodbus answers reads of the cell with exception 04 under function code "
-             "0x00 (a pymodbus quirk); mogbus uses the request's function code")
-
-
 def pm_behaviour(p, ctype, value, action, params, args, rep, where):
     """Sets p.value / p.extra from a pymodbus action. Registers only."""
     p.value = value
@@ -1110,7 +1104,6 @@ def pm_behaviour(p, ctype, value, action, params, args, rep, where):
         p.value = None
     elif action == "reset":
         p.extra = [static_text(p), RESET_DEGRADATION]
-        reset_note(rep)
     else:
         rep.warn("%s: action %r has no mogbus equivalent; the initial value is kept static" %
                  (where, action))
@@ -1178,9 +1171,7 @@ def pm_points(cells, shared, sizes, args, rep):
             if not targets:
                 rep.warn("%s: not reachable by any function code in this layout; skipped" % where)
                 continue
-            if c.action == "reset":
-                reset_note(rep)
-            elif c.action:
+            if c.action and c.action != "reset":
                 rep.warn("%s: action %r on bits is not supported; the value is kept static" %
                          (where, c.action))
             if idx * 16 + 15 > 65535:
