@@ -87,3 +87,4 @@ response:  AB FF 0006 0D CE 0B 00 FF FF
 
 - [Read Device Identification (0x2B / 0x0E)](fc2b-0e-read-device-identification.md)
 - [Config reference: CANopen objects](../config/device/canopen-object.md)
+- From C: @ref mogbus_client_canopen_request "mogbus_client_canopen_request()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

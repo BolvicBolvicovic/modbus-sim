@@ -3,7 +3,8 @@
  * @brief mogbus_probe(): one FC 08 Return Query Data round trip against a network server, used
  *        by `mogbus --health`.
  *
- * Nonblocking sockets with os_wait() deadlines; no allocation.
+ * Nonblocking sockets with os_wait() deadlines; no allocation, except that a TLS server that
+ * does not require client certificates is probed through a client (its own arena and OpenSSL).
  */
 #include "mogbus.h"
 #include "client/client.h"
@@ -136,6 +137,32 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 		return MOGBUS_ERR_INVALID;
 	}
 
+	if (mode == MOGBUS_MODE_TCP &&
+	    options->tls_enabled &&
+	    !options->tls_require_client_certificate)
+	{
+		/* A real echo over TLS, without a client certificate and without verifying the
+		 * server: the probe only asks whether the local listener is alive. */
+		client_options_t	co = { .mode            = CLIENT_TCP,
+					       .host            = host,
+					       .port            = options->port,
+					       .tls             = true,
+					       .timeout_ms      = timeout_ms };
+		client_t*		client = NULL;
+		u8			reply[MODBUS_MAX_PDU];
+		u32			reply_len = 0;
+		client_status_t		st;
+
+		if (client_new(&co, &client) != CLIENT_OK)
+			return MOGBUS_ERR_PROBE;	/* the text is client_detached_error() */
+		st = client_request(client, unit_id, PROBE_REQUEST, sizeof(PROBE_REQUEST), reply,
+				    sizeof(reply), &reply_len);
+		if (st != CLIENT_OK && st != CLIENT_EXCEPTION)
+			probe_err("%s", client_error(client));
+		client_free(client);
+		return st == CLIENT_OK || st == CLIENT_EXCEPTION ? MOGBUS_OK : MOGBUS_ERR_PROBE;
+	}
+
 	switch (mode)
 	{
 		case MOGBUS_MODE_RTU_TCP:
@@ -190,8 +217,9 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 	}
 	if (mode == MOGBUS_MODE_TCP && options->tls_enabled)
 	{
-		/* The handshake needs a client certificate the probe does not have: an
-		 * accepted connection is as far as it goes. */
+		/* Client certificates are required and the probe has none (the server's own
+		 * certificate is usually not valid for client authentication): an accepted
+		 * connection is as far as it goes. */
 		ok = true;
 		goto done;
 	}

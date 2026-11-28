@@ -35,9 +35,8 @@
  *    during the call; you may free them afterwards. Strings the library returns
  *    (mogbus_version, mogbus_server_pty_name) are borrowed from the library or
  *    the server and must not be freed or modified.
- *  - The library never installs signal handlers. A TLS server writes to its
- *    sockets through OpenSSL, which can raise SIGPIPE when a client vanishes:
- *    a host that uses TLS must ignore SIGPIPE (signal(SIGPIPE, SIG_IGN)).
+ *  - The library never installs signal handlers. Its sockets, TLS ones included, are written
+ *    without raising SIGPIPE when the peer vanishes.
  *  - A fallible call reports failure one way only: it returns a mogbus_result_t, MOGBUS_OK on
  *    success. A constructor hands the object back through its last parameter, which is set to NULL
  *    on failure (`mogbus_create(&ctx)`). The text of the failure is kept by the context:
@@ -72,6 +71,7 @@ typedef enum mogbus_parity_t mogbus_parity_t;
 typedef enum mogbus_tls_version_t mogbus_tls_version_t;
 typedef struct mogbus_server_options_t mogbus_server_options_t;
 typedef struct mogbus_client_options_t mogbus_client_options_t;
+typedef struct mogbus_client_file_record_t mogbus_client_file_record_t;
 typedef enum mogbus_frame_direction_t mogbus_frame_direction_t;
 typedef struct mogbus_frame_t mogbus_frame_t;
 typedef struct mogbus_poll_fd_t mogbus_poll_fd_t;
@@ -1523,26 +1523,37 @@ typedef struct mogbus_client_t		mogbus_client_t;
  * Modes: MOGBUS_MODE_TCP, MOGBUS_MODE_UDP, MOGBUS_MODE_RTU_TCP, MOGBUS_MODE_RTU_UDP,
  * MOGBUS_MODE_ASCII_TCP and MOGBUS_MODE_ASCII_UDP use host and port; MOGBUS_MODE_RTU_DEVICE and
  * MOGBUS_MODE_ASCII_DEVICE use the serial line fields. Every other mode is rejected.
+ *
+ * TLS (MOGBUS_MODE_TCP only, a build with TLS): set tls_enabled; the server certificate is checked
+ * against tls_ca_file (the system trust store when NULL) and tls_server_name (host when NULL), and
+ * tls_cert_file/tls_key_file present a client certificate. Port 0 then means 802.
  */
 struct mogbus_client_options_t
 {
 	mogbus_mode_t	mode;		/**< transport */
-	const char*	host;		/**< network modes: IP literal or "localhost" */
-	uint16_t	port;		/**< network modes */
+	const char*	host;		/**< network modes: IP literal or host name (resolved at connect time) */
+	uint16_t	port;		/**< network modes; 0 is 802 with TLS */
 	const char*	path;		/**< serial modes: the device, e.g. /dev/ttyUSB0 */
 	uint32_t	baud;		/**< serial modes; 0 keeps the device's speed */
 	uint32_t	data_bits;	/**< serial modes: 7 or 8 (RTU always uses 8) */
 	mogbus_parity_t	parity;		/**< serial modes */
 	uint32_t	stop_bits;	/**< serial modes: 1 or 2 */
-	bool		tls_enabled;	/**< not supported yet: mogbus_client_open() fails */
+	bool		tls_enabled;	/**< TLS over TCP: MOGBUS_MODE_TCP only; MOGBUS_ERR_UNSUPPORTED in a build without TLS */
 	uint32_t	timeout_ms;	/**< how long to wait for each reply */
 	uint32_t	retries;	/**< extra attempts after a timeout; other errors are never retried */
+	uint32_t	byte_timeout_ms; /**< stream modes: longest gap between the bytes of one reply, 0 = off */
+	const char*	tls_ca_file;	/**< TLS: PEM file of the CA(s) trusted; NULL = the system trust store */
+	const char*	tls_cert_file;	/**< TLS: PEM client certificate, or NULL */
+	const char*	tls_key_file;	/**< TLS: PEM private key; NULL = the key is in tls_cert_file */
+	const char*	tls_server_name; /**< TLS: name to verify and send as SNI; NULL = host */
+	bool		tls_verify;	/**< TLS: verify the server certificate (the default); false trusts anyone */
 };
 
 /**
  * @brief Returns the client defaults.
  *
- * TCP to 127.0.0.1:1502, 1000 ms timeout, no retries, 8N1.
+ * TCP to 127.0.0.1:1502, 1000 ms timeout, no byte timeout, no retries, 8N1, TLS off (with
+ * certificate verification on).
  * @return Default options.
  */
 MOGBUS_API mogbus_client_options_t	mogbus_client_options_defaults(void);
@@ -1554,8 +1565,8 @@ MOGBUS_API mogbus_client_options_t	mogbus_client_options_defaults(void);
  * wire, so it may live in the same process as the server it queries, on another thread. It owns
  * its memory (released by mogbus_client_close()) and connects lazily on the first call, and again
  * on the first call after a connection error. A client may be used from any thread, but only one
- * thread at a time; use one client per thread to talk in parallel. A TLS server cannot be reached
- * yet. The library's logging (mogbus_set_log_sink()) stays process-wide.
+ * thread at a time; use one client per thread to talk in parallel. A host name is resolved at
+ * connect time, which blocks for as long as the resolver takes. The library's logging (mogbus_set_log_sink()) stays process-wide.
  *
  * @param options Settings; strings are copied. Start from mogbus_client_options_defaults().
  * @param out Receives the client, or NULL on failure.
@@ -1767,8 +1778,9 @@ MOGBUS_API mogbus_result_t	mogbus_client_read_write_registers(mogbus_client_t* c
  * @brief Reads the basic device identification objects (function code 43, MEI type 14).
  *
  * The objects (vendor name, product code, revision: ids 0-2) are returned as the server sent
- * them, a list of [id][length][value bytes] triples. A server that has more objects than fit one
- * reply is not followed up.
+ * them, a list of [id][length][value bytes] triples. This is
+ * mogbus_client_read_device_identification() with read code 1 and object 0: replies that do not
+ * fit one PDU are followed up.
  *
  * @param client Client.
  * @param unit Unit id.
@@ -1779,6 +1791,184 @@ MOGBUS_API mogbus_result_t	mogbus_client_read_write_registers(mogbus_client_t* c
  */
 MOGBUS_API mogbus_result_t	mogbus_client_read_device_id(mogbus_client_t* client, uint8_t unit, uint8_t* out,
 							     size_t cap, size_t* out_len);
+
+/**
+ * @brief Reads device identification objects (function code 43, MEI type 14), following up a
+ *        reply that says more objects follow until the server has sent them all.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param read_code 1 basic (objects 0-2), 2 regular (0-6), 3 extended (0-6, then 0x80-0xFF) or
+ *        4 the one object @p object_id.
+ * @param object_id First object to read (0 from the start; the object itself with code 4).
+ * @param out Receives the objects as [id][length][value bytes] triples, all replies joined.
+ * @param cap Size of @p out.
+ * @param out_len Receives the bytes written to @p out.
+ * @param conformity Receives the conformity level of the server (0x81-0x83, 0x01-0x03 for
+ *        individual access); NULL to ignore.
+ * @return MOGBUS_OK or an error as for mogbus_client_request(); MOGBUS_ERR_FRAME for a reply that
+ *         does not match the request or the objects that do not fit @p cap.
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_device_identification(mogbus_client_t* client, uint8_t unit,
+									 uint8_t read_code, uint8_t object_id,
+									 uint8_t* out, size_t cap, size_t* out_len,
+									 uint8_t* conformity);
+
+/**
+ * @brief Reads the exception status byte (function code 07).
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param status Receives the status byte.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_exception_status(mogbus_client_t* client, uint8_t unit,
+								    uint8_t* status);
+
+/**
+ * @brief Sends a diagnostics request (function code 08) and returns the reply data.
+ *
+ * The server must echo the sub-function. Sub-function 0x0000 (Return Query Data) echoes @p data
+ * (a multiple of 2 bytes for a mogbus server); the others take and return 2 bytes.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param sub_function Sub-function code.
+ * @param data Request data after the sub-function; may be NULL when @p data_len is 0.
+ * @param data_len Bytes in @p data, at most 250.
+ * @param out Receives the reply data after the sub-function.
+ * @param cap Size of @p out.
+ * @param out_len Receives the bytes written to @p out.
+ * @return MOGBUS_OK or an error as for mogbus_client_request(); MOGBUS_ERR_FRAME when the
+ *         sub-function is not echoed.
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_diagnostics(mogbus_client_t* client, uint8_t unit,
+							  uint16_t sub_function, const uint8_t* data,
+							  size_t data_len, uint8_t* out, size_t cap,
+							  size_t* out_len);
+
+/**
+ * @brief Reads the communication event counter (function code 0B).
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param status Receives the status word (0 ready, 0xFFFF busy).
+ * @param event_count Receives the event counter.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_get_comm_event_counter(mogbus_client_t* client, uint8_t unit,
+								     uint16_t* status, uint16_t* event_count);
+
+/**
+ * @brief Reads the communication event log (function code 0C).
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param status Receives the status word.
+ * @param event_count Receives the event counter.
+ * @param message_count Receives the message counter.
+ * @param events Receives the event bytes (at most 64).
+ * @param cap Size of @p events; 64 is always enough.
+ * @param events_len Receives the number of event bytes.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_get_comm_event_log(mogbus_client_t* client, uint8_t unit,
+								 uint16_t* status, uint16_t* event_count,
+								 uint16_t* message_count, uint8_t* events,
+								 size_t cap, size_t* events_len);
+
+/**
+ * @brief Reads the server id report (function code 11).
+ *
+ * The data is device specific; mogbus devices send the server id, the run indicator (0xFF on) and
+ * their additional data, in that order.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param out Receives the report data.
+ * @param cap Size of @p out; 249 is always enough.
+ * @param out_len Receives the bytes written to @p out.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_report_server_id(mogbus_client_t* client, uint8_t unit,
+							       uint8_t* out, size_t cap, size_t* out_len);
+
+/** @brief One sub-request of mogbus_client_read_file_records() or mogbus_client_write_file_records(). */
+struct mogbus_client_file_record_t
+{
+	uint16_t	file;		/**< file number, 1-65535 */
+	uint16_t	record;		/**< first record, 0-9999 */
+	uint16_t	length;		/**< number of 16-bit records, at least 1 (record + length - 1 at most 9999) */
+	uint16_t*	values;		/**< length values: filled by a read, written by a write */
+};
+
+/**
+ * @brief Reads file records (function code 14); one reply answers every sub-request.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param records 1-35 sub-requests; each `values` must have room for `length` values and is filled
+ *        from the reply.
+ * @param count Number of sub-requests.
+ * @return MOGBUS_OK or an error as for mogbus_client_request(); MOGBUS_ERR_FRAME when the reply
+ *         does not have the shape of the request.
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_file_records(mogbus_client_t* client, uint8_t unit,
+								const mogbus_client_file_record_t* records,
+								size_t count);
+
+/**
+ * @brief Writes file records (function code 15); all or nothing.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param records Sub-requests; the byte total of the request (7 + 2 x length each) is at most 251.
+ * @param count Number of sub-requests, at least 1.
+ * @return MOGBUS_OK or an error as for mogbus_client_request(); MOGBUS_ERR_FRAME when the reply is
+ *         not an echo of the request.
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_write_file_records(mogbus_client_t* client, uint8_t unit,
+								 const mogbus_client_file_record_t* records,
+								 size_t count);
+
+/**
+ * @brief Reads a FIFO queue (function code 18).
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param address FIFO pointer address.
+ * @param values Receives the queued values.
+ * @param cap Size of @p values; 31 is always enough.
+ * @param count Receives the number of values (0-31).
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_read_fifo(mogbus_client_t* client, uint8_t unit, uint16_t address,
+							uint16_t* values, size_t cap, size_t* count);
+
+/**
+ * @brief Sends a CANopen general reference request (function code 2B, MEI type 0D).
+ *
+ * The request is the bytes after the MEI type: control byte, reserved byte 0, optional network id
+ * and data type, node, index, subindex, start, count and the data of a write. On success the
+ * reply is the bytes after the MEI type (control byte onward, echoing the request).
+ *
+ * A failure of the CANopen service (`AB FF len 0D AE|CE ...`) is a MOGBUS_ERR_EXCEPTION with
+ * mogbus_client_last_exception() 0xFF; @p reply then holds the bytes after the function code
+ * (`FF len 0D AE|CE payload`) so the caller can decode it. A plain Modbus exception leaves its one
+ * code byte in @p reply.
+ *
+ * @param client Client.
+ * @param unit Unit id.
+ * @param request Request bytes after `2B 0D`.
+ * @param request_len Bytes in @p request, 1-250.
+ * @param reply Receives the reply bytes described above.
+ * @param cap Size of @p reply.
+ * @param reply_len Receives the bytes written to @p reply.
+ * @return MOGBUS_OK or an error as for mogbus_client_request().
+ */
+MOGBUS_API mogbus_result_t	mogbus_client_canopen_request(mogbus_client_t* client, uint8_t unit,
+							      const uint8_t* request, size_t request_len,
+							      uint8_t* reply, size_t cap, size_t* reply_len);
 
 #ifdef __cplusplus
 }

@@ -58,6 +58,14 @@ bool		os_ip_is_literal(const char* text);
 /** @brief Parses an IPv4 or IPv6 literal plus port; false when text is not a literal. */
 bool		os_addr_parse(os_addr_t* addr, const char* text, u16 port);
 
+/**
+ * @brief Resolves a host name or IP literal to at most `cap` addresses (IPv4 and IPv6, in the
+ *        resolver's order), for a stream or a datagram socket; returns how many, 0 on failure.
+ *
+ * Blocks until the resolver answers, which can take as long as its own timeout.
+ */
+u32		os_resolve(const char* host, u16 port, bool datagram, os_addr_t* out, u32 cap);
+
 /** @brief Formats "ip:port", or "[ip]:port" for IPv6. */
 void		os_addr_text(const os_addr_t* addr, char* out, u32 size);
 

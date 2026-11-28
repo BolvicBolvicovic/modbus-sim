@@ -18,6 +18,7 @@ main(void)
 	typedef mogbus_connection_t CN;
 	typedef mogbus_client_options_t CO;
 	typedef mogbus_poll_fd_t PF;
+	typedef mogbus_client_file_record_t CF;
 
 	SIZE(O);
 	F(O, mode); F(O, bind_address); F(O, port); F(O, path); F(O, fd); F(O, seed);
@@ -50,6 +51,10 @@ main(void)
 	F(CO, stop_bits); F(CO, tls_enabled); F(CO, timeout_ms); F(CO, retries);
 	SIZE(PF);
 	F(PF, fd); F(PF, events);
+	F(CO, byte_timeout_ms); F(CO, tls_ca_file); F(CO, tls_cert_file); F(CO, tls_key_file);
+	F(CO, tls_server_name); F(CO, tls_verify);
+	SIZE(CF);
+	F(CF, file); F(CF, record); F(CF, length); F(CF, values);
 	printf("faults_count %d\n", MOGBUS_FAULT_KIND_COUNT);
 	printf("space_count %d\n", MOGBUS_SPACE_COUNT);
 	return 0;

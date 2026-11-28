@@ -59,3 +59,4 @@ response:  14 06 05 06 ABCD EF01
 - [Read File Record (0x14)](fc14-read-file-record.md)
 - [Writes are all-or-nothing](writes.md)
 - [Config reference: file records](../config/device/file.md)
+- From C: @ref mogbus_client_write_file_records "mogbus_client_write_file_records()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

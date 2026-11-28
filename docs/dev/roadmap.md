@@ -28,15 +28,6 @@ outstanding work is listed here. When an item is done, document it there and rem
 - Gateway/forwarder: a device whose tables are served by a real remote Modbus device. Why: pymodbus
   has `RemoteDeviceContext` for TCP-to-serial gateways.
 
-## Client side (gaps compared with libmodbus and pymodbus)
-
-- TLS in the client (`tls_enabled` is refused today). Why: `net_tls` only has the server side; the
-  client needs `TLS_client_method`, CA verification and an optional client certificate.
-- Typed client calls for the remaining function codes (07, 08, 0B, 0C, 11, 14, 15, 18, 2B/0D). Why:
-  only `mogbus_client_request` reaches them today; follow-up of "more data" in device identification.
-- Byte (inter-character) timeouts and host names in the client. Why: libmodbus has
-  `modbus_set_byte_timeout`, and only IP literals are accepted today.
-
 ## Platforms and integration (gaps compared with libmodbus)
 
 - RS-485 line control: `TIOCSRS485` and manual RTS toggling with a delay. Why: half-duplex

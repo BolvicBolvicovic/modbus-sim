@@ -4,6 +4,7 @@
  */
 #include "net/net_tls.h"
 #include "os/os_error.h"
+#include "os/os_socket.h"
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -36,6 +37,62 @@ tls_fail(SSL_CTX* ctx, net_tls_ctx_t* out, const char* what)
 	if (ctx)
 		SSL_CTX_free(ctx);
 	return false;
+}
+
+/* Sessions do their socket I/O through os_socket_send()/recv(): the stock socket BIO uses
+ * write(), which raises SIGPIPE when the peer has gone, not acceptable in a library. */
+static int
+sock_write(BIO* bio, const char* buf, int len)
+{
+	s64 n;
+
+	BIO_clear_retry_flags(bio);
+	n = os_socket_send((os_socket_t)(intptr_t)BIO_get_data(bio), buf, (u32)len);
+	if (n < 0 && os_retry())
+		BIO_set_retry_write(bio);
+	return n < 0 ? -1 : (int)n;
+}
+
+static int
+sock_read(BIO* bio, char* buf, int len)
+{
+	s64 n;
+
+	BIO_clear_retry_flags(bio);
+	n = os_socket_recv((os_socket_t)(intptr_t)BIO_get_data(bio), buf, (u32)len);
+	if (n < 0 && os_retry())
+		BIO_set_retry_read(bio);
+	return n < 0 ? -1 : (int)n;
+}
+
+static long
+sock_ctrl(BIO* bio, int cmd, long num, void* ptr)
+{
+	(void)bio;
+	(void)num;
+	(void)ptr;
+	return cmd == BIO_CTRL_FLUSH ? 1 : 0;
+}
+
+static bool
+bio_method_init(net_tls_ctx_t* out)
+{
+	out->bio_method = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "mogbus socket");
+	if (out->bio_method &&
+	    BIO_meth_set_write(out->bio_method, sock_write) == 1 &&
+	    BIO_meth_set_read(out->bio_method, sock_read) == 1 &&
+	    BIO_meth_set_ctrl(out->bio_method, sock_ctrl) == 1)
+		return true;
+	if (out->bio_method)
+		BIO_meth_free(out->bio_method);
+	out->bio_method = NULL;
+	return false;
+}
+
+bool
+net_tls_supported(void)
+{
+	return true;
 }
 
 bool
@@ -120,15 +177,57 @@ net_tls_ctx_init(net_tls_ctx_t* out, const net_tls_config_t* config)
 	}
 	SSL_CTX_set_verify(ctx, verify, NULL);
 	SSL_CTX_set_verify_depth(ctx, 4);
+	if (!bio_method_init(out))
+		return tls_fail(ctx, out, "cannot create the socket BIO");
 	out->ssl_ctx = ctx;
 	return true;
 }
 
-net_tls_conn_t*
-net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms)
+bool
+net_tls_client_ctx_init(net_tls_ctx_t* out, const net_tls_client_config_t* config)
+{
+	SSL_CTX* ctx;
+
+	memset(out, 0, sizeof(*out));
+	ctx = SSL_CTX_new(TLS_client_method());
+	if (!ctx)
+		return tls_fail(NULL, out, "cannot create TLS context");
+	if (SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION) != 1)
+		return tls_fail(ctx, out, "cannot set minimum TLS version");
+	if (config->verify)
+	{
+		if (config->ca_certificate ?
+		    SSL_CTX_load_verify_locations(ctx, config->ca_certificate, NULL) != 1 :
+		    SSL_CTX_set_default_verify_paths(ctx) != 1)
+			return tls_fail(ctx, out, "cannot load CA certificate");
+		SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+		SSL_CTX_set_verify_depth(ctx, 4);
+	}
+	else
+		SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+	if (config->certificate)
+	{
+		const char* key = config->private_key ? config->private_key : config->certificate;
+
+		if (SSL_CTX_use_certificate_chain_file(ctx, config->certificate) != 1)
+			return tls_fail(ctx, out, "cannot load client certificate");
+		if (SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1)
+			return tls_fail(ctx, out, "cannot load client private key");
+		if (SSL_CTX_check_private_key(ctx) != 1)
+			return tls_fail(ctx, out, "client certificate and private key do not match");
+	}
+	if (!bio_method_init(out))
+		return tls_fail(ctx, out, "cannot create the socket BIO");
+	out->ssl_ctx = ctx;
+	return true;
+}
+
+static net_tls_conn_t*
+conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms, const char* server_name)
 {
 	net_tls_conn_t* conn = NULL;
 	SSL*		ssl;
+	BIO*		bio;
 
 	for (u32 i = 0; i < NET_TLS_MAX_SESSIONS; i++)
 	{
@@ -149,19 +248,52 @@ net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms)
 		copy_last_error(ctx->error, sizeof(ctx->error));
 		return NULL;
 	}
-	if (SSL_set_fd(ssl, fd) != 1)
+	bio = BIO_new(ctx->bio_method);
+	if (!bio)
 	{
 		copy_last_error(ctx->error, sizeof(ctx->error));
 		SSL_free(ssl);
 		return NULL;
 	}
-	SSL_set_accept_state(ssl);
+	BIO_set_data(bio, (void*)(intptr_t)fd);
+	BIO_set_init(bio, 1);
+	SSL_set_bio(ssl, bio, bio);
+	if (server_name)
+	{
+		X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+		bool ok = os_ip_is_literal(server_name) ?
+			  X509_VERIFY_PARAM_set1_ip_asc(param, server_name) == 1 :
+			  (SSL_set_tlsext_host_name(ssl, server_name) == 1 &&
+			   SSL_set1_host(ssl, server_name) == 1);
+
+		if (!ok)
+		{
+			copy_last_error(ctx->error, sizeof(ctx->error));
+			SSL_free(ssl);
+			return NULL;
+		}
+		SSL_set_connect_state(ssl);
+	}
+	else
+		SSL_set_accept_state(ssl);
 	conn->ssl                   = ssl;
 	conn->handshake_done        = false;
 	conn->want_read             = true;
 	conn->want_write            = false;
 	conn->handshake_deadline_ms = handshake_deadline_ms;
 	return conn;
+}
+
+net_tls_conn_t*
+net_tls_conn_new(net_tls_ctx_t* ctx, int fd, u64 handshake_deadline_ms)
+{
+	return conn_new(ctx, fd, handshake_deadline_ms, NULL);
+}
+
+net_tls_conn_t*
+net_tls_client_conn_new(net_tls_ctx_t* ctx, int fd, const char* server_name)
+{
+	return conn_new(ctx, fd, 0, server_name);
 }
 
 static void
@@ -191,6 +323,9 @@ net_tls_ctx_close(net_tls_ctx_t* ctx)
 	if (ctx->ssl_ctx)
 		SSL_CTX_free(ctx->ssl_ctx);
 	ctx->ssl_ctx = NULL;
+	if (ctx->bio_method)
+		BIO_meth_free(ctx->bio_method);
+	ctx->bio_method = NULL;
 }
 
 bool
@@ -301,7 +436,16 @@ net_tls_conn_handshake(net_tls_conn_t* conn)
 	if (status == NET_TLS_OK)
 		conn->handshake_done = true;
 	if (status == NET_TLS_ERROR)
+	{
+		long verify = SSL_get_verify_result(conn->ssl);
+		u32  len;
+
 		copy_last_error(conn->error, sizeof(conn->error));
+		len = (u32)strlen(conn->error);
+		if (verify != X509_V_OK && len < sizeof(conn->error))
+			snprintf(conn->error + len, sizeof(conn->error) - len, " (%s)",
+				 X509_verify_cert_error_string(verify));
+	}
 	set_wants(conn, status);
 	return status;
 }

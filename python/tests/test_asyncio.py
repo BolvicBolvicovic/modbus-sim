@@ -248,6 +248,24 @@ class ServeTest(AsyncTestCase):
                 self.assertEqual(await c.read_holding_registers(0, 1), [1234])
 
 
+class RemainingCallsTest(AsyncTestCase):
+    async def test_remaining_calls(self):
+        ctx = mogbus.Context()
+        self.addCleanup(ctx.close)
+        dev = ctx.add_device(1)
+        dev.add_point("holding", 0, "u16", 5)
+        dev.add_fifo(100, [1, 2, 3])
+        dev.add_file_record(1, 0, [10, 11])
+        port = free_port()
+        async with ctx.serve(port=port).running():
+            async with AsyncClient(port=port, byte_timeout_ms=100) as c:
+                self.assertEqual(await c.read_exception_status(), 0)
+                self.assertEqual(await c.read_fifo(100), [1, 2, 3])
+                self.assertEqual(await c.read_file_records([(1, 0, 2)]), [[10, 11]])
+                self.assertEqual((await c.read_device_identification(4, 0)).objects, {0: b"mogbus"})
+                self.assertEqual(await c.diagnostics(0, b"\x12\x34"), b"\x12\x34")
+
+
 class ThreadedServerTest(AsyncTestCase):
     async def test_async_client_talks_to_a_threaded_server(self):
         ctx, _ = self.make_ctx()

@@ -52,3 +52,4 @@ print(client.read_exception_status().status)
 
 - [Config reference: device entries](../config/device/index.md)
 - [Exception codes](exceptions.md)
+- From C: @ref mogbus_client_read_exception_status "mogbus_client_read_exception_status()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

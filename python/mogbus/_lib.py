@@ -115,6 +115,21 @@ class ClientOptionsC(ctypes.Structure):
         ("tls_enabled", ctypes.c_bool),
         ("timeout_ms", ctypes.c_uint32),
         ("retries", ctypes.c_uint32),
+        ("byte_timeout_ms", ctypes.c_uint32),
+        ("tls_ca_file", ctypes.c_char_p),
+        ("tls_cert_file", ctypes.c_char_p),
+        ("tls_key_file", ctypes.c_char_p),
+        ("tls_server_name", ctypes.c_char_p),
+        ("tls_verify", ctypes.c_bool),
+    ]
+
+
+class ClientFileRecordC(ctypes.Structure):
+    _fields_ = [
+        ("file", ctypes.c_uint16),
+        ("record", ctypes.c_uint16),
+        ("length", ctypes.c_uint16),
+        ("values", ctypes.POINTER(ctypes.c_uint16)),
     ]
 
 
@@ -278,6 +293,23 @@ _sig("mogbus_client_read_write_registers", _c.c_int, _ptr, _c.c_uint8, _c.c_uint
      _p(_c.c_uint16), _c.c_uint16, _c.c_uint16, _p(_c.c_uint16))
 _sig("mogbus_client_read_device_id", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
      _p(_c.c_size_t))
+_sig("mogbus_client_read_device_identification", _c.c_int, _ptr, _c.c_uint8, _c.c_uint8, _c.c_uint8,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t), _p(_c.c_uint8))
+_sig("mogbus_client_read_exception_status", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8))
+_sig("mogbus_client_diagnostics", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_client_get_comm_event_counter", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint16),
+     _p(_c.c_uint16))
+_sig("mogbus_client_get_comm_event_log", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint16), _p(_c.c_uint16),
+     _p(_c.c_uint16), _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_client_report_server_id", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_size_t))
+_sig("mogbus_client_read_file_records", _c.c_int, _ptr, _c.c_uint8, _p(ClientFileRecordC), _c.c_size_t)
+_sig("mogbus_client_write_file_records", _c.c_int, _ptr, _c.c_uint8, _p(ClientFileRecordC), _c.c_size_t)
+_sig("mogbus_client_read_fifo", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _p(_c.c_uint16), _c.c_size_t,
+     _p(_c.c_size_t))
+_sig("mogbus_client_canopen_request", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
 _sig("mogbus_rtu_timing", None, _c.c_uint32, _c.c_uint32, _p(_c.c_uint32), _p(_c.c_uint32))
 _sig("mogbus_now_ms", _c.c_uint64)
 _sig("mogbus_server_step", _c.c_int, _ptr, _c.c_int)

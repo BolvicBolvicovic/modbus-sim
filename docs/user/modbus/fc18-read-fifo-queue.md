@@ -53,3 +53,4 @@ response:  18 0008 0003 1234 5678 002A
 
 - [Config reference: FIFO queues](../config/device/fifo.md)
 - [Read File Record (0x14)](fc14-read-file-record.md)
+- From C: @ref mogbus_client_read_fifo "mogbus_client_read_fifo()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

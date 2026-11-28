@@ -19,10 +19,14 @@ describes and exits 0 if it is answered, 1 otherwise. The reason goes to stderr,
 
 ## What it cannot check
 
-- **TLS is not exercised.** For a `tcp` server with `(tls ...)` the probe only opens a TCP
-  connection. It has no client certificate, so it sends no request and does not do the TLS
-  handshake: the check passes as soon as the port accepts the connection. A broken certificate or
-  a misconfigured cipher list is not detected (`mogbus --check` finds those before you start).
+- **TLS with required client certificates is only connect-tested.** For a `tcp` server with
+  `(tls ...)` that does not require client certificates (`(require-client-certificate off)`) the
+  probe does the TLS handshake (without verifying the server: it only asks whether the local
+  listener is alive) and sends the real FC 08 request, so a broken certificate or a plain-text
+  listener on the port is unhealthy. When client certificates are required (the default) the probe
+  has none to present, so it only opens a TCP connection: the check passes as soon as the port
+  accepts it, and a broken certificate or a misconfigured cipher list is not detected
+  (`mogbus --check` finds those before you start).
 - **Only the first device is asked.** Other devices, their points and their faults are not checked.
 - Serial and PTY modes exit 1 with `health check needs a network mode`.
 - The probe is itself a client: a TCP probe takes one of the 32 connection slots for a moment.

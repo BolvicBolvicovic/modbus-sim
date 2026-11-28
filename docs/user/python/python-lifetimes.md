@@ -165,8 +165,7 @@ Who runs where:
 - The context managers do this for you: leaving `with ctx.serve(...).start() as server:` closes the
   server, leaving `with mogbus.Context() as ctx:` closes the context (servers first).
 - The package installs no signal handlers. A script that should stop on Ctrl-C catches
-  `KeyboardInterrupt` in the main thread and leaves its `with` blocks; a host that serves TLS should
-  also ignore `SIGPIPE`.
+  `KeyboardInterrupt` in the main thread and leaves its `with` blocks.
 
 ## Lifetimes
 

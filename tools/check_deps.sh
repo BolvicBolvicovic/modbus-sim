@@ -6,7 +6,7 @@ set -eu
 #   net -> webui (a static page; webui includes only util and os)
 #   config -> device -> util
 #   server -> net, config -> server (server.h only)
-#   client -> modbus, util (a master over the wire; it knows no server, net or device)
+#   client -> modbus, util, net/net_tls.h (a master over the wire; it knows no server, device or other net header)
 #   view -> device, util, os (the live register view; api -> view)
 #   api -> client, config, device, modbus, net, server, view, util
 #   main.c -> mogbus.h only (the binary is a pure client of the public API)
@@ -94,6 +94,14 @@ check_extra_rules() {
 	check_dir_forbidden_include "$root/src/config" \
 		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)server/server_config\.h[">]' \
 		"config/ may include only server.h from server/"
+	# The client talks TLS through net_tls (and nothing else of net/).
+	bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)net/' "$root/src/client" 2>/dev/null |
+		grep -v 'net/net_tls\.h' || true)
+	if [ -n "$bad" ]; then
+		printf 'Forbidden dependency include found (client/ may include only net/net_tls.h from net/):\n' >&2
+		printf '%s\n' "$bad" >&2
+		exit 1
+	fi
 }
 
 # Headers that belong to the OS: only src/os/ may include them (ISO C headers such as stdio.h,
@@ -132,7 +140,7 @@ check_tree() {
 	check_layer "$root" device "device util os"
 	check_layer "$root" config "config device server util os"
 	check_layer "$root" server "server net modbus device util config os"
-	check_layer "$root" client "client modbus util os"
+	check_layer "$root" client "client modbus net util os"
 	check_layer "$root" view   "view device util os"
 	check_layer "$root" api    "api client config device modbus net server view util os"
 	check_layer "$root" util   "util os"
@@ -167,6 +175,7 @@ self_test() {
 	printf '#include "net/rtu_framer.h"\n' >"$clean/src/api/ok-net.c"
 	mkdir -p "$clean/src/client"
 	printf '#include "modbus/mbap.h"\n#include "os/os_wait.h"\n#include "util/log.h"\n' >"$clean/src/client/ok.c"
+	printf '#include "net/net_tls.h"\n' >>"$clean/src/client/ok.c"
 	printf '#include "client/client.h"\n' >>"$clean/src/api/ok-net.c"
 	printf '#include "mogbus.h"\n#include <stdio.h>\n' >"$clean/src/main.c"
 	printf '#include "os/os_socket.h"\n#include <poll.h>\n' >"$clean/src/os/ok.c" 2>/dev/null || true
@@ -186,6 +195,7 @@ self_test() {
 	}
 
 	# Issue 36 acceptance fixtures.
+	expect_fail client-net      client "net/net_common.h"
 	expect_fail net-device      net    "device/device.h"
 	expect_fail modbus-config   modbus "config/config.h"
 

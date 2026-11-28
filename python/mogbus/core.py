@@ -53,7 +53,7 @@ Client `mogbus_client_*` (a Modbus master, independent of every Context), rtu_ti
 Linux only (on Windows it works inside WSL2). The limits of the C API apply: 16 devices and 8
 servers per context, a server serves the devices that exist when it is created, and machines
 and faults can only be defined in config files. A TLS server needs a library built with TLS. The
-package installs no signal handlers; a host process serving TLS should ignore `SIGPIPE`. The wheel
+package installs no signal handlers. The wheel
 contains a native library, so build and install it on the machine that runs the tests.
 """
 from __future__ import annotations
@@ -2102,11 +2102,45 @@ class ModbusException(MogbusError):
     @param message The message of the client.
     @param code The Modbus exception code: 1 illegal function, 2 illegal data address, 3 illegal data
         value, 4 server device failure, 11 gateway target failed to respond; a server may use others.
+        255 is a CANopen service failure of Client.canopen_request().
+    @param data Reply bytes that came with the exception (the CANopen failure payload), else empty.
     """
 
-    def __init__(self, message: str, code: int):
+    def __init__(self, message: str, code: int, data: bytes = b""):
         super().__init__(message, Status.EXCEPTION)
         self.code = code
+        self.data = data
+
+
+class CommEventCounter(NamedTuple):
+    """@brief The reply of Client.get_comm_event_counter().
+    @param status The status word: 0 ready, 0xFFFF busy.
+    @param event_count The device's communication event counter.
+    """
+    status: int
+    event_count: int
+
+
+class CommEventLog(NamedTuple):
+    """@brief The reply of Client.get_comm_event_log().
+    @param status The status word.
+    @param event_count The communication event counter.
+    @param message_count The message counter.
+    @param events The event bytes, at most 64.
+    """
+    status: int
+    event_count: int
+    message_count: int
+    events: bytes
+
+
+class DeviceIdentification(NamedTuple):
+    """@brief The reply of Client.read_device_identification().
+    @param conformity The conformity level of the server (0x81-0x83, 0x01-0x03 for individual access).
+    @param objects The objects by id, as bytes.
+    """
+    conformity: int
+    objects: Dict[int, bytes]
 
 
 class Client:
@@ -2134,28 +2168,49 @@ class Client:
     @param data_bits Serial data bits: 7 or 8 (RTU: 8).
     @param parity Serial Parity, a member or its name.
     @param stop_bits Serial stop bits: 1 or 2.
-    @throws MogbusError If the options are invalid (not an IP address, a server-only mode, ...).
+    @param byte_timeout_ms Stream and serial modes: a reply fails with Status.TIMEOUT when, once its
+        first byte arrived, no further byte comes within this many milliseconds (0 = off).
+    @param tls Talk TLS (`"tcp"` mode only, a build with TLS; otherwise MogbusError with Status.UNSUPPORTED).
+    @param tls_ca_file PEM file of the CA(s) that signed the server's certificate; the system trust store when None.
+    @param tls_cert_file PEM client certificate to present, or None.
+    @param tls_key_file PEM private key of `tls_cert_file`; None when the key is in that file.
+    @param tls_server_name Name the server certificate must carry, also sent as SNI; `host` when None.
+    @param tls_verify Check the server certificate (the default); False trusts anyone.
+    @throws MogbusError If the options are invalid (not an address or host name, a server-only mode, ...).
+
+    `host` may be a name: it is resolved when the client connects, which blocks for as long as the
+    resolver takes. `port` defaults to 1502, or 802 with `tls`.
     """
 
-    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1", port: int = 1502,
+    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1",
+                 port: Optional[int] = None,
                  unit: int = 1, timeout_ms: int = 1000, retries: int = 0, path: Optional[str] = None,
                  baud: int = 0, data_bits: int = 8, parity: Union[str, int, Parity] = Parity.NONE,
-                 stop_bits: int = 1):
+                 stop_bits: int = 1, byte_timeout_ms: int = 0, tls: bool = False,
+                 tls_ca_file: Optional[str] = None, tls_cert_file: Optional[str] = None,
+                 tls_key_file: Optional[str] = None, tls_server_name: Optional[str] = None,
+                 tls_verify: bool = True):
         self._h = None
         self._lock = threading.RLock()
         c = _lib.ClientOptionsC()
         c.mode = int(_coerce(Mode, mode, "mode"))
         host_b, path_b = _text(host), _text(path)
         c.host = host_b
+        if port is None:
+            port = 802 if tls else 1502
         c.port = _u(port, "port", 1 << 16)
         c.path = path_b
         c.baud = _u(baud, "baud", 1 << 32)
         c.data_bits = _u(data_bits, "data_bits", 1 << 32)
         c.parity = int(_coerce(Parity, parity, "parity"))
         c.stop_bits = _u(stop_bits, "stop_bits", 1 << 32)
-        c.tls_enabled = False
+        c.tls_enabled = bool(tls)
         c.timeout_ms = _u(timeout_ms, "timeout_ms", 1 << 32)
         c.retries = _u(retries, "retries", 1 << 32)
+        c.byte_timeout_ms = _u(byte_timeout_ms, "byte_timeout_ms", 1 << 32)
+        tls_bytes = [_text(v) for v in (tls_ca_file, tls_cert_file, tls_key_file, tls_server_name)]
+        c.tls_ca_file, c.tls_cert_file, c.tls_key_file, c.tls_server_name = tls_bytes
+        c.tls_verify = bool(tls_verify)
         self.unit = _u(unit, "unit", 256)
         out = ctypes.c_void_p()
         code = lib.mogbus_client_open(ctypes.byref(c), ctypes.byref(out))
@@ -2189,13 +2244,13 @@ class Client:
             raise MogbusError("the client is closed")
         return self._h
 
-    def _check(self, code: int) -> None:
+    def _check(self, code: int, data: bytes = b"") -> None:
         if code == 0:
             return
         msg = lib.mogbus_client_last_error(self._h)
         text = msg.decode(errors="replace") if msg else "client call failed"
         if code == Status.EXCEPTION:
-            raise ModbusException(text, lib.mogbus_client_last_exception(self._h))
+            raise ModbusException(text, lib.mogbus_client_last_exception(self._h), data)
         raise MogbusError(text, Status(code))
 
     def _unit(self, unit: Optional[int]) -> int:
@@ -2332,21 +2387,170 @@ class Client:
                 _u(write_address, "write_address", 1 << 16), _u(len(values), "count", 1 << 16), buf))
         return list(out[:read_count])
 
-    def read_device_id(self, unit: Optional[int] = None) -> Dict[int, bytes]:
-        """@brief Reads the basic device identification objects (function code 43, MEI type 14).
+    def read_device_identification(self, read_code: int = 1, object_id: int = 0,
+                                   unit: Optional[int] = None) -> DeviceIdentification:
+        """@brief Reads device identification objects (function code 43, MEI type 14), following up "more follows" replies.
+        @param read_code 1 basic (objects 0-2), 2 regular (0-6), 3 extended (0-6, then 0x80-0xFF) or 4 the one object `object_id`.
+        @param object_id First object to read.
         @param unit Unit id; the client's default when None.
-        @return The objects by id: 0 vendor name, 1 product code, 2 revision.
+        @return The conformity level and the objects by id.
         """
-        buf = (ctypes.c_uint8 * 252)()
+        buf = (ctypes.c_uint8 * 65536)()
         n = ctypes.c_size_t()
+        level = ctypes.c_uint8()
         with self._lock:
-            self._check(lib.mogbus_client_read_device_id(self._live(), self._unit(unit), buf, 252,
-                                                         ctypes.byref(n)))
+            self._check(lib.mogbus_client_read_device_identification(
+                self._live(), self._unit(unit), _u(read_code, "read_code", 256), _u(object_id, "object_id", 256),
+                buf, len(buf), ctypes.byref(n), ctypes.byref(level)))
         raw, objects, i = bytes(buf[:n.value]), {}, 0
         while i + 2 <= len(raw) and i + 2 + raw[i + 1] <= len(raw):
             objects[raw[i]] = raw[i + 2:i + 2 + raw[i + 1]]
             i += 2 + raw[i + 1]
-        return objects
+        return DeviceIdentification(level.value, objects)
+
+    def read_device_id(self, unit: Optional[int] = None, read_code: int = 1,
+                       object_id: int = 0) -> Dict[int, bytes]:
+        """@brief Reads device identification objects (function code 43, MEI type 14); the basic ones by default.
+        @param unit Unit id; the client's default when None.
+        @param read_code 1 basic (objects 0-2), 2 regular, 3 extended or 4 one object; see read_device_identification().
+        @param object_id First object to read.
+        @return The objects by id: 0 vendor name, 1 product code, 2 revision, then the others the code asks for.
+        """
+        return self.read_device_identification(read_code, object_id, unit).objects
+
+    def read_exception_status(self, unit: Optional[int] = None) -> int:
+        """@brief Reads the exception status byte (function code 07).
+        @param unit Unit id; the client's default when None.
+        @return The status byte, 0-255.
+        """
+        out = ctypes.c_uint8()
+        with self._lock:
+            self._check(lib.mogbus_client_read_exception_status(self._live(), self._unit(unit), ctypes.byref(out)))
+        return out.value
+
+    def diagnostics(self, sub_function: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends a diagnostics request (function code 08).
+        @param sub_function The sub-function code, 0-65535.
+        @param data The request data after the sub-function, at most 250 bytes (sub-function 0 echoes any length, the others take 2).
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the sub-function.
+        @throws MogbusError With Status.FRAME if the sub-function is not echoed.
+        """
+        data = bytes(data)
+        req = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
+        out = (ctypes.c_uint8 * 252)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_diagnostics(self._live(), self._unit(unit),
+                                                      _u(sub_function, "sub_function", 1 << 16), req, len(data),
+                                                      out, 252, ctypes.byref(n)))
+        return bytes(out[:n.value])
+
+    def get_comm_event_counter(self, unit: Optional[int] = None) -> CommEventCounter:
+        """@brief Reads the communication event counter (function code 0B).
+        @param unit Unit id; the client's default when None.
+        @return The status word and the event counter.
+        """
+        status, count = ctypes.c_uint16(), ctypes.c_uint16()
+        with self._lock:
+            self._check(lib.mogbus_client_get_comm_event_counter(self._live(), self._unit(unit),
+                                                                 ctypes.byref(status), ctypes.byref(count)))
+        return CommEventCounter(status.value, count.value)
+
+    def get_comm_event_log(self, unit: Optional[int] = None) -> CommEventLog:
+        """@brief Reads the communication event log (function code 0C).
+        @param unit Unit id; the client's default when None.
+        @return The status word, the event and message counters and the event bytes.
+        """
+        status, count, messages = ctypes.c_uint16(), ctypes.c_uint16(), ctypes.c_uint16()
+        events = (ctypes.c_uint8 * 64)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_get_comm_event_log(
+                self._live(), self._unit(unit), ctypes.byref(status), ctypes.byref(count),
+                ctypes.byref(messages), events, 64, ctypes.byref(n)))
+        return CommEventLog(status.value, count.value, messages.value, bytes(events[:n.value]))
+
+    def report_server_id(self, unit: Optional[int] = None) -> bytes:
+        """@brief Reads the server id report (function code 11).
+        @param unit Unit id; the client's default when None.
+        @return The device specific data; mogbus devices send the server id, the run indicator (0xFF on) and their additional data.
+        """
+        out = (ctypes.c_uint8 * 252)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_report_server_id(self._live(), self._unit(unit), out, 252,
+                                                           ctypes.byref(n)))
+        return bytes(out[:n.value])
+
+    def _file_records(self, records, with_values):
+        arr = (_lib.ClientFileRecordC * max(len(records), 1))()
+        buffers = []
+        for i, rec in enumerate(records):
+            file, record, third = rec
+            if with_values:
+                values = [_u(v, "value", 1 << 16) for v in third]
+                length = len(values)
+            else:
+                length = _u(third, "length", 1 << 16)
+                values = [0] * length
+            buf = (ctypes.c_uint16 * max(length, 1))(*values)
+            buffers.append(buf)
+            arr[i].file = _u(file, "file", 1 << 16)
+            arr[i].record = _u(record, "record", 1 << 16)
+            arr[i].length = _u(length, "length", 1 << 16)
+            arr[i].values = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint16))
+        return arr, buffers
+
+    def read_file_records(self, requests: Sequence[Sequence[int]], unit: Optional[int] = None) -> List[List[int]]:
+        """@brief Reads file records (function code 14); one request answers every sub-request.
+        @param requests 1-35 tuples `(file, record, length)`: file 1-65535, first record 0-9999, number of records.
+        @param unit Unit id; the client's default when None.
+        @return The values of each sub-request, in order.
+        """
+        arr, buffers = self._file_records(requests, False)
+        with self._lock:
+            self._check(lib.mogbus_client_read_file_records(self._live(), self._unit(unit), arr, len(requests)))
+        return [list(b[:req[2]]) for b, req in zip(buffers, requests)]
+
+    def write_file_records(self, records: Sequence[Sequence[Any]], unit: Optional[int] = None) -> None:
+        """@brief Writes file records (function code 15); all or nothing.
+        @param records Tuples `(file, record, values)`: file 1-65535, first record 0-9999 and the raw 16-bit values; at most 251 request bytes in all.
+        @param unit Unit id; the client's default when None.
+        """
+        arr, _keep = self._file_records(records, True)
+        with self._lock:
+            self._check(lib.mogbus_client_write_file_records(self._live(), self._unit(unit), arr, len(records)))
+
+    def read_fifo(self, address: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads a FIFO queue (function code 18).
+        @param address FIFO pointer address.
+        @param unit Unit id; the client's default when None.
+        @return The queued raw values, at most 31.
+        """
+        out = (ctypes.c_uint16 * 31)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_read_fifo(self._live(), self._unit(unit), _u(address, "address", 1 << 16),
+                                                    out, 31, ctypes.byref(n)))
+        return list(out[:n.value])
+
+    def canopen_request(self, request: bytes, unit: Optional[int] = None) -> bytes:
+        """@brief Sends a CANopen general reference request (function code 2B, MEI type 0D) and returns the raw reply.
+        @param request The bytes after `2B 0D`: control byte, 0, optional network id and data type, node, index, subindex, start, count and the data of a write (1-251 bytes).
+        @param unit Unit id; the client's default when None.
+        @return The reply bytes after `2B 0D` (control byte onward).
+        @throws ModbusException With code 255 for a failure of the CANopen service; `data` holds `FF len 0D AE|CE payload`.
+        """
+        request = bytes(request)
+        req = (ctypes.c_uint8 * max(len(request), 1)).from_buffer_copy(request or b"\0")
+        out = (ctypes.c_uint8 * 260)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            code = lib.mogbus_client_canopen_request(self._live(), self._unit(unit), req, len(request), out, 260,
+                                                     ctypes.byref(n))
+            self._check(code, bytes(out[:n.value]))
+        return bytes(out[:n.value])
 
     def request(self, function_code: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
         """@brief Sends any request, including a user-defined function code, and returns the reply data.
@@ -2393,15 +2597,27 @@ class AsyncClient:
     @param data_bits Serial data bits: 7 or 8 (RTU: 8).
     @param parity Serial Parity, a member or its name.
     @param stop_bits Serial stop bits: 1 or 2.
+    @param byte_timeout_ms Stream and serial modes: longest gap between the bytes of a reply (0 = off).
+    @param tls Talk TLS (`"tcp"` mode only).
+    @param tls_ca_file PEM file of the trusted CA(s); the system trust store when None.
+    @param tls_cert_file PEM client certificate, or None.
+    @param tls_key_file PEM private key of `tls_cert_file`; None when the key is in that file.
+    @param tls_server_name Name the server certificate must carry, also sent as SNI; `host` when None.
+    @param tls_verify Check the server certificate (the default).
     @throws MogbusError If the options are invalid.
     """
 
-    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1", port: int = 1502,
+    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1",
+                 port: Optional[int] = None,
                  unit: int = 1, timeout_ms: int = 1000, retries: int = 0, path: Optional[str] = None,
                  baud: int = 0, data_bits: int = 8, parity: Union[str, int, Parity] = Parity.NONE,
-                 stop_bits: int = 1):
+                 stop_bits: int = 1, byte_timeout_ms: int = 0, tls: bool = False,
+                 tls_ca_file: Optional[str] = None, tls_cert_file: Optional[str] = None,
+                 tls_key_file: Optional[str] = None, tls_server_name: Optional[str] = None,
+                 tls_verify: bool = True):
         self._client = Client(mode, host, port, unit, timeout_ms, retries, path, baud, data_bits,
-                              parity, stop_bits)
+                              parity, stop_bits, byte_timeout_ms, tls, tls_ca_file, tls_cert_file,
+                              tls_key_file, tls_server_name, tls_verify)
         self._pool: Optional[concurrent.futures.ThreadPoolExecutor] = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mogbus-client")
 
@@ -2529,12 +2745,93 @@ class AsyncClient:
         return await self._call(self._client.read_write_registers, read_address, read_count,
                                 write_address, values, unit)
 
-    async def read_device_id(self, unit: Optional[int] = None) -> Dict[int, bytes]:
-        """@brief Reads the basic device identification objects (function code 43), see Client.read_device_id().
+    async def read_device_id(self, unit: Optional[int] = None, read_code: int = 1,
+                             object_id: int = 0) -> Dict[int, bytes]:
+        """@brief Reads device identification objects (function code 43), see Client.read_device_id().
         @param unit Unit id; the client's default when None.
+        @param read_code 1 basic, 2 regular, 3 extended or 4 one object.
+        @param object_id First object to read.
         @return The objects by id.
         """
-        return await self._call(self._client.read_device_id, unit)
+        return await self._call(self._client.read_device_id, unit, read_code, object_id)
+
+    async def read_device_identification(self, read_code: int = 1, object_id: int = 0,
+                                         unit: Optional[int] = None) -> DeviceIdentification:
+        """@brief Reads device identification objects and the conformity level, see Client.read_device_identification().
+        @param read_code 1 basic, 2 regular, 3 extended or 4 one object.
+        @param object_id First object to read.
+        @param unit Unit id; the client's default when None.
+        @return The conformity level and the objects by id.
+        """
+        return await self._call(self._client.read_device_identification, read_code, object_id, unit)
+
+    async def read_exception_status(self, unit: Optional[int] = None) -> int:
+        """@brief Reads the exception status byte (function code 07), see Client.read_exception_status().
+        @param unit Unit id; the client's default when None.
+        @return The status byte.
+        """
+        return await self._call(self._client.read_exception_status, unit)
+
+    async def diagnostics(self, sub_function: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends a diagnostics request (function code 08), see Client.diagnostics().
+        @param sub_function The sub-function code.
+        @param data The request data after the sub-function.
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the sub-function.
+        """
+        return await self._call(self._client.diagnostics, sub_function, data, unit)
+
+    async def get_comm_event_counter(self, unit: Optional[int] = None) -> CommEventCounter:
+        """@brief Reads the communication event counter (function code 0B), see Client.get_comm_event_counter().
+        @param unit Unit id; the client's default when None.
+        @return The status word and the event counter.
+        """
+        return await self._call(self._client.get_comm_event_counter, unit)
+
+    async def get_comm_event_log(self, unit: Optional[int] = None) -> CommEventLog:
+        """@brief Reads the communication event log (function code 0C), see Client.get_comm_event_log().
+        @param unit Unit id; the client's default when None.
+        @return The status word, the counters and the event bytes.
+        """
+        return await self._call(self._client.get_comm_event_log, unit)
+
+    async def report_server_id(self, unit: Optional[int] = None) -> bytes:
+        """@brief Reads the server id report (function code 11), see Client.report_server_id().
+        @param unit Unit id; the client's default when None.
+        @return The device specific report data.
+        """
+        return await self._call(self._client.report_server_id, unit)
+
+    async def read_file_records(self, requests: Sequence[Sequence[int]], unit: Optional[int] = None) -> List[List[int]]:
+        """@brief Reads file records (function code 14), see Client.read_file_records().
+        @param requests Tuples `(file, record, length)`.
+        @param unit Unit id; the client's default when None.
+        @return The values of each sub-request.
+        """
+        return await self._call(self._client.read_file_records, requests, unit)
+
+    async def write_file_records(self, records: Sequence[Sequence[Any]], unit: Optional[int] = None) -> None:
+        """@brief Writes file records (function code 15), see Client.write_file_records().
+        @param records Tuples `(file, record, values)`.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_file_records, records, unit)
+
+    async def read_fifo(self, address: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads a FIFO queue (function code 18), see Client.read_fifo().
+        @param address FIFO pointer address.
+        @param unit Unit id; the client's default when None.
+        @return The queued raw values.
+        """
+        return await self._call(self._client.read_fifo, address, unit)
+
+    async def canopen_request(self, request: bytes, unit: Optional[int] = None) -> bytes:
+        """@brief Sends a CANopen general reference request (function code 2B, MEI 0D), see Client.canopen_request().
+        @param request The bytes after `2B 0D`.
+        @param unit Unit id; the client's default when None.
+        @return The reply bytes after `2B 0D`.
+        """
+        return await self._call(self._client.canopen_request, request, unit)
 
     async def request(self, function_code: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
         """@brief Sends any request, including a user-defined function code, see Client.request().

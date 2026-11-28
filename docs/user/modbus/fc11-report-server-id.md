@@ -59,3 +59,4 @@ print(client.report_slave_id().identifier)
 
 - [Read Device Identification (0x2B / 0x0E)](fc2b-0e-read-device-identification.md)
 - [Config reference: device entries](../config/device/index.md)
+- From C: @ref mogbus_client_report_server_id "mogbus_client_report_server_id()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

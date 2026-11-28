@@ -17,11 +17,14 @@
 
 /** @brief OpenSSL TLS context, forward-declared so callers need no OpenSSL headers. */
 typedef struct ssl_ctx_st SSL_CTX;
+/** @brief OpenSSL BIO method, forward-declared so callers need no OpenSSL headers. */
+typedef struct bio_method_st BIO_METHOD;
 /** @brief OpenSSL connection, forward-declared so callers need no OpenSSL headers. */
 typedef struct ssl_st SSL;
 typedef enum net_tls_version_t net_tls_version_t;
 typedef enum net_tls_status_t net_tls_status_t;
 typedef struct net_tls_config_t net_tls_config_t;
+typedef struct net_tls_client_config_t net_tls_client_config_t;
 typedef struct net_tls_conn_t net_tls_conn_t;
 typedef struct net_tls_ctx_t net_tls_ctx_t;
 
@@ -61,6 +64,15 @@ struct net_tls_config_t
 	const char*	tls1_3_ciphersuites;	/**< NULL = OpenSSL default */
 };
 
+/** @brief TLS settings of a client; strings are borrowed and only read by net_tls_client_ctx_init(). */
+struct net_tls_client_config_t
+{
+	const char*	ca_certificate;		/**< NULL = the system trust store */
+	const char*	certificate;		/**< NULL = no client certificate */
+	const char*	private_key;		/**< NULL = the key is in `certificate` */
+	bool		verify;			/**< check the server certificate chain and name */
+};
+
 /**
  * @brief Per-connection state: SSL object, handshake/want flags and deadline.
  *
@@ -86,12 +98,30 @@ struct net_tls_conn_t
 struct net_tls_ctx_t
 {
 	SSL_CTX*	ssl_ctx;
+	BIO_METHOD*	bio_method;	/**< socket I/O that never raises SIGPIPE */
 	net_tls_conn_t	conns[NET_TLS_MAX_SESSIONS];
 	char		error[NET_TLS_ERROR_MAX];	/**< why the last init or conn_new failed */
 };
 
 /** @brief Returns false and sets ctx->error when OpenSSL cannot set up the server context. */
 bool		net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config);
+/** @brief True when this build has TLS (OpenSSL); false for the no-TLS stub. */
+bool		net_tls_supported(void);
+/**
+ * @brief Sets up a client context (TLS 1.2 or newer); false and ctx->error on failure.
+ *
+ * Sessions are created with net_tls_client_conn_new().
+ */
+bool		net_tls_client_ctx_init(net_tls_ctx_t* ctx, const net_tls_client_config_t* config);
+/**
+ * @brief Creates a connect-side session on a nonblocking, connected socket.
+ *
+ * With verification on, the certificate must match `server_name` (a DNS name, or an IP literal
+ * checked against the certificate's IP addresses); a DNS name is also sent as SNI. NULL and
+ * ctx->error on failure.
+ */
+net_tls_conn_t*	net_tls_client_conn_new(net_tls_ctx_t* ctx, int fd, const char* server_name);
+
 /**
  * @brief Closes any live sessions and frees the OpenSSL context.
  *

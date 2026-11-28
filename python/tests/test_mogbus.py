@@ -131,6 +131,7 @@ class LayoutTest(unittest.TestCase):
         expected.update(mine("CN", _lib.ConnectionC, []))
         expected.update(mine("CO", _lib.ClientOptionsC, []))
         expected.update(mine("PF", _lib.PollFdC, []))
+        expected.update(mine("CF", _lib.ClientFileRecordC, []))
         for key in ("faults_count", "space_count"):
             self.assertIn(key, c)
         self.assertEqual(c.pop("faults_count"), (7,))
@@ -152,7 +153,8 @@ class LayoutTest(unittest.TestCase):
                               ("FR", "mogbus_frame_t", _lib.FrameC),
                               ("CN", "mogbus_connection_t", _lib.ConnectionC),
                               ("CO", "mogbus_client_options_t", _lib.ClientOptionsC),
-                              ("PF", "mogbus_poll_fd_t", _lib.PollFdC)):
+                              ("PF", "mogbus_poll_fd_t", _lib.PollFdC),
+                              ("CF", "mogbus_client_file_record_t", _lib.ClientFileRecordC)):
             want = header_fields(text, tag)
             have = set()
             for name, _ in cls._fields_:
