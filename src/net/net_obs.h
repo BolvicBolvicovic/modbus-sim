@@ -36,6 +36,7 @@ enum
 	NET_OBS_HOSTS_COUNT	= 8,		/**< most allowed Host names */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
 	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per wait */
+	NET_OBS_GROUP_MAX	= 512,	/**< most entries one shared group wait takes (8 servers of 38 entries each fit) */
 };
 
 /** @brief Phase of a net_poll_group_t. */
@@ -60,8 +61,8 @@ struct net_poll_group_t
 	os_mutex_t*	lock;		/**< released around the shared wait; NULL = none */
 	int		timeout_ms;	/**< shortest timeout a gathered step asked for; -1 = none */
 	u32		count;
-	os_wait_entry_t	entries[OS_WAIT_MAX];
-	const net_obs_t* owner[OS_WAIT_MAX];	/**< server that appended each entry */
+	os_wait_entry_t	entries[NET_OBS_GROUP_MAX];
+	const net_obs_t* owner[NET_OBS_GROUP_MAX];	/**< server that appended each entry */
 };
 
 /** @brief What happened to one request. */

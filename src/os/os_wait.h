@@ -1,54 +1,48 @@
 /**
  * @file
- * @brief Event wait over sockets and byte-stream (serial/fd) handles; the only place poll() lives.
+ * @brief Event wait over sockets; the only place poll() lives.
  *
- * Every entry carries its kind so a Windows implementation can wait on sockets (WSAPoll) and
- * on serial handles (overlapped I/O plus WaitForMultipleObjects) differently; the Windows
- * build waits on sockets only and flags serial entries as invalid. The table is a plain
- * fixed-size caller-owned array.
+ * os_wait_entry_t is the platform's own poll entry (struct pollfd, WSAPOLLFD), so the table the
+ * callers fill goes to poll()/WSAPoll() untouched. This header includes the OS header for that
+ * reason; check_deps.sh looks at direct includes only and net/ never includes the OS header itself.
+ * The Windows build waits on sockets only (serial/PTY/fd modes are a stub that never opens a handle);
+ * a COM-port wait will need its own wrapper.
  */
 #ifndef OS_WAIT_H
 #define OS_WAIT_H
 
 #include "os/os_socket.h"
-#include "vlib/bits.h"
 #include "vlib/c_types.h"
 
-typedef enum os_wait_kind_t os_wait_kind_t;
-typedef struct os_wait_entry_t os_wait_entry_t;
+#ifdef _WIN32
+#include <winsock2.h>
+typedef WSAPOLLFD os_wait_entry_t;
+#else
+#include <poll.h>
+typedef struct pollfd os_wait_entry_t;
+#endif
 
-/** @brief What a wait entry refers to. */
-enum os_wait_kind_t
-{
-	OS_WAIT_SOCKET,
-	OS_WAIT_SERIAL,	/**< serial device, PTY or host-owned byte-stream fd */
-};
-
-/** @brief Event bits of os_wait_entry_t.events and .revents. */
+/** @brief Event bits of os_wait_entry_t.events and .revents (the platform's own values). */
 enum
 {
-	OS_WAIT_IN    = BIT0,
-	OS_WAIT_OUT   = BIT1,
-	OS_WAIT_ERR   = BIT2,
-	OS_WAIT_HUP   = BIT3,
-	OS_WAIT_INVAL = BIT4,
-	OS_WAIT_MAX   = 512,	/**< most entries one os_wait() call takes (8 servers of 38 entries each fit) */
-};
-
-/** @brief One handle to wait on: events is the request, revents the result. */
-struct os_wait_entry_t
-{
-	os_socket_t	fd;		/**< socket or serial handle; OS_SOCKET_INVALID (-1) entries are ignored */
-	os_wait_kind_t	kind;
-	u32		events;
-	u32		revents;
+#ifdef _WIN32
+	OS_WAIT_IN    = POLLRDNORM,
+	OS_WAIT_OUT   = POLLWRNORM,
+#else
+	OS_WAIT_IN    = POLLIN,
+	OS_WAIT_OUT   = POLLOUT,
+#endif
+	OS_WAIT_ERR   = POLLERR,
+	OS_WAIT_HUP   = POLLHUP,
+	OS_WAIT_INVAL = POLLNVAL,
 };
 
 /**
  * @brief Waits until an entry is ready or timeout_ms elapses (negative waits forever).
  *
- * Returns the number of ready entries, 0 on timeout, or -1 on error (see os_interrupted()).
- * ERR, HUP and INVAL are reported in revents whether or not they were requested.
+ * Fills revents; entries with fd OS_SOCKET_INVALID are ignored (revents 0). Returns the number
+ * of ready entries, 0 on timeout, or -1 on error (see os_interrupted()). ERR, HUP and INVAL are
+ * reported in revents whether or not they were requested.
  */
 int	os_wait(os_wait_entry_t* entries, u32 count, int timeout_ms);
 

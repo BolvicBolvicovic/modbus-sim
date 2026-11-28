@@ -22,8 +22,8 @@ outstanding work is listed here. When an item is done, document it there and rem
   `docs/user/import/import-pymodbus-servers.md`).
 - Windows (see [Windows build](architecture.md#windows-build) for what exists). Why: many PLC and SCADA engineers
   work on Windows. Remaining:
-  - COM ports: the `os_wait` serial entry (overlapped COM I/O plus `WaitForMultipleObjects`, comm
-    events) and `DCB`/`COMMTIMEOUTS` setup in `os_serial_win32.c`; there is no PTY on Windows, so
+  - COM ports: a COM-port wait of its own (`os_wait` is now a bare `poll`/`WSAPoll` over sockets, so
+    this needs a separate wrapper again: overlapped COM I/O plus `WaitForMultipleObjects`, comm events) and `DCB`/`COMMTIMEOUTS` setup in `os_serial_win32.c`; there is no PTY on Windows, so
     tests would use a com0com pair.
   - A portable `test_support`, which would bring most of `TESTS_POSIX_ONLY` to Windows.
   - Tests on `windows-latest` (unit, Python, interop), native COM tests with com0com.

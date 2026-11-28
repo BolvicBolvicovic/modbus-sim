@@ -273,7 +273,6 @@ static int
 wait_for(const client_t* c, u32 events, u64 deadline)
 {
 	os_wait_entry_t pfd = { .fd = os_socket_valid(c->sock) ? c->sock : (os_socket_t)c->ser,
-				.kind = is_serial(c) ? OS_WAIT_SERIAL : OS_WAIT_SOCKET,
 				.events = events };
 
 	for (;;)
