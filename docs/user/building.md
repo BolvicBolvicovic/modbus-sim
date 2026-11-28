@@ -64,6 +64,29 @@ by `tools/check_docs.sh examples` when checking a no-TLS binary.
 without config support`. `make WITH_CONFIG=0 tests` runs the tests that do not need config or the
 binary. See [Embedding mogbus in C](library/library-start.md).
 
+## Install
+
+`make install` builds `mogbus` and both libraries and copies them under `$(DESTDIR)$(PREFIX)` (`PREFIX` defaults to `/usr/local`, `DESTDIR` to empty; `BINDIR`, `LIBDIR`, `INCLUDEDIR` and `DATADIR` can be overridden, for example `LIBDIR=/usr/lib64`):
+
+| File | What |
+|---|---|
+| `bin/mogbus` | the binary (not with `WITH_CONFIG=0`) |
+| `lib/libmogbus.a`, `lib/libmogbus.so` | the static and the shared library |
+| `include/mogbus.h` | the whole C API |
+| `lib/pkgconfig/mogbus.pc` | the pkg-config file |
+| `share/mogbus/profiles/*.scm` | the example profiles |
+| `share/doc/mogbus/` | README, LICENSE, NOTICE and the user documentation |
+
+```bash
+sudo make install                            # /usr/local
+make install PREFIX=/usr DESTDIR=/tmp/pkg    # staging for a package
+make uninstall PREFIX=/usr/local             # removes the same files
+```
+
+`mogbus.pc` carries the prefix you installed to and the version of `include/mogbus.h`. A program is then built with `cc $(pkg-config --cflags mogbus) app.c $(pkg-config --libs mogbus)`, or with `pkg-config --static --libs mogbus` to link `libmogbus.a`, which also asks for `-lm` and, in a TLS build, for OpenSSL (`Requires.private: openssl`). If you install outside a directory pkg-config searches, set `PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig`.
+
+The shared library's soname is plain `libmogbus.so`: while the library is pre-1.0 there is no versioned soname, so rebuild a program after upgrading, as for a static library. The `.pc` file of the [release tarball](../dev/release.md) is relative to its own location, so `PKG_CONFIG_PATH=<unpacked tarball>/lib/pkgconfig` works wherever it was unpacked. `make install` is for Linux (`PLATFORM=posix`).
+
 ## Libraries, Python, Windows
 
 - `make lib` builds the static and shared libraries; see [Embedding mogbus in C](library/library-start.md).
