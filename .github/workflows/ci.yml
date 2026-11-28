@@ -236,9 +236,11 @@ jobs:
 
       - name: pymodbus interoperability
         run: |
-          python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/Scripts/python" -m pip install --quiet 'pymodbus==3.8.6'
-          MOGBUS_START_DELAY=1 MOGBUS_BIN=./mogbus.exe "$RUNNER_TEMP/venv/Scripts/python" \
+          python -m venv venv
+          venv_python=venv/bin/python
+          [ -x "$venv_python" ] || venv_python=venv/Scripts/python
+          "$venv_python" -m pip install --quiet 'pymodbus==3.8.6'
+          MOGBUS_START_DELAY=1 MOGBUS_BIN=./mogbus.exe "$venv_python" \
             examples/interop/pymodbus_interop.py tcp udp rtu-tcp rtu-udp ascii-tcp ascii-udp
 
   reproducible:
