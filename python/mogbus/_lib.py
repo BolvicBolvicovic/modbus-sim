@@ -312,6 +312,13 @@ _sig("mogbus_client_canopen_request", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8)
      _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
 _sig("mogbus_decode_frame", _c.c_int, _c.c_char_p, _c.c_size_t, _c.c_int, _c.c_int, _c.c_bool, _c.c_char_p,
      _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_registers_to_value", _c.c_int, _p(_c.c_uint16), _c.c_int, _c.c_int, _c.c_int, _p(_c.c_double))
+_sig("mogbus_value_to_registers", _c.c_int, _c.c_double, _c.c_int, _c.c_int, _c.c_int, _p(_c.c_uint16),
+     _p(_c.c_size_t))
+_sig("mogbus_registers_to_u64", _c.c_int, _p(_c.c_uint16), _c.c_int, _c.c_int, _p(_c.c_uint64))
+_sig("mogbus_u64_to_registers", _c.c_int, _c.c_uint64, _c.c_int, _c.c_int, _p(_c.c_uint16))
+_sig("mogbus_registers_to_text", _c.c_int, _p(_c.c_uint16), _c.c_size_t, _c.c_int, _c.c_char_p, _c.c_size_t)
+_sig("mogbus_text_to_registers", _c.c_int, _c.c_char_p, _c.c_size_t, _c.c_int, _p(_c.c_uint16))
 _sig("mogbus_rtu_timing", None, _c.c_uint32, _c.c_uint32, _p(_c.c_uint32), _p(_c.c_uint32))
 _sig("mogbus_now_ms", _c.c_uint64)
 _sig("mogbus_server_step", _c.c_int, _ptr, _c.c_int)

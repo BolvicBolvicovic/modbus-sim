@@ -32,7 +32,5 @@ outstanding work is listed here. When an item is done, document it there and rem
   adapters need it, and libmodbus has `modbus_rtu_set_serial_mode` and RTS callbacks.
 - macOS and the BSDs. Why: libmodbus builds there natively. Needs a vlib arena backend check and
   `os_serial`/PTY differences.
-- Public value helpers (float/int32/int64 from registers in each word and byte order). Why: libmodbus
-  has `modbus_get_float_abcd` and friends; mogbus does this only inside points.
 - `make install` with a `pkg-config` file. Why: the release ships a tarball only, which makes linking
   against `libmogbus` harder than against libmodbus.
