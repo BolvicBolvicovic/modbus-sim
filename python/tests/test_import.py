@@ -17,7 +17,7 @@ spec.loader.exec_module(imp)
 
 
 def mogbus_bin():
-    path = os.environ.get("MOGBUS_BIN") or str(ROOT / "mogbus")
+    path = os.environ.get("MOGBUS_BIN") or str(ROOT / ("mogbus.exe" if os.name == "nt" else "mogbus"))
     return path if os.path.exists(path) else None
 
 

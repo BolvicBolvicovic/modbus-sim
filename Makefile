@@ -8,6 +8,7 @@ endif
 # OS layer: src/os/os_*_<PLATFORM>.c are the only per-platform sources. PLATFORM=win32 cross-compiles
 # a native Windows build with MinGW-w64 (CROSS is the toolchain prefix); see docs/user/windows/windows-route.md.
 PLATFORM    ?= posix
+PYTHON      ?= python3
 ifeq ($(PLATFORM),posix)
 EXE         =
 OTHER_PLATFORM_SRCS = $(SRC_DIR)/os/%_win32.c
@@ -290,15 +291,15 @@ python-tests: $(LIB_SHARED)
 	mkdir -p build
 	$(CC) -Iinclude python/tests/layout.c -o build/py_layout
 	build/py_layout > build/py_layout.txt
-	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) MOGBUS_LAYOUT=$(CURDIR)/build/py_layout.txt PYTHONPATH=python python3 -m unittest discover -s python/tests
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) MOGBUS_LAYOUT=$(CURDIR)/build/py_layout.txt PYTHONPATH=python $(PYTHON) -m unittest discover -s python/tests
 
 # embed.py, pump_station.py and the unittest tests need only the library; test_device.py, test_station.py
 # and conftest.py need pytest and are not run here.
 python-examples: $(LIB_SHARED)
-	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/embed.py
-	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/asyncio_server.py
-	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/pump_station.py
-	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 -m unittest discover -s examples/python -p test_pump_station.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python $(PYTHON) examples/python/embed.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python $(PYTHON) examples/python/asyncio_server.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python $(PYTHON) examples/python/pump_station.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python $(PYTHON) -m unittest discover -s examples/python -p test_pump_station.py
 
 # Fast local build: make -j$(nproc) dev [tests|clean|...]. With no other goal,
 # `dev` builds the default binary; with extra goals it is just a mode switch.

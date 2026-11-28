@@ -1,4 +1,4 @@
-"""Finds and loads libmogbus.so and declares its C signatures."""
+"""Finds and loads libmogbus.so (mogbus.dll on Windows) and declares its C signatures."""
 import ctypes
 import ctypes.util
 import os
@@ -220,7 +220,8 @@ def _candidates():
         # An explicit path never falls back silently.
         return [env], True
     here = Path(__file__).resolve().parent
-    found = [str(here / "libmogbus.so"), str(here.parent.parent / "libmogbus.so")]
+    name = "mogbus.dll" if os.name == "nt" else "libmogbus.so"
+    found = [str(here / name), str(here.parent.parent / name)]
     found.append(ctypes.util.find_library("mogbus"))
     return [c for c in found if c], False
 
@@ -238,8 +239,8 @@ def _load():
             tried.append(f"{cand} ({exc})")
     where = "MOGBUS_LIB" if explicit else "the package directory, the checkout root or the system"
     raise ImportError(
-        "cannot load libmogbus.so from " + where + "; tried: " + ", ".join(tried or ["nothing"]) +
-        ". Build it with `make lib` and set MOGBUS_LIB=/path/to/libmogbus.so, "
+        "cannot load the mogbus library from " + where + "; tried: " + ", ".join(tried or ["nothing"]) +
+        ". Build it with `make lib` and set MOGBUS_LIB=/path/to/libmogbus.so (mogbus.dll on Windows), "
         "or run `make python` and install ./python.")
 
 

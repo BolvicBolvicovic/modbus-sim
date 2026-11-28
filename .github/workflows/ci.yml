@@ -201,6 +201,46 @@ jobs:
       - name: Windows cross build, tests and interop under Wine
         run: PYMODBUS=1 ./tools/win32_check.sh
 
+  windows-native:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          submodules: true
+
+      # MinGW-w64 gcc, make and Python from MSYS2 (the same toolchain as the Wine cross build).
+      - uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2.34.0
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
+
+      - name: Build mogbus.exe, mogbus.dll and the test binary
+        run: make -j4 PLATFORM=win32 WITH_TLS=0 all lib mogbus-tests.exe
+
+      # tools/run_tests.sh runs under MSYS2 with no Wine wrapper: the tests run natively.
+      - name: Unit and integration tests
+        run: make PLATFORM=win32 WITH_TLS=0 WINE= tests WHAT=c
+
+      - name: Python package tests and examples
+        run: make PLATFORM=win32 WITH_TLS=0 PYTHON=python python-tests python-examples
+
+      - name: pymodbus interoperability
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/Scripts/python" -m pip install --quiet 'pymodbus==3.8.6'
+          MOGBUS_START_DELAY=1 MOGBUS_BIN=./mogbus.exe "$RUNNER_TEMP/venv/Scripts/python" \
+            examples/interop/pymodbus_interop.py tcp udp rtu-tcp rtu-udp ascii-tcp ascii-udp
+
   reproducible:
     needs: changes
     if: needs.changes.outputs.code == 'true'
