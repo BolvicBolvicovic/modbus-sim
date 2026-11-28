@@ -8,6 +8,9 @@
 #define TESTS_TESTS_UTILS_TEST_OS_H
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN	/* no OLE: its VT_BOOL clashes with vtest.h */
 #endif
@@ -58,6 +61,10 @@ typedef ULONG nfds_t;
 
 /* <excpt.h> macros that collide with member names of the tests. */
 #undef ERROR
+#undef NEAR
+#undef FAR
+#undef near
+#undef far
 #undef exception_code
 #undef exception_info
 #undef abnormal_termination
