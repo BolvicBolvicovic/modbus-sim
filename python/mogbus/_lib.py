@@ -153,6 +153,18 @@ class ClientFileRecordC(ctypes.Structure):
     ]
 
 
+class RequestC(ctypes.Structure):
+    _fields_ = [
+        ("unit", ctypes.c_uint8),
+        ("function_code", ctypes.c_uint8),
+        ("data", ctypes.POINTER(ctypes.c_uint8)),
+        ("data_len", ctypes.c_size_t),
+        ("reply", ctypes.POINTER(ctypes.c_uint8)),
+        ("reply_cap", ctypes.c_size_t),
+        ("reply_len", ctypes.c_size_t),
+    ]
+
+
 class AccessC(ctypes.Structure):
     _fields_ = [
         ("kind", ctypes.c_int),
@@ -298,8 +310,7 @@ _sig("mogbus_client_close", None, _ptr)
 _sig("mogbus_client_last_error", _c.c_char_p, _ptr)
 _sig("mogbus_client_last_exception", _c.c_uint8, _ptr)
 _sig("mogbus_client_connect", _c.c_int, _ptr)
-_sig("mogbus_client_request", _c.c_int, _ptr, _c.c_uint8, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
-     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_client_request", _c.c_int, _ptr, _p(RequestC))
 _sig("mogbus_client_read_coils", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16, _p(_c.c_uint8))
 _sig("mogbus_client_read_discrete_inputs", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _c.c_uint16,
      _p(_c.c_uint8))

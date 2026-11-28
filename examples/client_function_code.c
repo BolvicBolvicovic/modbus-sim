@@ -105,10 +105,12 @@ main(void)
 		static const uint8_t	ask[] = { 0x01 };
 		static const uint8_t	bad[] = { 0x09 };
 		uint8_t			reply[252];
-		size_t			n = 0;
+		mogbus_request_t	request = { .unit = 1, .function_code = STATUS_CODE,
+						    .data = ask, .data_len = sizeof(ask),
+						    .reply = reply, .reply_cap = sizeof(reply) };
 
-		if (mogbus_client_request(client, 1, STATUS_CODE, ask, sizeof(ask), reply, sizeof(reply), &n) != MOGBUS_OK ||
-		    n != 2 ||
+		if (mogbus_client_request(client, &request) != MOGBUS_OK ||
+		    request.reply_len != 2 ||
 		    ((reply[0] << 8) | reply[1]) != 1234)
 		{
 			fprintf(stderr, "status: %s\n", mogbus_client_last_error(client));
@@ -116,7 +118,9 @@ main(void)
 		}
 		printf("function code 0x%02X -> %d\n", STATUS_CODE, (reply[0] << 8) | reply[1]);
 
-		if (mogbus_client_request(client, 1, STATUS_CODE, bad, sizeof(bad), reply, sizeof(reply), &n) != MOGBUS_ERR_EXCEPTION ||
+		request.data = bad;
+		request.data_len = sizeof(bad);
+		if (mogbus_client_request(client, &request) != MOGBUS_ERR_EXCEPTION ||
 		    mogbus_client_last_exception(client) != 3)
 		{
 			fprintf(stderr, "expected exception 3\n");

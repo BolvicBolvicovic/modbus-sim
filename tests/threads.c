@@ -198,7 +198,12 @@ TEST(CallbacksMayCallBackIntoTheContext)
 	ASSERT_EQ(mogbus_client_read_holding_registers(client, 1, 0, 1, regs) == MOGBUS_OK);
 	ASSERT_EQ(atomic_load(&fx.hook_calls) == 2);
 	ASSERT_EQ(mogbus_device_get_value(fx.dev, MOGBUS_HOLDING, 2, &value) == MOGBUS_OK && value == 2);
-	ASSERT_EQ(mogbus_client_request(client, 1, CUSTOM_FC, NULL, 0, reply, sizeof(reply), &reply_len) == MOGBUS_OK);
+	{
+		mogbus_request_t request = { .unit = 1, .function_code = CUSTOM_FC, .reply = reply, .reply_cap = sizeof(reply) };
+
+		ASSERT_EQ(mogbus_client_request(client, &request) == MOGBUS_OK);
+		reply_len = request.reply_len;
+	}
 	ASSERT_EQ(reply_len == 1 && reply[0] == 0x2a && atomic_load(&fx.fc_calls) == 1);
 	mogbus_client_close(client);
 	ASSERT_EQ(fx_stop(&fx) < STOP_BOUND_MS);

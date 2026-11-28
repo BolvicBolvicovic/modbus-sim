@@ -74,14 +74,15 @@ o.port = 1502;
 mogbus_client_t* c = NULL;
 mogbus_client_open(&o, &c);
 
-uint8_t request[] = { 0x01 };            /* request data after function code 0x41 */
+uint8_t data[] = { 0x01 };               /* request data after function code 0x41 */
 uint8_t reply[252];
-size_t  n = 0;
+mogbus_request_t request = { .unit = 1, .function_code = 0x41,
+                             .data = data, .data_len = sizeof(data),
+                             .reply = reply, .reply_cap = sizeof(reply) };
 
-mogbus_result_t err = mogbus_client_request(c, 1, 0x41, request, sizeof(request),
-                                           reply, sizeof(reply), &n);
+mogbus_result_t err = mogbus_client_request(c, &request);
 if (err == MOGBUS_OK)
-	printf("%zu reply bytes\n", n);
+	printf("%zu reply bytes\n", request.reply_len);
 else if (err == MOGBUS_ERR_EXCEPTION)
 	printf("exception %u\n", mogbus_client_last_exception(c));
 else if (err == MOGBUS_ERR_TIMEOUT)
@@ -134,7 +135,8 @@ int main(void)
 	mogbus_server_options_t so = mogbus_server_options_defaults();
 	mogbus_client_options_t co = mogbus_client_options_defaults();
 	uint8_t ask[] = { 0x01 }, reply[252];
-	size_t n = 0;
+	mogbus_request_t request = { .unit = 1, .function_code = 0x41, .data = ask, .data_len = sizeof(ask),
+	                             .reply = reply, .reply_cap = sizeof(reply) };
 	pthread_t thread;
 
 	mogbus_create(&ctx);
@@ -146,7 +148,7 @@ int main(void)
 	pthread_create(&thread, NULL, serve, server);   /* the server has its own thread ... */
 
 	mogbus_client_open(&co, &client);               /* ... the client only knows host and port */
-	if (mogbus_client_request(client, 1, 0x41, ask, sizeof(ask), reply, sizeof(reply), &n) == MOGBUS_OK)
+	if (mogbus_client_request(client, &request) == MOGBUS_OK)
 		printf("0x41 -> %d\n", (reply[0] << 8) | reply[1]);   /* 1234 */
 
 	mogbus_client_close(client);
@@ -189,7 +191,7 @@ request:   41 01
 response:  41 04 56 45 4E 44
 ```
 
-Ask for it with the [mogbus client](#calling-a-user-defined-code-with-the-mogbus-client): `mogbus_client_request(c, 1, 0x41, (uint8_t[]){ 0x01 }, 1, reply, sizeof(reply), &n)` in C, `c.request(0x41, b"\x01")` in Python; both return the reply data `04 56 45 4E 44`, and an exception answer is `MOGBUS_ERR_EXCEPTION` or @ref mogbus::core::ModbusException "ModbusException". Silence (a `(no-response)` action or a `drop` fault) is a timeout.
+Ask for it with the [mogbus client](#calling-a-user-defined-code-with-the-mogbus-client): `mogbus_client_request()` with a `mogbus_request_t` (unit 1, code 0x41, data `01`) in C, `c.request(0x41, b"\x01")` in Python; both return the reply data `04 56 45 4E 44`, and an exception answer is `MOGBUS_ERR_EXCEPTION` or @ref mogbus::core::ModbusException "ModbusException". Silence (a `(no-response)` action or a `drop` fault) is a timeout.
 
 ## See also
 

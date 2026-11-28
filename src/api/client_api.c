@@ -147,43 +147,41 @@ bad_reply(mogbus_client_t* client, u8 fc)
 }
 
 mogbus_result_t
-mogbus_client_request(mogbus_client_t* client, uint8_t unit, uint8_t function_code,
-		      const uint8_t* data, size_t data_len,
-		      uint8_t* reply, size_t reply_cap, size_t* reply_len)
+mogbus_client_request(mogbus_client_t* client, mogbus_request_t* request)
 {
 	u8		req[MODBUS_MAX_PDU];
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
 	mogbus_result_t	err;
 
-	if (reply_len)
-		*reply_len = 0;
-	if (!client)
+	if (request)
+		request->reply_len = 0;
+	if (!client ||
+	    !request)
 		return MOGBUS_ERR_INVALID;
-	if (function_code == 0 ||
-	    function_code > 127 ||
-	    data_len > sizeof(req) - 1 ||
-	    (data_len && !data) ||
-	    !reply_len ||
-	    (reply_cap && !reply))
-		return reject(client, "a request needs a function code 1-127, at most 252 data bytes and a reply length");
-	req[0] = function_code;
-	if (data_len)
-		memcpy(req + 1, data, data_len);
-	err = call(client, unit, req, (u32)data_len + 1, pdu, &pdu_len);
+	if (request->function_code == 0 ||
+	    request->function_code > 127 ||
+	    request->data_len > sizeof(req) - 1 ||
+	    (request->data_len && !request->data) ||
+	    (request->reply_cap && !request->reply))
+		return reject(client, "a request needs a function code 1-127 and at most 252 data bytes");
+	req[0] = request->function_code;
+	if (request->data_len)
+		memcpy(req + 1, request->data, request->data_len);
+	err = call(client, request->unit, req, (u32)request->data_len + 1, pdu, &pdu_len);
 	if (err != MOGBUS_OK)
 		return err;
 	if (pdu_len == 0)
 		return MOGBUS_OK;	/* broadcast */
-	if (pdu_len - 1 > reply_cap)
+	if (pdu_len - 1 > request->reply_cap)
 	{
 		client_set_error(impl(client), "reply of %u data bytes does not fit the %zu-byte buffer",
-				 pdu_len - 1, reply_cap);
+				 pdu_len - 1, request->reply_cap);
 		return MOGBUS_ERR_FRAME;
 	}
 	if (pdu_len > 1)
-		memcpy(reply, pdu + 1, pdu_len - 1);
-	*reply_len = pdu_len - 1;
+		memcpy(request->reply, pdu + 1, pdu_len - 1);
+	request->reply_len = pdu_len - 1;
 	return MOGBUS_OK;
 }
 
