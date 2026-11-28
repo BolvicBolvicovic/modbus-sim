@@ -2747,11 +2747,11 @@ class Client:
         data = bytes(data)
         req = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
         reply = (ctypes.c_uint8 * 252)()
-        n = ctypes.c_size_t()
+        r = _lib.RequestC(self._unit(unit), _u(function_code, "function_code", 256), ctypes.cast(req, ctypes.POINTER(ctypes.c_uint8)),
+                     len(data), ctypes.cast(reply, ctypes.POINTER(ctypes.c_uint8)), 252, 0)
         with self._lock:
-            self._check(lib.mogbus_client_request(self._live(), self._unit(unit), _u(function_code, "function_code", 256),
-                                                  req, len(data), reply, 252, ctypes.byref(n)))
-        return bytes(reply[:n.value])
+            self._check(lib.mogbus_client_request(self._live(), ctypes.byref(r)))
+        return bytes(reply[:r.reply_len])
 
 
 class AsyncClient:

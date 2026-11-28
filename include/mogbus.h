@@ -72,6 +72,7 @@ typedef enum mogbus_tls_version_t mogbus_tls_version_t;
 typedef struct mogbus_server_options_t mogbus_server_options_t;
 typedef struct mogbus_client_options_t mogbus_client_options_t;
 typedef struct mogbus_client_file_record_t mogbus_client_file_record_t;
+typedef struct mogbus_request_t mogbus_request_t;
 typedef enum mogbus_frame_direction_t mogbus_frame_direction_t;
 typedef struct mogbus_frame_t mogbus_frame_t;
 typedef struct mogbus_poll_fd_t mogbus_poll_fd_t;
@@ -1672,34 +1673,43 @@ MOGBUS_API uint8_t	mogbus_client_last_exception(const mogbus_client_t* client);
 MOGBUS_API mogbus_result_t	mogbus_client_connect(mogbus_client_t* client);
 
 /**
+ * @brief A request for mogbus_client_request(): what to ask and where the reply goes.
+ *
+ * Zero the struct, then set the inputs; the exception code of an exception reply is read with
+ * mogbus_client_last_exception().
+ */
+struct mogbus_request_t
+{
+	uint8_t		unit;		/**< in: unit id to ask; 1-255 in the MBAP modes, 1-247 in the RTU and ASCII modes (0 broadcasts there, and only writes make sense) */
+	uint8_t		function_code;	/**< in: function code of the request, 1-127 */
+	const uint8_t*	data;		/**< in: request data after the function code, may be NULL when data_len is 0 */
+	size_t		data_len;	/**< in: bytes of data, at most 252 */
+	uint8_t*	reply;		/**< in: receives the reply data after the function code; may be NULL when reply_cap is 0 */
+	size_t		reply_cap;	/**< in: size of reply */
+	size_t		reply_len;	/**< out: reply data length; set to 0 on failure and for a broadcast */
+};
+
+/**
  * @brief Sends any request and returns the reply, for function codes the typed calls do not cover
  *        (including user-defined ones).
  *
- * @p data follows the function code in the request; the reply data (without the function code) is
- * copied to @p reply. A reply with the exception bit set is MOGBUS_ERR_EXCEPTION, with
- * mogbus_client_last_exception() holding the code. In the RTU and ASCII modes unit 0 is the
- * broadcast address: the request is sent, nothing is awaited and @p reply_len is 0.
+ * The request data follows the function code on the wire; the reply data (without the function
+ * code) is copied to the request's reply buffer. A reply with the exception bit set is
+ * MOGBUS_ERR_EXCEPTION, with mogbus_client_last_exception() holding the code. In the RTU and ASCII
+ * modes unit 0 is the broadcast address: the request is sent, nothing is awaited and reply_len is 0.
  *
  * Every call that takes a @p unit uses it as the server's unit id: 1-255 in the MBAP modes and
  * 1-247 in the RTU and ASCII modes (0 broadcasts there, and only writes make sense).
  *
  * @param client Client.
- * @param unit Unit id to ask.
- * @param function_code Function code of the request, 1-127.
- * @param data Request data after the function code, may be NULL when @p data_len is 0.
- * @param data_len Bytes of @p data, at most 252.
- * @param reply Receives the reply data after the function code; may be NULL when @p reply_cap is 0.
- * @param reply_cap Size of @p reply.
- * @param reply_len Receives the reply data length; set to 0 on failure. Required.
- * @return MOGBUS_OK; MOGBUS_ERR_INVALID for a NULL client or argument or an out-of-range value;
+ * @param request Inputs and reply buffer, see mogbus_request_t; reply_len is written.
+ * @return MOGBUS_OK; MOGBUS_ERR_INVALID for a NULL client or request or an out-of-range value;
  *         MOGBUS_ERR_IO (connect, send or receive failed, or the server closed the connection:
  *         the next call reconnects); MOGBUS_ERR_TIMEOUT; MOGBUS_ERR_EXCEPTION; MOGBUS_ERR_FRAME
- *         (malformed reply, wrong function code, or a reply longer than @p reply_cap). The
+ *         (malformed reply, wrong function code, or a reply longer than reply_cap). The
  *         message is in mogbus_client_last_error().
  */
-MOGBUS_API mogbus_result_t	mogbus_client_request(mogbus_client_t* client, uint8_t unit, uint8_t function_code,
-						      const uint8_t* data, size_t data_len,
-						      uint8_t* reply, size_t reply_cap, size_t* reply_len);
+MOGBUS_API mogbus_result_t	mogbus_client_request(mogbus_client_t* client, mogbus_request_t* request);
 
 /**
  * @brief Reads coils (function code 01).

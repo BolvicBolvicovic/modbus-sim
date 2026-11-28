@@ -19,6 +19,7 @@ main(void)
 	typedef mogbus_client_options_t CO;
 	typedef mogbus_poll_fd_t PF;
 	typedef mogbus_client_file_record_t CF;
+	typedef mogbus_request_t RQ;
 
 	SIZE(O);
 	F(O, mode); F(O, bind_address); F(O, port); F(O, path); F(O, fd); F(O, seed);
@@ -55,6 +56,8 @@ main(void)
 	F(CO, tls_server_name); F(CO, tls_verify);
 	SIZE(CF);
 	F(CF, file); F(CF, record); F(CF, length); F(CF, values);
+	SIZE(RQ);
+	F(RQ, unit); F(RQ, function_code); F(RQ, data); F(RQ, data_len); F(RQ, reply); F(RQ, reply_cap); F(RQ, reply_len);
 	printf("faults_count %d\n", MOGBUS_FAULT_KIND_COUNT);
 	printf("space_count %d\n", MOGBUS_SPACE_COUNT);
 	return 0;

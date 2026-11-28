@@ -34,6 +34,18 @@ struct fx_t
 	atomic_int		silent_hits;
 };
 
+/* One request on unit 1; *n gets the reply length. */
+static mogbus_result_t
+ask(mogbus_client_t* c, uint8_t fc, const uint8_t* data, size_t data_len, uint8_t* reply, size_t reply_cap, size_t* n)
+{
+	mogbus_request_t	r = { .unit = 1, .function_code = fc, .data = data, .data_len = data_len,
+				      .reply = reply, .reply_cap = reply_cap, .reply_len = 99 };
+	mogbus_result_t		err = mogbus_client_request(c, &r);
+
+	*n = r.reply_len;
+	return err;
+}
+
 static int
 reverse_fn(void* user, mogbus_device_t* dev, uint8_t unit, uint8_t fc, const uint8_t* data, size_t len,
 	   uint8_t* reply, size_t cap, size_t* reply_len)
@@ -233,7 +245,7 @@ exercise_all_calls(mogbus_client_t* c)
 	{
 		uint8_t data[3] = { 1, 2, 3 };
 
-		ASSERT_EQ(mogbus_client_request(c, 1, CUSTOM_FC, data, 3, reply, sizeof(reply), &n) == MOGBUS_OK);
+		ASSERT_EQ(ask(c, CUSTOM_FC, data, 3, reply, sizeof(reply), &n) == MOGBUS_OK);
 		ASSERT_EQ(n == 3 && reply[0] == 3 && reply[1] == 2 && reply[2] == 1);
 	}
 }
@@ -305,9 +317,9 @@ TEST(ClientArgumentChecks)
 	ASSERT_EQ(mogbus_client_read_coils(c, 1, 0, 2001, bits) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(mogbus_client_write_registers(c, 1, 0, 124, regs) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(mogbus_client_write_coils(c, 1, 0, 1969, bits) == MOGBUS_ERR_INVALID);
-	ASSERT_EQ(mogbus_client_request(c, 1, 0, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(ask(c, 0, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(n == 0);
-	ASSERT_EQ(mogbus_client_request(c, 1, 3, NULL, 0, NULL, 0, NULL) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_client_request(c, NULL) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(mogbus_client_read_coils(NULL, 1, 0, 1, bits) == MOGBUS_ERR_INVALID);
 	/* nothing was sent, so the unreachable default endpoint was never tried */
 	mogbus_client_close(c);
@@ -370,9 +382,9 @@ TEST(ClientExceptionReply)
 	ASSERT_EQ(mogbus_client_write_register(c, 1, 5000, 1) == MOGBUS_ERR_EXCEPTION);
 	ASSERT_EQ(mogbus_client_read_holding_registers(c, 9, 0, 1, regs) == MOGBUS_ERR_EXCEPTION);
 	ASSERT_EQ(mogbus_client_last_exception(c) == 11);	/* unknown unit: gateway target */
-	ASSERT_EQ(mogbus_client_request(c, 1, 0x7F, NULL, 0, reply, sizeof(reply), &n) == MOGBUS_ERR_EXCEPTION);
+	ASSERT_EQ(ask(c, 0x7F, NULL, 0, reply, sizeof(reply), &n) == MOGBUS_ERR_EXCEPTION);
 	ASSERT_EQ(mogbus_client_last_exception(c) == 1 && n == 0);
-	ASSERT_EQ(mogbus_client_request(c, 1, REFUSING_FC, NULL, 0, reply, sizeof(reply), &n) == MOGBUS_ERR_EXCEPTION);
+	ASSERT_EQ(ask(c, REFUSING_FC, NULL, 0, reply, sizeof(reply), &n) == MOGBUS_ERR_EXCEPTION);
 	ASSERT_EQ(mogbus_client_last_exception(c) == 5);
 	mogbus_client_close(c);
 	fx_stop(&fx);
@@ -390,7 +402,7 @@ TEST(ClientTimeoutRetriesAndRecovery)
 	c = client_for(&fx, 2);
 	ASSERT_EQ(c != NULL);
 	t0 = os_now_ms();
-	ASSERT_EQ(mogbus_client_request(c, 1, SILENT_FC, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_TIMEOUT);
+	ASSERT_EQ(ask(c, SILENT_FC, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_TIMEOUT);
 	ASSERT_EQ(os_now_ms() - t0 >= 3 * CALL_TIMEOUT_MS - 20);
 	ASSERT_EQ(atomic_load(&fx.silent_hits) == 3);	/* the call and its two retries */
 	ASSERT_EQ(strstr(mogbus_client_last_error(c), "no reply") != NULL);
@@ -400,7 +412,7 @@ TEST(ClientTimeoutRetriesAndRecovery)
 
 	/* retries are per call: 1 + 5 attempts */
 	c = client_for(&fx, 5);
-	ASSERT_EQ(mogbus_client_request(c, 1, SILENT_FC, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_TIMEOUT);
+	ASSERT_EQ(ask(c, SILENT_FC, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_TIMEOUT);
 	ASSERT_EQ(atomic_load(&fx.silent_hits) == 3 + 6);
 	mogbus_client_close(c);
 	fx_stop(&fx);
@@ -415,7 +427,7 @@ TEST(ClientUdpTimeoutThenWorks)
 
 	ASSERT_EQ(fx_start(&fx, MOGBUS_MODE_UDP));
 	c = client_for(&fx, 0);
-	ASSERT_EQ(mogbus_client_request(c, 1, SILENT_FC, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_TIMEOUT);
+	ASSERT_EQ(ask(c, SILENT_FC, NULL, 0, NULL, 0, &n) == MOGBUS_ERR_TIMEOUT);
 	ASSERT_EQ(mogbus_client_read_holding_registers(c, 1, 3, 1, regs) == MOGBUS_OK && regs[0] == 103);
 	mogbus_client_close(c);
 	fx_stop(&fx);
@@ -459,11 +471,11 @@ TEST(ClientRawRequestAndBroadcast)
 	for (size_t i = 0; i < sizeof(data); i++)
 		data[i] = (uint8_t)i;
 	/* the largest request the protocol allows, the largest reply, a reply buffer that is too small */
-	ASSERT_EQ(mogbus_client_request(c, 1, CUSTOM_FC, data, sizeof(data), reply, sizeof(reply), &n) == MOGBUS_OK);
+	ASSERT_EQ(ask(c, CUSTOM_FC, data, sizeof(data), reply, sizeof(reply), &n) == MOGBUS_OK);
 	ASSERT_EQ(n == sizeof(data) && reply[0] == 251 && reply[251] == 0);
-	ASSERT_EQ(mogbus_client_request(c, 1, CUSTOM_FC, data, 10, reply, 4, &n) == MOGBUS_ERR_FRAME);
+	ASSERT_EQ(ask(c, CUSTOM_FC, data, 10, reply, 4, &n) == MOGBUS_ERR_FRAME);
 	ASSERT_EQ(n == 0);
-	ASSERT_EQ(mogbus_client_request(c, 1, CUSTOM_FC, data, 253, reply, sizeof(reply), &n) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(ask(c, CUSTOM_FC, data, 253, reply, sizeof(reply), &n) == MOGBUS_ERR_INVALID);
 	/* unit 0 broadcasts on RTU: sent, nothing awaited, nothing executed (broadcast-execute is off) */
 	ASSERT_EQ(mogbus_client_write_register(c, 0, 0, 1) == MOGBUS_OK);
 	ASSERT_EQ(mogbus_client_read_holding_registers(c, 1, 0, 1, regs) == MOGBUS_OK && regs[0] == 100);
