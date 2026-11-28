@@ -1026,6 +1026,9 @@ TEST(ConfigServerBind)
 		{ "(server (mode tcp) (bind \"0.0.0.0\"))" DEV, "0.0.0.0" },
 		{ "(server (mode tcp) (bind \"::1\"))" DEV, "::1" },
 		{ "(server (mode rtu-tcp) (bind \"::\"))" DEV, "::" },
+		/* A host name is kept as written; it is resolved when the server is created or checked. */
+		{ "(server (mode tcp) (bind \"localhost\"))" DEV, "localhost" },
+		{ "(server (mode udp) (bind \"sim-1.lab_x\"))" DEV, "sim-1.lab_x" },
 	};
 	char	text[320];
 	char	bind[SERVER_BIND_MAX + 8];
@@ -1038,7 +1041,8 @@ TEST(ConfigServerBind)
 			fprintf(stderr, "wrong bind for: %s\n", loads[i].text);
 		ASSERT_EQ(strcmp(config.servers[0].bind_address, loads[i].bind) == 0);
 	}
-	EXPECT_ERROR("(server (mode tcp) (bind \"localhost\"))" DEV, "not a valid IPv4 or IPv6 address");
+	EXPECT_ERROR("(server (mode tcp) (bind \"bad host!\"))" DEV, "or a host name");
+	EXPECT_ERROR("(server (mode tcp) (bind \"\"))" DEV, "or a host name");
 
 	memset(bind, 'a', SERVER_BIND_MAX);
 	bind[SERVER_BIND_MAX] = '\0';
@@ -2146,7 +2150,7 @@ TEST(ConfigDatagramModes)
 		{ "(server (mode @) (data-bits 8))" DEV, "is not valid in @ mode" },
 		{ "(server (mode @) (tls))" DEV, WITH_TLS ? "is not valid in @ mode" : "built without TLS support" },
 		{ "(server (mode @) (path \"/dev/ttyS0\"))" DEV, "(path ...) is only valid" },
-		{ "(server (mode @) (bind \"localhost\"))" DEV, "not a valid IPv4 or IPv6 address" },
+		{ "(server (mode @) (bind \"bad host!\"))" DEV, "or a host name" },
 		{ "(server (mode @)) (device (unit-id 1) (fault (kind disconnect)) (holding 0))",
 		  "(fault (kind disconnect)) is not valid in @ mode" },
 		{ "(server (mode @)) (device (unit-id 1) (holding 0)"
@@ -2230,8 +2234,8 @@ TEST(ConfigHttpEndpointRejectsBadValues)
 {
 	static const struct cfg_case cases[] = {
 		{ "(server (http (port 0)))" DEV, "port" },
-		{ "(server (http (bind \"localhost\")))" DEV,
-		  "http: bind address 'localhost' is not a valid IPv4 or IPv6 address" },
+		{ "(server (http (bind \"bad host!\")))" DEV,
+		  "http: bind address 'bad host!' is not an IPv4 or IPv6 address or a host name" },
 		{ "(server (http (control maybe)))" DEV, "control" },
 		{ "(server (http (control 2)))" DEV, "control" },
 		{ "(server (http (path \"/x\")))" DEV, "path" },

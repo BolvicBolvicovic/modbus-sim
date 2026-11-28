@@ -55,6 +55,23 @@ os_socket_valid(os_socket_t s)
 /** @brief True for an IPv4 or IPv6 literal. */
 bool		os_ip_is_literal(const char* text);
 
+/** @brief True for a plausible host name: letters, digits, '-', '_' and '.' (an IP literal is checked by os_ip_is_literal). */
+static inline bool
+os_host_name_valid(const char* host)
+{
+	if (host[0] == '\0')
+		return false;
+	for (const char* p = host; *p; p++)
+	{
+		if (!((*p >= 'a' && *p <= 'z') ||
+		      (*p >= 'A' && *p <= 'Z') ||
+		      (*p >= '0' && *p <= '9') ||
+		      *p == '-' || *p == '_' || *p == '.'))
+			return false;
+	}
+	return true;
+}
+
 /** @brief Parses an IPv4 or IPv6 literal plus port; false when text is not a literal. */
 bool		os_addr_parse(os_addr_t* addr, const char* text, u16 port);
 
@@ -65,6 +82,9 @@ bool		os_addr_parse(os_addr_t* addr, const char* text, u16 port);
  * Blocks until the resolver answers, which can take as long as its own timeout.
  */
 u32		os_resolve(const char* host, u16 port, bool datagram, os_addr_t* out, u32 cap);
+
+/** @brief True when addr is an IPv6 address (else IPv4). */
+bool		os_addr_is_ipv6(const os_addr_t* addr);
 
 /** @brief Formats "ip:port", or "[ip]:port" for IPv6. */
 void		os_addr_text(const os_addr_t* addr, char* out, u32 size);

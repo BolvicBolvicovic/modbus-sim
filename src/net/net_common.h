@@ -81,12 +81,20 @@ void		pending_response_clear(pending_response_t* pending);
  */
 bool		net_handle_hangup(pending_response_t* pending);
 
+/** @brief Most addresses a bind host name is tried with. */
+enum
+{
+	NET_BIND_ADDR_MAX = 8,
+};
+
 /**
- * @brief Parses an IPv4 or IPv6 literal plus port into a socket address.
+ * @brief Turns a bind address (an IPv4/IPv6 literal or a host name) plus port into the socket
+ *        addresses to try, in order: a literal is itself, a name is resolved and its IPv4
+ *        addresses come before its IPv6 ones.
  *
- * Returns false (after a WARN) when bind_address is not a literal.
+ * `out` holds NET_BIND_ADDR_MAX entries. Returns how many (0 after a WARN when the name does not resolve).
  */
-bool		net_bind_addr(const char* bind_address, u16 port, os_addr_t* addr);
+u32		net_bind_addrs(const char* bind_address, u16 port, bool datagram, os_addr_t* out);
 
 /**
  * @brief Handles one validated MBAP request (`request` = the PDU after the header) and writes
@@ -102,8 +110,8 @@ u32		net_mbap_respond(net_obs_t* obs, device_t** devices, u32 count, rng_t* rng,
 				 const u8* request, u8* out, fault_decision_t* decision);
 
 /**
- * @brief Opens, binds, and listens on a nonblocking TCP socket. bind_address must be an IPv4
- *        or IPv6 literal.
+ * @brief Opens, binds, and listens on a nonblocking TCP socket. bind_address is an IP literal
+ *        or a host name (the first address that binds wins, see net_bind_addrs()).
  *
  * IPv6 sockets set IPV6_V6ONLY. Returns the socket or OS_SOCKET_INVALID.
  */

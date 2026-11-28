@@ -223,8 +223,11 @@ parse_http(form_ctx_t* ctx, s7_pointer options, config_server_t* srv)
 	}
 	if (bind && strlen(bind) >= SERVER_BIND_MAX)
 		return form_fail(ctx, "http: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
-	if (bind && !os_ip_is_literal(bind))
-		return form_fail(ctx, "http: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
+	if (bind &&
+	    !os_ip_is_literal(bind) &&
+	    !os_host_name_valid(bind))
+		return form_fail(ctx, "http: bind address '%s' is not an IPv4 or IPv6 address or a host name "
+				 "(letters, digits, '.', '-' and '_')", bind);
 	strcpy(srv->http_bind_address, bind ? bind : "127.0.0.1");
 	srv->http_port    = (u16)port;
 	srv->http_control = control || ui;
@@ -433,8 +436,11 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 	if (bind && strlen(bind) >= SERVER_BIND_MAX)
 		return form_fail(ctx, "server: bind address is too long (max %d characters)", SERVER_BIND_MAX - 1);
 
-	if (bind && !os_ip_is_literal(bind))
-		return form_fail(ctx, "server: bind address '%s' is not a valid IPv4 or IPv6 address", bind);
+	if (bind &&
+	    !os_ip_is_literal(bind) &&
+	    !os_host_name_valid(bind))
+		return form_fail(ctx, "server: bind address '%s' is not an IPv4 or IPv6 address or a host name "
+				 "(letters, digits, '.', '-' and '_')", bind);
 
 	if ((mode == SERVER_MODE_RTU_DEVICE || mode == SERVER_MODE_ASCII_DEVICE) &&
 	    !path)

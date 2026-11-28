@@ -968,7 +968,7 @@ enum mogbus_tls_version_t
 struct mogbus_server_options_t
 {
 	mogbus_mode_t	mode;			/**< transport */
-	const char*	bind_address;		/**< TCP-family and UDP modes; "0.0.0.0" opts in to remote access */
+	const char*	bind_address;		/**< TCP-family and UDP modes: an IP address or a host name (resolved at creation, IPv4 first); "0.0.0.0" opts in to remote access */
 	uint16_t	port;			/**< TCP-family and UDP modes; use 802 by convention with TLS */
 	const char*	path;			/**< *_DEVICE modes */
 	int		fd;			/**< *_FD modes: yours, never closed by the library */
@@ -990,7 +990,7 @@ struct mogbus_server_options_t
 	mogbus_tls_version_t tls_min_version;	/**< minimum TLS version */
 	const char*	tls_ciphers_1_2;	/**< NULL = OpenSSL default */
 	const char*	tls_ciphersuites_1_3;	/**< NULL = OpenSSL default */
-	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint; NULL = off */
+	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint: an IP address or a host name; NULL = off */
 	uint16_t	http_port;		/**< endpoint port, used when http_bind_address is set */
 	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
 	bool		http_ui;		/**< serve the web UI on `/` (needs the endpoint; implies http_control) */
@@ -1107,7 +1107,7 @@ MOGBUS_API mogbus_result_t	mogbus_server_check(mogbus_t* ctx, const mogbus_serve
  * @param unit_id Unit to ask; not 0 (broadcast is never answered).
  * @param timeout_ms Time to wait for the reply.
  * @return MOGBUS_OK for the echo or a Modbus exception reply; MOGBUS_ERR_INVALID for a serial or
- *         fd mode, unit 0, a bind address that is not an IP address or NULL options;
+ *         fd mode, unit 0, a bind address that is neither an IP address nor a resolvable host name or NULL options;
  *         MOGBUS_ERR_PROBE for a timeout, a refused connection or a malformed reply. With no
  *         context the message is kept per thread: mogbus_last_error(NULL).
  */

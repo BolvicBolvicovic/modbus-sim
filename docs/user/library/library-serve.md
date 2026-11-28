@@ -20,7 +20,7 @@ options.bind_address = "127.0.0.1";
 options.port = free_port();
 ```
 
-Every transport of the `mogbus` binary is a `mogbus_mode_t`: Modbus TCP (optionally TLS), RTU, ASCII, RTU-over-TCP, ASCII-over-TCP, and the UDP modes, plus PTY, serial-device and file-descriptor variants of RTU and ASCII. Which fields a mode reads is listed on @ref mogbus_server_options_t "the options struct"; fields a mode does not use are ignored. Strings you pass are copied. TCP-family and UDP listeners bind to loopback unless you set `bind_address` to `0.0.0.0` on purpose.
+Every transport of the `mogbus` binary is a `mogbus_mode_t`: Modbus TCP (optionally TLS), RTU, ASCII, RTU-over-TCP, ASCII-over-TCP, and the UDP modes, plus PTY, serial-device and file-descriptor variants of RTU and ASCII. Which fields a mode reads is listed on @ref mogbus_server_options_t "the options struct"; fields a mode does not use are ignored. Strings you pass are copied. TCP-family and UDP listeners bind to loopback unless you set `bind_address` to `0.0.0.0` on purpose. `bind_address` (and `http_bind_address`) is an IP address or a host name: a name is resolved with `getaddrinfo` when the server is created or checked (`mogbus_server_check`), IPv4 addresses first, and the first address that binds is used; a name that does not resolve fails with `MOGBUS_ERR_INVALID` (`bind address 'NAME' is not an IP address and does not resolve to one`). Resolution blocks the calling thread for as long as the system resolver takes.
 
 The `*_FD` modes take a byte-stream file descriptor you own (a socketpair or a PTY master), which makes a test harness possible without any network: one end is the simulator, the other the client under test. The library never closes it.
 

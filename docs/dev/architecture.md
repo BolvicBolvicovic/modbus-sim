@@ -297,8 +297,8 @@ TCP MBAP behavior or RTU byte-stream behavior.
 
 ### UDP (`net/udp_server.c`, `net/net_udp.c`)
 
-`net/net_udp` is the shared datagram layer: one bound nonblocking socket (IPv4 or IPv6 literal, same
-address parsing as the TCP listeners, `IPV6_V6ONLY` on IPv6), `recvfrom` with `MSG_TRUNC` so empty
+`net/net_udp` is the shared datagram layer: one bound nonblocking socket (an IP literal or host name resolved by
+`net_bind_addrs`, IPv4 first and the first address that binds wins, as for the TCP listeners, `IPV6_V6ONLY` on IPv6), `recvfrom` with `MSG_TRUNC` so empty
 datagrams and datagrams longer than the caller's buffer are consumed and dropped (DEBUG log), `sendto`
 the peer, `ip:port` peer text for logs, and a fixed 16-slot table of delayed responses (peer address,
 bytes, deadline) with `net_udp_flush_due` and `net_udp_poll_timeout`, so the `delay` fault never blocks

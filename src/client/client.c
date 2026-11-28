@@ -118,21 +118,6 @@ client_set_error(client_t* c, const char* fmt, ...)
 	va_end(ap);
 }
 
-/* A host name: letters, digits, '-', '_' and '.' (an IP literal is checked by os_addr_parse). */
-static bool
-host_name_valid(const char* host)
-{
-	if (host[0] == '\0')
-		return false;
-	for (const char* p = host; *p; p++)
-		if (!((*p >= 'a' && *p <= 'z') ||
-		      (*p >= 'A' && *p <= 'Z') ||
-		      (*p >= '0' && *p <= '9') ||
-		      *p == '-' || *p == '_' || *p == '.'))
-			return false;
-	return true;
-}
-
 static bool
 is_serial(const client_t* c)
 {
@@ -251,7 +236,7 @@ client_new(const client_options_t* options, client_t** out)
 	}
 	c->literal = strlen(host) < sizeof(c->host) && os_addr_parse(&c->addrs[0], host, c->o.port);
 	if (strlen(host) >= sizeof(c->host) ||
-	    (!c->literal && !host_name_valid(host)))
+	    (!c->literal && !os_host_name_valid(host)))
 	{
 		client_detached_errorf("host '%s' is not an IP address or a host name", host);
 		goto bad;

@@ -12,19 +12,17 @@
 int
 net_udp_open(net_udp_t* udp, const char* bind_address, u16 port)
 {
-	os_addr_t addr;
+	os_addr_t	addrs[NET_BIND_ADDR_MAX];
+	u32		n = net_bind_addrs(bind_address, port, true, addrs);
 
 	memset(udp, 0, sizeof(*udp));
 	udp->fd = OS_SOCKET_INVALID;
-	if (!net_bind_addr(bind_address, port, &addr))
-		return -1;
-	udp->fd = os_udp_bind(&addr);
-	if (udp->fd == OS_SOCKET_INVALID)
-	{
+	for (u32 i = 0; i < n && udp->fd == OS_SOCKET_INVALID; i++)
+		udp->fd = os_udp_bind(&addrs[i]);
+	if (n != 0 &&
+	    udp->fd == OS_SOCKET_INVALID)
 		LOG_WARN("cannot bind UDP %s:%u: %s", bind_address, port, os_last_error_text());
-		return -1;
-	}
-	return 0;
+	return udp->fd == OS_SOCKET_INVALID ? -1 : 0;
 }
 
 void

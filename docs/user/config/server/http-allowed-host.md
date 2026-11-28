@@ -19,7 +19,8 @@ none
 ## Behaviour
 
 `/api/` and the web page answer 403 unless the request's `Host` header (port ignored, case
-ignored) is `localhost`, `127.0.0.1`, `[::1]`, the specific `bind` address of the endpoint, or a
+ignored) is `localhost`, `127.0.0.1`, `[::1]`, the specific `bind` address of the endpoint (when `bind` is a host name, that name as written, not the
+address it resolves to), or a
 name given here. When the endpoint is bound to a wildcard (`0.0.0.0` or `::`), any IP literal is
 accepted too, so a DNS name (a container name, a reverse proxy host) must be listed explicitly.
 This is the defence against DNS rebinding. `/healthz`, `/readyz` and `/metrics` are never checked.
