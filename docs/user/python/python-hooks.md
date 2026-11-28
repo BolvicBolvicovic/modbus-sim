@@ -202,6 +202,11 @@ replacement longer than `capacity` drops the frame and logs a warning, and an ex
 is printed and lets the frame through. The same rules per transport are in
 [Guard clients and keep records](../library/library-hooks.md#watching-and-rewriting-frames).
 
+To read a frame, \ref mogbus::core::decode_frame "decode_frame()" decodes bytes (or hex text, or the
+ASCII text starting with `:`) into readable text, or with `as_dict=True` into a dict of the same fields:
+`mogbus.decode_frame(frame.data)`. A damaged frame is not an error: its fields are there, `ok` is false
+and `errors` lists the problems. See [Decoding frames](../modbus/decoding-frames.md).
+
 ## Watching connections
 
 \ref mogbus::core::Server::set_connection_hook "Server.set_connection_hook()" tells you when a client

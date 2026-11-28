@@ -80,6 +80,8 @@ typedef struct mogbus_connection_t mogbus_connection_t;
 typedef enum mogbus_result_t mogbus_result_t;
 typedef enum mogbus_log_level_t mogbus_log_level_t;
 typedef enum mogbus_log_format_t mogbus_log_format_t;
+typedef enum mogbus_framing_t mogbus_framing_t;
+typedef enum mogbus_direction_t mogbus_direction_t;
 /** @brief A context: owns devices, servers and their memory. */
 typedef struct mogbus_t		mogbus_t;
 /** @brief A simulated device (one unit id), owned by its context. */
@@ -155,7 +157,7 @@ enum mogbus_result_t
 	MOGBUS_ERR_IO,		/**< client: connect, send or receive failed, or the server closed the connection */
 	MOGBUS_ERR_TIMEOUT,	/**< client: no reply within the timeout (after the retries) */
 	MOGBUS_ERR_EXCEPTION,	/**< client: the server answered with a Modbus exception, see mogbus_client_last_exception() */
-	MOGBUS_ERR_FRAME,	/**< client: malformed reply, or one that does not answer the request */
+	MOGBUS_ERR_FRAME,	/**< client: malformed reply, or one that does not answer the request; mogbus_decode_frame(): the frame is malformed (its text is still written) */
 };
 
 /**
@@ -1131,6 +1133,57 @@ MOGBUS_API uint64_t	mogbus_now_ms(void);
  */
 MOGBUS_API void		mogbus_rtu_timing(uint32_t baud, uint32_t frame_gap_ms,
 					  uint32_t* t35_us, uint32_t* gap_ms);
+
+/** @brief The ADU format of a captured frame, for mogbus_decode_frame(). */
+enum mogbus_framing_t
+{
+	MOGBUS_FRAMING_AUTO,	/**< detect it: ':' and a valid LRC is ASCII, protocol id 0 and a matching length is MBAP, a valid CRC is RTU */
+	MOGBUS_FRAMING_MBAP,	/**< Modbus TCP/UDP: 7-byte MBAP header and PDU */
+	MOGBUS_FRAMING_RTU,	/**< address, PDU, CRC (low byte first) */
+	MOGBUS_FRAMING_ASCII,	/**< ':', hex of address, PDU and LRC, CR LF */
+};
+
+/** @brief Whether a captured PDU is a request or a response, for mogbus_decode_frame(). */
+enum mogbus_direction_t
+{
+	MOGBUS_DIRECTION_AUTO,		/**< infer it from the length and the byte count */
+	MOGBUS_DIRECTION_REQUEST,
+	MOGBUS_DIRECTION_RESPONSE,
+};
+
+/** @brief Output buffer size that always holds the decoding of one frame (text or JSON, even an ambiguous one). */
+#define MOGBUS_DECODE_BUFFER_SIZE	65536
+
+/**
+ * @brief Decodes one captured Modbus frame into readable text or one JSON object.
+ *
+ * The output lists the ADU fields (MBAP transaction/protocol/length/unit, RTU or ASCII address and
+ * CRC or LRC with whether it matches), the function code and its name, the direction, and every
+ * field of the PDU of each function code mogbus supports (sub-function names, file records,
+ * device identification objects, CANopen, exception names); other function codes print their data
+ * raw. With MOGBUS_FRAMING_AUTO or MOGBUS_DIRECTION_AUTO the output says why it chose; a frame
+ * valid in several framings prints each candidate. A damaged frame (bad checksum, wrong length,
+ * truncated fields) still prints every field that could be read, then lists the problems in
+ * `errors` (and `ok` is false). Values a server would refuse are listed in `warnings`. The offsets
+ * in messages count bytes of the frame (of the decoded bytes for ASCII). The text is JSON when
+ * @p json is true: compact, one object, no trailing newline; the text format ends each line with a
+ * newline. It needs no context, does not allocate and may be called from any thread.
+ *
+ * @param data The frame bytes (for ASCII the characters, `:` first).
+ * @param size Bytes in @p data, at most 4096.
+ * @param framing The ADU format, or MOGBUS_FRAMING_AUTO.
+ * @param direction Request or response, or MOGBUS_DIRECTION_AUTO.
+ * @param json true for a JSON object, false for text.
+ * @param out Receives the NUL-terminated output.
+ * @param cap Size of @p out; MOGBUS_DECODE_BUFFER_SIZE always suffices.
+ * @param len Receives the output length without the NUL.
+ * @return MOGBUS_OK; MOGBUS_ERR_FRAME if the frame is malformed (the output is complete);
+ *         MOGBUS_ERR_NOMEM if @p out was too small (the output is cut); MOGBUS_ERR_INVALID for
+ *         NULL arguments, @p cap 0 or @p size above 4096.
+ */
+MOGBUS_API mogbus_result_t	mogbus_decode_frame(const uint8_t* data, size_t size, mogbus_framing_t framing,
+						    mogbus_direction_t direction, bool json, char* out,
+						    size_t cap, size_t* len);
 
 /** @brief Results of mogbus_server_step(). */
 enum

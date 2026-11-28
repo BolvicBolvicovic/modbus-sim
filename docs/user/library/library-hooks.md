@@ -188,6 +188,18 @@ The return value is the new length of the frame:
 
 The hook runs on the thread that calls @ref mogbus_server_step "mogbus_server_step()" or @ref mogbus_server_run "mogbus_server_run()", must not block, and must not close or step the server; it may call `mogbus_device_*`. The frame and `peer` are valid only during the call. A server has one hook, a new one replaces it and NULL removes it. It is not part of a config, and HTTP endpoint traffic is not shown.
 
+To read what the hook sees, @ref mogbus_decode_frame "mogbus_decode_frame()" turns the bytes of a frame into text or JSON (every field of the ADU and the PDU, with the checksum verdict), without a context or a server; it is the library side of `mogbus --decode` ([Decoding frames](../modbus/decoding-frames.md)). It only reads its input, so the hook may call it on `f->data`:
+
+```c
+char text[MOGBUS_DECODE_BUFFER_SIZE];
+size_t len;
+
+mogbus_decode_frame(f->data, f->len, MOGBUS_FRAMING_AUTO, MOGBUS_DIRECTION_AUTO, false, text, sizeof(text), &len);
+puts(text);
+```
+
+It returns `MOGBUS_OK`, or `MOGBUS_ERR_FRAME` for a damaged frame (the text is complete and lists the problems), `MOGBUS_ERR_NOMEM` when the buffer is too small (`MOGBUS_DECODE_BUFFER_SIZE` always suffices) and `MOGBUS_ERR_INVALID` for NULL arguments or a frame above 4096 bytes.
+
 ## Watching connections
 
 A *connection hook* (@ref mogbus_connection_fn "mogbus_connection_fn", installed per server with @ref mogbus_server_set_connection_hook "mogbus_server_set_connection_hook()") tells the host when a client connects to or leaves a server. It is the counterpart of pymodbus `trace_connect`:

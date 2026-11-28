@@ -23,8 +23,6 @@ outstanding work is listed here. When an item is done, document it there and rem
   - Tests on `windows-latest` (unit, Python, interop), native COM tests with com0com.
   - OpenSSL (or Schannel) for TLS.
   - Windows release artifacts.
-- A frame decoder command (hex frame in, decoded MBAP/RTU/ASCII ADU and PDU out). Why: pymodbus ships
-  a message decoder, and it helps when reading captures.
 - Gateway/forwarder: a device whose tables are served by a real remote Modbus device. Why: pymodbus
   has `RemoteDeviceContext` for TCP-to-serial gateways.
 

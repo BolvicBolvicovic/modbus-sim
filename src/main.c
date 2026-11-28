@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MAX_FRAME_ARGS	256
+
 typedef enum check_t check_t;
 typedef struct cli_t cli_t;
 
@@ -38,6 +40,13 @@ struct cli_t
 	bool		log_json;
 	bool		web;
 	uint32_t	show_ms;	/* --show-registers interval, 0 = off */
+	bool		decode;		/* --decode: the positional arguments are frames */
+	bool		framing_set;
+	bool		direction_set;
+	mogbus_framing_t	framing;
+	mogbus_direction_t	direction;
+	size_t		frame_count;
+	const char*	frames[MAX_FRAME_ARGS];
 };
 
 static inline void
@@ -46,6 +55,7 @@ print_usage(void)
 	puts("mogbus - Modbus TCP/UDP/RTU/ASCII device simulator\n"
 	     "\n"
 	     "Usage: mogbus [options] CONFIG.scm\n"
+	     "       mogbus --decode [--framing F] [--direction D] [HEX...]\n"
 	     "\n"
 	     "Options:\n"
 	     "  -c, --check[=verbose]\n"
@@ -64,6 +74,12 @@ print_usage(void)
 	     "                       table redrawn in place on a terminal (logs go below it), else\n"
 	     "                       all points as text lines, then only the changes; JSON lines\n"
 	     "                       with --log-format json\n"
+	     "      --decode         decode captured frames (hex, or ASCII text starting with ':')\n"
+	     "                       given as arguments or, with none, one per line on stdin; prints\n"
+	     "                       the ADU and PDU fields (--log-format json: one object per frame);\n"
+	     "                       exit 1 if a frame is malformed. No config is read\n"
+	     "      --framing F      --decode framing: auto (default), mbap, rtu or ascii\n"
+	     "      --direction D    --decode direction: auto (default), request or response\n"
 	     "  -v, --verbose        log every request\n"
 	     "      --log-format F   log lines as text (default) or json\n"
 	     "  -V, --version        print the version and exit\n"
@@ -200,16 +216,64 @@ parse_args(int argc, char** argv, cli_t* cli)
 			cli->log_json = strcmp(value, "json") == 0;
 			i++;
 		}
+		else if (strcmp(arg, "--decode") == 0)
+			cli->decode = true;
+		else if (strcmp(arg, "--framing") == 0)
+		{
+			if (!value ||
+			    !(strcmp(value, "auto") == 0 || strcmp(value, "mbap") == 0 ||
+			      strcmp(value, "rtu") == 0 || strcmp(value, "ascii") == 0))
+			{
+				fprintf(stderr, "--framing needs auto, mbap, rtu or ascii\n");
+				return false;
+			}
+			cli->framing     = strcmp(value, "mbap") == 0 ? MOGBUS_FRAMING_MBAP :
+					   strcmp(value, "rtu") == 0 ? MOGBUS_FRAMING_RTU :
+					   strcmp(value, "ascii") == 0 ? MOGBUS_FRAMING_ASCII : MOGBUS_FRAMING_AUTO;
+			cli->framing_set = true;
+			i++;
+		}
+		else if (strcmp(arg, "--direction") == 0)
+		{
+			if (!value ||
+			    !(strcmp(value, "auto") == 0 || strcmp(value, "request") == 0 ||
+			      strcmp(value, "response") == 0))
+			{
+				fprintf(stderr, "--direction needs auto, request or response\n");
+				return false;
+			}
+			cli->direction     = strcmp(value, "request") == 0 ? MOGBUS_DIRECTION_REQUEST :
+					     strcmp(value, "response") == 0 ? MOGBUS_DIRECTION_RESPONSE :
+					     MOGBUS_DIRECTION_AUTO;
+			cli->direction_set = true;
+			i++;
+		}
 		else if (arg[0] == '-')
 		{
 			fprintf(stderr, "unknown option '%s' (try --help)\n", arg);
 			return false;
 		}
-		else if (!cli->config_path)
-			cli->config_path = arg;
+		else if (cli->frame_count < MAX_FRAME_ARGS)
+			cli->frames[cli->frame_count++] = arg;	/* the config, or the frames with --decode */
 		else
 		{
-			fprintf(stderr, "unexpected argument '%s' (try --help)\n", arg);
+			fprintf(stderr, "too many arguments (try --help)\n");
+			return false;
+		}
+	}
+	if (!cli->decode &&
+	    (cli->framing_set || cli->direction_set))
+	{
+		fprintf(stderr, "--framing and --direction need --decode\n");
+		return false;
+	}
+	if (!cli->decode &&
+	    cli->frame_count > 0)
+	{
+		cli->config_path = cli->frames[0];
+		if (cli->frame_count > 1)
+		{
+			fprintf(stderr, "unexpected argument '%s' (try --help)\n", cli->frames[1]);
 			return false;
 		}
 	}
@@ -555,6 +619,165 @@ run(const cli_t* cli, mogbus_t* ctx)
 	return run_servers(cli, ctx, options, count);
 }
 
+/** @brief A hex digit's value, or -1. */
+static int
+hex_value(char ch)
+{
+	if (ch >= '0' && ch <= '9')
+		return ch - '0';
+	if (ch >= 'a' && ch <= 'f')
+		return ch - 'a' + 10;
+	if (ch >= 'A' && ch <= 'F')
+		return ch - 'A' + 10;
+	return -1;
+}
+
+/**
+ * @brief Turns a frame argument into bytes: hex (spaces, ':', ',', '-' and 0x prefixes between
+ *        bytes are ignored), or, when it starts with ':', the ASCII frame text itself (CR LF added
+ *        when missing).
+ */
+static bool
+parse_frame_text(const char* text, uint8_t* out, size_t cap, size_t* len)
+{
+	size_t	n = 0;
+	int	high = -1;
+
+	while (*text == ' ' ||
+	       *text == '\t')
+		text++;
+	if (*text == ':')
+	{
+		size_t end = strlen(text);
+
+		while (end > 0 &&
+		       (text[end - 1] == '\r' || text[end - 1] == '\n' || text[end - 1] == ' ' ||
+			text[end - 1] == '\t'))
+			end--;
+		if (end >= 4 &&
+		    memcmp(text + end - 4, "\\r\\n", 4) == 0)
+			end -= 4;
+		if (end + 2 > cap)
+			return false;
+		memcpy(out, text, end);
+		out[end]     = '\r';
+		out[end + 1] = '\n';
+		*len         = end + 2;
+		return true;
+	}
+	for (; *text; text++)
+	{
+		int v;
+
+		if (*text == ' ' ||
+		    *text == '\t' ||
+		    *text == '\r' ||
+		    *text == '\n' ||
+		    *text == ':' ||
+		    *text == ',' ||
+		    *text == '-')
+			continue;
+		if (*text == '0' &&
+		    high < 0 &&
+		    (text[1] == 'x' || text[1] == 'X'))
+		{
+			text++;
+			continue;
+		}
+		v = hex_value(*text);
+		if (v < 0)
+		{
+			fprintf(stderr, "invalid character '%c' in frame\n", *text);
+			return false;
+		}
+		if (high < 0)
+			high = v;
+		else
+		{
+			if (n >= cap)
+				return false;
+			out[n++] = (uint8_t)((high << 4) | v);
+			high     = -1;
+		}
+	}
+	if (high >= 0)
+	{
+		fprintf(stderr, "odd number of hex digits in frame\n");
+		return false;
+	}
+	*len = n;
+	return true;
+}
+
+/** @brief Decodes one frame argument or stdin line; the exit status it contributes. */
+static int
+decode_one(const cli_t* cli, const char* text, bool first)
+{
+	static uint8_t	frame[4096];
+	static char	out[MOGBUS_DECODE_BUFFER_SIZE];
+	size_t		frame_len = 0;
+	size_t		out_len   = 0;
+	mogbus_result_t	result;
+
+	if (!parse_frame_text(text, frame, sizeof(frame), &frame_len))
+	{
+		fprintf(stderr, "cannot read the frame '%.40s'\n", text);
+		return 2;
+	}
+	result = mogbus_decode_frame(frame, frame_len, cli->framing, cli->direction, cli->log_json, out,
+				     sizeof(out), &out_len);
+	if (result != MOGBUS_OK &&
+	    result != MOGBUS_ERR_FRAME)
+	{
+		fprintf(stderr, "cannot decode the frame '%.40s'\n", text);
+		return 2;
+	}
+	if (!cli->log_json &&
+	    !first)
+		putchar('\n');
+	fputs(out, stdout);
+	if (cli->log_json)
+		putchar('\n');
+	return result == MOGBUS_ERR_FRAME ? 1 : 0;
+}
+
+/** @brief --decode: 0 if every frame decoded, 1 if one is malformed, 2 for unreadable input. */
+static int
+run_decode(const cli_t* cli)
+{
+	static char	line[16384];
+	int		status = 0;
+	bool		first  = true;
+
+	for (size_t i = 0; i < cli->frame_count; i++)
+	{
+		int one = decode_one(cli, cli->frames[i], first);
+
+		status = one > status ? one : status;
+		first  = false;
+	}
+	if (cli->frame_count > 0)
+		return status;
+	while (fgets(line, sizeof(line), stdin))
+	{
+		const char*	p = line;
+		int		one;
+
+		while (*p == ' ' ||
+		       *p == '\t')
+			p++;
+		if (*p == '\0' ||
+		    *p == '\n' ||
+		    *p == '\r' ||
+		    *p == '#')
+			continue;
+		one    = decode_one(cli, line, first);
+		status = one > status ? one : status;
+		first  = false;
+	}
+	return status;
+}
+
 int
 main(int argc, char** argv)
 {
@@ -574,6 +797,10 @@ main(int argc, char** argv)
 #endif
 		return 0;
 	}
+
+	if (cli.decode &&
+	    !cli.show_help)
+		return run_decode(&cli);
 
 	if (cli.show_help ||
 	    !cli.config_path)

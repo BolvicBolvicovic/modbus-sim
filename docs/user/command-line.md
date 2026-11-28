@@ -2,6 +2,7 @@
 
 ```text
 mogbus [options] CONFIG.scm
+mogbus --decode [--framing F] [--direction D] [HEX...]
 ```
 
 There are no server CLI options: the transport mode, path and all server settings are selected in `(server ...)` in the config file.
@@ -16,6 +17,9 @@ There are no server CLI options: the transport mode, path and all server setting
   -w, --web            serve the web UI on the HTTP endpoint (turns the control API on too)
   -r, --show-registers[=MS]
                        show the point values every MS ms (10-60000, default 1000): a live table on a terminal
+      --decode         decode captured frames instead of running a server (see below)
+      --framing F      with --decode: auto (default), mbap, rtu or ascii
+      --direction D    with --decode: auto (default), request or response
   -v, --verbose        log every request
       --log-format F   log lines as text (default) or json
   -V, --version        print the version (and git revision, when built from a checkout) and exit
@@ -72,13 +76,37 @@ An interval outside 10-60000, or one that is not a number, exits with status 2. 
 the time between checks, not a guarantee: a transport busy answering a request delays the next
 print a little.
 
+## `--decode`
+
+`mogbus --decode HEX...` decodes captured frames and prints every field of the ADU (MBAP header, RTU
+or ASCII address and checksum) and of the PDU; it reads no config and opens nothing. A frame is hex,
+with or without spaces, `:`, `,` or `0x` between the bytes, or the ASCII frame text starting with `:`
+(CR LF is added when missing). Quote a frame that has spaces, since each argument is one frame. With
+no argument it reads one frame per line from stdin (blank lines and lines starting with `#` are
+skipped). `--framing` and `--direction` force what `auto` would detect; with `auto` the output says
+why it chose, and a frame that is valid in several framings lists every candidate.
+`--log-format json` prints one JSON object per frame instead of text.
+
+```bash
+./mogbus --decode "00 01 00 00 00 06 01 03 00 00 00 02"
+./mogbus --decode --log-format json ":010300000001FB"
+./mogbus --decode --framing rtu --direction response "01 03 02 00 0A 38 43"
+tshark -r capture.pcap -Y modbus -T fields -e tcp.payload | ./mogbus --decode
+```
+
+The exit status is 0 when every frame decoded cleanly, 1 when one is malformed (wrong checksum or
+length, truncated: what could be decoded is still printed, then the problems), and 2 for text that
+is not hex or an invalid option. The output, the fields and the rules for detecting the framing and
+the direction are in [Decoding frames](modbus/decoding-frames.md). The same decoder is
+@ref mogbus_decode_frame "mogbus_decode_frame()" in C and `mogbus.decode_frame()` in Python.
+
 ## Exit status
 
 | Status | Meaning |
 |---|---|
 | 0 | success, or a clean stop on SIGINT or SIGTERM |
-| 1 | a config error, a serial or PTY open failure, or a runtime poll error |
-| 2 | invalid CLI arguments, or a listener (TCP/UDP bind) or TLS start-up failure |
+| 1 | a config error, a serial or PTY open failure, or a runtime poll error; with `--decode`, a malformed frame |
+| 2 | invalid CLI arguments (with `--decode`, also text that is not hex), or a listener (TCP/UDP bind) or TLS start-up failure |
 
 ## Ports
 
@@ -110,4 +138,5 @@ modes cannot be probed. See [Health check](deployment/health-check.md).
 ## See also
 
 - [Logs](observability/logs.md)
+- [Decoding frames](modbus/decoding-frames.md)
 - [Get started](get-started.md)

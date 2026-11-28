@@ -98,7 +98,7 @@ def http_seeds():
 
 
 def write_seeds(out):
-    seeds = {'pdu': [], 'mbap': [], 'rtu': [], 'ascii': [], 'http': http_seeds()}
+    seeds = {'pdu': [], 'mbap': [], 'rtu': [], 'ascii': [], 'decode': [], 'http': http_seeds()}
     for i, pdu in enumerate(PDUS):
         seeds['pdu'].append(pdu)
         seeds['mbap'].append(mbap(i, 1, pdu))
@@ -107,6 +107,10 @@ def write_seeds(out):
         # flags byte (baud known), then the frame in one chunk followed by a gap
         seeds['rtu'].append(bytes([1, 0x80 | (len(frame) - 1 & 0x1F)]) + frame[:32])
         seeds['ascii'].append(ascii_frame(1, pdu) + ascii_frame(0, pdu))
+        # framing, direction, json bit and small-buffer size, then the frame (auto and forced)
+        for n, framed in enumerate((mbap(i, 1, pdu), frame, ascii_frame(1, pdu))):
+            seeds['decode'].append(bytes([0, 0, i & 1]) + framed)
+            seeds['decode'].append(bytes([n + 1, 1 + i % 2, 0x60 | (i & 1)]) + framed)
     for name, items in seeds.items():
         os.makedirs(os.path.join(out, name), exist_ok=True)
         for i, data in enumerate(items):

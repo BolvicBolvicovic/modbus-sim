@@ -8,7 +8,8 @@ set -eu
 #   server -> net, config -> server (server.h only)
 #   client -> modbus, util, net/net_tls.h (a master over the wire; it knows no server, device or other net header)
 #   view -> device, util, os (the live register view; api -> view)
-#   api -> client, config, device, modbus, net, server, view, util
+#   decode -> modbus, util (a frame decoder; no device state, server or net)
+#   api -> client, config, decode, device, modbus, net, server, view, util
 #   main.c -> mogbus.h only (the binary is a pure client of the public API)
 # Only src/server/server_config.{c,h} may use config/, and config/ may use only
 # server.h from server/ (the transport enum and the limits; server.h includes net/ headers
@@ -30,7 +31,7 @@ check_layer() {
 	[ -d "$dir" ] || return 0
 
 	bad=$(grep -rnE \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|client|util|os|webui|view)/[^">]+)[">]' \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|client|decode|util|os|webui|view)/[^">]+)[">]' \
 		"$dir" 2>/dev/null || true)
 	[ -n "$bad" ] || return 0
 
@@ -42,7 +43,7 @@ check_layer() {
 		IFS=$old_ifs
 		[ -n "$line" ] || continue
 		include=$(printf '%s\n' "$line" | sed -nE \
-			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|client|util|os|webui|view)/[^">]+))[">].*!\1!p')
+			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|client|decode|util|os|webui|view)/[^">]+))[">].*!\1!p')
 		target=$(printf '%s\n' "$include" | sed -E 's!^(\.\./)*!!; s!/.*!!')
 		case " $allowed " in
 		*" $target "*) ;;
@@ -142,7 +143,8 @@ check_tree() {
 	check_layer "$root" server "server net modbus device util config os"
 	check_layer "$root" client "client modbus net util os"
 	check_layer "$root" view   "view device util os"
-	check_layer "$root" api    "api client config device modbus net server view util os"
+	check_layer "$root" decode "decode modbus util os"
+	check_layer "$root" api    "api client config decode device modbus net server view util os"
 	check_layer "$root" util   "util os"
 	check_layer "$root" os     "os"
 	check_extra_rules "$root"
@@ -245,6 +247,11 @@ self_test() {
 	expect_fail view-api        view   "api/x.h"
 	expect_fail device-view     device "view/view.h"
 	expect_fail net-view        net    "view/view.h"
+	expect_fail decode-net      decode "net/net_common.h"
+	expect_fail decode-config   decode "config/config.h"
+	expect_fail decode-api      decode "api/x.h"
+	expect_fail modbus-decode   modbus "decode/decode.h"
+	expect_fail net-decode      net    "decode/decode.h"
 
 	mkdir -p "$tmp/main-internal/src"
 	printf '#include "mogbus.h"\n#include "util/log.h"\n' >"$tmp/main-internal/src/main.c"

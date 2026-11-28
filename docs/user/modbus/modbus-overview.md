@@ -76,3 +76,4 @@ dynamically or persisted, plus the limits below.
 
 - [Transports](../transports/transports.md): framing, options and limits of each transport.
 - [Unit ids and broadcast](unit-ids.md), [Writes are all-or-nothing](writes.md), [Request timing](timing.md).
+- [Decoding frames](decoding-frames.md): `mogbus --decode` explains a captured frame field by field.

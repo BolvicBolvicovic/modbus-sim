@@ -46,7 +46,7 @@ Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_a
 `mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
 `mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, Server.set_connection_hook `mogbus_server_set_connection_hook`, probe `mogbus_probe`,
-Client `mogbus_client_*` (a Modbus master, independent of every Context), rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
+Client `mogbus_client_*` (a Modbus master, independent of every Context), decode_frame `mogbus_decode_frame`, rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
 
 ## Limits
 
@@ -65,6 +65,7 @@ import ctypes
 import dataclasses
 import enum
 import functools
+import json
 import os
 import socket
 import tempfile
@@ -301,7 +302,7 @@ class Status(enum.IntEnum):
     TIMEOUT = 9
     ## A client got a Modbus exception reply; see ModbusException.
     EXCEPTION = 10
-    ## A client got a malformed reply, or one that does not answer the request.
+    ## A client got a malformed reply, or one that does not answer the request (mogbus_decode_frame(): a malformed frame, which decode_frame() reports in its result instead).
     FRAME = 11
 
 
@@ -325,6 +326,30 @@ class LogFormat(enum.IntEnum):
     TEXT = 0
     ## One JSON object per line.
     JSON = 1
+
+
+class Framing(enum.IntEnum):
+    """@brief The ADU format of a captured frame; see decode_frame().
+    """
+    ## Detect it from the bytes.
+    AUTO = 0
+    ## Modbus TCP/UDP: 7-byte MBAP header and PDU.
+    MBAP = 1
+    ## Address, PDU, CRC (low byte first).
+    RTU = 2
+    ## `:`, hex of address, PDU and LRC, CR LF.
+    ASCII = 3
+
+
+class Direction(enum.IntEnum):
+    """@brief Whether a captured PDU is a request or a response; see decode_frame().
+    """
+    ## Infer it from the length and the byte count.
+    AUTO = 0
+    ## A request.
+    REQUEST = 1
+    ## A response.
+    RESPONSE = 2
 
 
 _NETWORK_MODES = (Mode.TCP, Mode.RTU_TCP, Mode.ASCII_TCP, Mode.UDP, Mode.RTU_UDP, Mode.ASCII_UDP)
@@ -1962,6 +1987,54 @@ def rtu_timing(baud: int, frame_gap_ms: int = 0) -> RtuTiming:
     lib.mogbus_rtu_timing(_u(baud, "baud", 1 << 32), _u(frame_gap_ms, "frame_gap_ms", 1 << 32),
                           ctypes.byref(t35), ctypes.byref(gap))
     return RtuTiming(t35.value, gap.value)
+
+
+def _frame_bytes(data) -> bytes:
+    """Bytes of a frame given as bytes-like, as hex text ("01 03 00", "01:03", "0x01,0x03") or as
+    ASCII frame text starting with ':' (CR LF is added when missing)."""
+    if not isinstance(data, str):
+        return bytes(data)
+    text = data.strip()
+    if text.startswith(":"):
+        return text.encode("latin-1", errors="replace") + b"\r\n"
+    digits = text.replace("0x", "").replace("0X", "")
+    for sep in " \t\r\n:,-":
+        digits = digits.replace(sep, "")
+    try:
+        return bytes.fromhex(digits)
+    except ValueError:
+        raise MogbusError(f"cannot read the frame {data[:40]!r} as hex") from None
+
+
+def decode_frame(data, framing="auto", direction="auto", as_dict: bool = False) -> Union[str, dict]:
+    """@brief Decodes one captured Modbus frame into readable text, or a dict.
+
+    The result lists the ADU fields (MBAP transaction/protocol/length/unit, RTU or ASCII address and
+    CRC or LRC with whether it matches), the function code and its name, the direction and every
+    field of the PDU of each function code mogbus supports; other function codes keep their data
+    raw. A damaged frame (bad checksum, wrong length, truncated fields) is not an error: every field
+    that could be read is there, then the problems (`errors`, and `ok` is False; values a server
+    would refuse are `warnings`). A frame that is valid in several framings lists each candidate
+    (`ambiguous`). It needs no context and no server; see `mogbus --decode` for the same thing on
+    the command line.
+    @param data The frame: bytes-like, hex text (`"01 03 00 00 00 01 84 0A"`, also `01:03:...` or `0x01,...`), or the ASCII frame text starting with `:`.
+    @param framing A Framing or its name: `"auto"` (default), `"mbap"`, `"rtu"` or `"ascii"`.
+    @param direction A Direction or its name: `"auto"` (default), `"request"` or `"response"`.
+    @param as_dict Return the parsed JSON object (a dict) instead of the text.
+    @return The text, one `key: value` line per field, or the dict with the same fields.
+    @throws MogbusError For a frame above 4096 bytes, text that is not hex, or an unknown framing or direction.
+    """
+    frame = _frame_bytes(data)
+    framing = int(_coerce(Framing, framing, "framing"))
+    direction = int(_coerce(Direction, direction, "direction"))
+    out = ctypes.create_string_buffer(65536)
+    out_len = ctypes.c_size_t()
+    code = lib.mogbus_decode_frame(frame, len(frame), framing, direction, bool(as_dict), out, len(out),
+                                   ctypes.byref(out_len))
+    if code not in (Status.OK, Status.FRAME):
+        raise MogbusError("cannot decode the frame (at most 4096 bytes)", Status(code))
+    text = out.raw[:out_len.value].decode("ascii", errors="replace")
+    return json.loads(text) if as_dict else text
 
 
 def library_version() -> str:
