@@ -499,6 +499,7 @@ class PointInfo:
     @param byte_order Byte order inside every register.
     @param length Registers of a string point, else 0.
     @param read_only True when Modbus writes to the point are refused.
+    @param note The note of the point; empty when none.
     """
     space: Space
     address: int
@@ -507,6 +508,7 @@ class PointInfo:
     byte_order: ByteOrder
     length: int
     read_only: bool
+    note: str = ""
 
 
 @dataclass
@@ -718,7 +720,7 @@ class Device:
     @_locked
     def add_point(self, space, address, type="u16", value=0, word_order="high-first", ramp=None,
                   byte_order="big", length=0, text=None, read_only=False, clock=None,
-                  clock_utc=False):
+                  clock_utc=False, note=None):
         """@brief Adds a point to a table.
 
         A point is static (`value`), a ramp (`ramp`) or a clock (`clock`); the three are exclusive. A
@@ -737,6 +739,7 @@ class Device:
         @param read_only Coils and holding registers: Modbus writes fail with exception 02. Device.write() and set_value() still change the point.
         @param clock `"year"`, `"month"`, `"day"`, `"weekday"`, `"hour"`, `"minute"`, `"second"` or `"unix"`: an integer register that shows that field of the wall clock (`"unix"` needs 32 bits and is always UTC); excludes `ramp`.
         @param clock_utc Show the clock field in UTC rather than local time.
+        @param note A short note (at most 127 bytes of UTF-8) shown next to the point in the register view and the web UI.
         @throws MogbusError If the point is invalid, overlaps another or does not fit the table.
         """
         p = _lib.PointC()
@@ -747,6 +750,8 @@ class Device:
         p.byte_order = int(_coerce(ByteOrder, byte_order, "byte_order"))
         p.length = _u(length, "length", 1 << 32)
         p.read_only = bool(read_only)
+        if note:
+            p.note = note.encode("utf-8")
         if text is not None:
             if p.type != ValueType.STRING:
                 raise MogbusError("text only applies to type \"string\"")
@@ -1233,7 +1238,8 @@ class Device:
         c = _lib.PointC()
         while lib.mogbus_device_point_at(self._live(), len(out), ctypes.byref(c)):
             out.append(PointInfo(Space(c.space), c.address, ValueType(c.type), WordOrder(c.word_order),
-                                 ByteOrder(c.byte_order), c.length, bool(c.read_only)))
+                                 ByteOrder(c.byte_order), c.length, bool(c.read_only),
+                                 (c.note or b"").decode("utf-8", "replace")))
         return out
 
 

@@ -23,12 +23,14 @@ GET /api/devices/{unit}/points?space={space}[&from={address}][&limit={n}]
   of them (1 to 200), sorted by address, and `next`: the first address of the following page, or
   `null` when there are no more points. To list every point, repeat the request with `from` set to
   `next` until it is `null`. A page is never cut short silently: a device can have 8192 points, and
-  the pages keep every response inside the endpoint's output limit.
+  the pages keep every response inside the endpoint's output limit. With notes (up to 127 bytes each) an
+  entry can be several hundred bytes, so a page can end before `limit` points: always follow `next`.
 - Each point has `address`, `registers` (how many addresses it spans: 1 to 4, or the string length),
   `type` (`u16`, `s16`, `u32`, `s32`, `float32`, `u64`, `s64`, `float64`, `string`, or `bit` in the
   coil and discrete tables), `kind` (`static`, `ramp`, `model`, `clock` or `machine`), `read_only`
   (`(access read-only)`), and `word_order` (`high-first` or `low-first`) and `byte_order` (`big` or
-  `little`) to decode the raw registers of a read.
+  `little`) to decode the raw registers of a read, and `note` (the point's `(note "...")`, JSON-escaped) only
+  when it has one.
 - `kind` is the current kind: a point written over Modbus or the API becomes `static`.
 - No request body.
 

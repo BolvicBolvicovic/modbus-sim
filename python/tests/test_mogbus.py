@@ -614,6 +614,15 @@ class ControlApiTest(unittest.TestCase):
 
 
 class ServeHelperTest(unittest.TestCase):
+    def test_point_notes(self):
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 5, note="Setpoint")
+            dev.add_point("holding", 1, "u16", 6)
+            self.assertEqual([p.note for p in dev.points()], ["Setpoint", ""])
+            with self.assertRaisesRegex(MogbusError, "note"):
+                dev.add_point("holding", 2, "u16", 6, note="x" * 128)
+
     def test_read_only_points(self):
         with mogbus.Context() as ctx:
             dev = ctx.add_device(1)

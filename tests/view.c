@@ -97,6 +97,49 @@ TEST(ViewTableCutsLinesToTheWidthAndKeepsALogPane)
 	mogbus_destroy(ctx);
 }
 
+TEST(ViewShowsPointNotes)
+{
+	static u64	shown[VIEW_MAX_DEVICES][DEVICE_MAX_POINTS];
+	static char	out[VIEW_FRAME_MAX];
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev = NULL;
+	device_t*	devices[1];
+	view_t		view = { .interval_ms = 1000, .table = true, .shown = shown };
+	mogbus_point_t	p = { .space = MOGBUS_HOLDING, .address = 0, .type = MOGBUS_TYPE_U16, .value = 5,
+			      .note = "Setpoint \"C\"" };
+	mogbus_point_t	q = { .space = MOGBUS_HOLDING, .address = 1, .type = MOGBUS_TYPE_U16, .value = 6 };
+	mogbus_point_t	back;
+	char		text[512];
+	FILE*		f = tmpfile();
+	size_t		n;
+
+	mogbus_create(&ctx);
+	mogbus_add_device(ctx, 2, "d", &dev);
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_add_point(dev, &q) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_device_point_at(dev, 0, &back) && strcmp(back.note, "Setpoint \"C\"") == 0);
+	ASSERT_EQ(mogbus_device_point_at(dev, 1, &back) && back.note == NULL);
+	devices[0] = (device_t*)dev;
+	view_render_table(&view, devices, 1, 24, 80, 1000, out, sizeof(out));
+	ASSERT_EQ(strstr(out, "VALUE  NOTE") != NULL);
+	ASSERT_EQ(strstr(out, "u16     5      Setpoint \"C\"") != NULL);
+	view_render_lines(&view, devices, 1, true, 1000, f);
+	view.json = true;
+	view_render_lines(&view, devices, 1, true, 1000, f);
+	rewind(f);
+	n = fread(text, 1, sizeof(text) - 1, f);
+	text[n] = '\0';
+	fclose(f);
+	ASSERT_EQ(strstr(text, "unit 2 holding 0 = 5  # Setpoint \"C\"\nunit 2 holding 1 = 6\n") != NULL);
+	ASSERT_EQ(strstr(text, "\"value\":5,\"note\":\"Setpoint \\\"C\\\"\"}\n") != NULL);
+	ASSERT_EQ(strstr(text, "\"value\":6}\n") != NULL);
+	/* A 64-byte note is refused. */
+	p.address = 9;
+	p.note = "01234567890123456789012345678901234567890123456789012345678901230123456789012345678901234567890123456789012345678901234567890123";
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) != MOGBUS_OK);
+	mogbus_destroy(ctx);
+}
+
 TEST(ViewLinesPrintTheSnapshotThenOnlyChanges)
 {
 	static u64	shown[VIEW_MAX_DEVICES][DEVICE_MAX_POINTS];

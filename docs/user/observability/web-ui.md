@@ -40,6 +40,7 @@ page, from [List points](api/api-list-points.md). Each row shows:
 | Kind | `static`, `ramp`, `model`, `clock` or `machine`, plus a read-only marker |
 | Value | decoded in the browser from the raw registers, honouring word and byte order |
 | Raw | the registers as read |
+| Note | the [`(note ...)`](../config/points/point.md) of the point in muted text; the column is hidden when no point of the table has one |
 | Plot | a checkbox that puts the point on the chart (not for strings) |
 
 ### Keep values fresh

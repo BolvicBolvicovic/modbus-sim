@@ -480,6 +480,7 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 	out->read_only   = point->read_only;
 	out->clock_field = (mogbus_clock_field_t)point->clock_field;
 	out->clock_utc   = point->clock_utc;
+	out->note        = point->note;
 	return true;
 }
 
@@ -527,6 +528,7 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in)
 	point.order   = (word_order_t)in->word_order;
 	point.byte_order = (byte_order_t)in->byte_order;
 	point.read_only  = in->read_only;
+	point.note       = in->note;
 	if (point.type == VT_STRING)
 	{
 		if (in->length > DEVICE_MAX_STRING_REGISTERS)

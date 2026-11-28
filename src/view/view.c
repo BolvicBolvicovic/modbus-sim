@@ -163,11 +163,18 @@ view_render_lines(view_t* view, device_t* const* devices, u32 count, bool all, u
 				continue;
 			view->shown[d][i] = hash;
 			if (view->json)
-				fprintf(out, "{\"unit\":%u,\"space\":\"%s\",\"address\":%u,\"value\":%s}\n",
-					dev->unit_id, SPACE_NAMES[point->space], point->address, value);
+			{
+				char escaped[6 * DEVICE_NOTE_MAX] = "";
+
+				if (point->note)
+					log_json_escape(escaped, sizeof(escaped), point->note);
+				fprintf(out, "{\"unit\":%u,\"space\":\"%s\",\"address\":%u,\"value\":%s%s%s%s}\n",
+					dev->unit_id, SPACE_NAMES[point->space], point->address, value,
+					point->note ? ",\"note\":\"" : "", escaped, point->note ? "\"" : "");
+			}
 			else
-				fprintf(out, "unit %u %s %u = %s\n", dev->unit_id, SPACE_NAMES[point->space],
-					point->address, value);
+				fprintf(out, "unit %u %s %u = %s%s%s\n", dev->unit_id, SPACE_NAMES[point->space],
+					point->address, value, point->note ? "  # " : "", point->note ? point->note : "");
 		}
 	}
 }
@@ -207,6 +214,8 @@ view_render_table(view_t* view, device_t* const* devices, u32 count, u32 rows, u
 	u32		total        = 0;
 	u32		pane         = 0;
 	u32		printed      = 0;
+	u32		width        = 5;	/* VALUE column: the widest shown value, at most 24 */
+	bool		notes        = false;
 	u32		body;
 	u32		shown;
 
@@ -238,7 +247,25 @@ view_render_table(view_t* view, device_t* const* devices, u32 count, u32 rows, u
 	put_line(out, &len, size, true, cols, "mogbus  %u device%s, %u point%s  refresh %u ms, achieved %s  %02u:%02u:%02u",
 		 count, count == 1 ? "" : "s", total, total == 1 ? "" : "s", view->interval_ms, achieved,
 		 civil.hour, civil.min, civil.sec);
-	put_line(out, &len, size, true, cols, "%-4s  %-8s  %5s  %-6s  %s", "UNIT", "TABLE", "ADDR", "TYPE", "VALUE");
+	/* The NOTE column exists only when a shown point has a note. */
+	for (u32 d = 0, seen = 0; d < count && seen < shown; d++)
+	{
+		for (u32 i = 0; i < devices[d]->point_count && seen < shown; i++, seen++)
+		{
+			const point_t*	point = &devices[d]->points[i];
+			u32		n;
+
+			point_text(devices[d], point, false, value, sizeof(value));
+			n = (u32)strlen(value);
+			if (n > width)
+				width = n > 24 ? 24 : n;
+			notes = notes || point->note;
+		}
+	}
+	if (!notes)
+		width = 0;
+	put_line(out, &len, size, true, cols, "%-4s  %-8s  %5s  %-6s  %-*s%s", "UNIT", "TABLE", "ADDR", "TYPE",
+		 (int)width, "VALUE", notes ? "  NOTE" : "");
 	view->height = VIEW_FIXED_ROWS;
 	view->pane   = pane ? pane + 1 : 0;
 
@@ -251,8 +278,9 @@ view_render_table(view_t* view, device_t* const* devices, u32 count, u32 rows, u
 			const point_t* point = &dev->points[i];
 
 			point_text(dev, point, false, value, sizeof(value));
-			put_line(out, &len, size, true, cols, "%-4u  %-8s  %5u  %-6s  %s", dev->unit_id,
-				 SPACE_NAMES[point->space], point->address, TYPE_NAMES[point->type], value);
+			put_line(out, &len, size, true, cols, "%-4u  %-8s  %5u  %-6s  %-*s%s%s", dev->unit_id,
+				 SPACE_NAMES[point->space], point->address, TYPE_NAMES[point->type], (int)width, value,
+				 notes ? "  " : "", point->note ? point->note : "");
 			view->height++;
 		}
 	}

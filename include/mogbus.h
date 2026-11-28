@@ -314,6 +314,9 @@ struct mogbus_point_t
 						     the set_value calls still work */
 	mogbus_clock_field_t	clock_field;	/**< MOGBUS_POINT_CLOCK: the wall-clock value shown */
 	bool			clock_utc;	/**< MOGBUS_POINT_CLOCK: UTC instead of local time */
+	const char*		note;		/**< short human note shown next to the point in the register
+						     view and the web UI; at most 127 bytes, copied; NULL or
+						     empty means none; mogbus_device_point_at() returns it */
 };
 
 /**
@@ -327,7 +330,7 @@ struct mogbus_point_t
  * @param unit_id Modbus unit id. Two devices may share one only when they are assigned to
  *        different servers (mogbus_device_add_server()); mogbus_server_create() and
  *        mogbus_device_add_server() fail when two devices of one server have the same id.
- * @param name Device name, copied, at most 63 bytes; NULL means "unnamed".
+ * @param name Device name, copied, at most 127 bytes; NULL means "unnamed".
  * @param out Receives the device, or NULL on failure.
  * @return MOGBUS_OK, MOGBUS_ERR_INVALID for a too long name or when MOGBUS_MAX_DEVICES is
  *         reached, or MOGBUS_ERR_NOMEM. The message is in mogbus_last_error().

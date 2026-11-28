@@ -58,6 +58,7 @@ class PointC(ctypes.Structure):
         ("read_only", ctypes.c_bool),
         ("clock_field", ctypes.c_int),
         ("clock_utc", ctypes.c_bool),
+        ("note", ctypes.c_char_p),
     ]
 
 

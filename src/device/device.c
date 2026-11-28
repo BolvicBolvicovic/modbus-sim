@@ -247,6 +247,10 @@ validate_point(const device_t* dev, const point_t* point)
 			return "string text is longer than its registers";
 	}
 
+	if (point->note &&
+	    strlen(point->note) >= DEVICE_NOTE_MAX)
+		return "note is longer than 127 bytes";
+
 	if (point->address + width > ADDRESS_SPACE_SIZE)
 		return "point does not fit before address 65535";
 
@@ -347,6 +351,7 @@ device_add_point(device_t* dev, const point_t* point)
 	u32		width = point_width(point);
 	u32		index = dev->point_count;
 	char*		text = NULL;
+	char*		note = NULL;
 
 	if (error)
 		return error;
@@ -364,9 +369,21 @@ device_add_point(device_t* dev, const point_t* point)
 			memcpy(text, point->text, len);
 	}
 
+	if (point->note &&
+	    point->note[0])
+	{
+		size_t	len = strlen(point->note) + 1;
+
+		note = ARENA_PUSH_ARRAY(dev->arena, char, len);
+		if (!note)
+			return "out of memory while storing a note";
+		memcpy(note, point->note, len);
+	}
+
 	wall_refresh(dev);
 	dev->points[index] = *point;
 	dev->points[index].text = text;
+	dev->points[index].note = note;
 	dev->points[index].configured_kind = point->kind;
 	dev->point_count++;
 

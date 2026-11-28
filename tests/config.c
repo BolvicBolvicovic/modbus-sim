@@ -193,6 +193,21 @@ TEST(ConfigCountExpandsConsecutiveAddresses)
 	ASSERT_FAILURE(device_read(config.devices[0], SPACE_HOLDING, 14, 1, out));
 }
 
+TEST(ConfigPointNoteIsKeptAndSharedByCount)
+{
+	config_t	config = { 0 };
+	device_t*	dev;
+
+	config = load_ok("(device (unit-id 1) (note \"device\") (holding 0 (count 3) (static 1) (note \"Flow\")) (holding 10 (static 1)))");
+	dev = config.devices[0];
+	ASSERT_EQ(dev->point_count == 4);
+	ASSERT_EQ(strcmp(dev->points[0].note, "Flow") == 0 && dev->points[1].note == dev->points[0].note &&
+		  dev->points[2].note == dev->points[0].note);
+	ASSERT_EQ(dev->points[3].note == NULL);
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (static 1) (note \"01234567890123456789012345678901234567890123456789012345678901230123456789012345678901234567890123456789012345678901234567890123\")))",
+		     "note is longer than 127 bytes");
+}
+
 TEST(ConfigErrorsAreReadable)
 {
 	static const struct cfg_case cases[] = {

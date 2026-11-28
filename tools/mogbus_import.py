@@ -209,7 +209,8 @@ def render_point(p):
     if p.count > 1:
         parts.append("(count %d)" % p.count)
     if p.note:
-        parts.append("(note %s)" % q(p.note))
+        note = p.note.encode("utf-8")[:127].decode("utf-8", "ignore")   # mogbus notes hold 127 bytes
+        parts.append("(note %s)" % q(note))
     lines = ["(%s %d" % (p.table, p.addr)]
     for part in parts:
         if len(lines[-1]) + 1 + len(part) > 100:

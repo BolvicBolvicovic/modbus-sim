@@ -23,7 +23,8 @@ enum
 	MAX_REGISTERS = 125,
 	MAX_BITS     = 2000,
 	POINTS_DEFAULT_LIMIT = 100,
-	POINTS_MAX_LIMIT     = 200,	/* ~125 bytes each: fits NET_OBS_HTTP_OUT */
+	POINTS_MAX_LIMIT     = 200,	/* ~125 bytes each without a note */
+	POINT_ENTRY_MAX      = 960,	/* worst entry: fields plus a note escaped to 6 bytes per byte */
 };
 
 static const char* const SPACE_NAMES[SPACE_COUNT] = {
@@ -299,6 +300,7 @@ list_points(const device_t* dev, space_kind_t space, u32 from, u32 limit, char* 
 	u32		used = 0;
 	u32		n = 0;
 	u32		next = ADDRESS_SPACE_SIZE;
+	char		note[6 * DEVICE_NOTE_MAX];
 
 	put(out, cap, &used, "{\"points\":[");
 	for (u32 a = from; a < ADDRESS_SPACE_SIZE; a++)
@@ -312,18 +314,25 @@ list_points(const device_t* dev, space_kind_t space, u32 from, u32 limit, char* 
 		if (pt->space != space ||
 		    pt->address != a)
 			continue;
-		if (n == limit)
+		/* An entry is at most ~160 bytes plus a note of 127 bytes escaped to 6 each (~760); stop early
+		 * rather than overflow, `next` continues the listing. */
+		if (n == limit ||
+		    (used + POINT_ENTRY_MAX + 16 > cap))
 		{
 			next = a;
 			break;
 		}
+		note[0] = '\0';
+		if (pt->note)
+			log_json_escape(note, sizeof(note), pt->note);
 		put(out, cap, &used,
 		    "%s{\"address\":%u,\"registers\":%u,\"type\":\"%s\",\"kind\":\"%s\",\"read_only\":%s,"
-		    "\"word_order\":\"%s\",\"byte_order\":\"%s\"}",
+		    "\"word_order\":\"%s\",\"byte_order\":\"%s\"%s%s%s}",
 		    n ? "," : "", a, point_width(pt), TYPES[pt->type],
 		    KINDS[pt->kind], pt->read_only ? "true" : "false",
 		    pt->order == WORDS_LOW_FIRST ? "low-first" : "high-first",
-		    pt->byte_order == BYTES_LITTLE ? "little" : "big");
+		    pt->byte_order == BYTES_LITTLE ? "little" : "big",
+		    pt->note ? ",\"note\":\"" : "", note, pt->note ? "\"" : "");
 		n++;
 	}
 	if (next < ADDRESS_SPACE_SIZE)

@@ -25,14 +25,16 @@ device of the file is shown, at the smallest interval asked for. The command-lin
 - **On a terminal** (stdout is a terminal, `TERM` is not `dumb`, the log format is not JSON) one
   table is redrawn in place. The first line shows the refresh interval, the rate achieved between the
   last two redraws, the local time and the number of devices and points; then come the columns unit,
-  table, address, type and value, one line per point. The table never exceeds the terminal height: when
+  table, address, type and value, one line per point, plus a `NOTE` column with the
+  [`(note ...)`](../points/point.md) of the point when at least one shown point has one. The table never exceeds the terminal height: when
   it does not fit the last line says `... N more points`. Log lines would corrupt the drawing, so
   while the table is on they are kept (the last six) and shown in a pane below it, and written to
   stderr once when the server stops (the pane is erased first). The summary and PTY paths printed before the start stay above the
   table. On Windows the console must support virtual-terminal sequences (Windows 10 or newer).
 - **Otherwise** (a pipe, a file, or `--log-format json`) the view prints a full snapshot first and then
   only the points whose value changed, one line per point, as `unit U table A = VALUE` or as a JSON
-  object with `--log-format json`. Log lines stay on stderr.
+  object with `--log-format json`. A point with a note gets `  # note` after the value in text lines and
+  `"note":"..."` in JSON lines. Log lines stay on stderr.
 
 Values are decoded as configured: integers and floats as numbers, coils and discrete inputs as `0` or
 `1`, string points as quoted text. Reads go through the device like a host read, so ramps, models and

@@ -85,6 +85,8 @@ input[type="checkbox"] { accent-color: var(--acc); }
 .seg button[aria-selected="true"] { background: var(--acc); border-color: var(--acc); color: var(--bg); position: relative; }
 .seg button:hover:not(:disabled) { position: relative; }
 table.noacc .acc { display: none; }
+table.nonote .note { display: none; }
+td.note { color: var(--muted); font-size: 12px; }
 td.num { font-size: 16px; font-weight: 600; }
 #status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; color: var(--muted); }
 #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -168,7 +170,7 @@ td.num { font-size: 16px; font-weight: 600; }
 <div id="tableview">
 <div class="scroll">
 <table id="ptable">
-<thead><tr><th>Plot</th><th>Address</th><th>Type</th><th>Kind</th><th class="acc">Access</th><th class="r">Value</th><th>Raw</th></tr></thead>
+<thead><tr><th>Plot</th><th>Address</th><th>Type</th><th>Kind</th><th class="acc">Access</th><th class="r">Value</th><th>Raw</th><th class="note">Note</th></tr></thead>
 <tbody id="points"></tbody>
 </table>
 </div>
@@ -360,10 +362,12 @@ td.num { font-size: 16px; font-weight: 600; }
       tr.appendChild(ac);
       tr.appendChild(v);
       tr.appendChild(r);
+      tr.appendChild(el("td", pt.note || "", "note"));
       body.appendChild(tr);
       return { pt: pt, v: v, r: r };
     });
     $("ptable").classList.toggle("noacc", !st.all.some(function (pt) { return pt.read_only; }));
+    $("ptable").classList.toggle("nonote", !st.all.some(function (pt) { return pt.note; }));
     $("range").textContent = st.all.length ? "points " + (from + 1) + "-" + (from + part.length) + " of " + st.all.length : "no points in this table";
     $("prev").disabled = st.page === 0;
     $("next").disabled = from + PAGE >= st.all.length;
