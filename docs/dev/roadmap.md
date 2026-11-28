@@ -32,3 +32,10 @@ outstanding work is listed here. When an item is done, document it there and rem
   adapters need it, and libmodbus has `modbus_rtu_set_serial_mode` and RTS callbacks.
 - macOS and the BSDs. Why: libmodbus builds there natively. Needs a vlib arena backend check and
   `os_serial`/PTY differences.
+
+## Website
+
+- An interactive sandbox on the project website: edit a config, run it, and talk to it with a client
+  in the browser. Why: trying mogbus without installing anything lowers the barrier for new users.
+  The likely route is a WebAssembly build of the library (the OS layer is already isolated in
+  `src/os/`), with the network transports replaced by an in-page transport.
