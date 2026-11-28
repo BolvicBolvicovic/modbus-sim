@@ -11,6 +11,8 @@
 #include "os/os_time.h"
 #include "util/rng.h"
 #include "tests/tests_utils/test_support.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -2489,5 +2491,289 @@ TEST(ApiLoadsSeveralServersFromAConfig)
 	close(udp);
 	mogbus_destroy(ctx);
 	unlink(path);
+}
+#endif
+
+static struct conn_log_t
+{
+	unsigned	n;
+	struct conn_event_t
+	{
+		bool			connected;
+		uint64_t		id;
+		mogbus_close_reason_t	reason;
+		mogbus_mode_t		mode;
+		mogbus_server_t*	server;
+		char			peer[64];
+	} ev[16];
+} conn_log;
+
+static void
+conn_hook(void* user, mogbus_server_t* server, const mogbus_connection_t* c)
+{
+	struct conn_event_t* e = &conn_log.ev[conn_log.n % 16];
+
+	(void)user;
+	e->connected = c->connected;
+	e->id        = c->id;
+	e->reason    = c->reason;
+	e->mode      = c->mode;
+	e->server    = server;
+	snprintf(e->peer, sizeof(e->peer), "%s", c->peer);
+	conn_log.n++;
+}
+
+/* Steps the server until the log holds `count` events; returns whether it holds exactly that. */
+static bool
+conn_wait(mogbus_server_t* server, unsigned count)
+{
+	u64 deadline = os_now_ms() + 3000;
+
+	while (conn_log.n < count &&
+	       os_now_ms() < deadline)
+		(void)mogbus_server_step(server, 10);
+	return conn_log.n == count;
+}
+
+static void
+conn_steps(mogbus_server_t* server, u32 ms)
+{
+	u64 until = os_now_ms() + ms;
+
+	while (os_now_ms() < until)
+		(void)mogbus_server_step(server, 10);
+}
+
+static void
+conn_local_peer(int fd, char* out, size_t cap)
+{
+	struct sockaddr_in	sa;
+	socklen_t		len = sizeof(sa);
+
+	snprintf(out, cap, "?");
+	if (getsockname(fd, (struct sockaddr*)&sa, &len) == 0)
+		snprintf(out, cap, "127.0.0.1:%u", (unsigned)ntohs(sa.sin_port));
+}
+
+TEST(ApiConnectionHookReportsOpenAndCloseOnTcpTransports)
+{
+	static const struct { mogbus_mode_t mode; const char* name; } modes[] = {
+		{ MOGBUS_MODE_TCP, "tcp" }, { MOGBUS_MODE_RTU_TCP, "rtu-tcp" }, { MOGBUS_MODE_ASCII_TCP, "ascii-tcp" },
+	};
+
+	for (u32 m = 0; m < ARRAY_COUNT(modes); m++)
+	{
+		mogbus_t*		ctx = NULL;
+		mogbus_device_t*	dev = NULL;
+		mogbus_point_t		p0  = holding(0, 0x1111);
+		mogbus_server_options_t	o   = mogbus_server_options_defaults();
+		mogbus_server_t*	server = NULL;
+		char			peer[64];
+		char			peer2[64];
+		uint64_t		id1;
+		int			c1, c2, c3, c4;
+
+		test_case = modes[m].name;
+		memset(&conn_log, 0, sizeof(conn_log));
+		ASSERT_EQ(mogbus_create(&ctx) == MOGBUS_OK);
+		ASSERT_EQ(mogbus_add_device(ctx, 1, "conn", &dev) == MOGBUS_OK && mogbus_device_add_point(dev, &p0) == MOGBUS_OK);
+		o.mode            = modes[m].mode;
+		o.port            = ts_free_port();
+		o.idle_timeout_ms = 400;
+		o.frame_gap_ms    = 2;
+		ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK);
+		ASSERT_EQ(mogbus_server_set_connection_hook(NULL, conn_hook, NULL) != MOGBUS_OK);
+		ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) == MOGBUS_OK);
+
+		/* Open, then the client leaves. */
+		c1 = ts_connect_loopback(o.port, AF_INET, 1000);
+		ASSERT_EQ(c1 >= 0);
+		conn_local_peer(c1, peer, sizeof(peer));
+		ASSERT_EQ(conn_wait(server, 1));
+		ASSERT_EQ(conn_log.ev[0].connected && conn_log.ev[0].id != 0 && conn_log.ev[0].reason == MOGBUS_CLOSE_NONE);
+		ASSERT_EQ(conn_log.ev[0].mode == modes[m].mode && conn_log.ev[0].server == server);
+		ASSERT_EQ(strcmp(conn_log.ev[0].peer, peer) == 0);
+		id1 = conn_log.ev[0].id;
+		ASSERT_EQ(frame_roundtrip(server, modes[m].mode, c1) == 0x1111);
+		ASSERT_EQ(conn_log.n == 1);
+		close(c1);
+		ASSERT_EQ(conn_wait(server, 2));
+		ASSERT_EQ(!conn_log.ev[1].connected && conn_log.ev[1].id == id1 && conn_log.ev[1].reason == MOGBUS_CLOSE_PEER);
+		ASSERT_EQ(strcmp(conn_log.ev[1].peer, peer) == 0);
+
+		/* The slot is reused by the next client: a new id; it idles out. */
+		c2 = ts_connect_loopback(o.port, AF_INET, 1000);
+		ASSERT_EQ(c2 >= 0);
+		conn_local_peer(c2, peer2, sizeof(peer2));
+		ASSERT_EQ(conn_wait(server, 3));
+		ASSERT_EQ(conn_log.ev[2].connected && conn_log.ev[2].id != id1 && strcmp(conn_log.ev[2].peer, peer2) == 0);
+		ASSERT_EQ(conn_wait(server, 4));
+		ASSERT_EQ(!conn_log.ev[3].connected && conn_log.ev[3].id == conn_log.ev[2].id);
+		ASSERT_EQ(conn_log.ev[3].reason == MOGBUS_CLOSE_IDLE_TIMEOUT);
+		close(c2);
+
+		/* A connection made while no hook is installed is never announced, nor is its close. */
+		ASSERT_EQ(mogbus_server_set_connection_hook(server, NULL, NULL) == MOGBUS_OK);
+		c4 = ts_connect_loopback(o.port, AF_INET, 1000);
+		ASSERT_EQ(c4 >= 0);
+		conn_steps(server, 100);
+		ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) == MOGBUS_OK);
+		close(c4);
+		conn_steps(server, 100);
+		ASSERT_EQ(conn_log.n == 4);
+
+		/* Closing the server reports the client that is still connected. */
+		c3 = ts_connect_loopback(o.port, AF_INET, 1000);
+		ASSERT_EQ(c3 >= 0);
+		ASSERT_EQ(conn_wait(server, 5));
+		ASSERT_EQ(conn_log.ev[4].connected);
+		mogbus_server_close(server);
+		ASSERT_EQ(conn_log.n == 6);
+		ASSERT_EQ(!conn_log.ev[5].connected && conn_log.ev[5].id == conn_log.ev[4].id);
+		ASSERT_EQ(conn_log.ev[5].reason == MOGBUS_CLOSE_SERVER_STOP && conn_log.ev[5].server == server);
+		close(c3);
+		mogbus_destroy(ctx);
+		ASSERT_EQ(conn_log.n == 6);
+	}
+	test_case = 0;
+}
+
+TEST(ApiConnectionHookAcceptsNoConnectionTransportsAndNeverFires)
+{
+	mogbus_t*		ctx = NULL;
+	mogbus_device_t*	dev = NULL;
+	mogbus_point_t		p0  = holding(0, 0x1111);
+	mogbus_server_options_t	o   = mogbus_server_options_defaults();
+	mogbus_server_t*	server = NULL;
+	int			fd;
+
+	memset(&conn_log, 0, sizeof(conn_log));
+	ASSERT_EQ(mogbus_create(&ctx) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_add_device(ctx, 1, "udp", &dev) == MOGBUS_OK && mogbus_device_add_point(dev, &p0) == MOGBUS_OK);
+	o.mode = MOGBUS_MODE_UDP;
+	o.port = ts_free_port();
+	ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) == MOGBUS_OK);
+	fd = ts_udp_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0);
+	ASSERT_EQ(frame_roundtrip(server, MOGBUS_MODE_UDP, fd) == 0x1111);
+	close(fd);
+	mogbus_server_close(server);
+	ASSERT_EQ(conn_log.n == 0);
+	ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) != MOGBUS_OK);	/* closed */
+	mogbus_destroy(ctx);
+}
+
+#if WITH_CONFIG
+TEST(ApiConnectionHookReportsDisconnectFault)
+{
+	static const struct { mogbus_mode_t mode; const char* name; } modes[] = {
+		{ MOGBUS_MODE_TCP, "tcp" }, { MOGBUS_MODE_RTU_TCP, "rtu-tcp" }, { MOGBUS_MODE_ASCII_TCP, "ascii-tcp" },
+	};
+
+	for (u32 m = 0; m < ARRAY_COUNT(modes); m++)
+	{
+		char			path[] = "/tmp/mogbus-api-XXXXXX";
+		mogbus_t*		ctx = NULL;
+		mogbus_server_options_t	o   = mogbus_server_options_defaults();
+		mogbus_server_t*	server = NULL;
+		int			fd;
+
+		test_case = modes[m].name;
+		memset(&conn_log, 0, sizeof(conn_log));
+		ASSERT_EQ(write_config(path, "(device (unit-id 1) (holding 0 (static 7))\n"
+					     "  (fault (kind disconnect) (percent 100)))\n"));
+		ASSERT_EQ(mogbus_create(&ctx) == MOGBUS_OK && mogbus_load_config(ctx, path) == MOGBUS_OK);
+		o.mode         = modes[m].mode;
+		o.port         = ts_free_port();
+		o.frame_gap_ms = 2;
+		ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK);
+		ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) == MOGBUS_OK);
+		fd = ts_connect_loopback(o.port, AF_INET, 1000);
+		ASSERT_EQ(fd >= 0);
+		ASSERT_EQ(conn_wait(server, 1));
+		ASSERT_EQ(frame_send(modes[m].mode, fd));
+		ASSERT_EQ(conn_wait(server, 2));
+		ASSERT_EQ(!conn_log.ev[1].connected && conn_log.ev[1].id == conn_log.ev[0].id);
+		ASSERT_EQ(conn_log.ev[1].reason == MOGBUS_CLOSE_DISCONNECT_FAULT);
+		conn_steps(server, 100);
+		ASSERT_EQ(conn_log.n == 2);
+		close(fd);
+		mogbus_destroy(ctx);
+		unlink(path);
+	}
+	test_case = 0;
+}
+#endif
+
+TEST(ApiConnectionHookReportsErrorForBadMbapHeader)
+{
+	static const u8		bad[] = { 0, 1, 0, 9, 0, 6, 1, 3, 0, 0, 0, 1 };	/* protocol id 9 */
+	mogbus_t*		ctx = NULL;
+	mogbus_device_t*	dev = NULL;
+	mogbus_point_t		p0  = holding(0, 1);
+	mogbus_server_options_t	o   = mogbus_server_options_defaults();
+	mogbus_server_t*	server = NULL;
+	int			fd;
+
+	memset(&conn_log, 0, sizeof(conn_log));
+	ASSERT_EQ(mogbus_create(&ctx) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_add_device(ctx, 1, "bad", &dev) == MOGBUS_OK && mogbus_device_add_point(dev, &p0) == MOGBUS_OK);
+	o.port = ts_free_port();
+	ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) == MOGBUS_OK);
+	fd = ts_connect_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0);
+	ASSERT_EQ(conn_wait(server, 1));
+	ASSERT_EQ(ts_send_socket(fd, bad, sizeof(bad)));
+	ASSERT_EQ(conn_wait(server, 2));
+	ASSERT_EQ(!conn_log.ev[1].connected && conn_log.ev[1].id == conn_log.ev[0].id);
+	ASSERT_EQ(conn_log.ev[1].reason == MOGBUS_CLOSE_ERROR);
+	close(fd);
+	mogbus_destroy(ctx);
+}
+
+#if WITH_TLS
+TEST(ApiConnectionHookReportsTlsHandshakeFailureAndTimeout)
+{
+	static const u8		garbage[] = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+	mogbus_t*		ctx = NULL;
+	mogbus_device_t*	dev = NULL;
+	mogbus_point_t		p0  = holding(0, 1);
+	mogbus_server_options_t	o   = mogbus_server_options_defaults();
+	mogbus_server_t*	server = NULL;
+	int			fd;
+
+	memset(&conn_log, 0, sizeof(conn_log));
+	ASSERT_EQ(mogbus_create(&ctx) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_add_device(ctx, 1, "tls", &dev) == MOGBUS_OK && mogbus_device_add_point(dev, &p0) == MOGBUS_OK);
+	o.port                           = ts_free_port();
+	o.tls_enabled                    = true;
+	o.tls_certificate                = "tests/tls/server.pem";
+	o.tls_private_key                = "tests/tls/server.key";
+	o.tls_require_client_certificate = false;
+	o.tls_handshake_timeout_ms       = 200;
+	ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_set_connection_hook(server, conn_hook, NULL) == MOGBUS_OK);
+
+	/* Plaintext instead of a ClientHello. */
+	fd = ts_connect_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0);
+	ASSERT_EQ(conn_wait(server, 1));
+	ASSERT_EQ(ts_send_socket(fd, garbage, sizeof(garbage) - 1));
+	ASSERT_EQ(conn_wait(server, 2));
+	ASSERT_EQ(!conn_log.ev[1].connected && conn_log.ev[1].id == conn_log.ev[0].id);
+	ASSERT_EQ(conn_log.ev[1].reason == MOGBUS_CLOSE_TLS);
+	close(fd);
+
+	/* Silence past the handshake timeout. */
+	fd = ts_connect_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0);
+	ASSERT_EQ(conn_wait(server, 3));
+	ASSERT_EQ(conn_wait(server, 4));
+	ASSERT_EQ(!conn_log.ev[3].connected && conn_log.ev[3].id == conn_log.ev[2].id);
+	ASSERT_EQ(conn_log.ev[3].id != conn_log.ev[0].id && conn_log.ev[3].reason == MOGBUS_CLOSE_TLS);
+	close(fd);
+	mogbus_destroy(ctx);
 }
 #endif

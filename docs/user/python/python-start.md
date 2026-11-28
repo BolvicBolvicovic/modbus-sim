@@ -19,7 +19,7 @@ five steps in the same order:
 | 1 | [Build the device](python-device.md) | points of every kind, strings, ramps, file records, a FIFO, or a device from a config file |
 | 2 | [Serve it and read it](python-serve.md) | server options and transports, `serve`, probing, the first client |
 | 3 | [Simulate the process from the host](python-simulate.md) | tank physics, host writes against client writes |
-| 4 | [Guard clients and keep records](python-hooks.md) | the access hook, post-write hook, event log, alarm FIFO, a vendor function code, frame hook |
+| 4 | [Guard clients and keep records](python-hooks.md) | the access hook, post-write hook, event log, alarm FIFO, a vendor function code, frame hook, connection hook |
 | 5 | [Observe, shut down, lifetimes and threading](python-lifetimes.md) | logs, metrics, runtime control, the process on a thread, shutdown |
 | 6 | [Test your client](python-testing.md) | unittest and pytest fixtures |
 

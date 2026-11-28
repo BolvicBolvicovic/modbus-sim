@@ -202,6 +202,23 @@ replacement longer than `capacity` drops the frame and logs a warning, and an ex
 is printed and lets the frame through. The same rules per transport are in
 [Guard clients and keep records](../library/library-hooks.md#watching-and-rewriting-frames).
 
+## Watching connections
+
+\ref mogbus::core::Server::set_connection_hook "Server.set_connection_hook()" tells you when a client
+connects to or leaves a server (the counterpart of pymodbus `trace_connect`). The hook gets a
+`Connection` (`connected`, `id`, `mode`, `peer`, `reason`); `id` is the same in the open and the close
+event, and `reason` is a `CloseReason` (`NONE` for an open event, then `PEER`, `IDLE_TIMEOUT`,
+`DISCONNECT_FAULT`, `TLS`, `SERVER_STOP` or `ERROR`):
+
+```python
+server.set_connection_hook(lambda c: print(c.id, c.peer, "open" if c.connected else c.reason.name))
+```
+
+It fires for the `tcp`, `rtu-tcp` and `ascii-tcp` modes; on the other modes it is accepted and never
+called. Every announced connection gets exactly one close event, also when the server is closed with
+clients connected. The rules are in
+[Guard clients and keep records](../library/library-hooks.md#watching-connections).
+
 ## Next
 
 - [Step 5: Observe, shut down, lifetimes and threading](python-lifetimes.md)

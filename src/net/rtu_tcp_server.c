@@ -33,9 +33,9 @@ rtu_tcp_init_ctx(rtu_tcp_server_t* server)
 }
 
 static void
-conn_close(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
+conn_close(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, net_close_reason_t reason)
 {
-	net_tcp_pool_close_conn(&server->pool, &conn->base);
+	net_tcp_pool_close_conn(&server->pool, &conn->base, reason);
 }
 
 static void
@@ -63,7 +63,7 @@ conn_check_fault_disconnect(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 {
 	if (!os_socket_valid(conn->base.fd) || !conn->framer.fault_disconnect)
 		return false;
-	conn_close(server, conn);
+	conn_close(server, conn, NET_CLOSE_DISCONNECT_FAULT);
 	return true;
 }
 
@@ -124,13 +124,13 @@ conn_read(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		if (conn_check_fault_disconnect(server, conn))
 			return;
 		if (!f->pending.active)
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_PEER);
 		return;
 	}
 	if (got < 0 &&
 	    !os_retry())
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	if (got < 0)
@@ -159,7 +159,7 @@ conn_write(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	{
 		if (os_retry())
 			return;
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	p->sent += (u32)sent;
@@ -168,7 +168,7 @@ conn_write(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 	{
 		pending_response_clear(p);
 		if (conn->read_closed)
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_PEER);
 	}
 }
 
@@ -226,7 +226,7 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 		if (conn->read_closed)
 			return;
 		pending_response_clear(&f->pending);
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_PEER);
 		return;
 	}
 	if (!conn->read_closed)
@@ -240,12 +240,12 @@ conn_handle_hangup(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn)
 			if (f->pending.active)
 			{
 				pending_response_clear(&f->pending);
-				conn_close(server, conn);
+				conn_close(server, conn, NET_CLOSE_PEER);
 				return;
 			}
 		}
 	}
-	conn_close(server, conn);
+	conn_close(server, conn, NET_CLOSE_PEER);
 }
 
 static void
@@ -255,7 +255,7 @@ conn_handle_revents(rtu_tcp_server_t* server, rtu_tcp_conn_t* conn, u32 revents)
 		return;
 	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	if (revents & OS_WAIT_IN)

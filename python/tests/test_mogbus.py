@@ -8,6 +8,7 @@ import socket
 import struct
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -127,6 +128,7 @@ class LayoutTest(unittest.TestCase):
                                                      ("custom_fcs[0]", _lib._CustomFc)]))
         expected.update(mine("A", _lib.AccessC, []))
         expected.update(mine("FR", _lib.FrameC, []))
+        expected.update(mine("CN", _lib.ConnectionC, []))
         expected.update(mine("CO", _lib.ClientOptionsC, []))
         for key in ("faults_count", "space_count"):
             self.assertIn(key, c)
@@ -147,6 +149,7 @@ class LayoutTest(unittest.TestCase):
                               ("I", "mogbus_device_info_t", _lib.DeviceInfoC),
                               ("A", "mogbus_access_t", _lib.AccessC),
                               ("FR", "mogbus_frame_t", _lib.FrameC),
+                              ("CN", "mogbus_connection_t", _lib.ConnectionC),
                               ("CO", "mogbus_client_options_t", _lib.ClientOptionsC)):
             want = header_fields(text, tag)
             have = set()
@@ -826,6 +829,60 @@ class AccessHookTest(unittest.TestCase):
                     n = len(seen)
                     self.assertEqual(mbap_read(sock, 1, 0), [0x1111])
                     self.assertEqual(len(seen), n)
+
+    def test_connection_hook_reports_open_and_close(self):
+        port = free_port()
+        seen = []
+        with mogbus.Context() as ctx:
+            dev = ctx.add_device(1)
+            dev.add_point("holding", 0, "u16", 0x1111)
+            with ctx.serve(port=port) as server:
+                server.start()
+                server.set_connection_hook(seen.append)
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5) as sock:
+                    self.assertEqual(mbap_read(sock, 1, 0), [0x1111])
+                    local = sock.getsockname()
+                deadline = time.time() + 2
+                while len(seen) < 2 and time.time() < deadline:
+                    time.sleep(0.01)
+                opened, closed = seen
+                self.assertTrue(opened.connected)
+                self.assertEqual((opened.mode, opened.reason), (mogbus.Mode.TCP, mogbus.CloseReason.NONE))
+                self.assertEqual(opened.peer, f"127.0.0.1:{local[1]}")
+                self.assertFalse(closed.connected)
+                self.assertEqual((closed.id, closed.peer), (opened.id, opened.peer))
+                self.assertEqual(closed.reason, mogbus.CloseReason.PEER)
+
+                # A client still connected when the server is closed gets a SERVER_STOP close.
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    deadline = time.time() + 2
+                    while len(seen) < 3 and time.time() < deadline:
+                        time.sleep(0.01)
+                    self.assertEqual(len(seen), 3)
+                    self.assertNotEqual(seen[2].id, opened.id)
+                    server.close()
+                self.assertEqual(len(seen), 4)
+                self.assertEqual((seen[3].id, seen[3].reason), (seen[2].id, mogbus.CloseReason.SERVER_STOP))
+
+    def test_connection_hook_exception_is_printed(self):
+        port = free_port()
+        with mogbus.Context() as ctx:
+            ctx.add_device(1)
+            with ctx.serve(port=port) as server:
+                server.start()
+
+                def boom(_event):
+                    raise RuntimeError("boom")
+
+                server.set_connection_hook(boom)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                        deadline = time.time() + 2
+                        while "boom" not in err.getvalue() and time.time() < deadline:
+                            time.sleep(0.01)
+                self.assertIn("RuntimeError: boom", err.getvalue())
+                server.set_connection_hook(None)
 
     def test_hook_veto_and_raising_hook(self):
         port = free_port()

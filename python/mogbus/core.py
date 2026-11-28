@@ -45,7 +45,7 @@ registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (deco
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
 `mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
-`mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, probe `mogbus_probe`,
+`mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, Server.set_connection_hook `mogbus_server_set_connection_hook`, probe `mogbus_probe`,
 Client `mogbus_client_*` (a Modbus master, independent of every Context), rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
 
 ## Limits
@@ -425,6 +425,41 @@ class Frame:
     peer: str
     data: bytes
     capacity: int
+
+
+class CloseReason(enum.IntEnum):
+    """@brief Why a client connection seen by a connection hook closed.
+    """
+    ## Not a close: the connection opened.
+    NONE = 0
+    ## The client closed it (end of stream or hang-up).
+    PEER = 1
+    ## No traffic for the server's idle timeout.
+    IDLE_TIMEOUT = 2
+    ## A disconnect fault fired.
+    DISCONNECT_FAULT = 3
+    ## TLS setup failed, or the handshake failed or timed out.
+    TLS = 4
+    ## The server was closed while the client was connected.
+    SERVER_STOP = 5
+    ## Socket error, or a protocol violation (bad MBAP header, full receive buffer).
+    ERROR = 6
+
+
+@dataclass
+class Connection:
+    """@brief A client connection opening or closing, handed to a Server connection hook.
+    @param connected True when the connection opened, False when it closed.
+    @param id Per-server connection id, the same in the open and the close event.
+    @param mode The Mode of the server.
+    @param peer The client as in the log lines (`"ip:port"`).
+    @param reason Why it closed (CloseReason); NONE for an open event.
+    """
+    connected: bool
+    id: int
+    mode: Mode
+    peer: str
+    reason: CloseReason
 
 
 @dataclass
@@ -1264,6 +1299,7 @@ class Server:
         self._thread: Optional[threading.Thread] = None
         self._stopping = False
         self._frame_ref = None  # the C callback object, alive while the frame hook is installed
+        self._connection_ref = None  # same for the connection hook
         self.last_step_result: Optional[int] = None
 
     def _live(self):
@@ -1418,6 +1454,48 @@ class Server:
         if lib.mogbus_server_set_frame_hook(handle, ref, None):
             raise MogbusError("cannot install the frame hook")
         self._frame_ref = ref
+
+    @_locked
+    def set_connection_hook(self, hook: Optional[Callable[[Connection], None]]) -> None:
+        """@brief Runs `hook(connection)` when a client connects to or leaves this server; None removes it.
+
+        pymodbus offers `trace_connect`. It fires for the `tcp` (also with TLS), `rtu-tcp` and
+        `ascii-tcp` modes; on the others there are no connections, so it is accepted and never called.
+        The open event comes when the socket is accepted, before any data or TLS handshake (a failed
+        handshake then closes with `CloseReason.TLS`). A close event follows exactly once for every
+        announced connection, also for the clients still connected when the server is closed
+        (`CloseReason.SERVER_STOP`). Connections already open when the hook is installed are not
+        announced. `Connection.id` is the same in both events and never reused by the server.
+
+        The hook runs on the thread that steps the server with the context lock held, so it may call
+        the methods of the devices but must not close or step this server. An exception it raises is
+        printed with its traceback. A server has one hook; a new one replaces it.
+
+        ```python
+        server.set_connection_hook(lambda c: print(c.id, c.peer, "open" if c.connected else c.reason.name))
+        ```
+        @param hook A callable taking a Connection; None removes the hook.
+        @throws MogbusError If the server is closed or the hook cannot be installed.
+        """
+        handle = self._live()
+        if hook is None:
+            if lib.mogbus_server_set_connection_hook(handle, ctypes.cast(None, _lib.CONNECTION_FN), None):
+                raise MogbusError("cannot remove the connection hook")
+            self._connection_ref = None
+            return
+
+        def trampoline(_user, _server, event):
+            e = event.contents
+            try:
+                hook(Connection(bool(e.connected), e.id, Mode(e.mode), _decode(e.peer) or "",
+                                CloseReason(e.reason)))
+            except BaseException:  # an exception must not unwind into C
+                traceback.print_exc()
+
+        ref = _lib.CONNECTION_FN(trampoline)
+        if lib.mogbus_server_set_connection_hook(handle, ref, None):
+            raise MogbusError("cannot install the connection hook")
+        self._connection_ref = ref
 
     @_locked
     def metrics(self) -> str:

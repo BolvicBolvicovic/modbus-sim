@@ -112,16 +112,23 @@ net_tcp_pool_accept(net_tcp_pool_t* pool)
 		memset(conn, 0, pool->conn_size);
 		conn->fd               = fd;
 		conn->last_activity_ms = now_ms;
+		conn->id               = ++pool->last_id;
 		os_addr_text(&addr, conn->peer, sizeof(conn->peer));
 		log_connection(pool, conn, "connect", "connected");
 		net_obs_connection(pool->obs, true);
+		if (pool->obs &&
+		    pool->obs->conn_fn)
+		{
+			conn->announced = true;
+			pool->obs->conn_fn(pool->obs->conn_user, conn->id, conn->peer, NET_CLOSE_NONE);
+		}
 		if (pool->on_accept)
 			pool->on_accept(pool->ctx, conn, now_ms);
 	}
 }
 
 void
-net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn)
+net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn, net_close_reason_t reason)
 {
 	os_socket_t fd;
 
@@ -129,6 +136,10 @@ net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn)
 		return;
 	log_connection(pool, conn, "disconnect", "disconnected");
 	net_obs_connection(pool->obs, false);
+	if (conn->announced &&
+	    pool->obs &&
+	    pool->obs->conn_fn)
+		pool->obs->conn_fn(pool->obs->conn_user, conn->id, conn->peer, reason);
 	fd = conn->fd;
 	if (pool->on_close)
 		pool->on_close(pool->ctx, conn);
@@ -156,7 +167,7 @@ net_tcp_pool_close_idle(net_tcp_pool_t* pool, u64 now_ms)
 		if (now_ms < deadline)
 			continue;
 		LOG_INFO("client %s idle for %u ms, closing", conn->peer, idle_ms);
-		net_tcp_pool_close_conn(pool, conn);
+		net_tcp_pool_close_conn(pool, conn, NET_CLOSE_IDLE_TIMEOUT);
 	}
 }
 
@@ -164,7 +175,7 @@ void
 net_tcp_pool_close_all(net_tcp_pool_t* pool)
 {
 	for (u32 i = 0; i < pool->conn_count; i++)
-		net_tcp_pool_close_conn(pool, conn_at(pool, i));
+		net_tcp_pool_close_conn(pool, conn_at(pool, i), NET_CLOSE_SERVER_STOP);
 	if (os_socket_valid(pool->listen_fd))
 	{
 		os_socket_close(pool->listen_fd);

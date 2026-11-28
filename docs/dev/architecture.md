@@ -97,8 +97,10 @@ fail with `built without config support`. `tools/check_deps.sh` enforces that on
 caller-owned struct holding the `SSL_CTX*` plus its own pool of 32 `net_tls_conn_t` sessions
 (handshake/want flags and deadline), so there is no process-global TLS state. In a no-TLS build `net_tls_stub.c`
 implements the same API without OpenSSL. `net_tcp_pool` owns only listener, accept, idle and
-poll-table bookkeeping for the three TCP transports; per-connection framing/TLS setup stays in
-the servers. `server_config` only supplies borrowed TLS strings through `server_options_t` and `config`
+poll-table bookkeeping for the three TCP transports and is the only place that calls the connection hook
+(`net_obs_t.conn_fn`, open at accept, close from `net_tcp_pool_close_conn` with a `net_close_reason_t` chosen by the
+server's call site; `net_tcp_conn_t.id`/`announced` give the per-server id and the once-only close); per-connection
+framing/TLS setup stays in the servers. `server_config` only supplies borrowed TLS strings through `server_options_t` and `config`
 rejects `(tls ...)` at load time in no-TLS builds.
 `build_config.h` provides the `WITH_TLS` and `WITH_CONFIG` fallbacks for direct compilations. `device` and `modbus`
 can be tested alone, and are (see `tests/`).

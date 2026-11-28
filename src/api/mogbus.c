@@ -113,6 +113,8 @@ struct mogbus_server_t
 	u32		device_count;
 	mogbus_frame_fn	frame_fn;	/**< frame hook of the host, or NULL */
 	void*		frame_user;
+	mogbus_connection_fn conn_fn;	/**< connection hook of the host, or NULL */
+	void*		conn_user;
 	/** @brief Copies of the option strings, so they outlive the caller's buffers. */
 	struct strings_t
 	{
@@ -1135,6 +1137,8 @@ create_server(mogbus_t* ctx, server_options_t o, mogbus_server_t** out)
 	s->in_use     = true;
 	s->frame_fn   = NULL;
 	s->frame_user = NULL;
+	s->conn_fn    = NULL;
+	s->conn_user  = NULL;
 	*out = s;
 	return MOGBUS_OK;
 }
@@ -1490,6 +1494,36 @@ mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* 
 	server->frame_user        = user;
 	server->server.obs.frame_fn   = fn ? frame_trampoline : NULL;
 	server->server.obs.frame_user = server;
+	return MOGBUS_OK;
+}
+
+/** @brief Adapts the net-layer connection hook to the public one. */
+static void
+conn_trampoline(void* user, u64 id, const char* peer, net_close_reason_t reason)
+{
+	mogbus_server_t*	server = user;
+	mogbus_connection_t	event  = {
+		.connected = reason == NET_CLOSE_NONE,
+		.id        = id,
+		.mode      = (mogbus_mode_t)server->server.mode,
+		.peer      = peer,
+		.reason    = (mogbus_close_reason_t)reason,
+	};
+
+	server->conn_fn(server->conn_user, server, &event);
+}
+
+mogbus_result_t
+mogbus_server_set_connection_hook(mogbus_server_t* server, mogbus_connection_fn fn, void* user)
+{
+	LOCK(server ? server->ctx : NULL);
+	if (!server ||
+	    !server->in_use)
+		return fail(server ? server->ctx : NULL, MOGBUS_ERR_INVALID, "a running server is required");
+	server->conn_fn              = fn;
+	server->conn_user            = user;
+	server->server.obs.conn_fn   = fn ? conn_trampoline : NULL;
+	server->server.obs.conn_user = server;
 	return MOGBUS_OK;
 }
 

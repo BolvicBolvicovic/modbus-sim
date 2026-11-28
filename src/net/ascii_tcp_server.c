@@ -21,9 +21,9 @@
  */
 
 static void
-conn_close(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
+conn_close(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, net_close_reason_t reason)
 {
-	net_tcp_pool_close_conn(&server->pool, &conn->base);
+	net_tcp_pool_close_conn(&server->pool, &conn->base, reason);
 }
 
 static void
@@ -92,7 +92,7 @@ conn_handle_frame(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms
 				  resp, &decision);
 	if (decision.disconnect)
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_DISCONNECT_FAULT);
 		return;
 	}
 	if (decision.drop)
@@ -211,7 +211,7 @@ conn_read(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_ms)
 	{
 		if (os_retry())
 			return;
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	conn->rx_len += (u32)got;
@@ -232,7 +232,7 @@ conn_write(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
 	{
 		if (os_retry())
 			return;
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	p->sent += (u32)sent;
@@ -241,7 +241,7 @@ conn_write(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn)
 	{
 		pending_response_clear(p);
 		if (conn->read_closed)
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_PEER);
 	}
 }
 
@@ -297,7 +297,7 @@ conn_handle_hangup(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_m
 		if (conn->read_closed)
 			return;
 		pending_response_clear(&conn->pending);
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_PEER);
 		return;
 	}
 	if (!conn->read_closed)
@@ -307,11 +307,11 @@ conn_handle_hangup(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u64 now_m
 		if (conn->pending.active)
 		{
 			pending_response_clear(&conn->pending);
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_PEER);
 			return;
 		}
 	}
-	conn_close(server, conn);
+	conn_close(server, conn, NET_CLOSE_PEER);
 }
 
 static void
@@ -321,7 +321,7 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u32 reve
 		return;
 	if (revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	conn_process(server, conn, now_ms); /* expire stale bytes before adding new ones */
@@ -342,7 +342,7 @@ conn_handle_revents(ascii_tcp_server_t* server, ascii_tcp_conn_t* conn, u32 reve
 	if (os_socket_valid(conn->base.fd) &&
 	    conn->read_closed &&
 	    !conn->pending.active)
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_PEER);
 }
 
 s32

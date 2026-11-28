@@ -16,9 +16,9 @@
 #include <string.h>
 
 static void
-conn_close(tcp_server_t* server, tcp_conn_t* conn)
+conn_close(tcp_server_t* server, tcp_conn_t* conn, net_close_reason_t reason)
 {
-	net_tcp_pool_close_conn(&server->pool, &conn->base);
+	net_tcp_pool_close_conn(&server->pool, &conn->base, reason);
 }
 
 static bool
@@ -40,7 +40,7 @@ conn_tls_handshake(tcp_server_t* server, tcp_conn_t* conn)
 		return true;
 	if (status == NET_TLS_ERROR)
 		LOG_WARN("client %s TLS handshake failed: %s", conn->base.peer, conn->tls->error);
-	conn_close(server, conn);
+	conn_close(server, conn, NET_CLOSE_TLS);
 	return false;
 }
 
@@ -74,7 +74,7 @@ conn_on_accept(void* ctx, net_tcp_conn_t* base, u64 now_ms)
 		if (!conn->tls)
 		{
 			LOG_WARN("client %s TLS setup failed: %s", base->peer, server->tls.error);
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_TLS);
 			return;
 		}
 		(void)conn_tls_handshake(server, conn);
@@ -129,7 +129,7 @@ handle_frame(tcp_server_t* server, tcp_conn_t* conn, u32 frame_size, u64 now_ms)
 
 	if (decision.disconnect)
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_DISCONNECT_FAULT);
 		return;
 	}
 	if (len == 0)
@@ -154,7 +154,7 @@ conn_process(tcp_server_t* server, tcp_conn_t* conn)
 		{
 			LOG_WARN("client %s sent a bad MBAP header, closing", conn->base.peer);
 			net_obs_rejected(server->options.obs);
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_ERROR);
 			return;
 		}
 
@@ -195,7 +195,7 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 		if (conn->rx_len == sizeof(conn->rx))
 		{
 			LOG_WARN("client %s receive buffer full, closing", conn->base.peer);
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_ERROR);
 			return;
 		}
 
@@ -212,14 +212,14 @@ conn_read(tcp_server_t* server, tcp_conn_t* conn)
 			return;
 		if (status == NET_TLS_ERROR && len == 0)
 			LOG_WARN("client %s TLS read failed: %s", conn->base.peer, conn->tls->error);
-		conn_close(server, conn);
+		conn_close(server, conn, status == NET_TLS_ERROR ? NET_CLOSE_ERROR : NET_CLOSE_PEER);
 		return;
 	}
 
 	got = os_socket_recv(conn->base.fd, conn->rx + conn->rx_len, sizeof(conn->rx) - conn->rx_len);
 	if (got == 0 || (got < 0 && !os_retry()))
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, got == 0 ? NET_CLOSE_PEER : NET_CLOSE_ERROR);
 		return;
 	}
 	if (got < 0)
@@ -251,7 +251,7 @@ conn_write(tcp_server_t* server, tcp_conn_t* conn)
 			return;
 		if (status == NET_TLS_ERROR && len == 0)
 			LOG_WARN("client %s TLS write failed: %s", conn->base.peer, conn->tls->error);
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 
@@ -259,7 +259,7 @@ conn_write(tcp_server_t* server, tcp_conn_t* conn)
 	if (sent < 0 &&
 	    !os_retry())
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 	if (sent < 0)
@@ -292,7 +292,7 @@ close_stalled_handshakes(tcp_server_t* server, u64 now_ms)
 			continue;
 
 		LOG_WARN("client %s TLS handshake exceeded %u ms, closing", conn->base.peer, timeout_ms);
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_TLS);
 	}
 }
 
@@ -393,7 +393,7 @@ serve_ready(tcp_server_t* server, const os_wait_entry_t* fd, net_tcp_conn_t* own
 
 	if (fd->revents & (OS_WAIT_ERR | OS_WAIT_INVAL))
 	{
-		conn_close(server, conn);
+		conn_close(server, conn, NET_CLOSE_ERROR);
 		return;
 	}
 
@@ -428,7 +428,7 @@ serve_ready(tcp_server_t* server, const os_wait_entry_t* fd, net_tcp_conn_t* own
 		 * the slot without waiting for the delayed response to become due. */
 		if (fd->revents & OS_WAIT_HUP)
 		{
-			conn_close(server, conn);
+			conn_close(server, conn, NET_CLOSE_PEER);
 			return;
 		}
 		if (tls_events != 0 || conn->tx_due_ms <= now_ms)

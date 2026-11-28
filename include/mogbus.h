@@ -74,6 +74,8 @@ typedef struct mogbus_server_options_t mogbus_server_options_t;
 typedef struct mogbus_client_options_t mogbus_client_options_t;
 typedef enum mogbus_frame_direction_t mogbus_frame_direction_t;
 typedef struct mogbus_frame_t mogbus_frame_t;
+typedef enum mogbus_close_reason_t mogbus_close_reason_t;
+typedef struct mogbus_connection_t mogbus_connection_t;
 typedef enum mogbus_result_t mogbus_result_t;
 typedef enum mogbus_log_level_t mogbus_log_level_t;
 typedef enum mogbus_log_format_t mogbus_log_format_t;
@@ -1330,6 +1332,69 @@ typedef size_t (*mogbus_frame_fn)(void* user, mogbus_server_t* server, mogbus_fr
  *         is in mogbus_last_error() of the server's context.
  */
 MOGBUS_API mogbus_result_t	mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* user);
+
+/** @brief Why a client connection closed, as seen by a connection hook. */
+enum mogbus_close_reason_t
+{
+	MOGBUS_CLOSE_NONE,		/**< not a close event: the connection opened */
+	MOGBUS_CLOSE_PEER,		/**< the client closed it (end of stream or hang-up) */
+	MOGBUS_CLOSE_IDLE_TIMEOUT,	/**< no traffic for the server's idle timeout */
+	MOGBUS_CLOSE_DISCONNECT_FAULT,	/**< a disconnect fault fired */
+	MOGBUS_CLOSE_TLS,		/**< TLS setup failed, or the handshake failed or timed out */
+	MOGBUS_CLOSE_SERVER_STOP,	/**< the server was closed while the client was connected */
+	MOGBUS_CLOSE_ERROR,		/**< socket error, or a protocol violation (bad MBAP header, full receive buffer) */
+};
+
+/**
+ * @brief A client connection opening or closing, as seen by a connection hook.
+ *
+ * New fields are appended, so older code that ignores them still works.
+ */
+struct mogbus_connection_t
+{
+	bool		connected;	/**< true when the connection opened, false when it closed */
+	uint64_t	id;		/**< per-server id, the same in the open and the close event, never reused by the server */
+	mogbus_mode_t	mode;		/**< transport of the server */
+	const char*	peer;		/**< client text as in the log lines ("ip:port"); valid only during the call */
+	mogbus_close_reason_t reason;	/**< why it closed; MOGBUS_CLOSE_NONE for an open event */
+};
+
+/**
+ * @brief Connection hook: told when a client connects to or leaves a server.
+ *
+ * It runs on the thread that steps (or closes) the server with the context lock held, may call
+ * `mogbus_*` functions, must not block, and must not close or step the server. The event and `peer`
+ * are valid only during the call.
+ *
+ * @param user Pointer given to mogbus_server_set_connection_hook().
+ * @param server Server the client belongs to.
+ * @param event The event.
+ */
+typedef void (*mogbus_connection_fn)(void* user, mogbus_server_t* server, const mogbus_connection_t* event);
+
+/**
+ * @brief Installs (or, with @p fn NULL, removes) the connection hook of a server.
+ *
+ * The counterpart of the frame hook, like pymodbus `trace_connect`. It is called for the connection
+ * oriented transports MOGBUS_MODE_TCP (also with TLS), MOGBUS_MODE_RTU_TCP and MOGBUS_MODE_ASCII_TCP;
+ * on the others (UDP, serial, PTY, fd) there are no connections, so installing it succeeds and it
+ * never fires.
+ *
+ * An open event is sent when the server accepts the socket, before any data or TLS handshake. A client
+ * refused for lack of slots is never accepted and is not reported. A close event follows exactly once
+ * for every connection announced, with the reason: a TLS handshake failure or timeout closes with
+ * MOGBUS_CLOSE_TLS (after the open event), and closing the server (mogbus_server_close(),
+ * mogbus_destroy(), the end of mogbus_run()) reports every still connected client with
+ * MOGBUS_CLOSE_SERVER_STOP. Connections open when the hook is installed are not announced and
+ * produce no close event; a hook removed before a close misses it. A server has one hook; a new one
+ * replaces it, and it is forgotten when the server is closed.
+ *
+ * @param server Server.
+ * @param fn Hook, or NULL to remove it.
+ * @param user Passed back to @p fn.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID if @p server is NULL or already closed.
+ */
+MOGBUS_API mogbus_result_t	mogbus_server_set_connection_hook(mogbus_server_t* server, mogbus_connection_fn fn, void* user);
 
 /* ---- Logging (process-wide) ---- */
 

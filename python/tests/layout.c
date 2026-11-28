@@ -15,6 +15,7 @@ main(void)
 	typedef mogbus_device_info_t I;
 	typedef mogbus_access_t A;
 	typedef mogbus_frame_t FR;
+	typedef mogbus_connection_t CN;
 	typedef mogbus_client_options_t CO;
 
 	SIZE(O);
@@ -41,6 +42,8 @@ main(void)
 	F(A, target); F(A, file); F(A, node); F(A, subindex); F(A, index); F(A, data); F(A, data_len);
 	SIZE(FR);
 	F(FR, direction); F(FR, mode); F(FR, peer); F(FR, data); F(FR, len); F(FR, capacity);
+	SIZE(CN);
+	F(CN, connected); F(CN, id); F(CN, mode); F(CN, peer); F(CN, reason);
 	SIZE(CO);
 	F(CO, mode); F(CO, host); F(CO, port); F(CO, path); F(CO, baud); F(CO, data_bits); F(CO, parity);
 	F(CO, stop_bits); F(CO, tls_enabled); F(CO, timeout_ms); F(CO, retries);
