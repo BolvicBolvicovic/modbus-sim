@@ -497,6 +497,16 @@ TEST(DecodeDeviceIdRequestCutAfterMeiType)
 	ASSERT_EQ(run(copy, sizeof(copy), DECODE_FRAMING_AUTO, DECODE_DIRECTION_AUTO, true) != DECODE_INVALID);
 	ASSERT_EQ(json_valid(g_json));
 
+	/* The nightly fuzz run (issue #77) hit the same read with this RTU-shaped input. */
+	{
+		static const u8	nightly[] = { 0x00, 0x00, 0x01, 0xFF, 0xFF, 0x01, 0x01, 0x2B, 0x0E };
+		u8		exact[sizeof(nightly)];
+
+		memcpy(exact, nightly, sizeof(exact));
+		for (int f = DECODE_FRAMING_AUTO; f <= DECODE_FRAMING_ASCII; f++)
+			ASSERT_EQ(run(exact, sizeof(exact), (decode_framing_t)f, DECODE_DIRECTION_AUTO, false) != DECODE_INVALID);
+	}
+
 	copy[5] = 0x03;	/* MBAP length that matches: unit, 2B 0E, a request cut after the MEI type */
 	memcpy(copy + 7, (const u8[]){ 0x2B, 0x0E }, 2);
 	ASSERT_EQ(run(copy, 9, DECODE_FRAMING_MBAP, DECODE_DIRECTION_REQUEST, false) == DECODE_MALFORMED);
