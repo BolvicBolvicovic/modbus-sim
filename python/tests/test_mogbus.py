@@ -734,10 +734,11 @@ class ServeHelperTest(unittest.TestCase):
         self.assertTrue(srv.context.closed)
 
     def test_serve_config_file_udp(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".scm") as f:
-            f.write(DEVICES)
-            f.flush()
-            with mogbus.serve(config=f.name, mode="udp", port=0) as srv:
+        with tempfile.TemporaryDirectory() as tmp:	# not NamedTemporaryFile: Windows cannot reopen an open one
+            path = os.path.join(tmp, "devices.scm")
+            with open(path, "w") as f:
+                f.write(DEVICES)
+            with mogbus.serve(config=path, mode="udp", port=0) as srv:
                 self.assertTrue(mogbus.probe(ServerOptions(mode="udp", port=srv.port), 7))
 
     def test_serve_uses_config_server_section(self):
