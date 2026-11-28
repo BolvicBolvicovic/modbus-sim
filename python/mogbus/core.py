@@ -58,6 +58,8 @@ contains a native library, so build and install it on the machine that runs the 
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import contextlib
 import ctypes
 import dataclasses
@@ -1298,6 +1300,8 @@ class Server:
         self._h = handle
         self._thread: Optional[threading.Thread] = None
         self._stopping = False
+        self._serving = False  # a serve() coroutine drives this server
+        self._waiter: Optional["_Waiter"] = None
         self._frame_ref = None  # the C callback object, alive while the frame hook is installed
         self._connection_ref = None  # same for the connection hook
         self.last_step_result: Optional[int] = None
@@ -1329,6 +1333,70 @@ class Server:
             time.sleep(0.0002)
         return 0
 
+    async def serve(self, poll_interval: float = 0.005) -> int:
+        """@brief Serves this server inside the running asyncio event loop, without a background thread.
+
+        Returns when the server stops: stop() (also from a hook or another thread), a finished byte
+        stream (`rtu-fd`, PTY peer gone) or a poll error. Between steps the coroutine waits on the sockets of
+        the server with the loop's own `add_reader()`/`add_writer()` (the C library tells it which with
+        `mogbus_server_poll_fds()`), so it costs nothing while idle and answers as soon as a request
+        arrives. Every step runs with a wait of 0 on the loop's thread, with the context lock held, so hooks
+        and callbacks run on the loop's thread and a slow one delays the loop. An exception raised by a
+        hook is handled as in the threaded mode: printed with its traceback and answered as the hook
+        documents.
+
+        Cancelling the task (or leaving `async with server.running()`) stops the server and runs a final
+        step, then raises CancelledError; it does not close the transport, so call close() to free the
+        port. When the loop cannot watch descriptors (the Windows ProactorEventLoop, a serial fd that
+        epoll rejects) it steps every `poll_interval` seconds instead, at most.
+
+        ```python
+        server = ctx.serve(port=1502)
+        task = asyncio.create_task(server.serve())
+        ...
+        server.stop()
+        await task
+        ```
+        @param poll_interval Longest sleep between steps in the fallback that cannot watch descriptors, in seconds.
+        @return 0 after a clean stop, 1 on a poll error.
+        @throws MogbusError If the server is closed, already started on a thread or already served.
+        """
+        with self._ctx._lock:
+            self._live()
+            if self._thread is not None or self._serving:
+                raise MogbusError("server is already running")
+            self._serving = True
+            self._stopping = False
+        ctx = self._ctx
+        try:
+            return await _drive(ctx, self, poll_interval)
+        finally:
+            self._serving = False
+
+    @contextlib.asynccontextmanager
+    async def running(self, poll_interval: float = 0.005):
+        """@brief Async context manager: serves this server in the event loop for the body, then stops and closes it.
+
+        The server runs as a task of the current loop (see serve()); on exit the task is cancelled, a
+        final step runs and the server is closed, like `with server:` does for a threaded one. An
+        exception that ended the serving task early (a poll error) is raised at exit.
+
+        ```python
+        async with ctx.serve(port=1502).running():
+            await asyncio.sleep(60)
+        ```
+        @param poll_interval See serve().
+        @return The server (as `async with ... as server`).
+        """
+        task = asyncio.ensure_future(self.serve(poll_interval))
+        try:
+            yield self
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            self.close()
+
     def run(self, exclusive: bool = False) -> int:
         """@brief Steps until stopped; blocks the calling thread.
 
@@ -1353,6 +1421,8 @@ class Server:
             self._live()
             if self._thread is not None:
                 raise MogbusError("server thread already started")
+            if self._serving:
+                raise MogbusError("server is being served by serve()")
             self._stopping = False
             self._thread = threading.Thread(target=self._loop, name="mogbus-server", daemon=True)
             self._thread.start()
@@ -1365,6 +1435,9 @@ class Server:
         h = self._h
         if h:
             lib.mogbus_server_stop(h)
+        for waiter in (self._waiter, self._ctx._waiter):
+            if waiter is not None:
+                waiter.wake()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join()
@@ -1519,6 +1592,111 @@ class Server:
         self.close()
 
 
+class _Waiter:
+    """Sleeps until a descriptor of the server is ready, a deadline passes or wake() is called (any thread)."""
+
+    def __init__(self, loop: "asyncio.AbstractEventLoop"):
+        self.loop = loop
+        self.future: Optional["asyncio.Future"] = None
+        self.watch = True  # False once the loop cannot watch descriptors
+
+    def _set(self) -> None:
+        future = self.future
+        if future is not None and not future.done():
+            future.set_result(None)
+
+    def wake(self) -> None:
+        with contextlib.suppress(RuntimeError):  # the loop is closed
+            self.loop.call_soon_threadsafe(self._set)
+
+    async def wait(self, entries, seconds: float, interval: float) -> None:
+        """Waits at most `seconds` (the library's deadline) for one of `entries` (fd, events) to be ready."""
+        if self.watch and entries:
+            self.future = self.loop.create_future()
+            added = []
+            timer = self.loop.call_later(seconds, self._set)
+            try:
+                try:
+                    for fd, events in entries:
+                        if events & 1:
+                            self.loop.add_reader(fd, self._set)
+                            added.append((self.loop.remove_reader, fd))
+                        if events & 2:
+                            self.loop.add_writer(fd, self._set)
+                            added.append((self.loop.remove_writer, fd))
+                except NotImplementedError:
+                    self.watch = False  # Proactor loop: no add_reader
+                except (OSError, ValueError):
+                    pass  # an fd this loop cannot watch right now: sleep for this round
+                else:
+                    await self.future
+                    return
+            finally:
+                timer.cancel()
+                for remove, fd in added:
+                    with contextlib.suppress(Exception):
+                        remove(fd)
+                self.future = None
+        await asyncio.sleep(min(seconds, interval))
+
+
+async def _drive(ctx: "Context", server: Optional["Server"], interval: float) -> int:
+    """Steps `server` (or every server of `ctx`) on the running loop: poll_fds, wait, step(0), until done."""
+    loop = asyncio.get_running_loop()
+    waiter = _Waiter(loop)
+    owner = server if server is not None else ctx
+    owner._waiter = waiter
+    table = (_lib.PollFdC * (64 if server is not None else 512))()
+    count = ctypes.c_size_t()
+    timeout = ctypes.c_int()
+
+    def call(poll, handle):
+        """One locked poll_fds + the entries; None if the owner is gone."""
+        with ctx._lock:
+            if not ctx._h or (server is not None and not server._h):
+                return None
+            code = poll(handle, table, len(table), ctypes.byref(count), ctypes.byref(timeout))
+            if code:
+                raise _fail(ctx._h, code, "cannot poll the server")
+            return [(table[i].fd, table[i].events) for i in range(count.value)]
+
+    def step(max_wait_ms):
+        with ctx._lock:
+            if not ctx._h or (server is not None and not server._h):
+                return 1
+            if server is not None:
+                return lib.mogbus_server_step(server._h, max_wait_ms)
+            return lib.mogbus_step(ctx._h, max_wait_ms)
+
+    try:
+        while True:
+            if server is not None:
+                entries = call(lib.mogbus_server_poll_fds, server._h)
+            else:
+                entries = call(lib.mogbus_poll_fds, ctx._h)
+            if entries is None:
+                return 0
+            if timeout.value > 0:
+                await waiter.wait(entries, timeout.value / 1000.0, interval)
+            else:
+                await asyncio.sleep(0)  # let other tasks run between steps that have no wait
+            result = step(0)
+            if server is not None:
+                server.last_step_result = result
+            if result != 0:
+                return 1 if result == 2 else 0
+    except asyncio.CancelledError:
+        if server is not None:
+            server.stop()
+        else:
+            for sv in list(ctx._servers):
+                sv.stop()
+        step(0)  # the final step sees the stop and closes the connections
+        raise
+    finally:
+        owner._waiter = None
+
+
 class Context:
     """@brief Owns devices and servers; the root of the API.
 
@@ -1536,6 +1714,8 @@ class Context:
             raise MogbusError("cannot create a context (memory cannot be mapped)")
         self._servers: List[Server] = []
         self._devices: Dict[int, Device] = {}
+        self._waiter: Optional[_Waiter] = None
+        self._serving_all = False
 
     def _check_open(self):
         if not self._h:
@@ -1686,6 +1866,37 @@ class Context:
             out = ctypes.c_void_p()
             code = lib.mogbus_server_create_from_config(self._h, ctypes.byref(out))
             return self._new_server(code, out.value)
+
+    async def serve_all(self, poll_interval: float = 0.005) -> int:
+        """@brief Serves every server of this context inside the running asyncio event loop with one wait.
+
+        The asyncio counterpart of `mogbus_run()`: one coroutine drives all servers (`mogbus_step()`),
+        watching their sockets together, and returns once every server stopped or finished (at once when
+        there is none). Everything said for Server.serve() applies: no thread, the steps run on the
+        loop's thread, cancelling stops every server after a final step and does not close them, and
+        `poll_interval` is the fallback sleep. The servers must not be started on threads or served
+        individually meanwhile.
+
+        ```python
+        a = ctx.serve(port=1502)
+        b = ctx.serve(mode="udp", port=1502)
+        await ctx.serve_all()          # until a and b are stopped
+        ```
+        @param poll_interval Longest sleep between steps in the fallback that cannot watch descriptors, in seconds.
+        @return 0 after a clean stop, 1 on a poll error.
+        @throws MogbusError If the context is closed, a server runs on a thread or is served, or this coroutine already runs.
+        """
+        with self._lock:
+            self._check_open()
+            if self._serving_all or any(sv._thread is not None or sv._serving for sv in self._servers):
+                raise MogbusError("servers of this context are already running")
+            self._serving_all = True
+            for sv in self._servers:
+                sv._stopping = False
+        try:
+            return await _drive(self, None, poll_interval)
+        finally:
+            self._serving_all = False
 
     def _new_server(self, code, handle):
         if code:
@@ -2153,3 +2364,184 @@ class Client:
             self._check(lib.mogbus_client_request(self._live(), self._unit(unit), _u(function_code, "function_code", 256),
                                                   req, len(data), reply, 252, ctypes.byref(n)))
         return bytes(reply[:n.value])
+
+
+class AsyncClient:
+    """@brief The asyncio counterpart of Client: the same calls as coroutines, so they never block the event loop.
+
+    Each call runs the blocking C call of a Client on one worker thread owned by this object, so the
+    calls of one AsyncClient are serialized in the order they were made (the C client handles one
+    request at a time), and several AsyncClients talk in parallel. Cancelling an awaiting task
+    abandons the wait, not the request: the call finishes on the worker thread and the calls queued
+    after it wait for it. Everything else, including the arguments, the return values, the default `unit` (fixed at construction; pass `unit=` per call to ask another one), the
+    connect-on-first-call and reconnect behaviour and the errors (ModbusException, MogbusError with a
+    Status), is that of Client. Use it as `async with`, or await close().
+
+    ```python
+    async with mogbus.AsyncClient(port=1502) as c:
+        regs, coils = await asyncio.gather(c.read_holding_registers(0, 4), c.read_coils(0, 8))
+    ```
+    The constructor takes the arguments of Client and does not connect.
+    @param mode Transport: a Mode or its name (see Client).
+    @param host IP address of the server; network modes.
+    @param port Port of the server; network modes.
+    @param unit Default unit id of the calls.
+    @param timeout_ms How long to wait for each reply.
+    @param retries Extra attempts after a timeout.
+    @param path Serial device; serial modes.
+    @param baud Serial speed; 0 keeps the device's.
+    @param data_bits Serial data bits: 7 or 8 (RTU: 8).
+    @param parity Serial Parity, a member or its name.
+    @param stop_bits Serial stop bits: 1 or 2.
+    @throws MogbusError If the options are invalid.
+    """
+
+    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1", port: int = 1502,
+                 unit: int = 1, timeout_ms: int = 1000, retries: int = 0, path: Optional[str] = None,
+                 baud: int = 0, data_bits: int = 8, parity: Union[str, int, Parity] = Parity.NONE,
+                 stop_bits: int = 1):
+        self._client = Client(mode, host, port, unit, timeout_ms, retries, path, baud, data_bits,
+                              parity, stop_bits)
+        self._pool: Optional[concurrent.futures.ThreadPoolExecutor] = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mogbus-client")
+
+    async def __aenter__(self) -> "AsyncClient":
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.close()
+
+    def __del__(self):
+        with contextlib.suppress(Exception):
+            if self._pool is not None:
+                self._pool.shutdown(wait=False)
+            self._client.close()
+
+    async def _call(self, fn, *args):
+        pool = self._pool
+        if pool is None:
+            raise MogbusError("the client is closed")
+        return await asyncio.get_running_loop().run_in_executor(pool, fn, *args)
+
+    async def close(self) -> None:
+        """@brief Waits for the calls in flight, closes the connection and the worker thread; calling it again does nothing.
+        """
+        pool, self._pool = self._pool, None
+        if pool is None:
+            return
+        await asyncio.get_running_loop().run_in_executor(pool, self._client.close)
+        pool.shutdown(wait=False)
+
+    async def connect(self) -> None:
+        """@brief Connects now instead of at the first call (see Client.connect()).
+        @throws MogbusError With Status.IO if the connection fails.
+        """
+        await self._call(self._client.connect)
+
+    async def read_coils(self, address: int, count: int, unit: Optional[int] = None) -> List[bool]:
+        """@brief Reads coils (function code 01), see Client.read_coils().
+        @param address First coil.
+        @param count Number of coils, 1-2000.
+        @param unit Unit id; the client's default when None.
+        @return `count` booleans.
+        """
+        return await self._call(self._client.read_coils, address, count, unit)
+
+    async def read_discrete_inputs(self, address: int, count: int, unit: Optional[int] = None) -> List[bool]:
+        """@brief Reads discrete inputs (function code 02), see Client.read_discrete_inputs().
+        @param address First input.
+        @param count Number of inputs, 1-2000.
+        @param unit Unit id; the client's default when None.
+        @return `count` booleans.
+        """
+        return await self._call(self._client.read_discrete_inputs, address, count, unit)
+
+    async def read_holding_registers(self, address: int, count: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads holding registers (function code 03), see Client.read_holding_registers().
+        @param address First register.
+        @param count Number of registers, 1-125.
+        @param unit Unit id; the client's default when None.
+        @return `count` raw 16-bit values.
+        """
+        return await self._call(self._client.read_holding_registers, address, count, unit)
+
+    async def read_input_registers(self, address: int, count: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads input registers (function code 04), see Client.read_input_registers().
+        @param address First register.
+        @param count Number of registers, 1-125.
+        @param unit Unit id; the client's default when None.
+        @return `count` raw 16-bit values.
+        """
+        return await self._call(self._client.read_input_registers, address, count, unit)
+
+    async def write_coil(self, address: int, value: bool, unit: Optional[int] = None) -> None:
+        """@brief Writes one coil (function code 05), see Client.write_coil().
+        @param address Coil.
+        @param value On or off.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_coil, address, value, unit)
+
+    async def write_register(self, address: int, value: int, unit: Optional[int] = None) -> None:
+        """@brief Writes one holding register (function code 06), see Client.write_register().
+        @param address Register.
+        @param value Raw 16-bit value.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_register, address, value, unit)
+
+    async def write_coils(self, address: int, values: Sequence[bool], unit: Optional[int] = None) -> None:
+        """@brief Writes several coils (function code 15), see Client.write_coils().
+        @param address First coil.
+        @param values The values, 1-1968.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_coils, address, values, unit)
+
+    async def write_registers(self, address: int, values: Sequence[int], unit: Optional[int] = None) -> None:
+        """@brief Writes several holding registers (function code 16), see Client.write_registers().
+        @param address First register.
+        @param values The raw values, 1-123.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_registers, address, values, unit)
+
+    async def mask_write_register(self, address: int, and_mask: int, or_mask: int,
+                                  unit: Optional[int] = None) -> None:
+        """@brief Changes bits of a holding register (function code 22), see Client.mask_write_register().
+        @param address Register.
+        @param and_mask Bits to keep.
+        @param or_mask Bits to set where `and_mask` is 0.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.mask_write_register, address, and_mask, or_mask, unit)
+
+    async def read_write_registers(self, read_address: int, read_count: int, write_address: int,
+                                   values: Sequence[int], unit: Optional[int] = None) -> List[int]:
+        """@brief Writes then reads holding registers in one request (function code 23), see Client.read_write_registers().
+        @param read_address First register to read.
+        @param read_count Registers to read, 1-125.
+        @param write_address First register to write.
+        @param values The raw values to write, 1-121.
+        @param unit Unit id; the client's default when None.
+        @return The `read_count` raw values read after the write.
+        """
+        return await self._call(self._client.read_write_registers, read_address, read_count,
+                                write_address, values, unit)
+
+    async def read_device_id(self, unit: Optional[int] = None) -> Dict[int, bytes]:
+        """@brief Reads the basic device identification objects (function code 43), see Client.read_device_id().
+        @param unit Unit id; the client's default when None.
+        @return The objects by id.
+        """
+        return await self._call(self._client.read_device_id, unit)
+
+    async def request(self, function_code: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends any request, including a user-defined function code, see Client.request().
+        @param function_code The function code, 1-127.
+        @param data The request data after the function code, at most 252 bytes.
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the function code.
+        @throws ModbusException If the server answered with an exception.
+        """
+        return await self._call(self._client.request, function_code, data, unit)

@@ -17,6 +17,7 @@ main(void)
 	typedef mogbus_frame_t FR;
 	typedef mogbus_connection_t CN;
 	typedef mogbus_client_options_t CO;
+	typedef mogbus_poll_fd_t PF;
 
 	SIZE(O);
 	F(O, mode); F(O, bind_address); F(O, port); F(O, path); F(O, fd); F(O, seed);
@@ -47,6 +48,8 @@ main(void)
 	SIZE(CO);
 	F(CO, mode); F(CO, host); F(CO, port); F(CO, path); F(CO, baud); F(CO, data_bits); F(CO, parity);
 	F(CO, stop_bits); F(CO, tls_enabled); F(CO, timeout_ms); F(CO, retries);
+	SIZE(PF);
+	F(PF, fd); F(PF, events);
 	printf("faults_count %d\n", MOGBUS_FAULT_KIND_COUNT);
 	printf("space_count %d\n", MOGBUS_SPACE_COUNT);
 	return 0;

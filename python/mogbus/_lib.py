@@ -98,6 +98,10 @@ class ServerOptionsC(ctypes.Structure):
     ]
 
 
+class PollFdC(ctypes.Structure):
+    _fields_ = [("fd", ctypes.c_uint64), ("events", ctypes.c_uint32)]
+
+
 class ClientOptionsC(ctypes.Structure):
     _fields_ = [
         ("mode", ctypes.c_int),
@@ -277,7 +281,10 @@ _sig("mogbus_client_read_device_id", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8),
 _sig("mogbus_rtu_timing", None, _c.c_uint32, _c.c_uint32, _p(_c.c_uint32), _p(_c.c_uint32))
 _sig("mogbus_now_ms", _c.c_uint64)
 _sig("mogbus_server_step", _c.c_int, _ptr, _c.c_int)
+_sig("mogbus_step", _c.c_int, _ptr, _c.c_int)
 _sig("mogbus_server_stop", None, _ptr)
+_sig("mogbus_server_poll_fds", _c.c_int, _ptr, _p(PollFdC), _c.c_size_t, _p(_c.c_size_t), _p(_c.c_int))
+_sig("mogbus_poll_fds", _c.c_int, _ptr, _p(PollFdC), _c.c_size_t, _p(_c.c_size_t), _p(_c.c_int))
 _sig("mogbus_server_run", _c.c_int, _ptr)
 _sig("mogbus_server_close", None, _ptr)
 _sig("mogbus_server_metrics", _c.c_size_t, _ptr, _c.c_char_p, _c.c_size_t)

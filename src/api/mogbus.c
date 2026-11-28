@@ -1350,6 +1350,104 @@ mogbus_server_step(mogbus_server_t* server, int max_wait_ms)
 	return server_step(&server->server, max_wait_ms);
 }
 
+/**
+ * @brief Runs the gather phase of a group step for `servers` and copies the wait table out.
+ *
+ * Returns MOGBUS_ERR_INVALID (nothing copied) if `cap` is too small. The timeout is 0 when a
+ * gathered step already reports done/error (stop requested), so the host steps at once.
+ */
+static mogbus_result_t
+poll_fds_of(mogbus_t* ctx, server_t* const* servers, u32 n, mogbus_poll_fd_t* out, size_t cap,
+	    size_t* count, int* timeout_ms)
+{
+	net_poll_group_t*	group = &ctx->group;
+	u32			live  = 0;
+	bool			ready = false;
+
+	group->phase      = NET_POLL_GATHER;
+	group->count      = 0;
+	group->timeout_ms = -1;
+	for (u32 i = 0; i < n; i++)
+	{
+		server_t* s = servers[i];
+
+		if (!s ||
+		    s->done)
+			continue;
+		s->obs.group = group;
+		if (server_step(s, -1) == NET_STEP_CONTINUE)
+			live++;
+		else
+			ready = true;
+		s->obs.group = NULL;
+	}
+	*count      = group->count;
+	*timeout_ms = (ready || !live) ? 0 : (group->timeout_ms < 0 || group->timeout_ms > 1000) ? 1000 : group->timeout_ms;
+	if (group->count > cap)
+		return fail(ctx, MOGBUS_ERR_INVALID, "poll table needs %u entries, got room for %zu", group->count, cap);
+	*count = 0;
+	for (u32 i = 0; i < group->count; i++)
+	{
+		const os_wait_entry_t* e = &group->entries[i];
+
+		if (!os_socket_valid(e->fd))
+			continue;
+		out[(*count)++] = (mogbus_poll_fd_t){
+			.fd     = (uint64_t)e->fd,
+			.events = ((e->events & OS_WAIT_IN) ? MOGBUS_POLL_IN : 0) |
+				  ((e->events & OS_WAIT_OUT) ? MOGBUS_POLL_OUT : 0),
+		};
+	}
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_server_poll_fds(mogbus_server_t* server, mogbus_poll_fd_t* out, size_t cap, size_t* count,
+		       int* timeout_ms)
+{
+	server_t*	one;
+	LOCK(server ? server->ctx : NULL);
+
+	if (!server ||
+	    !server->in_use ||
+	    !count ||
+	    !timeout_ms ||
+	    (!out && cap))
+		return MOGBUS_ERR_INVALID;
+	one = &server->server;
+	return poll_fds_of(server->ctx, &one, 1, out, cap, count, timeout_ms);
+}
+
+mogbus_result_t
+mogbus_poll_fds(mogbus_t* ctx, mogbus_poll_fd_t* out, size_t cap, size_t* count, int* timeout_ms)
+{
+	server_t*	servers[MOGBUS_MAX_SERVERS] = { NULL };
+	mogbus_result_t	rc;
+	LOCK(ctx);
+
+	if (!ctx ||
+	    !count ||
+	    !timeout_ms ||
+	    (!out && cap))
+		return MOGBUS_ERR_INVALID;
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			servers[i] = &ctx->servers[i]->server;
+	}
+	rc = poll_fds_of(ctx, servers, MOGBUS_MAX_SERVERS, out, cap, count, timeout_ms);
+	if (rc == MOGBUS_OK &&
+	    ctx->view.interval_ms)
+	{
+		u32 due = view_wait_ms(&ctx->view, os_now_ms());
+
+		if ((u32)*timeout_ms > due)
+			*timeout_ms = (int)due;
+	}
+	return rc;
+}
+
 void
 mogbus_server_stop(mogbus_server_t* server)
 {

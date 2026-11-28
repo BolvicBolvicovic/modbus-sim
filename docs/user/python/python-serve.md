@@ -108,6 +108,8 @@ inlet flow moved by itself: 20 -> 24 m3/h
 
 The exact numbers depend on when you start; they climb by 4 every second.
 
+In an asyncio program use `await server.serve()` instead of a thread, see [asyncio](python-asyncio.md).
+
 ## Next
 
 - [Step 3: Simulate the process from the host](python-simulate.md)

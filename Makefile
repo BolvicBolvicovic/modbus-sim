@@ -236,7 +236,7 @@ TEST_SRCS   := $(filter-out tests/config.c tests/ascii_cli.c tests/rtu_cli.c tes
 endif
 # These fork, use PTYs, termios, poll() or POSIX sockets directly, or spawn the binary through
 # tests_utils/test_support.c; they stay out of the Windows test binary (docs/dev/architecture.md).
-TESTS_POSIX_ONLY = tests/api.c tests/client.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
+TESTS_POSIX_ONLY = tests/api.c tests/poll_fds.c tests/client.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
                    tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c \
                    tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
                    tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/threads.c tests/udp_server.c \
@@ -296,6 +296,7 @@ python-tests: $(LIB_SHARED)
 # and conftest.py need pytest and are not run here.
 python-examples: $(LIB_SHARED)
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/embed.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/asyncio_server.py
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/pump_station.py
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 -m unittest discover -s examples/python -p test_pump_station.py
 

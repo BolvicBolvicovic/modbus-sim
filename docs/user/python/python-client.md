@@ -62,8 +62,13 @@ with mogbus.Context() as ctx:
 
 The server must be started (`start()`): the client blocks until the reply arrives, so it cannot share the thread that steps the server. A Client takes its own lock per call, so threads may share one, though it handles one request at a time; use one Client per thread to talk in parallel.
 
+## From asyncio
+
+\ref mogbus::core::AsyncClient "AsyncClient" has the same constructor and methods as coroutines (`await c.read_holding_registers(0, 4)`) and never blocks the event loop; see [asyncio](python-asyncio.md).
+
 ## Where next
 
 - [Talking to a Modbus server from C](../library/library-client.md) for the C API under it.
+- [Using mogbus in an asyncio program](python-asyncio.md) to serve in the event loop and use `AsyncClient`.
 - [Testing with pytest or unittest](python-testing.md) to use a Client and a server in one test.
 - [User-defined function codes](../modbus/user-defined-function-codes.md#calling-a-user-defined-code-with-the-mogbus-client) for `request()` with a vendor code.

@@ -61,6 +61,27 @@ It returns `MOGBUS_STEP_CONTINUE`, `MOGBUS_STEP_DONE` (stopped, or the byte-stre
 
 Requests are answered inside `mogbus_server_step`, so the simulation, the access hook and a host write never run concurrently with a request: a context has one lock, held while a request is answered and released while the step waits (see [threading](library-lifetimes.md#threading)). A host that wants a background thread can run `mogbus_server_run()` on it and keep calling `mogbus_device_*` from the others. A long computation between steps of your own loop still delays every client.
 
+## Driving the server from your own event loop
+
+`mogbus_server_step(server, 100)` blocks inside the library, which does not suit a host that already has an event loop (asyncio, libuv, GLib, a GUI). Let the loop do the waiting instead. @ref mogbus_server_poll_fds "mogbus_server_poll_fds()" lists what the server is waiting for now and for how long, and the host calls `mogbus_server_step(server, 0)` once something is ready or the time is up:
+
+```c
+mogbus_poll_fd_t fds[64];
+size_t n;
+int timeout_ms;
+
+for (;;)
+{
+	mogbus_server_poll_fds(server, fds, 64, &n, &timeout_ms);
+	/* register fds[i].fd for readability (MOGBUS_POLL_IN) or writability (MOGBUS_POLL_OUT)
+	 * with your loop, wait for one of them or timeout_ms, then unregister them */
+	if (mogbus_server_step(server, 0) != MOGBUS_STEP_CONTINUE)
+		break;
+}
+```
+
+The descriptors are listeners, client connections, the datagram socket or serial descriptor and those of the HTTP endpoint, for every transport. The set changes with the connections, so ask again before every wait. `fd` is a file descriptor on POSIX and a `SOCKET` on Windows, carried as 64 bits. `timeout_ms` (at most 1000) is the next deadline of the server (idle timeouts, delayed responses, frame timing) and is 0 when the server was stopped, so the next step returns `MOGBUS_STEP_DONE`. The call does no I/O and takes the context lock like the other calls; an array too small gives `MOGBUS_ERR_INVALID` with `*count` set to the size needed (64 always fit one server). @ref mogbus_poll_fds "mogbus_poll_fds()" does the same for every server of the context, to be followed by `mogbus_step(ctx, 0)`, and also honours the deadline of the register view. @ref mogbus_server_stop "mogbus_server_stop()" from another thread only sets a flag: have your loop wake itself (a self-pipe or the loop's thread-safe call) after it, or it is noticed at the next deadline, within one second. The Python package uses this for [`Server.serve()`](../python/python-asyncio.md).
+
 ## Check that it answers
 
 @ref mogbus_probe "mogbus_probe()" is what `mogbus --health` uses: one FC 08 Return Query Data request to a unit of a server, `MOGBUS_OK` for the echo or a Modbus exception (on failure the message is `mogbus_last_error(NULL)`). It blocks with a deadline, so the thread that steps the server cannot call it. The program's helper `probe_self()` therefore forks a child that probes while the parent keeps stepping the server until the child exits (`options` and `unit` are the server options and unit id from above):

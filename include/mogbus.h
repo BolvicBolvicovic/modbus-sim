@@ -74,6 +74,7 @@ typedef struct mogbus_server_options_t mogbus_server_options_t;
 typedef struct mogbus_client_options_t mogbus_client_options_t;
 typedef enum mogbus_frame_direction_t mogbus_frame_direction_t;
 typedef struct mogbus_frame_t mogbus_frame_t;
+typedef struct mogbus_poll_fd_t mogbus_poll_fd_t;
 typedef enum mogbus_close_reason_t mogbus_close_reason_t;
 typedef struct mogbus_connection_t mogbus_connection_t;
 typedef enum mogbus_result_t mogbus_result_t;
@@ -1151,6 +1152,48 @@ enum
  */
 MOGBUS_API int		mogbus_server_step(mogbus_server_t* server, int max_wait_ms);
 
+/** @brief Event bits of mogbus_poll_fd_t.events. */
+enum
+{
+	MOGBUS_POLL_IN  = 1,	/**< wait until the descriptor is readable */
+	MOGBUS_POLL_OUT = 2,	/**< wait until the descriptor is writable */
+};
+
+/**
+ * @brief One descriptor a host event loop must watch for a server, see mogbus_server_poll_fds().
+ *
+ * `fd` is a file descriptor on POSIX and a SOCKET on Windows, carried in 64 bits either way.
+ */
+struct mogbus_poll_fd_t
+{
+	uint64_t	fd;		/**< descriptor (POSIX) or SOCKET (Windows); never an invalid one */
+	uint32_t	events;		/**< MOGBUS_POLL_IN and/or MOGBUS_POLL_OUT */
+};
+
+/**
+ * @brief Tells what to wait on before the next mogbus_server_step(), so a host event loop (asyncio,
+ *        libuv, GLib, ...) can wait itself instead of blocking in a step.
+ *
+ * Fills @p out with the descriptors the server is waiting for now (listeners, client
+ * connections, the datagram socket or serial fd, and those of its HTTP endpoint) and
+ * @p timeout_ms with the longest the host may wait: the next deadline of the server (idle
+ * timeouts, delayed responses, frame timing; at most 1000). When any descriptor is ready or the
+ * timeout elapsed, call mogbus_server_step(server, 0), which then does not block. The set
+ * changes with the connections, so ask again before every wait. The timeout is 0 when the
+ * server was asked to stop or has finished, so that the next step reports MOGBUS_STEP_DONE.
+ * The call does no I/O and, like the other calls, holds the context lock.
+ *
+ * @param server Server.
+ * @param out Receives the descriptors; may be NULL when @p cap is 0.
+ * @param cap Entries of @p out.
+ * @param count Receives the number of descriptors; when it is above @p cap nothing was copied
+ *        and the result is MOGBUS_ERR_INVALID (retry with a larger array; 64 entries always fit one server).
+ * @param timeout_ms Receives the timeout in milliseconds.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL argument or too small an array.
+ */
+MOGBUS_API mogbus_result_t	mogbus_server_poll_fds(mogbus_server_t* server, mogbus_poll_fd_t* out,
+						       size_t cap, size_t* count, int* timeout_ms);
+
 /**
  * @brief Asks the server to stop; the next step returns MOGBUS_STEP_DONE.
  *
@@ -1188,6 +1231,24 @@ MOGBUS_API void		mogbus_stop_on_signals(mogbus_server_t* volatile* slot);
  *         stopped or finished (also with no server), MOGBUS_STEP_ERROR if a wait failed.
  */
 MOGBUS_API int		mogbus_step(mogbus_t* ctx, int max_wait_ms);
+
+/**
+ * @brief mogbus_server_poll_fds() for the whole context: the descriptors of every live server and
+ *        the nearest deadline, to be followed by mogbus_step(ctx, 0).
+ *
+ * The timeout also honours the register view of the context (see mogbus_server_options_t), which
+ * mogbus_step() draws; it is 0 when no live server is left, so that the next mogbus_step()
+ * returns MOGBUS_STEP_DONE. The descriptors of one context never exceed 512.
+ *
+ * @param ctx Context.
+ * @param out Receives the descriptors; may be NULL when @p cap is 0.
+ * @param cap Entries of @p out.
+ * @param count Receives the number of descriptors (see mogbus_server_poll_fds()).
+ * @param timeout_ms Receives the timeout in milliseconds.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL argument or too small an array.
+ */
+MOGBUS_API mogbus_result_t	mogbus_poll_fds(mogbus_t* ctx, mogbus_poll_fd_t* out, size_t cap,
+						size_t* count, int* timeout_ms);
 
 /**
  * @brief Steps the whole context until every server stopped or finished, then closes the
