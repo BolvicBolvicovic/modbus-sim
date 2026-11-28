@@ -193,6 +193,21 @@ TEST(ConfigCountExpandsConsecutiveAddresses)
 	ASSERT_FAILURE(device_read(config.devices[0], SPACE_HOLDING, 14, 1, out));
 }
 
+TEST(ConfigPointNoteIsKeptAndSharedByCount)
+{
+	config_t	config = { 0 };
+	device_t*	dev;
+
+	config = load_ok("(device (unit-id 1) (note \"device\") (holding 0 (count 3) (static 1) (note \"Flow\")) (holding 10 (static 1)))");
+	dev = config.devices[0];
+	ASSERT_EQ(dev->point_count == 4);
+	ASSERT_EQ(strcmp(dev->points[0].note, "Flow") == 0 && dev->points[1].note == dev->points[0].note &&
+		  dev->points[2].note == dev->points[0].note);
+	ASSERT_EQ(dev->points[3].note == NULL);
+	EXPECT_ERROR("(device (unit-id 1) (holding 0 (static 1) (note \"01234567890123456789012345678901234567890123456789012345678901230123456789012345678901234567890123456789012345678901234567890123\")))",
+		     "note is longer than 127 bytes");
+}
+
 TEST(ConfigErrorsAreReadable)
 {
 	static const struct cfg_case cases[] = {
@@ -1387,6 +1402,10 @@ TEST(ConfigServerOptionsRejectedPerMode)
 	static const struct cfg_case cases[] = {
 		{ "(server (mode rtu-tcp) (strict-t15 on))" DEV, "strict-t15 is not valid in rtu-tcp mode" },
 		{ "(server (mode rtu-tcp) (strict-t15 off))" DEV, "strict-t15 is not valid in rtu-tcp mode" },
+		{ "(server (mode rtu-tcp) (char-timing on))" DEV, "char-timing is not valid in rtu-tcp mode" },
+		{ "(server (mode ascii-pty) (char-timing on))" DEV, "char-timing is not valid in ascii-pty mode" },
+		{ "(server (mode tcp) (char-timing off))" DEV, "char-timing is not valid in tcp mode" },
+		{ "(server (mode rtu-pty) (char-timing on))" DEV, "char-timing needs (baud N) in rtu-pty mode" },
 		{ "(server (mode rtu-tcp) (parity none))" DEV, "parity is not valid in rtu-tcp mode" },
 		{ "(server (mode rtu-tcp) (parity even))" DEV, "parity is not valid in rtu-tcp mode" },
 		{ "(server (mode rtu-tcp) (stop-bits 1))" DEV, "stop-bits is not valid in rtu-tcp mode" },
@@ -1498,6 +1517,19 @@ TEST(ConfigSerialModesAcceptSerialOptions)
 	ASSERT_EQ(config.servers[0].parity == PARITY_EVEN);
 	ASSERT_EQ(config.servers[0].stop_bits == 2);
 	ASSERT_EQ(config.servers[0].baud == 9600);
+	ASSERT_EQ(config.servers[0].char_timing == false);
+}
+
+TEST(ConfigCharTiming)
+{
+	config_t	config = load_ok("(server (mode rtu-pty) (baud 9600) (char-timing on))"
+		     " (device (unit-id 1) (holding 0))");
+
+	ASSERT_EQ(config.servers[0].char_timing == true);
+	/* A device takes its baud from the tty when the config has none. */
+	config = load_ok("(server (mode rtu-device) (path \"/dev/ttyS0\") (char-timing on))"
+		     " (device (unit-id 1) (holding 0))");
+	ASSERT_EQ(config.servers[0].char_timing == true);
 }
 
 TEST(ConfigNonFiniteStatic)
@@ -2202,6 +2234,7 @@ TEST(ConfigDatagramModes)
 		{ "(server (mode @) (frame-gap-ms 20))" DEV, "is not valid in @ mode" },
 		{ "(server (mode @) (strict-t15 on))" DEV, "is not valid in @ mode" },
 		{ "(server (mode @) (strict-t15 off))" DEV, "is not valid in @ mode" },
+		{ "(server (mode @) (char-timing on))" DEV, "is not valid in @ mode" },
 		{ "(server (mode @) (parity none))" DEV, "is not valid in @ mode" },
 		{ "(server (mode @) (stop-bits 1))" DEV, "is not valid in @ mode" },
 		{ "(server (mode @) (data-bits 8))" DEV, "is not valid in @ mode" },
@@ -2329,6 +2362,26 @@ TEST(ConfigHttpUiAndAllowedHosts)
 		{ "(server (http (allowed-host a)))" DEV, "allowed-host" },
 		{ "(server (http (ui on) (ui off)))" DEV, "more than once" },
 		{ "(server (http (ui maybe)))" DEV, "ui" },
+	};
+	run_cases(cases, ARRAY_COUNT(cases));
+}
+
+TEST(ConfigShowRegisters)
+{
+	config_t config = load_ok("(server (mode tcp))" DEV);
+
+	ASSERT_EQ(config.servers[0].show_registers_ms == 0);
+	config = load_ok("(server (mode tcp) (show-registers 250))" DEV);
+	ASSERT_EQ(config.servers[0].show_registers_ms == 250);
+	config = load_ok("(server (mode udp) (show-registers 10))" DEV);
+	ASSERT_EQ(config.servers[0].show_registers_ms == 10);
+	config = load_ok("(server (mode rtu-pty) (show-registers 60000))" DEV);
+	ASSERT_EQ(config.servers[0].show_registers_ms == 60000);
+	static const struct cfg_case cases[] = {
+		{ "(server (show-registers 9))" DEV, "show-registers" },
+		{ "(server (show-registers 60001))" DEV, "show-registers" },
+		{ "(server (show-registers fast))" DEV, "show-registers" },
+		{ "(server (show-registers 100) (show-registers 200))" DEV, "more than once" },
 	};
 	run_cases(cases, ARRAY_COUNT(cases));
 }

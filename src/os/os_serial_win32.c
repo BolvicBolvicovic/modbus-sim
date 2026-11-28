@@ -57,6 +57,13 @@ os_serial_open(bool pty, const char* label, const char* path, u32 baud,
 	return OS_SERIAL_INVALID;
 }
 
+bool
+os_serial_low_latency(os_serial_t fd)
+{
+	(void)fd;
+	return false;
+}
+
 s64
 os_serial_read(os_serial_t fd, void* buf, u32 len)
 {

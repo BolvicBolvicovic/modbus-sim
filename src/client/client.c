@@ -11,6 +11,7 @@
 #include "modbus/bytes.h"
 #include "modbus/mbap.h"
 #include "modbus/rtu.h"
+#include "net/net_tls.h"
 #include "os/os_socket.h"
 #include "os/os_time.h"
 #include "os/os_wait.h"
@@ -23,7 +24,9 @@
 enum
 {
 	CLIENT_DEFAULT_TIMEOUT_MS = 1000,
-	CLIENT_HOST_MAX		  = 64,
+	CLIENT_HOST_MAX		  = 256,
+	CLIENT_ADDR_MAX		  = 4,
+	CLIENT_TLS_PORT		  = 802,
 	CLIENT_PATH_MAX		  = 128,
 	CLIENT_ERROR_MAX	  = 256,
 };
@@ -44,7 +47,13 @@ struct client_t
 	client_options_t o;
 	char		host[CLIENT_HOST_MAX];
 	char		path[CLIENT_PATH_MAX];
-	os_addr_t	addr;
+	os_addr_t	addrs[CLIENT_ADDR_MAX];	/* the literal, or what the last resolve returned */
+	u32		addr_count;
+	bool		literal;	/* host is an IP literal: never resolved */
+	net_tls_ctx_t	tls_ctx;
+	net_tls_conn_t*	tls;		/* the session of the connected socket, or NULL */
+	bool		tls_retry;	/* the last TLS read/write wants the socket first */
+	char		tls_name[CLIENT_HOST_MAX];
 	os_socket_t	sock;
 	os_serial_t	ser;
 	os_serial_t	slave;		/* unused PTY slave of os_serial_open() */
@@ -109,6 +118,21 @@ client_set_error(client_t* c, const char* fmt, ...)
 	va_end(ap);
 }
 
+/* A host name: letters, digits, '-', '_' and '.' (an IP literal is checked by os_addr_parse). */
+static bool
+host_name_valid(const char* host)
+{
+	if (host[0] == '\0')
+		return false;
+	for (const char* p = host; *p; p++)
+		if (!((*p >= 'a' && *p <= 'z') ||
+		      (*p >= 'A' && *p <= 'Z') ||
+		      (*p >= '0' && *p <= '9') ||
+		      *p == '-' || *p == '_' || *p == '.'))
+			return false;
+	return true;
+}
+
 static bool
 is_serial(const client_t* c)
 {
@@ -159,9 +183,14 @@ client_new(const client_options_t* options, client_t** out)
 		client_detached_errorf("unknown client mode %d", (int)options->mode);
 		return CLIENT_INVALID;
 	}
-	if (options->tls)
+	if (options->tls && options->mode != CLIENT_TCP)
 	{
-		client_detached_errorf("TLS is not supported by the client");
+		client_detached_errorf("TLS is only available in the tcp mode");
+		return CLIENT_INVALID;
+	}
+	if (options->tls && !net_tls_supported())
+	{
+		client_detached_errorf("TLS is not available: built without TLS support");
 		return CLIENT_UNSUPPORTED;
 	}
 	arena = ARENA_ALLOC();
@@ -213,20 +242,43 @@ client_new(const client_options_t* options, client_t** out)
 	}
 
 	host = options->host ? options->host : "127.0.0.1";
-	if (strcmp(host, "localhost") == 0)
-		host = "127.0.0.1";
-	if (options->port == 0)
+	if (options->port == 0 && options->tls)
+		c->o.port = CLIENT_TLS_PORT;
+	if (c->o.port == 0)
 	{
 		client_detached_errorf("a port is required");
 		goto bad;
 	}
+	c->literal = strlen(host) < sizeof(c->host) && os_addr_parse(&c->addrs[0], host, c->o.port);
 	if (strlen(host) >= sizeof(c->host) ||
-	    !os_addr_parse(&c->addr, host, options->port))
+	    (!c->literal && !host_name_valid(host)))
 	{
-		client_detached_errorf("host '%s' is not an IP address", host);
+		client_detached_errorf("host '%s' is not an IP address or a host name", host);
 		goto bad;
 	}
+	c->addr_count = c->literal ? 1 : 0;
 	snprintf(c->host, sizeof(c->host), "%s", host);
+	if (options->tls)
+	{
+		const char*		name = options->tls_server_name ? options->tls_server_name : host;
+		net_tls_client_config_t	config = { .ca_certificate = options->tls_ca_file,
+						   .certificate    = options->tls_cert_file,
+						   .private_key    = options->tls_key_file,
+						   .verify         = options->tls_verify };
+
+		if (strlen(name) >= sizeof(c->tls_name))
+		{
+			client_detached_errorf("TLS server name is longer than %zu characters",
+					       sizeof(c->tls_name) - 1);
+			goto bad;
+		}
+		snprintf(c->tls_name, sizeof(c->tls_name), "%s", name);
+		if (!net_tls_client_ctx_init(&c->tls_ctx, &config))
+		{
+			client_detached_errorf("TLS: %s", c->tls_ctx.error);
+			goto bad;
+		}
+	}
 	*out = c;
 	return CLIENT_OK;
 
@@ -238,6 +290,9 @@ bad:
 static void
 disconnect(client_t* c)
 {
+	if (c->tls)
+		net_tls_conn_close(c->tls);
+	c->tls = NULL;
 	if (os_socket_valid(c->sock))
 		os_socket_close(c->sock);
 	if (c->ser != OS_SERIAL_INVALID)
@@ -257,6 +312,7 @@ client_free(client_t* c)
 	if (!c)
 		return;
 	disconnect(c);
+	net_tls_ctx_close(&c->tls_ctx);
 	arena_release(c->arena);	/* the client lives in its own arena */
 }
 
@@ -273,7 +329,6 @@ static int
 wait_for(const client_t* c, u32 events, u64 deadline)
 {
 	os_wait_entry_t pfd = { .fd = os_socket_valid(c->sock) ? c->sock : (os_socket_t)c->ser,
-				.kind = is_serial(c) ? OS_WAIT_SERIAL : OS_WAIT_SOCKET,
 				.events = events };
 
 	for (;;)
@@ -286,21 +341,95 @@ wait_for(const client_t* c, u32 events, u64 deadline)
 	}
 }
 
+/* Like os_socket_recv(): bytes, 0 at the end of the stream, -1 on error or when it would block
+ * (would_block()); the TLS session is read through net_tls. */
 static s64
-carrier_read(const client_t* c, void* buf, u32 len)
+carrier_read(client_t* c, void* buf, u32 len)
 {
+	if (c->tls)
+	{
+		int			got = 0;
+		net_tls_status_t	st  = net_tls_conn_read(c->tls, buf, (int)len, &got);
+
+		c->tls_retry = st == NET_TLS_WANT_READ || st == NET_TLS_WANT_WRITE;
+		return st == NET_TLS_OK ? got : st == NET_TLS_EOF ? 0 : -1;
+	}
 	return is_serial(c) ? os_serial_read(c->ser, buf, len) : os_socket_recv(c->sock, buf, len);
 }
 
 static s64
-carrier_write(const client_t* c, const void* buf, u32 len)
+carrier_write(client_t* c, const void* buf, u32 len)
 {
+	if (c->tls)
+	{
+		int			put = 0;
+		net_tls_status_t	st  = net_tls_conn_write(c->tls, buf, (int)len, &put);
+
+		c->tls_retry = st == NET_TLS_WANT_READ || st == NET_TLS_WANT_WRITE;
+		return st == NET_TLS_OK ? put : -1;
+	}
 	return is_serial(c) ? os_serial_write(c->ser, buf, len) : os_socket_send(c->sock, buf, len);
+}
+
+/* After a failed carrier call: true when waiting for the descriptor is the answer. */
+static bool
+would_block(const client_t* c)
+{
+	return c->tls ? c->tls_retry : os_retry();
+}
+
+static const char*
+carrier_error_text(const client_t* c)
+{
+	return c->tls ? c->tls->error : os_last_error_text();
+}
+
+/* What to wait for after a would-block: what the TLS session asked for, else `fallback`. */
+static u32
+wait_events(const client_t* c, u32 fallback)
+{
+	u32 events = c->tls ? net_tls_conn_poll_events(c->tls) : 0;
+
+	return events ? events : fallback;
+}
+
+/* Connects the socket to one address within the deadline. */
+static client_status_t
+connect_addr(client_t* c, const os_addr_t* addr, u64 deadline)
+{
+	int rc;
+	int so_error;
+
+	c->sock = os_socket_open(addr, is_datagram(c));
+	if (!os_socket_valid(c->sock))
+		return fail(c, CLIENT_IO, "socket: %s", os_last_error_text());
+	rc       = os_connect(c->sock, addr);
+	so_error = rc < 0 ? os_last_error() : 0;
+	if (rc > 0)
+	{
+		if (wait_for(c, OS_WAIT_OUT, deadline) <= 0)
+		{
+			disconnect(c);
+			return fail(c, CLIENT_IO, "connect %s:%u: timed out", c->host, c->o.port);
+		}
+		so_error = os_connect_status(c->sock);
+	}
+	if (so_error != 0)
+	{
+		disconnect(c);
+		return fail(c, CLIENT_IO, "connect %s:%u: %s", c->host, c->o.port,
+			    os_error_text(so_error));
+	}
+	if (!is_datagram(c))
+		(void)os_tcp_nodelay(c->sock);
+	return CLIENT_OK;
 }
 
 static client_status_t
 connect_until(client_t* c, u64 deadline)
 {
+	client_status_t st = CLIENT_IO;
+
 	if (c->connected)
 		return CLIENT_OK;
 	c->rx_len = 0;
@@ -310,34 +439,60 @@ connect_until(client_t* c, u64 deadline)
 					c->o.parity, c->o.stop_bits, &c->slave, NULL, 0);
 		if (c->ser == OS_SERIAL_INVALID)
 			return fail(c, CLIENT_IO, "cannot open serial device '%s'", c->path);
+		c->connected = true;
+		return CLIENT_OK;
 	}
-	else
-	{
-		int rc;
-		int so_error;
 
-		c->sock = os_socket_open(&c->addr, is_datagram(c));
-		if (!os_socket_valid(c->sock))
-			return fail(c, CLIENT_IO, "socket: %s", os_last_error_text());
-		rc       = os_connect(c->sock, &c->addr);
-		so_error = rc < 0 ? os_last_error() : 0;
-		if (rc > 0)
+	/* A name is resolved on every connect, so a changed address is picked up. This blocks
+	 * for as long as the resolver takes. */
+	if (!c->literal)
+	{
+		c->addr_count = os_resolve(c->host, c->o.port, is_datagram(c), c->addrs, CLIENT_ADDR_MAX);
+		if (c->addr_count == 0)
+			return fail(c, CLIENT_IO, "cannot resolve host '%s'", c->host);
+	}
+	/* The first address that accepts wins; each one gets an equal share of what is left. */
+	for (u32 i = 0; i < c->addr_count; i++)
+	{
+		u64 now = os_now_ms();
+		u64 slice = i + 1 == c->addr_count ?
+			    deadline :
+			    now + remaining_ms(deadline) / (c->addr_count - i);
+
+		st = connect_addr(c, &c->addrs[i], slice);
+		if (st == CLIENT_OK)
+			break;
+	}
+	if (st != CLIENT_OK)
+		return st;
+
+	if (c->o.tls)
+	{
+		c->tls = net_tls_client_conn_new(&c->tls_ctx, (int)c->sock, c->tls_name);
+		if (!c->tls)
 		{
-			if (wait_for(c, OS_WAIT_OUT, deadline) <= 0)
-			{
-				disconnect(c);
-				return fail(c, CLIENT_IO, "connect %s:%u: timed out", c->host, c->o.port);
-			}
-			so_error = os_connect_status(c->sock);
-		}
-		if (so_error != 0)
-		{
+			fail(c, CLIENT_IO, "TLS: %s", c->tls_ctx.error);
 			disconnect(c);
-			return fail(c, CLIENT_IO, "connect %s:%u: %s", c->host, c->o.port,
-				    os_error_text(so_error));
+			return CLIENT_IO;
 		}
-		if (!is_datagram(c))
-			(void)os_tcp_nodelay(c->sock);
+		for (;;)
+		{
+			net_tls_status_t hs = net_tls_conn_handshake(c->tls);
+
+			if (hs == NET_TLS_OK)
+				break;
+			if (hs == NET_TLS_WANT_READ || hs == NET_TLS_WANT_WRITE)
+			{
+				if (wait_for(c, net_tls_conn_poll_events(c->tls), deadline) > 0)
+					continue;
+				fail(c, CLIENT_IO, "TLS handshake with %s:%u timed out", c->host, c->o.port);
+			}
+			else
+				fail(c, CLIENT_IO, "TLS handshake with %s:%u failed: %s", c->host, c->o.port,
+				     hs == NET_TLS_EOF ? "the server closed the connection" : c->tls->error);
+			disconnect(c);
+			return CLIENT_IO;
+		}
 	}
 	c->connected = true;
 	return CLIENT_OK;
@@ -361,6 +516,8 @@ rtu_reply_len(const u8* buf, u32 len, u32* need)
 	if (len < 2)
 		return 0;
 	fc = buf[1];
+	if (fc == 0xAB)
+		return -1;	/* FC 43 extended failure: a variable length after the code */
 	if (fc & 0x80)
 	{
 		*need = 5;
@@ -368,7 +525,15 @@ rtu_reply_len(const u8* buf, u32 len, u32* need)
 	}
 	switch (fc)
 	{
-		case 0x05: case 0x06: case 0x08: case 0x0B: case 0x0F: case 0x10:
+		case 0x08:
+			/* sub-function 0 echoes data of any length */
+			if (len < 4)
+				return 0;
+			if (get_be16(buf + 2) == 0)
+				return -1;
+			*need = 8;
+			return 1;
+		case 0x05: case 0x06: case 0x0B: case 0x0F: case 0x10:
 			*need = 8;
 			return 1;
 		case 0x16:
@@ -465,6 +630,8 @@ exchange(client_t* c, u8 unit, const u8* req, u32 req_len, bool broadcast,
 	u32		sent = 0;
 	client_status_t	st;
 	u8		scratch[16];
+	bool		started = false;	/* a byte of the reply has arrived */
+	u64		last_byte_ms = 0;
 
 	st = connect_until(c, deadline);
 	if (st != CLIENT_OK)
@@ -495,9 +662,9 @@ exchange(client_t* c, u8 unit, const u8* req, u32 req_len, bool broadcast,
 	{
 		s64 n = carrier_write(c, frame + sent, frame_len - sent);
 
-		if (n < 0 && os_retry())
+		if (n < 0 && would_block(c))
 		{
-			if (wait_for(c, OS_WAIT_OUT, deadline) <= 0)
+			if (wait_for(c, wait_events(c, OS_WAIT_OUT), deadline) <= 0)
 			{
 				disconnect(c);
 				return fail(c, CLIENT_IO, "send: timed out");
@@ -506,7 +673,7 @@ exchange(client_t* c, u8 unit, const u8* req, u32 req_len, bool broadcast,
 		}
 		if (n <= 0)
 		{
-			fail(c, CLIENT_IO, "send: %s", os_last_error_text());
+			fail(c, CLIENT_IO, "send: %s", carrier_error_text(c));
 			disconnect(c);
 			return CLIENT_IO;
 		}
@@ -557,20 +724,40 @@ exchange(client_t* c, u8 unit, const u8* req, u32 req_len, bool broadcast,
 			return CLIENT_FRAME;
 		}
 
-		if (wait_for(c, OS_WAIT_IN, deadline) <= 0)
+		u64 wait_until = deadline;
+		bool stalled = false;
+
+		if (started &&
+		    c->o.byte_timeout_ms &&
+		    last_byte_ms + c->o.byte_timeout_ms < deadline)
+		{
+			wait_until = last_byte_ms + c->o.byte_timeout_ms;
+			stalled    = true;
+		}
+		/* Bytes the TLS session already decrypted are not on the socket. */
+		if ((!c->tls || net_tls_conn_pending(c->tls) == 0) &&
+		    wait_for(c, wait_events(c, OS_WAIT_IN), wait_until) <= 0)
 		{
 			if (!is_datagram(c) && !is_serial(c))
 				disconnect(c);	/* a late reply must not answer the next request */
+			if (stalled)
+				return fail(c, CLIENT_TIMEOUT, "reply from unit %u stalled: no byte for %u ms", unit,
+					    c->o.byte_timeout_ms);
 			return fail(c, CLIENT_TIMEOUT, "no reply from unit %u within %u ms", unit,
 				    c->o.timeout_ms);
 		}
 		n = carrier_read(c, c->rx + c->rx_len, (u32)sizeof(c->rx) - c->rx_len);
-		if (n < 0 && os_retry())
+		if (n < 0 && would_block(c))
 			continue;
+		if (n > 0)
+		{
+			started      = true;
+			last_byte_ms = os_now_ms();
+		}
 		if (n < 0 || (n == 0 && !is_datagram(c)))
 		{
 			if (n < 0)
-				fail(c, CLIENT_IO, "recv: %s", os_last_error_text());
+				fail(c, CLIENT_IO, "recv: %s", carrier_error_text(c));
 			else
 				fail(c, CLIENT_IO, "connection closed without a reply");
 			disconnect(c);

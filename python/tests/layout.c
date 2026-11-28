@@ -16,7 +16,10 @@ main(void)
 	typedef mogbus_access_t A;
 	typedef mogbus_frame_t FR;
 	typedef mogbus_action_t AC;
+	typedef mogbus_connection_t CN;
 	typedef mogbus_client_options_t CO;
+	typedef mogbus_poll_fd_t PF;
+	typedef mogbus_client_file_record_t CF;
 
 	SIZE(O);
 	F(O, mode); F(O, bind_address); F(O, port); F(O, path); F(O, fd); F(O, seed);
@@ -24,12 +27,12 @@ main(void)
 	F(O, broadcast_execute); F(O, data_bits); F(O, parity); F(O, stop_bits); F(O, tls_enabled);
 	F(O, tls_handshake_timeout_ms); F(O, tls_certificate); F(O, tls_private_key);
 	F(O, tls_ca_certificate); F(O, tls_require_client_certificate); F(O, tls_min_version);
-	F(O, tls_ciphers_1_2); F(O, tls_ciphersuites_1_3); F(O, http_bind_address); F(O, http_port); F(O, http_control); F(O, http_ui); F(O, http_allowed_hosts); F(O, id);
+	F(O, tls_ciphers_1_2); F(O, tls_ciphersuites_1_3); F(O, http_bind_address); F(O, http_port); F(O, http_control); F(O, http_ui); F(O, http_allowed_hosts); F(O, id); F(O, show_registers_ms); F(O, char_timing);
 
 	SIZE(P);
 	F(P, space); F(P, address); F(P, type); F(P, word_order); F(P, kind); F(P, value); F(P, ramp);
 	F(P, ramp.from); F(P, ramp.to); F(P, ramp.step); F(P, ramp.every_ms); F(P, ramp.mode);
-	F(P, byte_order); F(P, length); F(P, text); F(P, read_only); F(P, clock_field); F(P, clock_utc);
+	F(P, byte_order); F(P, length); F(P, text); F(P, read_only); F(P, clock_field); F(P, clock_utc); F(P, note);
 
 	SIZE(I);
 	F(I, name); F(I, unit_id); F(I, any_unit); F(I, point_count); F(I, faults); F(I, custom_fc_count);
@@ -45,9 +48,17 @@ main(void)
 	SIZE(AC);
 	F(AC, space); F(AC, address); F(AC, on_write); F(AC, name); F(AC, param_count); F(AC, params);
 	F(AC, params[0].name); F(AC, params[0].is_bool); F(AC, params[0].flag); F(AC, params[0].number);
+	SIZE(CN);
+	F(CN, connected); F(CN, id); F(CN, mode); F(CN, peer); F(CN, reason);
 	SIZE(CO);
 	F(CO, mode); F(CO, host); F(CO, port); F(CO, path); F(CO, baud); F(CO, data_bits); F(CO, parity);
 	F(CO, stop_bits); F(CO, tls_enabled); F(CO, timeout_ms); F(CO, retries);
+	SIZE(PF);
+	F(PF, fd); F(PF, events);
+	F(CO, byte_timeout_ms); F(CO, tls_ca_file); F(CO, tls_cert_file); F(CO, tls_key_file);
+	F(CO, tls_server_name); F(CO, tls_verify);
+	SIZE(CF);
+	F(CF, file); F(CF, record); F(CF, length); F(CF, values);
 	printf("faults_count %d\n", MOGBUS_FAULT_KIND_COUNT);
 	printf("space_count %d\n", MOGBUS_SPACE_COUNT);
 	return 0;

@@ -140,7 +140,8 @@
         "docs/user/python/python-hooks.md",
         "docs/user/python/python-lifetimes.md",
         "docs/user/python/python-testing.md",
-        "docs/user/python/python-client.md"
+        "docs/user/python/python-client.md",
+        "docs/user/python/python-asyncio.md"
       ]
     },
     {
@@ -235,6 +236,7 @@
         "docs/user/modbus/exceptions.md",
         "docs/user/modbus/writes.md",
         "docs/user/modbus/unit-ids.md",
+        "docs/user/modbus/decoding-frames.md",
         "docs/user/modbus/timing.md",
         "docs/user/modbus/fault-effects.md"
       ]
@@ -283,7 +285,8 @@
                 "docs/user/config/server/port.md",
                 "docs/user/config/server/bind.md",
                 "docs/user/config/server/seed.md",
-                "docs/user/config/server/idle-timeout-ms.md"
+                "docs/user/config/server/idle-timeout-ms.md",
+                "docs/user/config/server/show-registers.md"
               ]
             },
             {
@@ -292,6 +295,7 @@
                 "docs/user/config/server/baud.md",
                 "docs/user/config/server/frame-gap-ms.md",
                 "docs/user/config/server/strict-t15.md",
+                "docs/user/config/server/char-timing.md",
                 "docs/user/config/server/broadcast-execute.md",
                 "docs/user/config/server/data-bits.md",
                 "docs/user/config/server/parity.md",
@@ -483,10 +487,11 @@
           "title": "Python API",
           "groups": [
             {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "ActionInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
-            {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing", "Frame"]},
-            {"title": "Client", "items": ["Client", "ModbusException"]},
+            {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing", "Frame", "Connection"]},
+            {"title": "Decoding frames", "items": ["decode_frame"]},
+            {"title": "Client", "items": ["Client", "AsyncClient", "ModbusException", "CommEventCounter", "CommEventLog", "DeviceIdentification"]},
             {"title": "Logging and errors", "items": ["set_log_level", "set_log_format", "set_log_sink", "library_version", "MogbusError", "Status"]},
-            {"title": "Enumerations", "items": ["Space", "ValueType", "WordOrder", "ByteOrder", "RampMode", "ClockField", "AccessKind", "AccessTarget", "FrameDirection", "Mode", "Parity", "TlsVersion", "FaultKind", "LogLevel", "LogFormat"]}
+            {"title": "Enumerations", "items": ["Space", "ValueType", "WordOrder", "ByteOrder", "RampMode", "ClockField", "AccessKind", "AccessTarget", "FrameDirection", "Framing", "Direction", "CloseReason", "Mode", "Parity", "TlsVersion", "FaultKind", "LogLevel", "LogFormat"]}
           ]
         }
       ]

@@ -5,13 +5,16 @@ set -eu
 #   net -> modbus -> device -> util -> os
 #   net -> webui (a static page; webui includes only util and os)
 #   config -> device -> util
-#   server -> net, config -> server (server_mode.h, server_limits.h only)
-#   client -> modbus, util (a master over the wire; it knows no server, net or device)
-#   api -> client, config, device, modbus, net, server, util
+#   server -> net, config -> server (server.h only)
+#   client -> modbus, util, net/net_tls.h (a master over the wire; it knows no server, device or other net header)
+#   view -> device, util, os (the live register view; api -> view)
+#   decode -> modbus, util (a frame decoder; no device state, server or net)
+#   api -> client, config, decode, device, modbus, net, server, view, util
 #   main.c -> mogbus.h only (the binary is a pure client of the public API)
 # Only src/server/server_config.{c,h} may use config/, and config/ may use only
-# server_mode.h and server_limits.h from server/, so WITH_CONFIG=0 leaves out
-# config/ and server_config.c and nothing else changes.
+# server.h from server/ (the transport enum and the limits; server.h includes net/ headers
+# itself, so config sees them transitively, but this check looks at direct includes only), so
+# WITH_CONFIG=0 leaves out config/ and server_config.c and nothing else changes.
 #
 # os/ is the bottom layer and the only place in src/ that may include OS headers (see
 # check_os_headers); every layer may include os/, and os/ includes no other module.
@@ -28,7 +31,7 @@ check_layer() {
 	[ -d "$dir" ] || return 0
 
 	bad=$(grep -rnE \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|client|util|os|webui)/[^">]+)[">]' \
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*(net|modbus|device|config|server|api|client|decode|util|os|webui|view)/[^">]+)[">]' \
 		"$dir" 2>/dev/null || true)
 	[ -n "$bad" ] || return 0
 
@@ -40,7 +43,7 @@ check_layer() {
 		IFS=$old_ifs
 		[ -n "$line" ] || continue
 		include=$(printf '%s\n' "$line" | sed -nE \
-			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|client|util|os|webui)/[^">]+))[">].*!\1!p')
+			's!.*#[[:space:]]*include[[:space:]]*[<"](((\.\./)*(net|modbus|device|config|server|api|client|decode|util|os|webui|view)/[^">]+))[">].*!\1!p')
 		target=$(printf '%s\n' "$include" | sed -E 's!^(\.\./)*!!; s!/.*!!')
 		case " $allowed " in
 		*" $target "*) ;;
@@ -90,8 +93,16 @@ check_extra_rules() {
 		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)config/' \
 		"only server_config.{c,h} may include config/" 'server_config.*'
 	check_dir_forbidden_include "$root/src/config" \
-		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)server/(server|server_config)\.h[">]' \
-		"config/ may include only server_mode.h and server_limits.h from server/"
+		'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)server/server_config\.h[">]' \
+		"config/ may include only server.h from server/"
+	# The client talks TLS through net_tls (and nothing else of net/).
+	bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]((\.\./)*)net/' "$root/src/client" 2>/dev/null |
+		grep -v 'net/net_tls\.h' || true)
+	if [ -n "$bad" ]; then
+		printf 'Forbidden dependency include found (client/ may include only net/net_tls.h from net/):\n' >&2
+		printf '%s\n' "$bad" >&2
+		exit 1
+	fi
 }
 
 # Headers that belong to the OS: only src/os/ may include them (ISO C headers such as stdio.h,
@@ -130,8 +141,10 @@ check_tree() {
 	check_layer "$root" device "device util os"
 	check_layer "$root" config "config device server util os"
 	check_layer "$root" server "server net modbus device util config os"
-	check_layer "$root" client "client modbus util os"
-	check_layer "$root" api    "api client config device modbus net server util os"
+	check_layer "$root" client "client modbus net util os"
+	check_layer "$root" view   "view device util os"
+	check_layer "$root" decode "decode modbus util os"
+	check_layer "$root" api    "api client config decode device modbus net server view util os"
 	check_layer "$root" util   "util os"
 	check_layer "$root" os     "os"
 	check_extra_rules "$root"
@@ -146,7 +159,7 @@ self_test() {
 	clean=$tmp/clean
 	mkdir -p "$clean/src/config" "$clean/src/device" "$clean/src/server" "$clean/src/api" \
 		 "$clean/src/modbus" "$clean/src/net" "$clean/src/util" "$clean/src/os"
-	printf '#include "server/server_mode.h"\n' >"$clean/src/config/ok-server.c"
+	printf '#include "server/server.h"\n' >"$clean/src/config/ok-server.c"
 	printf '#include "config/config.h"\n#include "net/net_common.h"\n' >"$clean/src/server/server_config.c"
 	printf '#include "net/net_common.h"\n' >"$clean/src/server/ok.c"
 	printf '#include "server/server.h"\n#include "config/config.h"\n' >"$clean/src/api/ok.c"
@@ -164,6 +177,7 @@ self_test() {
 	printf '#include "net/rtu_framer.h"\n' >"$clean/src/api/ok-net.c"
 	mkdir -p "$clean/src/client"
 	printf '#include "modbus/mbap.h"\n#include "os/os_wait.h"\n#include "util/log.h"\n' >"$clean/src/client/ok.c"
+	printf '#include "net/net_tls.h"\n' >>"$clean/src/client/ok.c"
 	printf '#include "client/client.h"\n' >>"$clean/src/api/ok-net.c"
 	printf '#include "mogbus.h"\n#include <stdio.h>\n' >"$clean/src/main.c"
 	printf '#include "os/os_socket.h"\n#include <poll.h>\n' >"$clean/src/os/ok.c" 2>/dev/null || true
@@ -183,6 +197,7 @@ self_test() {
 	}
 
 	# Issue 36 acceptance fixtures.
+	expect_fail client-net      client "net/net_common.h"
 	expect_fail net-device      net    "device/device.h"
 	expect_fail modbus-config   modbus "config/config.h"
 
@@ -209,7 +224,7 @@ self_test() {
 	expect_fail device-webui    device "webui/webui.h"
 	expect_fail net-server      net    "server/server.h"
 	expect_fail device-api      device "api/x.h"
-	expect_fail config-server   config "server/server.h"
+	expect_fail config-server   config "server/server_config.h"
 	expect_fail server-config   server "config/config.h"
 	expect_fail client-net      client "net/net_common.h"
 	expect_fail client-device   client "device/device.h"
@@ -227,6 +242,16 @@ self_test() {
 		fi
 	done
 	expect_fail os-util         os     "util/log.h"
+	expect_fail view-net        view   "net/net_common.h"
+	expect_fail view-server     view   "server/server.h"
+	expect_fail view-api        view   "api/x.h"
+	expect_fail device-view     device "view/view.h"
+	expect_fail net-view        net    "view/view.h"
+	expect_fail decode-net      decode "net/net_common.h"
+	expect_fail decode-config   decode "config/config.h"
+	expect_fail decode-api      decode "api/x.h"
+	expect_fail modbus-decode   modbus "decode/decode.h"
+	expect_fail net-decode      net    "decode/decode.h"
 
 	mkdir -p "$tmp/main-internal/src"
 	printf '#include "mogbus.h"\n#include "util/log.h"\n' >"$tmp/main-internal/src/main.c"

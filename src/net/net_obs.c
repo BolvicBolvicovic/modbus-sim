@@ -858,7 +858,7 @@ net_poll(net_obs_t* obs, os_wait_entry_t* fds, u32 count, int timeout_ms)
 
 	if (group && group->phase == NET_POLL_GATHER)
 	{
-		for (u32 i = 0; i < n && group->count < OS_WAIT_MAX; i++)
+		for (u32 i = 0; i < n && group->count < NET_OBS_GROUP_MAX; i++)
 		{
 			group->entries[group->count] = all[i];
 			group->owner[group->count++] = obs;

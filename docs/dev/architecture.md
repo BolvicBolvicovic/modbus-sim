@@ -57,12 +57,14 @@ src/            the program, one folder per module (headers next to their .c fil
   modbus/       Modbus TCP MBAP, RTU CRC/framing, ASCII hex/LRC framing, and PDU handlers
   webui/        the built-in browser page (index.html embedded as a byte array at build time)
   net/          TCP, RTU byte-stream, ASCII byte-stream, RTU-over-TCP, ASCII-over-TCP, UDP, ASCII-over-UDP and RTU-over-UDP network loops; OpenSSL TLS wrapper or no-TLS stub
+  view/         the live register view (terminal table or lines) behind show_registers_ms
+  decode/       the frame decoder (captured MBAP/RTU/ASCII frames as text or JSON)
   api/          the public C API implementation (top layer)
   server/       transport-independent server facade and the config adapter
   util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest); tests/fuzz/ has the libFuzzer harnesses (make fuzz-run)
-tools/          modbus_probe.py, loadtest.py, run_fuzz.sh, fuzz_seeds.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
+tools/          modbus_probe.py (client and `load` test), fuzz.py, changes.sh, check_deps.sh, check_docs.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           git submodule: the vlib toolchain (arena allocator, test framework), unmodified
 ```
@@ -71,22 +73,25 @@ vlib/           git submodule: the vlib toolchain (arena allocator, test framewo
 
 | Folder | Files | Responsibility |
 |---|---|---|
-| `src/os` | `os_socket`, `os_wait`, `os_mutex`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets and byte-stream handles, `poll()` on POSIX, `WSAPoll` on Windows), a recursive mutex with caller-owned storage (`os_mutex`: pthread, `CRITICAL_SECTION`), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
+| `src/os` | `os_socket`, `os_wait`, `os_mutex`, `os_serial`, `os_time`, `os_console`, `os_error` (each with an `os_X_posix.c` and an `os_X_win32.c`) | the only code that includes OS headers: nonblocking TCP/UDP sockets and address text, `os_wait` (event wait over sockets: its entry type is the platform's own `struct pollfd`/`WSAPOLLFD`, and the call is `poll()` on POSIX, `WSAPoll` on Windows), a recursive mutex with caller-owned storage (`os_mutex`: pthread, `CRITICAL_SECTION`), serial/PTY open and termios line setup with the baud table, monotonic and UTC clocks, the SIGINT/SIGTERM stop hook and the stop-flag type, the terminal size and ANSI check (`os_console_terminal`, which also turns on VT processing on Windows), and last-error classification (`os_retry()`, `os_interrupted()`, ...) so no other file reads `errno` |
 | `src/util` | `rng`, `log`, `arena_impl` | reproducible dice, logging (stderr by default, or a host sink via `log_set_sink`; level via `log_set_level`) |
 | `src/device` | `device`, `machine`, `behaviour`, `encode`, `fault` | the device model and compiled machine runtime; knows nothing about Modbus framing, TCP or Scheme |
 | `src/modbus` | `mbap`, `pdu`, `rtu`, `ascii`, `bytes.h` | TCP MBAP, RTU CRC/frame codec, ASCII hex/LRC codec and delimiter scan, function codes, exceptions; knows nothing about sockets or Scheme |
 | `src/net` | `tcp_server`, `net_tls`/`net_tls_stub`, `net_tcp_pool`, `rtu_server`, `ascii_server`, `ascii_tcp_server`, `rtu_tcp_server`, `udp_server`, `ascii_udp_server`, `rtu_udp_server`, `net_udp`, `rtu_framer`, `net_common` | TCP sockets, optional TLS for MBAP/TCP (OpenSSL wrapper or no-TLS stub), shared TCP accept/idle/wait-table connection pool, RTU byte stream, ASCII byte stream, ASCII-over-TCP, RTU-over-TCP, shared RTU rx/framing, `poll` loops, delayed sending, shared dispatch/helpers |
 | `src/webui` | `webui`, `index.html` | the web page served on `/` of the HTTP endpoint (a vanilla-JS client of `/api/`): `index.html` is turned into a C array by a Makefile rule (`od` and `awk`, no other tools) in the gitignored `page_data.h`; knows nothing of the other modules |
 | `src/config` | `form`, `config_device`, `config_machine`, `config_fault`, `config` | s7 reading, option checking, error messages |
-| `src/server` | `server`, `server_mode.h`, `server_limits.h`, `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
-| `src/client` | `client` | the Modbus client (master): one request/reply exchange over TCP, UDP or a serial line in every framing (MBAP, RTU, ASCII), lazy connect, reconnect after an error, deadlines and timeout retries; owns its arena and shares nothing with the servers; knows only the `modbus` codecs, `util` and `os` |
-| `src/api` | `mogbus.c`, `probe.c`, `client_api.c` | the public C API behind `include/mogbus.h` (see [Embedding mogbus in C](../user/library/library-start.md)): context, devices and points, server handles, logging, `client_api.c` (the public client calls: function code encoding over `src/client`, `mogbus_client_*`), and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
-| `src/main.c` | | command line, `--check` summary, printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
+| `src/server` | `server` (with the transport enum `server_mode_t` and the limits and option defaults), `server_config` | transport-independent facade: `server_options_t`/`server_t` (`init/step/stop/close/serve/run`), PTY/serial open and baud auto-detect, TLS validation (`server_check_tls`); `server_config` is the only file that reads `config_t` |
+| `src/view` | `view` | the live register view of a context (`show_registers_ms`): a terminal table redrawn in place (ANSI sequences, size from `os_console_terminal`, log lines kept in a pane below it through a log sink) or snapshot-then-changes text/JSON lines; renders into a buffer so tests can use a fake terminal size; knows only `device`, `util` and `os` |
+| `src/decode` | `decode` | the frame decoder behind `mogbus --decode`, `mogbus_decode_frame()` and Python `decode_frame()`: writes the ADU (MBAP, RTU, ASCII) and PDU fields of every supported function code as text or JSON into a caller buffer, with no allocation and no context. One walk feeds a small writer for both formats; framing is detected from the bytes (protocol id and length, CRC, `:` and LRC), the direction by decoding the PDU both ways with the output muted and comparing the structural problems and the refused values each reading finds; knows only the `modbus` codecs, `util` and `os` |
+| `src/client` | `client` | the Modbus client (master): one request/reply exchange over TCP (optionally TLS through `net_tls`), UDP or a serial line in every framing (MBAP, RTU, ASCII), lazy connect (names are resolved with `os_resolve` at connect time, the first address that connects wins), reconnect after an error, deadlines, byte timeouts and timeout retries; owns its arena and shares nothing with the servers; knows only the `modbus` codecs, `net/net_tls.h`, `util` and `os` |
+| `src/api` | `mogbus.c`, `probe.c`, `client_api.c`, `decode_api.c` | the public C API behind `include/mogbus.h` (see [Embedding mogbus in C](../user/library/library-start.md)): context, devices and points, server handles, logging, `client_api.c` (the public client calls: function code encoding and strict reply checks over `src/client`, `mogbus_client_*`, including the follow-up of device identification and the typed calls of FC 07, 08, 0B, 0C, 11, 14, 15, 18 and 2B/0D), `decode_api.c` (`mogbus_decode_frame`, a thin wrapper of `src/decode` that needs no context and no lock), and `mogbus_probe` (the `--health` client: one FC 08 echo over any network transport, built on the `modbus` codecs; a TLS server without required client certificates is probed through a `client_t`); the top layer, nothing includes it; public enums mirror the internal ones, checked with `_Static_assert` |
+| `src/main.c` | | command line, `--check` (quiet by default, `=verbose` prints the summary), printing the PTY slave name; a pure client of `mogbus.h` (it includes nothing else) and linked against the static library, so the binary and an embedding host share one wiring path |
 
 Dependencies point one way: `server → net → modbus → device → util → os`, `net → webui` (webui includes only util and os), `config → device → util`, every layer may also use `os`, and `os` includes no other module (only vlib),
-`server_config → server, config`, `main → api` (only through `include/mogbus.h`), and `client → modbus, util, os` (no TLS, no server, no device), and `api → client, server_config, server, config, net, modbus, device, util, os` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
-`server/server_mode.h` (the transport enum) and `server/server_limits.h` (array limits and option defaults shared with `api`),
-each in its own header so config does not pull in `net`, and `api` does not need config for them.
+`server_config → server, config`, `view → device, util, os`, `decode → modbus, util, os`, `main → api` (only through `include/mogbus.h`), and `client → modbus, util, os` and `net/net_tls.h` only (no server, no device), and `api → client, server_config, server, view, config, decode, net, modbus, device, util, os` (`net` only for the RTU timing helpers, `modbus` only for the probe's codecs). `config` includes only
+`server/server.h` among the server headers (never `server_config.h`), for the transport enum `server_mode_t` and the array limits and
+option defaults shared with `api`. `server.h` includes the `net` headers for the per-transport option structs it embeds, so config sees them
+transitively; `tools/check_deps.sh` checks direct includes, and config itself uses nothing from `net`.
 A host that builds `server_options_t` itself can drop `config/` and `server_config.c`: `WITH_CONFIG=0`
 does exactly that (plus s7 and `main.c`); `api` then compiles its two config entry points as stubs that
 fail with `built without config support`. `tools/check_deps.sh` enforces that only `server_config.{c,h}` includes `config/` and that `main.c` includes only `mogbus.h`.
@@ -94,8 +99,10 @@ fail with `built without config support`. `tools/check_deps.sh` enforces that on
 caller-owned struct holding the `SSL_CTX*` plus its own pool of 32 `net_tls_conn_t` sessions
 (handshake/want flags and deadline), so there is no process-global TLS state. In a no-TLS build `net_tls_stub.c`
 implements the same API without OpenSSL. `net_tcp_pool` owns only listener, accept, idle and
-poll-table bookkeeping for the three TCP transports; per-connection framing/TLS setup stays in
-the servers. `server_config` only supplies borrowed TLS strings through `server_options_t` and `config`
+poll-table bookkeeping for the three TCP transports and is the only place that calls the connection hook
+(`net_obs_t.conn_fn`, open at accept, close from `net_tcp_pool_close_conn` with a `net_close_reason_t` chosen by the
+server's call site; `net_tcp_conn_t.id`/`announced` give the per-server id and the once-only close); per-connection
+framing/TLS setup stays in the servers. `server_config` only supplies borrowed TLS strings through `server_options_t` and `config`
 rejects `(tls ...)` at load time in no-TLS builds.
 `build_config.h` provides the `WITH_TLS` and `WITH_CONFIG` fallbacks for direct compilations. `device` and `modbus`
 can be tested alone, and are (see `tests/`).
@@ -191,8 +198,8 @@ fd the host already owns (socketpair, PTY master) and never close it; the config
 The net layer installs no signal handlers. `main.c` calls `mogbus_stop_on_signals(&g_server)`, which
 (through `os_console_on_stop`) handles SIGINT/SIGTERM (no `SA_RESTART`, calling `mogbus_server_stop`,
 which only sets a flag, on the running server) and ignores SIGPIPE. Plain socket sends use `MSG_NOSIGNAL`; RTU/ASCII
-byte-stream writes go to PTY/serial fds. OpenSSL writes to the socket with plain `write()`, so a host
-embedding a TLS server must ignore SIGPIPE itself.
+byte-stream writes go to PTY/serial fds. TLS sessions (server and client) use a custom OpenSSL BIO over
+`os_socket_send()`/`os_socket_recv()` instead of the stock socket BIO, whose `write()` would raise SIGPIPE.
 
 ### Threading
 
@@ -245,6 +252,16 @@ length field, so frame boundaries are detected by inter-frame silence. When a ba
 for inter-frame boundaries. Optional `strict_t15` enables a best-effort t1.5 intra-frame discard
 heuristic in baud-derived auto mode for RTU byte streams. `frame-gap-ms` is an explicit inter-frame
 override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a practical approximation.
+Optional `char_timing` (needs a baud; config `char-timing`, library `char_timing`) replaces both
+the read-boundary heuristics: `rtu_framer_rx_chars()` dates each character of a `read()` chunk
+(newest at the read, the others a character time apart, never closer than one to the previous one),
+discards a frame on a silence over t1.5 and drops characters until t3.5 of silence, and processes a
+frame at t3.5 without deferring incomplete ones; `frame-gap-ms` still overrides t3.5. The server
+paces replies through the poll timeout (`rtu_server_t.pace_tx`/`tx_start_us`: a reply character j
+may be written once `(j+1)` character times have passed since the first attempt) when the handle is
+not a real tty (`os_serial_baud() == 0`), and `server.c` asks a real `rtu-device` for low latency
+(`os_serial_low_latency()`, `ASYNC_LOW_LATENCY` on Linux, a stub on Windows). Precision limits are in
+`docs/user/config/server/char-timing.md`.
 After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0)
 produce no response. Delayed fault responses use the same due-time poll pattern as TCP.
 
@@ -353,7 +370,7 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
   Public functions in `include/mogbus.h` document every `@param` and `@return`; internal ones add
   them only when the brief does not already say it. Comments inside function bodies stay `/* */`.
   `make docs` (CI job `docs`) runs Doxygen with warnings as errors, then
-  `tools/check_doc_briefs.sh`, which fails for any file, struct, union, enum or opaque or
+  `tools/check_docs.sh briefs`, which fails for any file, struct, union, enum or opaque or
   function-pointer typedef without a brief, then builds the site (see [Documentation site](docs.md)).
 - Typedef layout: forward typedefs (`typedef struct x_t x_t;`, enums and unions alike) are grouped
   at the top of the file after the includes; the brief sits directly above the `struct x_t {` or
@@ -371,7 +388,7 @@ Robustness evidence beyond the unit tests:
   framer (fed in fuzzer-chosen chunks with simulated gaps), and ASCII scanning/decoding. Each checks
   invariants (response sizes, echoed function codes, encode/decode round trips). `make fuzz` builds
   them in `build/fuzz/`, `make fuzz-run FUZZ_SECONDS=N` seeds them with one valid request per FC
-  (`tools/fuzz_seeds.py`) and runs each for N s, in parallel (at most `FUZZ_JOBS`, default `nproc`); the CI `fuzz` job runs
+  and runs each (`tools/fuzz.py`) for N s, in parallel (at most `FUZZ_JOBS`, default `nproc`); the CI `fuzz` job runs
   30 s each per push, restoring and saving the corpus (`build/fuzz/corpus`) with `actions/cache`, and
   uploads crash reproducers. `.github/workflows/fuzz-nightly.yml` runs 600 s daily on the same corpus and
   opens (or comments on) the issue "Nightly fuzzing found a crash" on failure. Replay one with `build/fuzz/fuzz_NAME FILE`.
@@ -379,7 +396,7 @@ Robustness evidence beyond the unit tests:
   through the API: a request sent one byte at a time is answered, and after seeded random garbage
   (biased to frame-start bytes) in random chunks or datagrams, and frames split across datagrams,
   the server still answers a valid request.
-- **Load and stability:** `tools/loadtest.py` runs N concurrent TCP clients for a duration and reports
+- **Load and stability:** `tools/modbus_probe.py load` runs N concurrent TCP clients for a duration and reports
   throughput, latency percentiles, errors and the server's RSS (start, peak, end); it fails on any
   error or memory growth. CI runs 32 clients for 5 s; run it for hours for a soak test. On a laptop
   the Python client tops out near 26 000 req/s against one mogbus with flat RSS (about 10 MB).
@@ -400,15 +417,15 @@ pick free ports, so no two tests share a resource. The queue is ordered slowest 
 durations of the previous run (`BIN.times`, or `RUN_TESTS_TIMES`); new tests go first.
 `make tests` is a dispatcher over the scopes in `WHAT` (`c`, `python`, `docs`, `all`, `auto`): `c` is the run
 described above, `python` runs `python-tests` and `python-examples`, `docs` runs `make docs` and
-`tools/check_doc_examples.sh`. `auto` (the local default) chooses the scopes from the files changed versus the
-merge base with `origin/main` plus uncommitted and untracked files (`tools/test_scope.sh`, which prints its
+`tools/check_docs.sh examples`. `auto` (the local default) chooses the scopes from the files changed versus the
+merge base with `origin/main` plus uncommitted and untracked files (`tools/changes.sh scope`, which prints its
 choice); when the `CI` environment variable is set the default is `c`, and CI jobs for Python and docs keep their
 own targets. `SUITES=a,b` limits the `c` scope to those vtest suites (`RUN_TESTS_SUITES` for `run_tests.sh`).
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
 Compilations emit `.d` dependency files (`-MMD -MP`), so editing a header rebuilds every
 object that includes it. CI (`.github/workflows/ci.yml`) starts only for code paths, and its
-`changes` job (`tools/ci_changes.sh`) skips the build and test jobs when C files changed only in
+`changes` job (`tools/changes.sh ci`, sharing one file-to-category table with the `make tests` scope selection) skips the build and test jobs when C files changed only in
 comments or only packaging files changed. It runs these checks plus a `WITH_TLS=0` job
 with no OpenSSL install step, which also runs `WITH_CONFIG=0` (and `WITH_CONFIG=0 WITH_TLS=0`) tests. The Makefile is based on the one `vlib/gen_makefile.py` creates, but finds
 sources recursively because modules have sub-folders. `WITH_TLS=auto` (default) detects OpenSSL

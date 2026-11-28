@@ -21,6 +21,10 @@
  * a best-effort intra-frame t1.5 discard heuristic on read() boundaries in baud-derived auto
  * mode. Otherwise fall back to a fixed conservative silence gap. frame_gap_ms remains an
  * explicit inter-frame override for compatibility and deterministic testing.
+ *
+ * With char_timing (and a baud) the receive side dates every character instead of every read()
+ * (rtu_framer_rx_chars), and a handle that is not a real serial port (PTY, socket, host fd) gets
+ * its replies paced at the line rate, one character per 11 bit times, through the poll timeout.
  */
 
 static void
@@ -33,6 +37,7 @@ rtu_server_init_ctx(rtu_server_t* server)
 		.frame_gap_ms = server->options.frame_gap_ms,
 		.baud = server->options.baud,
 		.strict_t15 = server->options.strict_t15,
+		.char_timing = server->options.char_timing && server->options.baud > 0,
 		.broadcast_execute = server->options.broadcast_execute,
 		.peer = NULL,
 		.obs = server->options.obs,
@@ -54,7 +59,19 @@ read_available(rtu_server_t* server, u64 now_ms)
 	now_us = os_now_us();
 	rtu_framer_note_gap(f, &server->ctx, now_ms, now_us);
 
-	got = os_serial_read(server->options.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
+	if (server->ctx.char_timing)
+	{
+		u8 chunk[MODBUS_RTU_MAX_FRAME];
+
+		got = os_serial_read(server->options.fd, chunk, sizeof(chunk));
+		if (got > 0)
+		{
+			rtu_framer_rx_chars(f, &server->ctx, chunk, (u32)got, now_ms, now_us);
+			return true;
+		}
+	}
+	else
+		got = os_serial_read(server->options.fd, f->rx + f->rx_len, sizeof(f->rx) - f->rx_len);
 	if (got == 0)
 	{
 		server->read_closed = true;
@@ -80,6 +97,7 @@ static bool
 write_pending(rtu_server_t* server)
 {
 	s64	sent = 0;
+	u32	want;
 	pending_response_t*	p = &server->framer.pending;
 
 	if (!p->active)
@@ -87,7 +105,23 @@ write_pending(rtu_server_t* server)
 	if (p->due_ms > os_now_ms())
 		return true;
 
-	sent = os_serial_write(server->options.fd, p->buf + p->sent, p->len - p->sent);
+	want = p->len - p->sent;
+	if (server->pace_tx)
+	{
+		/* Character j is on the wire from tx_start_us + j * t_char and complete one character
+		 * time later, so only the characters whose time has passed may go out. */
+		u64	now_us = os_now_us();
+		u64	chr = rtu_char_us(server->options.baud);
+		u64	allowed;
+
+		if (server->tx_start_us == 0)
+			server->tx_start_us = now_us;
+		allowed = (now_us - server->tx_start_us) / chr;
+		if (allowed <= p->sent)
+			return true;
+		want = MIN(want, (u32)(allowed - p->sent));
+	}
+	sent = os_serial_write(server->options.fd, p->buf + p->sent, want);
 	if (sent < 0)
 	{
 		if (os_retry())
@@ -97,7 +131,10 @@ write_pending(rtu_server_t* server)
 
 	p->sent += (u32)sent;
 	if (p->sent >= p->len)
+	{
 		pending_response_clear(p);
+		server->tx_start_us = 0;
+	}
 	return true;
 }
 
@@ -112,13 +149,25 @@ rtu_build_poll(const rtu_server_t* server, os_wait_entry_t* pfd, int* timeout,
 	*pfd = (os_wait_entry_t){ .fd = server->options.fd, .events = 0 };
 	if (f->pending.active)
 	{
-		if (f->pending.due_ms <= now_ms)
+		if (f->pending.due_ms > now_ms)
 		{
-			pfd->events |= OS_WAIT_OUT;
-			*timeout = 0;
-		}
-		else
 			*timeout = (int)(f->pending.due_ms - now_ms);
+			return;
+		}
+		if (server->pace_tx &&
+		    server->tx_start_us != 0)
+		{
+			u64 now_us = os_now_us();
+			u64 next = server->tx_start_us + (u64)(f->pending.sent + 1) * rtu_char_us(server->options.baud);
+
+			if (next > now_us)
+			{
+				*timeout = (int)((next - now_us + 999) / 1000);
+				return;
+			}
+		}
+		pfd->events |= OS_WAIT_OUT;
+		*timeout = 0;
 		return;
 	}
 
@@ -194,7 +243,12 @@ rtu_handle_revents(rtu_server_t* server, u32 revents, u64 now_ms)
 static void
 rtu_log_startup(const rtu_server_options_t* options, u32 gap_ms)
 {
-	if (options->frame_gap_ms > 0)
+	if (options->char_timing && options->baud > 0)
+		LOG_INFO("RTU listening on fd %d (%u device%s), baud %u, character timing: t1.5 %u us, t3.5 %u us. Ctrl-C to stop.",
+			 options->fd, options->device_count, options->device_count == 1 ? "" : "s",
+			 options->baud, rtu_t15_us(options->baud),
+			 options->frame_gap_ms > 0 ? options->frame_gap_ms * 1000 : rtu_t35_us(options->baud));
+	else if (options->frame_gap_ms > 0)
 		LOG_INFO("RTU listening on fd %d (%u device%s), frame gap %u ms (override). Ctrl-C to stop.",
 			 options->fd, options->device_count, options->device_count == 1 ? "" : "s", gap_ms);
 	else if (options->baud > 0)
@@ -260,6 +314,8 @@ rtu_server_init(rtu_server_t* server, const rtu_server_options_t* options)
 	rng_seed(&server->rng, options->seed);
 	rtu_framer_init(&server->framer);
 	rtu_server_init_ctx(server);
+	/* A real serial port already takes one character time per byte; anything else is paced here. */
+	server->pace_tx = server->ctx.char_timing && os_serial_baud(options->fd) == 0;
 	rtu_log_startup(options, rtu_effective_gap_ms(options->frame_gap_ms, options->baud));
 	server->open = true;
 	return 0;

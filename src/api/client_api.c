@@ -46,6 +46,7 @@ mogbus_client_options_defaults(void)
 		.parity     = MOGBUS_PARITY_NONE,
 		.stop_bits  = 1,
 		.timeout_ms = 1000,
+		.tls_verify = true,
 	};
 }
 
@@ -84,6 +85,12 @@ mogbus_client_open(const mogbus_client_options_t* options, mogbus_client_t** out
 	o.tls        = options->tls_enabled;
 	o.timeout_ms = options->timeout_ms;
 	o.retries    = options->retries;
+	o.byte_timeout_ms = options->byte_timeout_ms;
+	o.tls_ca_file     = options->tls_ca_file;
+	o.tls_cert_file   = options->tls_cert_file;
+	o.tls_key_file    = options->tls_key_file;
+	o.tls_server_name = options->tls_server_name;
+	o.tls_verify      = options->tls_verify;
 	return to_error(client_new(&o, (client_t**)out));
 }
 
@@ -401,8 +408,217 @@ mogbus_client_read_write_registers(mogbus_client_t* client, uint8_t unit, uint16
 mogbus_result_t
 mogbus_client_read_device_id(mogbus_client_t* client, uint8_t unit, uint8_t* out, size_t cap, size_t* out_len)
 {
-	/* MEI type 14, read device id code 1 (basic), first object 0. */
-	static const u8	req[] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, 0x01, 0x00 };
+	return mogbus_client_read_device_identification(client, unit, 1, 0, out, cap, out_len, NULL);
+}
+
+/* Walks `count` [id][length][value] objects at p; returns the bytes they take, or 0 when they do
+ * not fit in `avail`; *last_id is the id of the last one. */
+static u32
+walk_objects(const u8* p, u32 avail, u32 count, u8* last_id)
+{
+	u32 used = 0;
+
+	for (u32 i = 0; i < count; i++)
+	{
+		if (used + 2 > avail || used + 2 + p[used + 1] > avail)
+			return 0;
+		*last_id = p[used];
+		used += 2u + p[used + 1];
+	}
+	return used;
+}
+
+mogbus_result_t
+mogbus_client_read_device_identification(mogbus_client_t* client, uint8_t unit, uint8_t read_code,
+					 uint8_t object_id, uint8_t* out, size_t cap, size_t* out_len,
+					 uint8_t* conformity)
+{
+	size_t		total = 0;
+	u8		level = 0;
+	u8		next  = object_id;
+
+	if (out_len)
+		*out_len = 0;
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (unit == 0 || !out_len || (cap && !out) || read_code < 1 || read_code > 4)
+		return reject(client, "read the device identification (code 1-4) from a unit other than 0 with a length");
+
+	/* Every round returns at least one object and there are at most 256. */
+	for (u32 round = 0; round < 256; round++)
+	{
+		u8		req[4] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0E, read_code, next };
+		u8		pdu[MODBUS_MAX_PDU];
+		u32		pdu_len = 0;
+		u8		last_id = 0;
+		u32		used;
+		mogbus_result_t	err = call(client, unit, req, sizeof(req), pdu, &pdu_len);
+
+		if (err != MOGBUS_OK)
+			return err;
+		/* [2B][0E][code][conformity][more][next object][count] then the objects */
+		if (pdu_len < 7 ||
+		    pdu[1] != 0x0E ||
+		    pdu[2] != read_code ||
+		    (pdu[4] != 0x00 && pdu[4] != 0xFF) ||
+		    pdu[6] == 0)
+			return bad_reply(client, req[0]);
+		used = walk_objects(pdu + 7, pdu_len - 7, pdu[6], &last_id);
+		if (used == 0 ||
+		    used != pdu_len - 7 ||
+		    (pdu[4] == 0xFF && (read_code == 4 || pdu[5] <= last_id)))
+			return bad_reply(client, req[0]);
+		if (total + used > cap)
+		{
+			client_set_error(impl(client), "the identification objects (%zu bytes) do not fit the %zu-byte buffer",
+					 total + used, cap);
+			return MOGBUS_ERR_FRAME;
+		}
+		memcpy(out + total, pdu + 7, used);
+		total += used;
+		level  = pdu[3];
+		if (pdu[4] == 0x00)
+		{
+			*out_len = total;
+			if (conformity)
+				*conformity = level;
+			return MOGBUS_OK;
+		}
+		next = pdu[5];
+	}
+	return bad_reply(client, FC_ENCAPSULATED_INTERFACE_TRANSPORT);
+}
+
+mogbus_result_t
+mogbus_client_read_exception_status(mogbus_client_t* client, uint8_t unit, uint8_t* status)
+{
+	static const u8	req[] = { FC_READ_EXCEPTION_STATUS };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	mogbus_result_t	err;
+
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (unit == 0 || !status)
+		return reject(client, "read the exception status of a unit other than 0 into a buffer");
+	err = call(client, unit, req, sizeof(req), pdu, &pdu_len);
+	if (err != MOGBUS_OK)
+		return err;
+	if (pdu_len != 2)
+		return bad_reply(client, req[0]);
+	*status = pdu[1];
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_client_diagnostics(mogbus_client_t* client, uint8_t unit, uint16_t sub_function, const uint8_t* data,
+			  size_t data_len, uint8_t* out, size_t cap, size_t* out_len)
+{
+	u8		req[MODBUS_MAX_PDU] = { FC_DIAGNOSTICS };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	mogbus_result_t	err;
+
+	if (out_len)
+		*out_len = 0;
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (!out_len ||
+	    (cap && !out) ||
+	    data_len > sizeof(req) - 3 ||
+	    (data_len && !data))
+		return reject(client, "send at most %zu data bytes with a reply length", sizeof(req) - 3);
+	put_be16(req + 1, sub_function);
+	if (data_len)
+		memcpy(req + 3, data, data_len);
+	err = call(client, unit, req, 3 + (u32)data_len, pdu, &pdu_len);
+	if (err != MOGBUS_OK)
+		return err;
+	if (pdu_len == 0)
+		return MOGBUS_OK;	/* broadcast */
+	if (pdu_len < 3 ||
+	    get_be16(pdu + 1) != sub_function ||
+	    (sub_function != 0 && pdu_len != 5))
+		return bad_reply(client, req[0]);
+	if (pdu_len - 3 > cap)
+	{
+		client_set_error(impl(client), "reply of %u data bytes does not fit the %zu-byte buffer",
+				 pdu_len - 3, cap);
+		return MOGBUS_ERR_FRAME;
+	}
+	if (pdu_len > 3)
+		memcpy(out, pdu + 3, pdu_len - 3);
+	*out_len = pdu_len - 3;
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_client_get_comm_event_counter(mogbus_client_t* client, uint8_t unit, uint16_t* status,
+				     uint16_t* event_count)
+{
+	static const u8	req[] = { FC_GET_COM_EVENT_COUNTER };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	mogbus_result_t	err;
+
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (unit == 0 || !status || !event_count)
+		return reject(client, "read the event counter of a unit other than 0 into buffers");
+	err = call(client, unit, req, sizeof(req), pdu, &pdu_len);
+	if (err != MOGBUS_OK)
+		return err;
+	if (pdu_len != 5)
+		return bad_reply(client, req[0]);
+	*status      = get_be16(pdu + 1);
+	*event_count = get_be16(pdu + 3);
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_client_get_comm_event_log(mogbus_client_t* client, uint8_t unit, uint16_t* status,
+				 uint16_t* event_count, uint16_t* message_count, uint8_t* events,
+				 size_t cap, size_t* events_len)
+{
+	static const u8	req[] = { FC_GET_COM_EVENT_LOG };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	mogbus_result_t	err;
+
+	if (events_len)
+		*events_len = 0;
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (unit == 0 || !status || !event_count || !message_count || !events_len || (cap && !events))
+		return reject(client, "read the event log of a unit other than 0 into buffers");
+	err = call(client, unit, req, sizeof(req), pdu, &pdu_len);
+	if (err != MOGBUS_OK)
+		return err;
+	/* [0C][byte count][status 2][events 2][messages 2][event bytes, at most 64] */
+	if (pdu_len < 8 ||
+	    pdu[1] < 6 ||
+	    pdu[1] > 6 + 64 ||
+	    pdu_len != 2u + pdu[1])
+		return bad_reply(client, req[0]);
+	if (pdu[1] - 6u > cap)
+	{
+		client_set_error(impl(client), "the event log (%u bytes) does not fit the %zu-byte buffer",
+				 pdu[1] - 6u, cap);
+		return MOGBUS_ERR_FRAME;
+	}
+	*status        = get_be16(pdu + 2);
+	*event_count   = get_be16(pdu + 4);
+	*message_count = get_be16(pdu + 6);
+	if (pdu[1] > 6)
+		memcpy(events, pdu + 8, pdu[1] - 6u);
+	*events_len = pdu[1] - 6u;
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_client_report_server_id(mogbus_client_t* client, uint8_t unit, uint8_t* out, size_t cap, size_t* out_len)
+{
+	static const u8	req[] = { FC_REPORT_SERVER_ID };
 	u8		pdu[MODBUS_MAX_PDU];
 	u32		pdu_len = 0;
 	mogbus_result_t	err;
@@ -412,20 +628,191 @@ mogbus_client_read_device_id(mogbus_client_t* client, uint8_t unit, uint8_t* out
 	if (!client)
 		return MOGBUS_ERR_INVALID;
 	if (unit == 0 || !out_len || (cap && !out))
-		return reject(client, "read the device identification from a unit other than 0 with a length");
+		return reject(client, "read the server id of a unit other than 0 with a length");
 	err = call(client, unit, req, sizeof(req), pdu, &pdu_len);
 	if (err != MOGBUS_OK)
 		return err;
-	/* [2B][0E][code][conformity][more][next object][count] then the objects */
-	if (pdu_len < 7 || pdu[1] != 0x0E)
+	if (pdu_len < 2 || pdu_len != 2u + pdu[1])
 		return bad_reply(client, req[0]);
-	if (pdu_len - 7 > cap)
+	if (pdu[1] > cap)
 	{
-		client_set_error(impl(client), "the identification objects (%u bytes) do not fit the %zu-byte buffer",
-				 pdu_len - 7, cap);
+		client_set_error(impl(client), "the server id report (%u bytes) does not fit the %zu-byte buffer",
+				 pdu[1], cap);
 		return MOGBUS_ERR_FRAME;
 	}
-	memcpy(out, pdu + 7, pdu_len - 7);
-	*out_len = pdu_len - 7;
+	if (pdu[1])
+		memcpy(out, pdu + 2, pdu[1]);
+	*out_len = pdu[1];
+	return MOGBUS_OK;
+}
+
+/* One sub-request of FC 14/15 must name a record range that exists in the protocol. */
+static bool
+file_record_valid(const mogbus_client_file_record_t* r)
+{
+	return r->file >= 1 &&
+	       r->length >= 1 &&
+	       (u32)r->record + r->length - 1 <= 9999 &&
+	       r->values;
+}
+
+mogbus_result_t
+mogbus_client_read_file_records(mogbus_client_t* client, uint8_t unit, const mogbus_client_file_record_t* records,
+				size_t count)
+{
+	u8		req[2 + 7 * 35] = { FC_READ_FILE_RECORD };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	u32		used = 2;
+	mogbus_result_t	err;
+
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (unit == 0 || !records || count < 1 || count > 35)
+		return reject(client, "read 1-35 file records from a unit other than 0");
+	for (size_t i = 0; i < count; i++)
+	{
+		if (!file_record_valid(&records[i]))
+			return reject(client, "file record %zu: file 1-65535, records 0-9999, length 1 or more, a buffer", i);
+		req[used] = 0x06;
+		put_be16(req + used + 1, records[i].file);
+		put_be16(req + used + 3, records[i].record);
+		put_be16(req + used + 5, records[i].length);
+		used += 7;
+	}
+	req[1] = (u8)(used - 2);
+	err = call(client, unit, req, used, pdu, &pdu_len);
+	if (err != MOGBUS_OK)
+		return err;
+	/* [14][data length] then per sub-request [1 + 2 x length][06][values] */
+	if (pdu_len < 2 || pdu_len != 2u + pdu[1])
+		return bad_reply(client, req[0]);
+	used = 2;
+	for (size_t i = 0; i < count; i++)
+	{
+		u32 bytes = 2u * records[i].length;
+
+		if (used + 2 + bytes > pdu_len ||
+		    pdu[used] != 1 + bytes ||
+		    pdu[used + 1] != 0x06)
+			return bad_reply(client, req[0]);
+		for (u32 v = 0; v < records[i].length; v++)
+			records[i].values[v] = get_be16(pdu + used + 2 + 2 * v);
+		used += 2 + bytes;
+	}
+	if (used != pdu_len)
+		return bad_reply(client, req[0]);
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_client_write_file_records(mogbus_client_t* client, uint8_t unit, const mogbus_client_file_record_t* records,
+				 size_t count)
+{
+	u8	req[MODBUS_MAX_PDU] = { FC_WRITE_FILE_RECORD };
+	u32	used = 2;
+
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (!records || count < 1)
+		return reject(client, "write at least one file record");
+	for (size_t i = 0; i < count; i++)
+	{
+		if (!file_record_valid(&records[i]))
+			return reject(client, "file record %zu: file 1-65535, records 0-9999, length 1 or more, a buffer", i);
+		/* The request PDU holds 253 bytes: function code, byte count and at most 251 of records. */
+		if (used + 7 + 2u * records[i].length > sizeof(req))
+			return reject(client, "the file records do not fit one request (251 bytes)");
+		req[used] = 0x06;
+		put_be16(req + used + 1, records[i].file);
+		put_be16(req + used + 3, records[i].record);
+		put_be16(req + used + 5, records[i].length);
+		for (u32 v = 0; v < records[i].length; v++)
+			put_be16(req + used + 7 + 2 * v, records[i].values[v]);
+		used += 7 + 2u * records[i].length;
+	}
+	req[1] = (u8)(used - 2);
+	return write_echo(client, req, used, unit);
+}
+
+mogbus_result_t
+mogbus_client_read_fifo(mogbus_client_t* client, uint8_t unit, uint16_t address, uint16_t* values, size_t cap,
+			size_t* count)
+{
+	u8		req[3] = { FC_READ_FIFO_QUEUE };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	u32		n;
+	mogbus_result_t	err;
+
+	if (count)
+		*count = 0;
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (unit == 0 || !count || (cap && !values))
+		return reject(client, "read a FIFO of a unit other than 0 with a count");
+	put_be16(req + 1, address);
+	err = call(client, unit, req, sizeof(req), pdu, &pdu_len);
+	if (err != MOGBUS_OK)
+		return err;
+	/* [18][byte count 2][FIFO count 2][values], 31 at most */
+	if (pdu_len < 5)
+		return bad_reply(client, req[0]);
+	n = get_be16(pdu + 3);
+	if (n > 31 ||
+	    get_be16(pdu + 1) != 2 + 2 * n ||
+	    pdu_len != 5 + 2 * n)
+		return bad_reply(client, req[0]);
+	if (n > cap)
+	{
+		client_set_error(impl(client), "the FIFO holds %u values, more than the %zu-value buffer", n, cap);
+		return MOGBUS_ERR_FRAME;
+	}
+	for (u32 i = 0; i < n; i++)
+		values[i] = get_be16(pdu + 5 + 2 * i);
+	*count = n;
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_client_canopen_request(mogbus_client_t* client, uint8_t unit, const uint8_t* request, size_t request_len,
+			      uint8_t* reply, size_t cap, size_t* reply_len)
+{
+	u8		req[MODBUS_MAX_PDU] = { FC_ENCAPSULATED_INTERFACE_TRANSPORT, 0x0D };
+	u8		pdu[MODBUS_MAX_PDU];
+	u32		pdu_len = 0;
+	mogbus_result_t	err;
+
+	if (reply_len)
+		*reply_len = 0;
+	if (!client)
+		return MOGBUS_ERR_INVALID;
+	if (!request ||
+	    request_len < 1 ||
+	    request_len > sizeof(req) - 2 ||
+	    !reply_len ||
+	    (cap && !reply))
+		return reject(client, "send 1-%zu request bytes with a reply length", sizeof(req) - 2);
+	memcpy(req + 2, request, request_len);
+	err = call(client, unit, req, 2 + (u32)request_len, pdu, &pdu_len);
+	if (err == MOGBUS_ERR_EXCEPTION && pdu_len >= 2 && pdu_len - 1 <= cap)
+	{
+		memcpy(reply, pdu + 1, pdu_len - 1);
+		*reply_len = pdu_len - 1;
+	}
+	if (err != MOGBUS_OK)
+		return err;
+	if (pdu_len == 0)
+		return MOGBUS_OK;	/* broadcast */
+	/* [2B][0D][control][00][network id][node][index 2][subindex][start 2][count 2][data] */
+	if (pdu_len < 12 || pdu[1] != 0x0D || pdu[2] != request[0])
+		return bad_reply(client, req[0]);
+	if (pdu_len - 2 > cap)
+	{
+		client_set_error(impl(client), "reply of %u bytes does not fit the %zu-byte buffer", pdu_len - 2, cap);
+		return MOGBUS_ERR_FRAME;
+	}
+	memcpy(reply, pdu + 2, pdu_len - 2);
+	*reply_len = pdu_len - 2;
 	return MOGBUS_OK;
 }

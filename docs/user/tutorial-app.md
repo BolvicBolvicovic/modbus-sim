@@ -66,7 +66,7 @@ gets exception 02.
 ## 2. Check the config
 
 ```bash
-./mogbus --check station.scm
+./mogbus --check=verbose station.scm
 ```
 
 ```text
@@ -75,7 +75,7 @@ gets exception 02.
 config OK
 ```
 
-`--check` prints the same summary as a real start and validates everything it can without opening a
+`--check=verbose` prints the same summary as a real start (plain `--check` prints nothing when the file is valid) and validates everything it can without opening a
 socket. A mistake is reported with its position in the file; see [config errors](config/errors.md).
 All options are on the [command line](command-line.md) page.
 
@@ -189,7 +189,7 @@ To observe the station, add an HTTP endpoint to the `(server ...)` form (see
 The full file has all of this. Check it:
 
 ```bash
-./mogbus --check examples/tutorial/pump-station.scm
+./mogbus --check=verbose examples/tutorial/pump-station.scm
 ```
 
 ```text

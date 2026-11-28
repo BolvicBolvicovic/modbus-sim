@@ -63,6 +63,15 @@ os_serial_t	os_serial_open(bool pty, const char* label, const char* path, u32 ba
 			       u32 data_bits, parity_t parity, u32 stop_bits,
 			       os_serial_t* slave_fd, char* name, size_t name_size);
 
+/**
+ * @brief Asks the driver of a real serial port for low-latency mode (Linux `ASYNC_LOW_LATENCY`),
+ *        so received characters are handed to user space as soon as possible.
+ *
+ * Returns false when the handle is not a serial port or the driver refuses (PTYs, sockets and
+ * many USB adapters); the caller carries on with the driver's own latency.
+ */
+bool		os_serial_low_latency(os_serial_t fd);
+
 /** @brief Reads up to len bytes: bytes read, 0 at end of stream, -1 on error (see os_retry()). */
 s64		os_serial_read(os_serial_t fd, void* buf, u32 len);
 

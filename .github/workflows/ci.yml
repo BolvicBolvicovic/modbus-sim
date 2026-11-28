@@ -87,7 +87,7 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           [ "$EVENT" = workflow_dispatch ] && BASE=
-          ./tools/ci_changes.sh "$BASE" "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
+          ./tools/changes.sh ci "$BASE" "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
 
   build-and-test:
     needs: changes
@@ -118,13 +118,15 @@ jobs:
           ./tools/check_deps.sh
 
       - name: Test runner self-test
-        run: ./tools/run_tests.sh --self-test
+        run: |
+          ./tools/run_tests.sh --self-test
+          ./tools/changes.sh --self-test
 
       - name: Unit tests
         run: make -j$(nproc) tests
 
       - name: Load smoke test (32 clients, 5 s, no errors, no memory growth)
-        run: ./tools/loadtest.py --spawn profiles/two-devices.scm --units 1,2 --clients 32 --duration 5
+        run: ./tools/modbus_probe.py load --spawn profiles/two-devices.scm --units 1,2 --clients 32 --duration 5
 
       - name: Check all profiles
         run: |
@@ -133,7 +135,7 @@ jobs:
           done
 
       - name: Check doc examples
-        run: ./tools/check_doc_examples.sh ./mogbus
+        run: ./tools/check_docs.sh examples ./mogbus
 
       - name: Sanitizers (ASan + UBSan, vendored s7 excluded)
         run: make -j$(nproc) asan
@@ -171,7 +173,7 @@ jobs:
           done
 
       - name: Check doc examples without TLS
-        run: ./tools/check_doc_examples.sh ./mogbus
+        run: ./tools/check_docs.sh examples ./mogbus
 
       - name: Unit tests without config loader
         run: make -j$(nproc) WITH_CONFIG=0 tests
@@ -250,7 +252,7 @@ jobs:
           done
 
       - name: Check doc examples (dev)
-        run: ./tools/check_doc_examples.sh ./mogbus
+        run: ./tools/check_docs.sh examples ./mogbus
 
       - name: Sanitizers (dev)
         run: make -j$(nproc) asan

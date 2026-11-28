@@ -6,6 +6,7 @@
 #include "os/os_socket.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
@@ -62,6 +63,33 @@ os_addr_parse(os_addr_t* addr, const char* text, u16 port)
 		return true;
 	}
 	return false;
+}
+
+u32
+os_resolve(const char* host, u16 port, bool datagram, os_addr_t* out, u32 cap)
+{
+	struct addrinfo	hints = { .ai_family   = AF_UNSPEC,
+				  .ai_socktype = datagram ? SOCK_DGRAM : SOCK_STREAM,
+				  .ai_flags    = AI_NUMERICSERV };
+	struct addrinfo*	list = NULL;
+	char			service[8];
+	u32			n = 0;
+
+	snprintf(service, sizeof(service), "%u", port);
+	if (getaddrinfo(host, service, &hints, &list) != 0)
+		return 0;
+	for (const struct addrinfo* ai = list; ai && n < cap; ai = ai->ai_next)
+	{
+		if ((ai->ai_family != AF_INET && ai->ai_family != AF_INET6) ||
+		    ai->ai_addrlen > sizeof(out[n].raw))
+			continue;
+		memset(&out[n], 0, sizeof(out[n]));
+		memcpy(out[n].raw, ai->ai_addr, ai->ai_addrlen);
+		out[n].len = (u32)ai->ai_addrlen;
+		n++;
+	}
+	freeaddrinfo(list);
+	return n;
 }
 
 void

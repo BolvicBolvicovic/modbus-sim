@@ -29,7 +29,7 @@ th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--line
 th { position: sticky; top: 0; z-index: 1; background: var(--panel); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
 tbody tr:nth-child(even) { background: var(--zebra); }
 tbody tr:hover { background: var(--hover); }
-td.num, td.raw, #kpi_rate, #kpi_age, .tile .counts b { font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; }
+td.num, td.raw, .tile .counts b { font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; }
 td.num, th.r { text-align: right; }
 td.raw { color: var(--muted); font-size: 12px; white-space: normal; word-break: break-all; }
 button, input, select { font: inherit; color: inherit; background: var(--field); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; min-height: 26px; }
@@ -85,6 +85,8 @@ input[type="checkbox"] { accent-color: var(--acc); }
 .seg button[aria-selected="true"] { background: var(--acc); border-color: var(--acc); color: var(--bg); position: relative; }
 .seg button:hover:not(:disabled) { position: relative; }
 table.noacc .acc { display: none; }
+table.nonote .note { display: none; }
+td.note { color: var(--muted); font-size: 12px; }
 td.num { font-size: 16px; font-weight: 600; }
 #status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; color: var(--muted); }
 #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -111,7 +113,23 @@ td.num { font-size: 16px; font-weight: 600; }
 #padd_list [role="option"] { padding: 3px 8px; cursor: pointer; white-space: nowrap; }
 #padd_list [role="option"].active { background: var(--hover); }
 #padd_list .empty { padding: 3px 8px; color: var(--muted); }
-#pscroll { width: 100%; padding: 0; margin: 6px 0 0; accent-color: var(--acc); }
+#pscroll { -webkit-appearance: none; appearance: none; width: 100%; height: 12px; min-height: 0; padding: 0; margin: 4px 0 0; border: 0; background: transparent; cursor: pointer; }
+#pscroll:disabled { opacity: .4; cursor: default; }
+#pscroll::-webkit-slider-runnable-track { height: 2px; background: var(--line); border-radius: 1px; }
+#pscroll::-moz-range-track { height: 2px; background: var(--line); border-radius: 1px; }
+#pscroll::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 8px; margin-top: -3px; border-radius: 4px; border: 0; background: var(--muted); }
+#pscroll::-moz-range-thumb { width: 28px; height: 8px; border-radius: 4px; border: 0; background: var(--muted); }
+#pscroll:hover::-webkit-slider-thumb, #pscroll:focus-visible::-webkit-slider-thumb { background: var(--acc); }
+#pscroll:hover::-moz-range-thumb, #pscroll:focus-visible::-moz-range-thumb { background: var(--acc); }
+#pscroll:focus-visible { outline: none; }
+.form { display: grid; grid-template-columns: max-content minmax(8rem, 24rem) max-content 1fr; gap: 6px 10px; align-items: center; }
+.form .frow { display: contents; }
+.form .frow[hidden] { display: none; }
+.form label { display: block; }
+.form button { justify-self: start; }
+.form input, .form select { width: 100%; box-sizing: border-box; }
+.form .muted { min-width: 0; }
+@media (max-width: 860px) { .form { grid-template-columns: max-content minmax(0, 1fr); } .form button, .form .muted { grid-column: 2; justify-self: start; } .form .frow > span:empty { display: none; } }
 #measure { min-height: 1.4em; margin-top: 6px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; }
 .legend .item { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--field); }
@@ -136,8 +154,6 @@ td.num { font-size: 16px; font-weight: 600; }
 <div class="tile"><div class="k">Device</div><div class="v" id="kpi_dev">-</div><div class="sub" id="kpi_dev_sub"></div></div>
 <div class="tile"><div class="k">Points per table</div><div class="counts"><span><b id="kpi_p_coil">-</b>coil</span><span><b id="kpi_p_discrete">-</b>discrete</span><span><b id="kpi_p_input">-</b>input</span><span><b id="kpi_p_holding">-</b>holding</span></div></div>
 <div class="tile" id="kpi_ftile"><div class="k">Active faults</div><div class="v" id="kpi_faults">-</div><div class="sub" id="kpi_fsub"></div></div>
-<div class="tile"><div class="k">Refresh</div><div class="v" id="kpi_rate">-</div><div class="sub" id="kpi_every"></div></div>
-<div class="tile"><div class="k">Last update</div><div class="v" id="kpi_age">-</div></div>
 </section>
 <div id="message" role="status" aria-live="polite"></div>
 
@@ -154,7 +170,7 @@ td.num { font-size: 16px; font-weight: 600; }
 <div id="tableview">
 <div class="scroll">
 <table id="ptable">
-<thead><tr><th>Plot</th><th>Address</th><th>Type</th><th>Kind</th><th class="acc">Access</th><th class="r">Value</th><th>Raw</th></tr></thead>
+<thead><tr><th>Plot</th><th>Address</th><th>Type</th><th>Kind</th><th class="acc">Access</th><th class="r">Value</th><th>Raw</th><th class="note">Note</th></tr></thead>
 <tbody id="points"></tbody>
 </table>
 </div>
@@ -170,6 +186,7 @@ td.num { font-size: 16px; font-weight: 600; }
 <button id="zoomin" type="button" aria-label="Zoom in">+</button>
 <span id="winlabel" class="muted"></span>
 <button id="live" type="button" aria-pressed="true" title="Follow the newest samples">Live</button>
+<button id="preset" type="button" title="Clear the samples and restart the time at 0:00">Reset</button>
 <span id="vrange" class="muted"></span>
 </div>
 <div id="plot" tabindex="0" aria-label="Plot: arrow keys scroll in time, drag to measure"></div>
@@ -189,18 +206,10 @@ td.num { font-size: 16px; font-weight: 600; }
 
 <section class="card" id="editor">
 <h2>Write</h2>
-<div class="bar">
-<label>Address <input id="addr" inputmode="numeric" size="6"></label>
-</div>
-<div class="bar">
-<label>Decoded value <input id="val"></label>
-<button id="setval" type="button">Set value</button>
-<span class="muted">sticks until the device restarts; Modbus writes then get exception 02</span>
-</div>
-<div class="bar">
-<label>Raw registers (or bits) <input id="raw" placeholder="1, 2, 3" size="24"></label>
-<button id="setraw" type="button">Write raw</button>
-<span class="muted">from the address, 0 to 65535 (0 or 1 for bits)</span>
+<div class="form">
+<div class="frow"><label for="addr">Address</label><input id="addr" inputmode="numeric"><span></span><span></span></div>
+<div class="frow"><label for="val">Decoded value</label><input id="val"><button id="setval" type="button">Set value</button><span class="muted">sticks until the device restarts; Modbus writes then get exception 02</span></div>
+<div class="frow"><label for="raw">Raw registers (or bits)</label><input id="raw" placeholder="1, 2, 3"><button id="setraw" type="button">Write raw</button><span class="muted">from the address, 0 to 65535 (0 or 1 for bits)</span></div>
 </div>
 <div id="werr" class="err" role="alert"></div>
 </section>
@@ -224,13 +233,13 @@ td.num { font-size: 16px; font-weight: 600; }
 <tbody id="faults"></tbody>
 </table>
 </div>
-<div class="bar" style="margin-top:10px">
-<label>Kind <select id="fkind"></select></label>
-<label>Percent <input id="fpercent" value="100" size="4"></label>
-<label id="fdelay_l">delay_ms <input id="fdelay" value="100" size="6"></label>
-<label id="fcode_l">exception_code <input id="fcode" value="4" size="4"></label>
-<label id="fmode_l">Mode <select id="fmode"><option>pdu</option><option>register</option><option>checksum</option></select></label>
-<button id="fset" type="button">Set fault</button>
+<div class="form" style="margin-top:10px">
+<div class="frow"><label for="fkind">Kind</label><select id="fkind"></select><span></span><span></span></div>
+<div class="frow"><label for="fpercent">Percent</label><input id="fpercent" value="100"><span></span><span></span></div>
+<div class="frow" id="fdelay_l"><label for="fdelay">delay_ms</label><input id="fdelay" value="100"><span></span><span></span></div>
+<div class="frow" id="fcode_l"><label for="fcode">exception_code</label><input id="fcode" value="4"><span></span><span></span></div>
+<div class="frow" id="fmode_l"><label for="fmode">Mode</label><select id="fmode"><option>pdu</option><option>register</option><option>checksum</option></select><span></span><span></span></div>
+<div class="frow"><span></span><button id="fset" type="button" style="justify-self:start">Set fault</button><span></span><span></span></div>
 </div>
 <div id="ferr" class="err" role="alert"></div>
 </section>
@@ -333,7 +342,6 @@ td.num { font-size: 16px; font-weight: 600; }
     return more(0).catch(function (e) { say("message", "Cannot list points: " + e.message); });
   }
 
-  var lastOk = 0;
   var cbs = {};    /* address -> plot checkbox of the page on screen */
   var rows = [];   /* {pt, valueCell, rawCell} of the page on screen */
   function render() {
@@ -365,10 +373,12 @@ td.num { font-size: 16px; font-weight: 600; }
       tr.appendChild(ac);
       tr.appendChild(v);
       tr.appendChild(r);
+      tr.appendChild(el("td", pt.note || "", "note"));
       body.appendChild(tr);
       return { pt: pt, v: v, r: r };
     });
     $("ptable").classList.toggle("noacc", !st.all.some(function (pt) { return pt.read_only; }));
+    $("ptable").classList.toggle("nonote", !st.all.some(function (pt) { return pt.note; }));
     $("range").textContent = st.all.length ? "points " + (from + 1) + "-" + (from + part.length) + " of " + st.all.length : "no points in this table";
     $("prev").disabled = st.page === 0;
     $("next").disabled = from + PAGE >= st.all.length;
@@ -389,6 +399,7 @@ td.num { font-size: 16px; font-weight: 600; }
     }
     st.sel.forEach(function (x) { used[x.c] = true; });
     for (i = 0; used[i]; i++) { }
+    if (!st.sel.length) { origin = nowT(); }
     st.sel.push({ space: space, pt: pt, c: i, buf: [], last: "" });
     if (!batch) { say("message", "", false); refresh(); }
     return true;
@@ -472,7 +483,7 @@ td.num { font-size: 16px; font-weight: 600; }
           if (it.ser) { sample(it.ser, t, null, "error"); }
         });
       });
-    })).then(function () { st.busy = false; lastOk = Date.now(); ticked(); requestDraw(); }, function () { st.busy = false; });
+    })).then(function () { st.busy = false; ticked(); requestDraw(); }, function () { st.busy = false; });
     if (Date.now() - faultsAt >= 1000) { loadFaults(); }
   }
 
@@ -597,7 +608,7 @@ td.num { font-size: 16px; font-weight: 600; }
     list.scrollTop = 0;
   }
 
-  var live = true, viewEnd = 0, meas = null, geo = null, drag = null, scrolling = false;
+  var origin = Date.now(), live = true, viewEnd = 0, meas = null, geo = null, drag = null, scrolling = false;
   var WINDOWS = [1000, 2000, 5000, 10000, 30000, 60000, 120000, 300000], win = 4;
   function fmtSpan(ms) { return ms >= 60000 ? ms / 60000 + " min" : ms / 1000 + " s"; }
   function setWindow(i, f) {
@@ -619,7 +630,6 @@ td.num { font-size: 16px; font-weight: 600; }
     while (ticks[0] < t - 1000) { ticks.shift(); }
     if (t - rateAt >= 250) { rateAt = t; var txt = ticks.length + (ticks.length === 1 ? " sample/s" : " samples/s");
       $("rate").textContent = "\u2248 " + txt;
-      $("kpi_rate").textContent = txt;
     }
   }
 
@@ -663,9 +673,10 @@ td.num { font-size: 16px; font-weight: 600; }
   }
   function goLive() { live = true; syncLive(); }
   function pad(n, w) { return String(n).padStart(w || 2, "0"); }
+  /* Elapsed time since the plot started (origin): m:ss, h:mm:ss from one hour, with milliseconds when asked. */
   function fmtClock(t, ms) {
-    var d = new Date(t);
-    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + (ms ? "." + pad(d.getMilliseconds(), 3) : "");
+    var e = Math.max(0, Math.round(t - origin)), sec = Math.floor(e / 1000), h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
+    return (h ? h + ":" + pad(m) : String(m)) + ":" + pad(sec % 60) + (ms ? "." + pad(e % 1000, 3) : "");
   }
   function fmtDur(ms) {
     var t;
@@ -712,7 +723,7 @@ td.num { font-size: 16px; font-weight: 600; }
   function drawPlot() {
     var host = $("plot"), W = Math.max(320, host.clientWidth || 720), H = 300, L = 56, R = 10, T = 10, B = 24;
     var span = WINDOWS[win], end, t0, lo = Infinity, hi = -Infinity, s, i, y, step, plotW = W - L - R;
-    var all = [], low, wasLive = live, lastX = -1e9, off;
+    var all = [], low, wasLive = live, lastX = -1e9;
     if (st.view !== "plot") { return; }
     geo = null;
     clampView();
@@ -767,15 +778,14 @@ td.num { font-size: 16px; font-weight: 600; }
       s.appendChild(svg("line", { x1: L, x2: W - R, y1: py(y), y2: py(y), "class": "grid" }));
       s.appendChild(svg("text", { x: L - 4, y: py(y) + 4, "text-anchor": "end", "class": "tick" }, fmt(y)));
     }
-    /* Gridlines sit at absolute wall-clock multiples of the step, so they stay with the data. */
+    /* Gridlines sit at multiples of the step counted from the plot start, so they stay with the data. */
     step = tstep(span);
-    off = -new Date(t0).getTimezoneOffset() * 60000;
     var xlabels = [], nowLabel = null;
-    for (i = Math.ceil((t0 + off) / step); i * step - off <= end; i++) {
-      var tt = i * step - off, x = px(tt);
+    for (i = Math.ceil((t0 - origin) / step); origin + i * step <= end; i++) {
+      var tt = origin + i * step, x = px(tt);
       if (x < L) { continue; }
       s.appendChild(svg("line", { x1: x, x2: x, y1: T, y2: H - B, "class": "grid" }));
-      if (x < W - R && x - lastX >= (step < 1000 ? 84 : 62)) {
+      if (tt >= origin && x < W - R && x - lastX >= (step < 1000 ? 84 : 62)) {
         lastX = x;
         xlabels.push(s.appendChild(svg("text", { x: x, y: H - 8, "text-anchor": "middle", "class": "tick" }, fmtClock(tt, step < 1000))));
       }
@@ -946,17 +956,15 @@ td.num { font-size: 16px; font-weight: 600; }
     frozenNow = Date.now();
     ticks = [];
     $("rate").textContent = "";
-    $("kpi_rate").textContent = st.paused ? "paused" : "-";
     requestDraw();
   });
   $("refresh").addEventListener("click", refresh);
   $("prev").addEventListener("click", function () { st.page--; render(); });
   $("next").addEventListener("click", function () { st.page++; render(); });
-  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; showDevice(); loadFaults(); st.sel = []; pcache = {}; pticks = {}; meas = null; updateMeasure(); requestDraw(); loadPoints(); loadActions(); fillAdd(); });
+  $("device").addEventListener("change", function () { st.unit = this.value; st.page = 0; showDevice(); loadFaults(); st.sel = []; origin = Date.now(); pcache = {}; pticks = {}; meas = null; updateMeasure(); requestDraw(); loadPoints(); loadActions(); fillAdd(); });
 
   var EVERY = [10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000], every = EVERY_MS, timer = null;
   function schedule() {
-    $("kpi_every").textContent = "every " + every + " ms";
     if (timer !== null) { clearInterval(timer); }
     timer = setInterval(function () { if (!st.paused && !document.hidden && st.unit !== null) { refresh(); } }, every);
   }
@@ -1009,6 +1017,14 @@ td.num { font-size: 16px; font-weight: 600; }
       ev.preventDefault();
     });
     $("live").addEventListener("click", goLive);
+    $("preset").addEventListener("click", function () {
+      st.sel.forEach(function (ser) { ser.buf = []; });
+      origin = nowT();
+      live = true;
+      meas = null;
+      updateMeasure();
+      syncLive();
+    });
     $("pscroll").addEventListener("input", function () {
       var low = lowEnd();
       if (live) { live = false; }
@@ -1019,7 +1035,7 @@ td.num { font-size: 16px; font-weight: 600; }
     $("pscroll").addEventListener("pointerdown", function () { scrolling = true; });
     $("pscroll").addEventListener("pointerup", function () { scrolling = false; requestDraw(); });
     $("pscroll").addEventListener("pointercancel", function () { scrolling = false; });
-    /* Drag on the chart to measure: the band keeps absolute times. A click without movement clears it. */
+    /* Drag on the chart to measure: the band keeps plot times. A click without movement clears it. */
     plot.addEventListener("pointerdown", function (ev) {
       if (ev.button !== 0 || !geo) { return; }
       drag = { id: ev.pointerId, x: ev.clientX, t: timeAt(ev.clientX), moved: false };
@@ -1120,9 +1136,6 @@ td.num { font-size: 16px; font-weight: 600; }
     $("kpi_dev_sub").textContent = "unit " + d.unit + (devList.length > 1 ? " (" + devList.length + " devices)" : "");
     SPACES.forEach(function (sp) { $("kpi_p_" + sp).textContent = d.points ? String(d.points[sp]) : "-"; });
   }
-  setInterval(function () {
-    $("kpi_age").textContent = st.paused ? "paused" : lastOk === 0 ? "-" : ((Date.now() - lastOk) / 1000).toFixed(1) + " s ago";
-  }, 250);
 
   tabs();
   api("GET", "/api/devices").then(function (devices) {

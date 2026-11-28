@@ -18,6 +18,7 @@
 
 typedef enum net_result_t net_result_t;
 typedef enum net_frame_dir_t net_frame_dir_t;
+typedef enum net_close_reason_t net_close_reason_t;
 typedef struct net_obs_t net_obs_t;
 typedef enum net_poll_phase_t net_poll_phase_t;
 typedef struct net_poll_group_t net_poll_group_t;
@@ -36,6 +37,7 @@ enum
 	NET_OBS_HOSTS_COUNT	= 8,		/**< most allowed Host names */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
 	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per wait */
+	NET_OBS_GROUP_MAX	= 512,	/**< most entries one shared group wait takes (8 servers of 38 entries each fit) */
 };
 
 /** @brief Phase of a net_poll_group_t. */
@@ -60,8 +62,8 @@ struct net_poll_group_t
 	os_mutex_t*	lock;		/**< released around the shared wait; NULL = none */
 	int		timeout_ms;	/**< shortest timeout a gathered step asked for; -1 = none */
 	u32		count;
-	os_wait_entry_t	entries[OS_WAIT_MAX];
-	const net_obs_t* owner[OS_WAIT_MAX];	/**< server that appended each entry */
+	os_wait_entry_t	entries[NET_OBS_GROUP_MAX];
+	const net_obs_t* owner[NET_OBS_GROUP_MAX];	/**< server that appended each entry */
 };
 
 /** @brief What happened to one request. */
@@ -90,6 +92,25 @@ enum net_frame_dir_t
 typedef u32 (*net_frame_fn)(void* user, net_frame_dir_t dir, const char* peer, u8* data, u32 len,
 			    u32 capacity);
 
+/** @brief Why a client connection was closed, as shown to the connection hook. */
+enum net_close_reason_t
+{
+	NET_CLOSE_NONE,		/**< the connection was opened */
+	NET_CLOSE_PEER,		/**< the client closed it (EOF or hang-up) */
+	NET_CLOSE_IDLE_TIMEOUT,	/**< no traffic for the idle timeout */
+	NET_CLOSE_DISCONNECT_FAULT,	/**< a disconnect fault fired */
+	NET_CLOSE_TLS,		/**< TLS setup, handshake failure or handshake timeout */
+	NET_CLOSE_SERVER_STOP,	/**< the server was closed with the client connected */
+	NET_CLOSE_ERROR,	/**< socket error or protocol violation (bad header, buffer full) */
+};
+
+/**
+ * @brief Connection hook: a client connection opened (`reason` NET_CLOSE_NONE) or closed.
+ *
+ * `id` is unique per server and never reused; `peer` is the log text of the client.
+ */
+typedef void (*net_conn_fn)(void* user, u64 id, const char* peer, net_close_reason_t reason);
+
 /** @brief Upper bounds of the response latency histogram, in milliseconds. */
 extern const u32 NET_OBS_LATENCY_MS[NET_OBS_LATENCY_BUCKETS];
 
@@ -109,6 +130,8 @@ struct net_obs_t
 	net_poll_group_t* group;	/**< shared wait while a group step runs, else NULL */
 	net_frame_fn	frame_fn;	/**< frame hook, or NULL; set by the host after net_obs_init() */
 	void*		frame_user;
+	net_conn_fn	conn_fn;	/**< connection hook, or NULL; set by the host after net_obs_init() */
+	void*		conn_user;
 
 	/** @brief Counters exposed on `/metrics`. */
 	struct net_metrics_t

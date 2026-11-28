@@ -43,7 +43,7 @@ Modbus RTU frames carried on a TCP listen socket: no MBAP header, the frame is `
 
 | Message | Meaning |
 |---|---|
-| load error | `parity`, `stop-bits`, `strict-t15`, `data-bits`, `path` or `tls` in this mode |
+| load error | `parity`, `stop-bits`, `strict-t15`, `char-timing`, `data-bits`, `path` or `tls` in this mode |
 
 ## Examples
 

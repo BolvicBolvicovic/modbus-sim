@@ -54,7 +54,7 @@ make -j$(nproc)                        # builds ./mogbus
 ./tools/modbus_probe.py holding 0 2    # -> [42, <a value that moves>]
 ```
 
-`./mogbus --check CONFIG.scm` validates a config without starting the server. The
+`./mogbus --check CONFIG.scm` validates a config without starting the server (silent when it is valid; `--check=verbose` prints the summary). The
 [Get started](docs/user/get-started.md) page walks through writing your own config in five minutes.
 
 ## Where to go next

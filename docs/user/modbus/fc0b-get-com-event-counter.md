@@ -56,3 +56,4 @@ print(client.diag_get_comm_event_counter().count)
 
 - [Get Com Event Log (0x0C)](fc0c-get-com-event-log.md)
 - [Diagnostics (0x08)](fc08-diagnostics.md)
+- From C: @ref mogbus_client_get_comm_event_counter "mogbus_client_get_comm_event_counter()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

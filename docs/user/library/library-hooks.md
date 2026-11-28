@@ -188,6 +188,46 @@ The return value is the new length of the frame:
 
 The hook runs on the thread that calls @ref mogbus_server_step "mogbus_server_step()" or @ref mogbus_server_run "mogbus_server_run()", must not block, and must not close or step the server; it may call `mogbus_device_*`. The frame and `peer` are valid only during the call. A server has one hook, a new one replaces it and NULL removes it. It is not part of a config, and HTTP endpoint traffic is not shown.
 
+To read what the hook sees, @ref mogbus_decode_frame "mogbus_decode_frame()" turns the bytes of a frame into text or JSON (every field of the ADU and the PDU, with the checksum verdict), without a context or a server; it is the library side of `mogbus --decode` ([Decoding frames](../modbus/decoding-frames.md)). It only reads its input, so the hook may call it on `f->data`:
+
+```c
+char text[MOGBUS_DECODE_BUFFER_SIZE];
+size_t len;
+
+mogbus_decode_frame(f->data, f->len, MOGBUS_FRAMING_AUTO, MOGBUS_DIRECTION_AUTO, false, text, sizeof(text), &len);
+puts(text);
+```
+
+It returns `MOGBUS_OK`, or `MOGBUS_ERR_FRAME` for a damaged frame (the text is complete and lists the problems), `MOGBUS_ERR_NOMEM` when the buffer is too small (`MOGBUS_DECODE_BUFFER_SIZE` always suffices) and `MOGBUS_ERR_INVALID` for NULL arguments or a frame above 4096 bytes.
+
+## Watching connections
+
+A *connection hook* (@ref mogbus_connection_fn "mogbus_connection_fn", installed per server with @ref mogbus_server_set_connection_hook "mogbus_server_set_connection_hook()") tells the host when a client connects to or leaves a server. It is the counterpart of pymodbus `trace_connect`:
+
+```c
+static void
+on_connection(void* user, mogbus_server_t* server, const mogbus_connection_t* c)
+{
+	(void)user;
+	(void)server;
+	if (c->connected)
+		printf("#%llu %s connected\n", (unsigned long long)c->id, c->peer);
+	else
+		printf("#%llu %s left (reason %d)\n", (unsigned long long)c->id, c->peer, c->reason);
+}
+
+mogbus_server_set_connection_hook(server, on_connection, NULL);
+```
+
+`mogbus_connection_t` holds `connected`, `id`, `mode`, `peer` and `reason`:
+
+- It works for the connection-oriented transports `MOGBUS_MODE_TCP` (also with TLS), `MOGBUS_MODE_RTU_TCP` and `MOGBUS_MODE_ASCII_TCP`. UDP, serial, PTY and fd servers have no connections: setting the hook there succeeds (so a host can treat every server the same) and it never fires.
+- **Open**: sent when the server accepts the socket, before any data and before a TLS handshake. A client refused because all 32 slots are in use is never accepted and is not reported.
+- **Close**: sent exactly once for every connection that was announced, with `reason`: `MOGBUS_CLOSE_PEER` (end of stream or hang-up), `MOGBUS_CLOSE_IDLE_TIMEOUT`, `MOGBUS_CLOSE_DISCONNECT_FAULT`, `MOGBUS_CLOSE_TLS` (TLS setup failure, failed handshake or handshake timeout; the open event came first), `MOGBUS_CLOSE_SERVER_STOP` (the server or context was closed with the client connected, including at the end of @ref mogbus_run "mogbus_run()") or `MOGBUS_CLOSE_ERROR` (socket error, bad MBAP header, full receive buffer). Connections already open when the hook is installed are not announced and produce no close event.
+- `id` is the same in the open and the close event and is never reused by the server, so a reused connection slot gets a new id. `peer` is `ip:port`, as in the log lines and in `mogbus_frame_t.peer`, and is valid only during the call.
+
+The hook runs with the context lock held on the thread that steps or closes the server, must not block, and must not close or step the server; it may call `mogbus_*` functions. A server has one hook, a new one replaces it and NULL removes it. It is not part of a config.
+
 ## Next
 
 - [Step 5: Observe, shut down, lifetimes and threading](library-lifetimes.md)

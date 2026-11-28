@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Writes seed corpora for the libFuzzer harnesses: one valid request per supported function
-code, framed for each harness. Usage: tools/fuzz_seeds.py OUT_DIR (creates OUT_DIR/<harness>/)."""
+"""Runs the libFuzzer harnesses built by `make fuzz`. Usage: tools/fuzz.py SECONDS NAME...
+
+Seeds build/fuzz/corpus/<name> with one valid request per supported function code, framed for each
+harness, then runs every harness for SECONDS, at most FUZZ_JOBS (default nproc) at once, continuing
+from the corpus a previous run left there. A crash fails the run (exit status 1); libFuzzer writes
+the reproducer to build/fuzz/artifacts/<name>-crash-*, and `build/fuzz/fuzz_<name> FILE` replays it.
+Results print in argument order."""
+import concurrent.futures
 import os
+import re
 import struct
+import subprocess
 import sys
+
+DIR = 'build/fuzz'
 
 PDUS = [
     bytes([0x01, 0, 0, 0, 8]),                 # read coils
@@ -91,9 +101,8 @@ def http_seeds():
     return out
 
 
-def main():
-    out = sys.argv[1]
-    seeds = {'pdu': [], 'mbap': [], 'rtu': [], 'ascii': [], 'http': http_seeds()}
+def write_seeds(out):
+    seeds = {'pdu': [], 'mbap': [], 'rtu': [], 'ascii': [], 'decode': [], 'http': http_seeds()}
     for i, pdu in enumerate(PDUS):
         seeds['pdu'].append(pdu)
         seeds['mbap'].append(mbap(i, 1, pdu))
@@ -102,6 +111,10 @@ def main():
         # flags byte (baud known), then the frame in one chunk followed by a gap
         seeds['rtu'].append(bytes([1, 0x80 | (len(frame) - 1 & 0x1F)]) + frame[:32])
         seeds['ascii'].append(ascii_frame(1, pdu) + ascii_frame(0, pdu))
+        # framing, direction, json bit and small-buffer size, then the frame (auto and forced)
+        for n, framed in enumerate((mbap(i, 1, pdu), frame, ascii_frame(1, pdu))):
+            seeds['decode'].append(bytes([0, 0, i & 1]) + framed)
+            seeds['decode'].append(bytes([n + 1, 1 + i % 2, 0x60 | (i & 1)]) + framed)
     for name, items in seeds.items():
         os.makedirs(os.path.join(out, name), exist_ok=True)
         for i, data in enumerate(items):
@@ -109,5 +122,35 @@ def main():
                 f.write(data)
 
 
+def run_one(name, seconds):
+    with open(f'{DIR}/{name}.log', 'w') as log:
+        rc = subprocess.call([f'{DIR}/fuzz_{name}', f'-max_total_time={seconds}', '-print_final_stats=1',
+                              f'-artifact_prefix={DIR}/artifacts/{name}-', f'{DIR}/corpus/{name}'],
+                             stdout=log, stderr=subprocess.STDOUT)
+    return rc == 0
+
+
+def main():
+    seconds, names = sys.argv[1], sys.argv[2:]
+    jobs = int(os.environ.get('FUZZ_JOBS') or os.cpu_count() or 1)
+    os.makedirs(f'{DIR}/artifacts', exist_ok=True)
+    write_seeds(f'{DIR}/corpus')
+    print(f'fuzzing {len(names)} harnesses, {seconds}s each, up to {jobs} at once', flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        results = list(pool.map(lambda n: run_one(n, seconds), names))
+    fail = False
+    for name, ok in zip(names, results):
+        print(f'fuzz_{name}: {seconds}s')
+        with open(f'{DIR}/{name}.log', errors='replace') as f:
+            lines = f.read().splitlines()
+        if not ok:
+            print('\n'.join(lines[-40:]), file=sys.stderr)
+            print(f'fuzz_{name}: FAILED (see {DIR}/{name}.log and {DIR}/artifacts)', file=sys.stderr)
+            fail = True
+            continue
+        print(' '.join(l for l in lines if re.match(r'stat::(number_of_executed_units|peak_rss_mb)', l)) + ' ')
+    return 1 if fail else 0
+
+
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

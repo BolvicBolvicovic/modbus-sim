@@ -870,7 +870,7 @@ TEST(RtuCliCheckSummarizesConfiguredModes)
 		bin = "./mogbus";
 	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
 	{
-		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
+		char* argv[] = { (char*)bin, "--check=verbose", g_rtu_cli.config, NULL };
 		bool ok = rtu_cli_write_server_config(cases[c].mode, cases[c].target, cases[c].options, devices) &&
 			  rtu_cli_expect_cli_success(argv, cases[c].needles);
 
@@ -878,6 +878,31 @@ TEST(RtuCliCheckSummarizesConfiguredModes)
 			fprintf(stderr, "check summary case failed: %s %s\n", cases[c].mode, cases[c].options);
 		ASSERT_EQ(ok);
 	}
+}
+
+TEST(RtuCliCheckPrintsNothingUnlessVerbose)
+{
+	const char* bin = getenv("MOGBUS_BIN");
+	char* quiet[]   = { (char*)(bin ? bin : "./mogbus"), "--check", g_rtu_cli.config, NULL };
+	char* verbose[] = { (char*)(bin ? bin : "./mogbus"), "--check=verbose", g_rtu_cli.config, NULL };
+	char* bad[]     = { (char*)(bin ? bin : "./mogbus"), "--check=loud", g_rtu_cli.config, NULL };
+	int status = 0;
+	bool ok;
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0 (static 1)))\n"));
+	ok = rtu_cli_start_with_args_capture_stdout(quiet) &&
+	     wait_for_process_exit(g_rtu_cli.pid, &status, 2000) &&
+	     WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+	     !rtu_cli_file_contains(g_rtu_cli.stdout_path, "config OK") &&
+	     !rtu_cli_file_contains(g_rtu_cli.stdout_path, "device");
+	g_rtu_cli.pid = -1;
+	rtu_cli_stop();
+	ASSERT_EQ(ok);
+
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0 (static 1)))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_success(verbose, (const char* const[]){ "1 device", "config OK", NULL }));
+	ASSERT_EQ(rtu_cli_write_config("(device (unit-id 1) (holding 0 (static 1)))\n"));
+	ASSERT_EQ(rtu_cli_expect_cli_error(bad, "--check takes no value"));
 }
 
 TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
@@ -915,7 +940,7 @@ TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
 		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "Usage: mogbus", NULL });
 	}
 	{
-		char* argv[] = { (char*)bin, "--check", g_rtu_cli.config, NULL };
+		char* argv[] = { (char*)bin, "--check=verbose", g_rtu_cli.config, NULL };
 
 		ASSERT_EQ(rtu_cli_write_config(valid));
 		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "config OK", NULL });
@@ -924,10 +949,10 @@ TEST(RtuCliAcceptsOnlyGenericOptionsAndRejectsServerFlags)
 		char* argv[] = { (char*)bin, "--verbose", "-c", g_rtu_cli.config, NULL };
 
 		ASSERT_EQ(rtu_cli_write_config(valid));
-		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "config OK", NULL });
+		ok = ok && rtu_cli_expect_cli_success(argv, NULL);
 	}
 	{
-		char* argv[] = { (char*)bin, "-v", "--check", g_rtu_cli.config, NULL };
+		char* argv[] = { (char*)bin, "-v", "--check=verbose", g_rtu_cli.config, NULL };
 
 		ASSERT_EQ(rtu_cli_write_config(valid));
 		ok = ok && rtu_cli_expect_cli_success(argv, (const char* const[]){ "config OK", NULL });

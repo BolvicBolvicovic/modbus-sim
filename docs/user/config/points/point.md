@@ -18,7 +18,7 @@ Defines a point in one of the four Modbus tables, at an address a client can rea
   (on-read ...)       ; optional: action run on every client read (single points only)
   (on-write ...)      ; optional: action run after a client write (coil and holding only)
   (count N)           ; optional: repeat for N consecutive points
-  (note "Text"))      ; optional comment
+  (note "Text"))      ; optional comment, at most 127 bytes, shown next to the point
 ```
 
 ## Default
@@ -47,6 +47,13 @@ says "40001", that is address `0` of the holding table; "40101" is `100`.
 (illegal data address), like a real device. A read that covers a gap also fails. Each table has 65536
 addresses; a device can have at most 8192 points in total (`DEVICE_MAX_POINTS`).
 
+**`(note "Text")`** is a short description of the point, at most 127 bytes. It does not change what a
+client sees. It is shown in the `NOTE` column of the [live register table](../server/show-registers.md)
+(and as `# Text` in its line output and a `"note"` field in its JSON lines), in the `Note` column of the
+[web UI](../../observability/web-ui.md) and as `note` in [List points](../../observability/api/api-list-points.md).
+With `(count N)` the N points share the note. A `(note ...)` written directly in the device is
+documentation only and is not shown.
+
 Coils and discrete inputs are always on/off; do not give them a `type`. They can only be
 `(static on/off)`.
 
@@ -54,6 +61,7 @@ Coils and discrete inputs are always on/off; do not give them a `type`. They can
 
 - `address must be between 0 and 65535`: the address is out of range.
 - `address is already used by another point`: two points overlap. Remember 32-bit points use two addresses, 64-bit points four and strings `length`.
+- `note is longer than 127 bytes`: shorten the note.
 - `unknown option 'statik'. Allowed: ...`: typo. The message lists the valid names.
 - `expected a number` / `expected a whole number`: a value has the wrong form, for example text in quotes.
 - `coils and discrete inputs can only be (static on/off)`: no ramps and no `type` for bit tables.

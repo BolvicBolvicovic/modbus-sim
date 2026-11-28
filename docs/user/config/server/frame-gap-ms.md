@@ -33,4 +33,5 @@ is unknown, RTU falls back to 20 ms.
 ## See also
 
 - [baud](baud.md)
+- [char-timing](char-timing.md)
 - [serial framing](framing.md)

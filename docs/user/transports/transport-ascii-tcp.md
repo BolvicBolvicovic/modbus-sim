@@ -37,7 +37,7 @@ Raw Modbus ASCII frames on a TCP listen socket: `:` + hex + `CR LF`, no MBAP hea
 
 | Message | Meaning |
 |---|---|
-| load error | `baud`, `frame-gap-ms`, `strict-t15`, `data-bits`, `parity`, `stop-bits`, `path`, `broadcast-execute` or `tls`; `--check` rejects them too |
+| load error | `baud`, `frame-gap-ms`, `strict-t15`, `char-timing`, `data-bits`, `parity`, `stop-bits`, `path`, `broadcast-execute` or `tls`; `--check` rejects them too |
 
 ## Examples
 

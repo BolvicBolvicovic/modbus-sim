@@ -45,24 +45,27 @@ registers), Device.get_value/set_value `mogbus_device_get_value/set_value` (deco
 Device.get_string/set_string `mogbus_device_get_string/set_string`, Device.set_access_hook
 `mogbus_device_set_access_hook`, Device.set_written_hook `mogbus_device_set_written_hook`, Device.add_function_code `mogbus_device_add_function_code`, Device.info `mogbus_device_info`, Device.points `mogbus_device_point_at`, Device.actions `mogbus_device_action_at`, Device.set_action_param/get_action_param `mogbus_device_set_action_param`/`mogbus_device_get_action_param`, Context.serve
 `mogbus_server_create`, Context.serve_config `mogbus_server_create_from_config`, Server.step/run/stop/close
-`mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, probe `mogbus_probe`,
-Client `mogbus_client_*` (a Modbus master, independent of every Context), rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
+`mogbus_server_step/run/stop/close`, Server.metrics `mogbus_server_metrics`, Server.set_frame_hook `mogbus_server_set_frame_hook`, Server.set_connection_hook `mogbus_server_set_connection_hook`, probe `mogbus_probe`,
+Client `mogbus_client_*` (a Modbus master, independent of every Context), decode_frame `mogbus_decode_frame`, rtu_timing `mogbus_rtu_timing` and the set_log_* functions `mogbus_set_log_level/format/sink`.
 
 ## Limits
 
 Linux only (on Windows it works inside WSL2). The limits of the C API apply: 16 devices and 8
 servers per context, a server serves the devices that exist when it is created, and machines
 and faults can only be defined in config files. A TLS server needs a library built with TLS. The
-package installs no signal handlers; a host process serving TLS should ignore `SIGPIPE`. The wheel
+package installs no signal handlers. The wheel
 contains a native library, so build and install it on the machine that runs the tests.
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import contextlib
 import ctypes
 import dataclasses
 import enum
 import functools
+import json
 import os
 import socket
 import tempfile
@@ -299,7 +302,7 @@ class Status(enum.IntEnum):
     TIMEOUT = 9
     ## A client got a Modbus exception reply; see ModbusException.
     EXCEPTION = 10
-    ## A client got a malformed reply, or one that does not answer the request.
+    ## A client got a malformed reply, or one that does not answer the request (mogbus_decode_frame(): a malformed frame, which decode_frame() reports in its result instead).
     FRAME = 11
 
 
@@ -323,6 +326,30 @@ class LogFormat(enum.IntEnum):
     TEXT = 0
     ## One JSON object per line.
     JSON = 1
+
+
+class Framing(enum.IntEnum):
+    """@brief The ADU format of a captured frame; see decode_frame().
+    """
+    ## Detect it from the bytes.
+    AUTO = 0
+    ## Modbus TCP/UDP: 7-byte MBAP header and PDU.
+    MBAP = 1
+    ## Address, PDU, CRC (low byte first).
+    RTU = 2
+    ## `:`, hex of address, PDU and LRC, CR LF.
+    ASCII = 3
+
+
+class Direction(enum.IntEnum):
+    """@brief Whether a captured PDU is a request or a response; see decode_frame().
+    """
+    ## Infer it from the length and the byte count.
+    AUTO = 0
+    ## A request.
+    REQUEST = 1
+    ## A response.
+    RESPONSE = 2
 
 
 _NETWORK_MODES = (Mode.TCP, Mode.RTU_TCP, Mode.ASCII_TCP, Mode.UDP, Mode.RTU_UDP, Mode.ASCII_UDP)
@@ -427,6 +454,41 @@ class Frame:
     capacity: int
 
 
+class CloseReason(enum.IntEnum):
+    """@brief Why a client connection seen by a connection hook closed.
+    """
+    ## Not a close: the connection opened.
+    NONE = 0
+    ## The client closed it (end of stream or hang-up).
+    PEER = 1
+    ## No traffic for the server's idle timeout.
+    IDLE_TIMEOUT = 2
+    ## A disconnect fault fired.
+    DISCONNECT_FAULT = 3
+    ## TLS setup failed, or the handshake failed or timed out.
+    TLS = 4
+    ## The server was closed while the client was connected.
+    SERVER_STOP = 5
+    ## Socket error, or a protocol violation (bad MBAP header, full receive buffer).
+    ERROR = 6
+
+
+@dataclass
+class Connection:
+    """@brief A client connection opening or closing, handed to a Server connection hook.
+    @param connected True when the connection opened, False when it closed.
+    @param id Per-server connection id, the same in the open and the close event.
+    @param mode The Mode of the server.
+    @param peer The client as in the log lines (`"ip:port"`).
+    @param reason Why it closed (CloseReason); NONE for an open event.
+    """
+    connected: bool
+    id: int
+    mode: Mode
+    peer: str
+    reason: CloseReason
+
+
 @dataclass
 class Ramp:
     """@brief A point that moves over time: from `from_` to `to` by `step` every `every_ms`.
@@ -499,6 +561,7 @@ class PointInfo:
     @param byte_order Byte order inside every register.
     @param length Registers of a string point, else 0.
     @param read_only True when Modbus writes to the point are refused.
+    @param note The note of the point; empty when none.
     """
     space: Space
     address: int
@@ -507,6 +570,7 @@ class PointInfo:
     byte_order: ByteOrder
     length: int
     read_only: bool
+    note: str = ""
 
 
 @dataclass
@@ -580,6 +644,8 @@ class ServerOptions:
     @param http_ui Serve the web UI on `/` (needs the endpoint; implies `http_control`).
     @param http_allowed_hosts Extra Host names `/api/` and the UI accept (loopback and the bind address always pass): a comma-separated string or a list of at most 8 names.
     @param id Names the server (at most 31 bytes, unique in the context); it serves the devices that list it with `Device.add_server`, a server without one the devices that list none.
+    @param show_registers_ms Show the point values of the context every this many milliseconds (10 to 60000; 0 is off): a live table when stdout is a terminal, text lines otherwise. Written by `mogbus_step()`, so it needs a stepping `Server`.
+    @param char_timing RTU byte streams: date every character so t1.5 and t3.5 are measured between characters, and send replies at the line rate when the handle is not a real serial port; needs `baud` (a device may take it from the tty); supersedes `strict_t15`.
     """
     mode: Union[str, int, Mode] = Mode.TCP
     bind_address: Optional[str] = "127.0.0.1"
@@ -610,6 +676,8 @@ class ServerOptions:
     http_ui: bool = False
     http_allowed_hosts: Union[None, str, Sequence[str]] = None
     id: Optional[str] = None
+    show_registers_ms: int = 0
+    char_timing: bool = False
 
     def _to_c(self):
         """Returns (struct, keepalive). The struct points into the bytes objects in keepalive."""
@@ -643,7 +711,8 @@ class ServerOptions:
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise MogbusError(f"fd must be an integer, got {value!r}")
             elif f.name in ("strict_t15", "broadcast_execute", "tls_enabled",
-                            "tls_require_client_certificate", "http_control", "http_ui"):
+                            "tls_require_client_certificate", "http_control", "http_ui",
+                            "char_timing"):
                 value = bool(value)
             else:
                 value = _u(value, f.name, 1 << 32)
@@ -732,7 +801,7 @@ class Device:
     @_locked
     def add_point(self, space, address, type="u16", value=0, word_order="high-first", ramp=None,
                   byte_order="big", length=0, text=None, read_only=False, clock=None,
-                  clock_utc=False):
+                  clock_utc=False, note=None):
         """@brief Adds a point to a table.
 
         A point is static (`value`), a ramp (`ramp`) or a clock (`clock`); the three are exclusive. A
@@ -751,6 +820,7 @@ class Device:
         @param read_only Coils and holding registers: Modbus writes fail with exception 02. Device.write() and set_value() still change the point.
         @param clock `"year"`, `"month"`, `"day"`, `"weekday"`, `"hour"`, `"minute"`, `"second"` or `"unix"`: an integer register that shows that field of the wall clock (`"unix"` needs 32 bits and is always UTC); excludes `ramp`.
         @param clock_utc Show the clock field in UTC rather than local time.
+        @param note A short note (at most 127 bytes of UTF-8) shown next to the point in the register view and the web UI.
         @throws MogbusError If the point is invalid, overlaps another or does not fit the table.
         """
         p = _lib.PointC()
@@ -761,6 +831,8 @@ class Device:
         p.byte_order = int(_coerce(ByteOrder, byte_order, "byte_order"))
         p.length = _u(length, "length", 1 << 32)
         p.read_only = bool(read_only)
+        if note:
+            p.note = note.encode("utf-8")
         if text is not None:
             if p.type != ValueType.STRING:
                 raise MogbusError("text only applies to type \"string\"")
@@ -1247,7 +1319,8 @@ class Device:
         c = _lib.PointC()
         while lib.mogbus_device_point_at(self._live(), len(out), ctypes.byref(c)):
             out.append(PointInfo(Space(c.space), c.address, ValueType(c.type), WordOrder(c.word_order),
-                                 ByteOrder(c.byte_order), c.length, bool(c.read_only)))
+                                 ByteOrder(c.byte_order), c.length, bool(c.read_only),
+                                 (c.note or b"").decode("utf-8", "replace")))
         return out
 
     @_locked
@@ -1330,7 +1403,10 @@ class Server:
         self._h = handle
         self._thread: Optional[threading.Thread] = None
         self._stopping = False
+        self._serving = False  # a serve() coroutine drives this server
+        self._waiter: Optional["_Waiter"] = None
         self._frame_ref = None  # the C callback object, alive while the frame hook is installed
+        self._connection_ref = None  # same for the connection hook
         self.last_step_result: Optional[int] = None
 
     def _live(self):
@@ -1360,6 +1436,70 @@ class Server:
             time.sleep(0.0002)
         return 0
 
+    async def serve(self, poll_interval: float = 0.005) -> int:
+        """@brief Serves this server inside the running asyncio event loop, without a background thread.
+
+        Returns when the server stops: stop() (also from a hook or another thread), a finished byte
+        stream (`rtu-fd`, PTY peer gone) or a poll error. Between steps the coroutine waits on the sockets of
+        the server with the loop's own `add_reader()`/`add_writer()` (the C library tells it which with
+        `mogbus_server_poll_fds()`), so it costs nothing while idle and answers as soon as a request
+        arrives. Every step runs with a wait of 0 on the loop's thread, with the context lock held, so hooks
+        and callbacks run on the loop's thread and a slow one delays the loop. An exception raised by a
+        hook is handled as in the threaded mode: printed with its traceback and answered as the hook
+        documents.
+
+        Cancelling the task (or leaving `async with server.running()`) stops the server and runs a final
+        step, then raises CancelledError; it does not close the transport, so call close() to free the
+        port. When the loop cannot watch descriptors (the Windows ProactorEventLoop, a serial fd that
+        epoll rejects) it steps every `poll_interval` seconds instead, at most.
+
+        ```python
+        server = ctx.serve(port=1502)
+        task = asyncio.create_task(server.serve())
+        ...
+        server.stop()
+        await task
+        ```
+        @param poll_interval Longest sleep between steps in the fallback that cannot watch descriptors, in seconds.
+        @return 0 after a clean stop, 1 on a poll error.
+        @throws MogbusError If the server is closed, already started on a thread or already served.
+        """
+        with self._ctx._lock:
+            self._live()
+            if self._thread is not None or self._serving:
+                raise MogbusError("server is already running")
+            self._serving = True
+            self._stopping = False
+        ctx = self._ctx
+        try:
+            return await _drive(ctx, self, poll_interval)
+        finally:
+            self._serving = False
+
+    @contextlib.asynccontextmanager
+    async def running(self, poll_interval: float = 0.005):
+        """@brief Async context manager: serves this server in the event loop for the body, then stops and closes it.
+
+        The server runs as a task of the current loop (see serve()); on exit the task is cancelled, a
+        final step runs and the server is closed, like `with server:` does for a threaded one. An
+        exception that ended the serving task early (a poll error) is raised at exit.
+
+        ```python
+        async with ctx.serve(port=1502).running():
+            await asyncio.sleep(60)
+        ```
+        @param poll_interval See serve().
+        @return The server (as `async with ... as server`).
+        """
+        task = asyncio.ensure_future(self.serve(poll_interval))
+        try:
+            yield self
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            self.close()
+
     def run(self, exclusive: bool = False) -> int:
         """@brief Steps until stopped; blocks the calling thread.
 
@@ -1384,6 +1524,8 @@ class Server:
             self._live()
             if self._thread is not None:
                 raise MogbusError("server thread already started")
+            if self._serving:
+                raise MogbusError("server is being served by serve()")
             self._stopping = False
             self._thread = threading.Thread(target=self._loop, name="mogbus-server", daemon=True)
             self._thread.start()
@@ -1396,6 +1538,9 @@ class Server:
         h = self._h
         if h:
             lib.mogbus_server_stop(h)
+        for waiter in (self._waiter, self._ctx._waiter):
+            if waiter is not None:
+                waiter.wake()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join()
@@ -1487,6 +1632,48 @@ class Server:
         self._frame_ref = ref
 
     @_locked
+    def set_connection_hook(self, hook: Optional[Callable[[Connection], None]]) -> None:
+        """@brief Runs `hook(connection)` when a client connects to or leaves this server; None removes it.
+
+        pymodbus offers `trace_connect`. It fires for the `tcp` (also with TLS), `rtu-tcp` and
+        `ascii-tcp` modes; on the others there are no connections, so it is accepted and never called.
+        The open event comes when the socket is accepted, before any data or TLS handshake (a failed
+        handshake then closes with `CloseReason.TLS`). A close event follows exactly once for every
+        announced connection, also for the clients still connected when the server is closed
+        (`CloseReason.SERVER_STOP`). Connections already open when the hook is installed are not
+        announced. `Connection.id` is the same in both events and never reused by the server.
+
+        The hook runs on the thread that steps the server with the context lock held, so it may call
+        the methods of the devices but must not close or step this server. An exception it raises is
+        printed with its traceback. A server has one hook; a new one replaces it.
+
+        ```python
+        server.set_connection_hook(lambda c: print(c.id, c.peer, "open" if c.connected else c.reason.name))
+        ```
+        @param hook A callable taking a Connection; None removes the hook.
+        @throws MogbusError If the server is closed or the hook cannot be installed.
+        """
+        handle = self._live()
+        if hook is None:
+            if lib.mogbus_server_set_connection_hook(handle, ctypes.cast(None, _lib.CONNECTION_FN), None):
+                raise MogbusError("cannot remove the connection hook")
+            self._connection_ref = None
+            return
+
+        def trampoline(_user, _server, event):
+            e = event.contents
+            try:
+                hook(Connection(bool(e.connected), e.id, Mode(e.mode), _decode(e.peer) or "",
+                                CloseReason(e.reason)))
+            except BaseException:  # an exception must not unwind into C
+                traceback.print_exc()
+
+        ref = _lib.CONNECTION_FN(trampoline)
+        if lib.mogbus_server_set_connection_hook(handle, ref, None):
+            raise MogbusError("cannot install the connection hook")
+        self._connection_ref = ref
+
+    @_locked
     def metrics(self) -> str:
         """@brief Prometheus text of this server's counters (the same as `/metrics`).
         @return The text exposition.
@@ -1508,6 +1695,111 @@ class Server:
         self.close()
 
 
+class _Waiter:
+    """Sleeps until a descriptor of the server is ready, a deadline passes or wake() is called (any thread)."""
+
+    def __init__(self, loop: "asyncio.AbstractEventLoop"):
+        self.loop = loop
+        self.future: Optional["asyncio.Future"] = None
+        self.watch = True  # False once the loop cannot watch descriptors
+
+    def _set(self) -> None:
+        future = self.future
+        if future is not None and not future.done():
+            future.set_result(None)
+
+    def wake(self) -> None:
+        with contextlib.suppress(RuntimeError):  # the loop is closed
+            self.loop.call_soon_threadsafe(self._set)
+
+    async def wait(self, entries, seconds: float, interval: float) -> None:
+        """Waits at most `seconds` (the library's deadline) for one of `entries` (fd, events) to be ready."""
+        if self.watch and entries:
+            self.future = self.loop.create_future()
+            added = []
+            timer = self.loop.call_later(seconds, self._set)
+            try:
+                try:
+                    for fd, events in entries:
+                        if events & 1:
+                            self.loop.add_reader(fd, self._set)
+                            added.append((self.loop.remove_reader, fd))
+                        if events & 2:
+                            self.loop.add_writer(fd, self._set)
+                            added.append((self.loop.remove_writer, fd))
+                except NotImplementedError:
+                    self.watch = False  # Proactor loop: no add_reader
+                except (OSError, ValueError):
+                    pass  # an fd this loop cannot watch right now: sleep for this round
+                else:
+                    await self.future
+                    return
+            finally:
+                timer.cancel()
+                for remove, fd in added:
+                    with contextlib.suppress(Exception):
+                        remove(fd)
+                self.future = None
+        await asyncio.sleep(min(seconds, interval))
+
+
+async def _drive(ctx: "Context", server: Optional["Server"], interval: float) -> int:
+    """Steps `server` (or every server of `ctx`) on the running loop: poll_fds, wait, step(0), until done."""
+    loop = asyncio.get_running_loop()
+    waiter = _Waiter(loop)
+    owner = server if server is not None else ctx
+    owner._waiter = waiter
+    table = (_lib.PollFdC * (64 if server is not None else 512))()
+    count = ctypes.c_size_t()
+    timeout = ctypes.c_int()
+
+    def call(poll, handle):
+        """One locked poll_fds + the entries; None if the owner is gone."""
+        with ctx._lock:
+            if not ctx._h or (server is not None and not server._h):
+                return None
+            code = poll(handle, table, len(table), ctypes.byref(count), ctypes.byref(timeout))
+            if code:
+                raise _fail(ctx._h, code, "cannot poll the server")
+            return [(table[i].fd, table[i].events) for i in range(count.value)]
+
+    def step(max_wait_ms):
+        with ctx._lock:
+            if not ctx._h or (server is not None and not server._h):
+                return 1
+            if server is not None:
+                return lib.mogbus_server_step(server._h, max_wait_ms)
+            return lib.mogbus_step(ctx._h, max_wait_ms)
+
+    try:
+        while True:
+            if server is not None:
+                entries = call(lib.mogbus_server_poll_fds, server._h)
+            else:
+                entries = call(lib.mogbus_poll_fds, ctx._h)
+            if entries is None:
+                return 0
+            if timeout.value > 0:
+                await waiter.wait(entries, timeout.value / 1000.0, interval)
+            else:
+                await asyncio.sleep(0)  # let other tasks run between steps that have no wait
+            result = step(0)
+            if server is not None:
+                server.last_step_result = result
+            if result != 0:
+                return 1 if result == 2 else 0
+    except asyncio.CancelledError:
+        if server is not None:
+            server.stop()
+        else:
+            for sv in list(ctx._servers):
+                sv.stop()
+        step(0)  # the final step sees the stop and closes the connections
+        raise
+    finally:
+        owner._waiter = None
+
+
 class Context:
     """@brief Owns devices and servers; the root of the API.
 
@@ -1525,6 +1817,8 @@ class Context:
             raise MogbusError("cannot create a context (memory cannot be mapped)")
         self._servers: List[Server] = []
         self._devices: Dict[int, Device] = {}
+        self._waiter: Optional[_Waiter] = None
+        self._serving_all = False
 
     def _check_open(self):
         if not self._h:
@@ -1676,6 +1970,37 @@ class Context:
             code = lib.mogbus_server_create_from_config(self._h, ctypes.byref(out))
             return self._new_server(code, out.value)
 
+    async def serve_all(self, poll_interval: float = 0.005) -> int:
+        """@brief Serves every server of this context inside the running asyncio event loop with one wait.
+
+        The asyncio counterpart of `mogbus_run()`: one coroutine drives all servers (`mogbus_step()`),
+        watching their sockets together, and returns once every server stopped or finished (at once when
+        there is none). Everything said for Server.serve() applies: no thread, the steps run on the
+        loop's thread, cancelling stops every server after a final step and does not close them, and
+        `poll_interval` is the fallback sleep. The servers must not be started on threads or served
+        individually meanwhile.
+
+        ```python
+        a = ctx.serve(port=1502)
+        b = ctx.serve(mode="udp", port=1502)
+        await ctx.serve_all()          # until a and b are stopped
+        ```
+        @param poll_interval Longest sleep between steps in the fallback that cannot watch descriptors, in seconds.
+        @return 0 after a clean stop, 1 on a poll error.
+        @throws MogbusError If the context is closed, a server runs on a thread or is served, or this coroutine already runs.
+        """
+        with self._lock:
+            self._check_open()
+            if self._serving_all or any(sv._thread is not None or sv._serving for sv in self._servers):
+                raise MogbusError("servers of this context are already running")
+            self._serving_all = True
+            for sv in self._servers:
+                sv._stopping = False
+        try:
+            return await _drive(self, None, poll_interval)
+        finally:
+            self._serving_all = False
+
     def _new_server(self, code, handle):
         if code:
             raise _fail(self._h, code, "cannot create server")
@@ -1740,6 +2065,54 @@ def rtu_timing(baud: int, frame_gap_ms: int = 0) -> RtuTiming:
     lib.mogbus_rtu_timing(_u(baud, "baud", 1 << 32), _u(frame_gap_ms, "frame_gap_ms", 1 << 32),
                           ctypes.byref(t35), ctypes.byref(gap))
     return RtuTiming(t35.value, gap.value)
+
+
+def _frame_bytes(data) -> bytes:
+    """Bytes of a frame given as bytes-like, as hex text ("01 03 00", "01:03", "0x01,0x03") or as
+    ASCII frame text starting with ':' (CR LF is added when missing)."""
+    if not isinstance(data, str):
+        return bytes(data)
+    text = data.strip()
+    if text.startswith(":"):
+        return text.encode("latin-1", errors="replace") + b"\r\n"
+    digits = text.replace("0x", "").replace("0X", "")
+    for sep in " \t\r\n:,-":
+        digits = digits.replace(sep, "")
+    try:
+        return bytes.fromhex(digits)
+    except ValueError:
+        raise MogbusError(f"cannot read the frame {data[:40]!r} as hex") from None
+
+
+def decode_frame(data, framing="auto", direction="auto", as_dict: bool = False) -> Union[str, dict]:
+    """@brief Decodes one captured Modbus frame into readable text, or a dict.
+
+    The result lists the ADU fields (MBAP transaction/protocol/length/unit, RTU or ASCII address and
+    CRC or LRC with whether it matches), the function code and its name, the direction and every
+    field of the PDU of each function code mogbus supports; other function codes keep their data
+    raw. A damaged frame (bad checksum, wrong length, truncated fields) is not an error: every field
+    that could be read is there, then the problems (`errors`, and `ok` is False; values a server
+    would refuse are `warnings`). A frame that is valid in several framings lists each candidate
+    (`ambiguous`). It needs no context and no server; see `mogbus --decode` for the same thing on
+    the command line.
+    @param data The frame: bytes-like, hex text (`"01 03 00 00 00 01 84 0A"`, also `01:03:...` or `0x01,...`), or the ASCII frame text starting with `:`.
+    @param framing A Framing or its name: `"auto"` (default), `"mbap"`, `"rtu"` or `"ascii"`.
+    @param direction A Direction or its name: `"auto"` (default), `"request"` or `"response"`.
+    @param as_dict Return the parsed JSON object (a dict) instead of the text.
+    @return The text, one `key: value` line per field, or the dict with the same fields.
+    @throws MogbusError For a frame above 4096 bytes, text that is not hex, or an unknown framing or direction.
+    """
+    frame = _frame_bytes(data)
+    framing = int(_coerce(Framing, framing, "framing"))
+    direction = int(_coerce(Direction, direction, "direction"))
+    out = ctypes.create_string_buffer(65536)
+    out_len = ctypes.c_size_t()
+    code = lib.mogbus_decode_frame(frame, len(frame), framing, direction, bool(as_dict), out, len(out),
+                                   ctypes.byref(out_len))
+    if code not in (Status.OK, Status.FRAME):
+        raise MogbusError("cannot decode the frame (at most 4096 bytes)", Status(code))
+    text = out.raw[:out_len.value].decode("ascii", errors="replace")
+    return json.loads(text) if as_dict else text
 
 
 def library_version() -> str:
@@ -1880,11 +2253,45 @@ class ModbusException(MogbusError):
     @param message The message of the client.
     @param code The Modbus exception code: 1 illegal function, 2 illegal data address, 3 illegal data
         value, 4 server device failure, 11 gateway target failed to respond; a server may use others.
+        255 is a CANopen service failure of Client.canopen_request().
+    @param data Reply bytes that came with the exception (the CANopen failure payload), else empty.
     """
 
-    def __init__(self, message: str, code: int):
+    def __init__(self, message: str, code: int, data: bytes = b""):
         super().__init__(message, Status.EXCEPTION)
         self.code = code
+        self.data = data
+
+
+class CommEventCounter(NamedTuple):
+    """@brief The reply of Client.get_comm_event_counter().
+    @param status The status word: 0 ready, 0xFFFF busy.
+    @param event_count The device's communication event counter.
+    """
+    status: int
+    event_count: int
+
+
+class CommEventLog(NamedTuple):
+    """@brief The reply of Client.get_comm_event_log().
+    @param status The status word.
+    @param event_count The communication event counter.
+    @param message_count The message counter.
+    @param events The event bytes, at most 64.
+    """
+    status: int
+    event_count: int
+    message_count: int
+    events: bytes
+
+
+class DeviceIdentification(NamedTuple):
+    """@brief The reply of Client.read_device_identification().
+    @param conformity The conformity level of the server (0x81-0x83, 0x01-0x03 for individual access).
+    @param objects The objects by id, as bytes.
+    """
+    conformity: int
+    objects: Dict[int, bytes]
 
 
 class Client:
@@ -1912,28 +2319,49 @@ class Client:
     @param data_bits Serial data bits: 7 or 8 (RTU: 8).
     @param parity Serial Parity, a member or its name.
     @param stop_bits Serial stop bits: 1 or 2.
-    @throws MogbusError If the options are invalid (not an IP address, a server-only mode, ...).
+    @param byte_timeout_ms Stream and serial modes: a reply fails with Status.TIMEOUT when, once its
+        first byte arrived, no further byte comes within this many milliseconds (0 = off).
+    @param tls Talk TLS (`"tcp"` mode only, a build with TLS; otherwise MogbusError with Status.UNSUPPORTED).
+    @param tls_ca_file PEM file of the CA(s) that signed the server's certificate; the system trust store when None.
+    @param tls_cert_file PEM client certificate to present, or None.
+    @param tls_key_file PEM private key of `tls_cert_file`; None when the key is in that file.
+    @param tls_server_name Name the server certificate must carry, also sent as SNI; `host` when None.
+    @param tls_verify Check the server certificate (the default); False trusts anyone.
+    @throws MogbusError If the options are invalid (not an address or host name, a server-only mode, ...).
+
+    `host` may be a name: it is resolved when the client connects, which blocks for as long as the
+    resolver takes. `port` defaults to 1502, or 802 with `tls`.
     """
 
-    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1", port: int = 1502,
+    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1",
+                 port: Optional[int] = None,
                  unit: int = 1, timeout_ms: int = 1000, retries: int = 0, path: Optional[str] = None,
                  baud: int = 0, data_bits: int = 8, parity: Union[str, int, Parity] = Parity.NONE,
-                 stop_bits: int = 1):
+                 stop_bits: int = 1, byte_timeout_ms: int = 0, tls: bool = False,
+                 tls_ca_file: Optional[str] = None, tls_cert_file: Optional[str] = None,
+                 tls_key_file: Optional[str] = None, tls_server_name: Optional[str] = None,
+                 tls_verify: bool = True):
         self._h = None
         self._lock = threading.RLock()
         c = _lib.ClientOptionsC()
         c.mode = int(_coerce(Mode, mode, "mode"))
         host_b, path_b = _text(host), _text(path)
         c.host = host_b
+        if port is None:
+            port = 802 if tls else 1502
         c.port = _u(port, "port", 1 << 16)
         c.path = path_b
         c.baud = _u(baud, "baud", 1 << 32)
         c.data_bits = _u(data_bits, "data_bits", 1 << 32)
         c.parity = int(_coerce(Parity, parity, "parity"))
         c.stop_bits = _u(stop_bits, "stop_bits", 1 << 32)
-        c.tls_enabled = False
+        c.tls_enabled = bool(tls)
         c.timeout_ms = _u(timeout_ms, "timeout_ms", 1 << 32)
         c.retries = _u(retries, "retries", 1 << 32)
+        c.byte_timeout_ms = _u(byte_timeout_ms, "byte_timeout_ms", 1 << 32)
+        tls_bytes = [_text(v) for v in (tls_ca_file, tls_cert_file, tls_key_file, tls_server_name)]
+        c.tls_ca_file, c.tls_cert_file, c.tls_key_file, c.tls_server_name = tls_bytes
+        c.tls_verify = bool(tls_verify)
         self.unit = _u(unit, "unit", 256)
         out = ctypes.c_void_p()
         code = lib.mogbus_client_open(ctypes.byref(c), ctypes.byref(out))
@@ -1967,13 +2395,13 @@ class Client:
             raise MogbusError("the client is closed")
         return self._h
 
-    def _check(self, code: int) -> None:
+    def _check(self, code: int, data: bytes = b"") -> None:
         if code == 0:
             return
         msg = lib.mogbus_client_last_error(self._h)
         text = msg.decode(errors="replace") if msg else "client call failed"
         if code == Status.EXCEPTION:
-            raise ModbusException(text, lib.mogbus_client_last_exception(self._h))
+            raise ModbusException(text, lib.mogbus_client_last_exception(self._h), data)
         raise MogbusError(text, Status(code))
 
     def _unit(self, unit: Optional[int]) -> int:
@@ -2110,21 +2538,170 @@ class Client:
                 _u(write_address, "write_address", 1 << 16), _u(len(values), "count", 1 << 16), buf))
         return list(out[:read_count])
 
-    def read_device_id(self, unit: Optional[int] = None) -> Dict[int, bytes]:
-        """@brief Reads the basic device identification objects (function code 43, MEI type 14).
+    def read_device_identification(self, read_code: int = 1, object_id: int = 0,
+                                   unit: Optional[int] = None) -> DeviceIdentification:
+        """@brief Reads device identification objects (function code 43, MEI type 14), following up "more follows" replies.
+        @param read_code 1 basic (objects 0-2), 2 regular (0-6), 3 extended (0-6, then 0x80-0xFF) or 4 the one object `object_id`.
+        @param object_id First object to read.
         @param unit Unit id; the client's default when None.
-        @return The objects by id: 0 vendor name, 1 product code, 2 revision.
+        @return The conformity level and the objects by id.
         """
-        buf = (ctypes.c_uint8 * 252)()
+        buf = (ctypes.c_uint8 * 65536)()
         n = ctypes.c_size_t()
+        level = ctypes.c_uint8()
         with self._lock:
-            self._check(lib.mogbus_client_read_device_id(self._live(), self._unit(unit), buf, 252,
-                                                         ctypes.byref(n)))
+            self._check(lib.mogbus_client_read_device_identification(
+                self._live(), self._unit(unit), _u(read_code, "read_code", 256), _u(object_id, "object_id", 256),
+                buf, len(buf), ctypes.byref(n), ctypes.byref(level)))
         raw, objects, i = bytes(buf[:n.value]), {}, 0
         while i + 2 <= len(raw) and i + 2 + raw[i + 1] <= len(raw):
             objects[raw[i]] = raw[i + 2:i + 2 + raw[i + 1]]
             i += 2 + raw[i + 1]
-        return objects
+        return DeviceIdentification(level.value, objects)
+
+    def read_device_id(self, unit: Optional[int] = None, read_code: int = 1,
+                       object_id: int = 0) -> Dict[int, bytes]:
+        """@brief Reads device identification objects (function code 43, MEI type 14); the basic ones by default.
+        @param unit Unit id; the client's default when None.
+        @param read_code 1 basic (objects 0-2), 2 regular, 3 extended or 4 one object; see read_device_identification().
+        @param object_id First object to read.
+        @return The objects by id: 0 vendor name, 1 product code, 2 revision, then the others the code asks for.
+        """
+        return self.read_device_identification(read_code, object_id, unit).objects
+
+    def read_exception_status(self, unit: Optional[int] = None) -> int:
+        """@brief Reads the exception status byte (function code 07).
+        @param unit Unit id; the client's default when None.
+        @return The status byte, 0-255.
+        """
+        out = ctypes.c_uint8()
+        with self._lock:
+            self._check(lib.mogbus_client_read_exception_status(self._live(), self._unit(unit), ctypes.byref(out)))
+        return out.value
+
+    def diagnostics(self, sub_function: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends a diagnostics request (function code 08).
+        @param sub_function The sub-function code, 0-65535.
+        @param data The request data after the sub-function, at most 250 bytes (sub-function 0 echoes any length, the others take 2).
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the sub-function.
+        @throws MogbusError With Status.FRAME if the sub-function is not echoed.
+        """
+        data = bytes(data)
+        req = (ctypes.c_uint8 * max(len(data), 1)).from_buffer_copy(data or b"\0")
+        out = (ctypes.c_uint8 * 252)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_diagnostics(self._live(), self._unit(unit),
+                                                      _u(sub_function, "sub_function", 1 << 16), req, len(data),
+                                                      out, 252, ctypes.byref(n)))
+        return bytes(out[:n.value])
+
+    def get_comm_event_counter(self, unit: Optional[int] = None) -> CommEventCounter:
+        """@brief Reads the communication event counter (function code 0B).
+        @param unit Unit id; the client's default when None.
+        @return The status word and the event counter.
+        """
+        status, count = ctypes.c_uint16(), ctypes.c_uint16()
+        with self._lock:
+            self._check(lib.mogbus_client_get_comm_event_counter(self._live(), self._unit(unit),
+                                                                 ctypes.byref(status), ctypes.byref(count)))
+        return CommEventCounter(status.value, count.value)
+
+    def get_comm_event_log(self, unit: Optional[int] = None) -> CommEventLog:
+        """@brief Reads the communication event log (function code 0C).
+        @param unit Unit id; the client's default when None.
+        @return The status word, the event and message counters and the event bytes.
+        """
+        status, count, messages = ctypes.c_uint16(), ctypes.c_uint16(), ctypes.c_uint16()
+        events = (ctypes.c_uint8 * 64)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_get_comm_event_log(
+                self._live(), self._unit(unit), ctypes.byref(status), ctypes.byref(count),
+                ctypes.byref(messages), events, 64, ctypes.byref(n)))
+        return CommEventLog(status.value, count.value, messages.value, bytes(events[:n.value]))
+
+    def report_server_id(self, unit: Optional[int] = None) -> bytes:
+        """@brief Reads the server id report (function code 11).
+        @param unit Unit id; the client's default when None.
+        @return The device specific data; mogbus devices send the server id, the run indicator (0xFF on) and their additional data.
+        """
+        out = (ctypes.c_uint8 * 252)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_report_server_id(self._live(), self._unit(unit), out, 252,
+                                                           ctypes.byref(n)))
+        return bytes(out[:n.value])
+
+    def _file_records(self, records, with_values):
+        arr = (_lib.ClientFileRecordC * max(len(records), 1))()
+        buffers = []
+        for i, rec in enumerate(records):
+            file, record, third = rec
+            if with_values:
+                values = [_u(v, "value", 1 << 16) for v in third]
+                length = len(values)
+            else:
+                length = _u(third, "length", 1 << 16)
+                values = [0] * length
+            buf = (ctypes.c_uint16 * max(length, 1))(*values)
+            buffers.append(buf)
+            arr[i].file = _u(file, "file", 1 << 16)
+            arr[i].record = _u(record, "record", 1 << 16)
+            arr[i].length = _u(length, "length", 1 << 16)
+            arr[i].values = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint16))
+        return arr, buffers
+
+    def read_file_records(self, requests: Sequence[Sequence[int]], unit: Optional[int] = None) -> List[List[int]]:
+        """@brief Reads file records (function code 14); one request answers every sub-request.
+        @param requests 1-35 tuples `(file, record, length)`: file 1-65535, first record 0-9999, number of records.
+        @param unit Unit id; the client's default when None.
+        @return The values of each sub-request, in order.
+        """
+        arr, buffers = self._file_records(requests, False)
+        with self._lock:
+            self._check(lib.mogbus_client_read_file_records(self._live(), self._unit(unit), arr, len(requests)))
+        return [list(b[:req[2]]) for b, req in zip(buffers, requests)]
+
+    def write_file_records(self, records: Sequence[Sequence[Any]], unit: Optional[int] = None) -> None:
+        """@brief Writes file records (function code 15); all or nothing.
+        @param records Tuples `(file, record, values)`: file 1-65535, first record 0-9999 and the raw 16-bit values; at most 251 request bytes in all.
+        @param unit Unit id; the client's default when None.
+        """
+        arr, _keep = self._file_records(records, True)
+        with self._lock:
+            self._check(lib.mogbus_client_write_file_records(self._live(), self._unit(unit), arr, len(records)))
+
+    def read_fifo(self, address: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads a FIFO queue (function code 18).
+        @param address FIFO pointer address.
+        @param unit Unit id; the client's default when None.
+        @return The queued raw values, at most 31.
+        """
+        out = (ctypes.c_uint16 * 31)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            self._check(lib.mogbus_client_read_fifo(self._live(), self._unit(unit), _u(address, "address", 1 << 16),
+                                                    out, 31, ctypes.byref(n)))
+        return list(out[:n.value])
+
+    def canopen_request(self, request: bytes, unit: Optional[int] = None) -> bytes:
+        """@brief Sends a CANopen general reference request (function code 2B, MEI type 0D) and returns the raw reply.
+        @param request The bytes after `2B 0D`: control byte, 0, optional network id and data type, node, index, subindex, start, count and the data of a write (1-251 bytes).
+        @param unit Unit id; the client's default when None.
+        @return The reply bytes after `2B 0D` (control byte onward).
+        @throws ModbusException With code 255 for a failure of the CANopen service; `data` holds `FF len 0D AE|CE payload`.
+        """
+        request = bytes(request)
+        req = (ctypes.c_uint8 * max(len(request), 1)).from_buffer_copy(request or b"\0")
+        out = (ctypes.c_uint8 * 260)()
+        n = ctypes.c_size_t()
+        with self._lock:
+            code = lib.mogbus_client_canopen_request(self._live(), self._unit(unit), req, len(request), out, 260,
+                                                     ctypes.byref(n))
+            self._check(code, bytes(out[:n.value]))
+        return bytes(out[:n.value])
 
     def request(self, function_code: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
         """@brief Sends any request, including a user-defined function code, and returns the reply data.
@@ -2142,3 +2719,277 @@ class Client:
             self._check(lib.mogbus_client_request(self._live(), self._unit(unit), _u(function_code, "function_code", 256),
                                                   req, len(data), reply, 252, ctypes.byref(n)))
         return bytes(reply[:n.value])
+
+
+class AsyncClient:
+    """@brief The asyncio counterpart of Client: the same calls as coroutines, so they never block the event loop.
+
+    Each call runs the blocking C call of a Client on one worker thread owned by this object, so the
+    calls of one AsyncClient are serialized in the order they were made (the C client handles one
+    request at a time), and several AsyncClients talk in parallel. Cancelling an awaiting task
+    abandons the wait, not the request: the call finishes on the worker thread and the calls queued
+    after it wait for it. Everything else, including the arguments, the return values, the default `unit` (fixed at construction; pass `unit=` per call to ask another one), the
+    connect-on-first-call and reconnect behaviour and the errors (ModbusException, MogbusError with a
+    Status), is that of Client. Use it as `async with`, or await close().
+
+    ```python
+    async with mogbus.AsyncClient(port=1502) as c:
+        regs, coils = await asyncio.gather(c.read_holding_registers(0, 4), c.read_coils(0, 8))
+    ```
+    The constructor takes the arguments of Client and does not connect.
+    @param mode Transport: a Mode or its name (see Client).
+    @param host IP address of the server; network modes.
+    @param port Port of the server; network modes.
+    @param unit Default unit id of the calls.
+    @param timeout_ms How long to wait for each reply.
+    @param retries Extra attempts after a timeout.
+    @param path Serial device; serial modes.
+    @param baud Serial speed; 0 keeps the device's.
+    @param data_bits Serial data bits: 7 or 8 (RTU: 8).
+    @param parity Serial Parity, a member or its name.
+    @param stop_bits Serial stop bits: 1 or 2.
+    @param byte_timeout_ms Stream and serial modes: longest gap between the bytes of a reply (0 = off).
+    @param tls Talk TLS (`"tcp"` mode only).
+    @param tls_ca_file PEM file of the trusted CA(s); the system trust store when None.
+    @param tls_cert_file PEM client certificate, or None.
+    @param tls_key_file PEM private key of `tls_cert_file`; None when the key is in that file.
+    @param tls_server_name Name the server certificate must carry, also sent as SNI; `host` when None.
+    @param tls_verify Check the server certificate (the default).
+    @throws MogbusError If the options are invalid.
+    """
+
+    def __init__(self, mode: Union[str, int, Mode] = "tcp", host: str = "127.0.0.1",
+                 port: Optional[int] = None,
+                 unit: int = 1, timeout_ms: int = 1000, retries: int = 0, path: Optional[str] = None,
+                 baud: int = 0, data_bits: int = 8, parity: Union[str, int, Parity] = Parity.NONE,
+                 stop_bits: int = 1, byte_timeout_ms: int = 0, tls: bool = False,
+                 tls_ca_file: Optional[str] = None, tls_cert_file: Optional[str] = None,
+                 tls_key_file: Optional[str] = None, tls_server_name: Optional[str] = None,
+                 tls_verify: bool = True):
+        self._client = Client(mode, host, port, unit, timeout_ms, retries, path, baud, data_bits,
+                              parity, stop_bits, byte_timeout_ms, tls, tls_ca_file, tls_cert_file,
+                              tls_key_file, tls_server_name, tls_verify)
+        self._pool: Optional[concurrent.futures.ThreadPoolExecutor] = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mogbus-client")
+
+    async def __aenter__(self) -> "AsyncClient":
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.close()
+
+    def __del__(self):
+        with contextlib.suppress(Exception):
+            if self._pool is not None:
+                self._pool.shutdown(wait=False)
+            self._client.close()
+
+    async def _call(self, fn, *args):
+        pool = self._pool
+        if pool is None:
+            raise MogbusError("the client is closed")
+        return await asyncio.get_running_loop().run_in_executor(pool, fn, *args)
+
+    async def close(self) -> None:
+        """@brief Waits for the calls in flight, closes the connection and the worker thread; calling it again does nothing.
+        """
+        pool, self._pool = self._pool, None
+        if pool is None:
+            return
+        await asyncio.get_running_loop().run_in_executor(pool, self._client.close)
+        pool.shutdown(wait=False)
+
+    async def connect(self) -> None:
+        """@brief Connects now instead of at the first call (see Client.connect()).
+        @throws MogbusError With Status.IO if the connection fails.
+        """
+        await self._call(self._client.connect)
+
+    async def read_coils(self, address: int, count: int, unit: Optional[int] = None) -> List[bool]:
+        """@brief Reads coils (function code 01), see Client.read_coils().
+        @param address First coil.
+        @param count Number of coils, 1-2000.
+        @param unit Unit id; the client's default when None.
+        @return `count` booleans.
+        """
+        return await self._call(self._client.read_coils, address, count, unit)
+
+    async def read_discrete_inputs(self, address: int, count: int, unit: Optional[int] = None) -> List[bool]:
+        """@brief Reads discrete inputs (function code 02), see Client.read_discrete_inputs().
+        @param address First input.
+        @param count Number of inputs, 1-2000.
+        @param unit Unit id; the client's default when None.
+        @return `count` booleans.
+        """
+        return await self._call(self._client.read_discrete_inputs, address, count, unit)
+
+    async def read_holding_registers(self, address: int, count: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads holding registers (function code 03), see Client.read_holding_registers().
+        @param address First register.
+        @param count Number of registers, 1-125.
+        @param unit Unit id; the client's default when None.
+        @return `count` raw 16-bit values.
+        """
+        return await self._call(self._client.read_holding_registers, address, count, unit)
+
+    async def read_input_registers(self, address: int, count: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads input registers (function code 04), see Client.read_input_registers().
+        @param address First register.
+        @param count Number of registers, 1-125.
+        @param unit Unit id; the client's default when None.
+        @return `count` raw 16-bit values.
+        """
+        return await self._call(self._client.read_input_registers, address, count, unit)
+
+    async def write_coil(self, address: int, value: bool, unit: Optional[int] = None) -> None:
+        """@brief Writes one coil (function code 05), see Client.write_coil().
+        @param address Coil.
+        @param value On or off.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_coil, address, value, unit)
+
+    async def write_register(self, address: int, value: int, unit: Optional[int] = None) -> None:
+        """@brief Writes one holding register (function code 06), see Client.write_register().
+        @param address Register.
+        @param value Raw 16-bit value.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_register, address, value, unit)
+
+    async def write_coils(self, address: int, values: Sequence[bool], unit: Optional[int] = None) -> None:
+        """@brief Writes several coils (function code 15), see Client.write_coils().
+        @param address First coil.
+        @param values The values, 1-1968.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_coils, address, values, unit)
+
+    async def write_registers(self, address: int, values: Sequence[int], unit: Optional[int] = None) -> None:
+        """@brief Writes several holding registers (function code 16), see Client.write_registers().
+        @param address First register.
+        @param values The raw values, 1-123.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_registers, address, values, unit)
+
+    async def mask_write_register(self, address: int, and_mask: int, or_mask: int,
+                                  unit: Optional[int] = None) -> None:
+        """@brief Changes bits of a holding register (function code 22), see Client.mask_write_register().
+        @param address Register.
+        @param and_mask Bits to keep.
+        @param or_mask Bits to set where `and_mask` is 0.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.mask_write_register, address, and_mask, or_mask, unit)
+
+    async def read_write_registers(self, read_address: int, read_count: int, write_address: int,
+                                   values: Sequence[int], unit: Optional[int] = None) -> List[int]:
+        """@brief Writes then reads holding registers in one request (function code 23), see Client.read_write_registers().
+        @param read_address First register to read.
+        @param read_count Registers to read, 1-125.
+        @param write_address First register to write.
+        @param values The raw values to write, 1-121.
+        @param unit Unit id; the client's default when None.
+        @return The `read_count` raw values read after the write.
+        """
+        return await self._call(self._client.read_write_registers, read_address, read_count,
+                                write_address, values, unit)
+
+    async def read_device_id(self, unit: Optional[int] = None, read_code: int = 1,
+                             object_id: int = 0) -> Dict[int, bytes]:
+        """@brief Reads device identification objects (function code 43), see Client.read_device_id().
+        @param unit Unit id; the client's default when None.
+        @param read_code 1 basic, 2 regular, 3 extended or 4 one object.
+        @param object_id First object to read.
+        @return The objects by id.
+        """
+        return await self._call(self._client.read_device_id, unit, read_code, object_id)
+
+    async def read_device_identification(self, read_code: int = 1, object_id: int = 0,
+                                         unit: Optional[int] = None) -> DeviceIdentification:
+        """@brief Reads device identification objects and the conformity level, see Client.read_device_identification().
+        @param read_code 1 basic, 2 regular, 3 extended or 4 one object.
+        @param object_id First object to read.
+        @param unit Unit id; the client's default when None.
+        @return The conformity level and the objects by id.
+        """
+        return await self._call(self._client.read_device_identification, read_code, object_id, unit)
+
+    async def read_exception_status(self, unit: Optional[int] = None) -> int:
+        """@brief Reads the exception status byte (function code 07), see Client.read_exception_status().
+        @param unit Unit id; the client's default when None.
+        @return The status byte.
+        """
+        return await self._call(self._client.read_exception_status, unit)
+
+    async def diagnostics(self, sub_function: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends a diagnostics request (function code 08), see Client.diagnostics().
+        @param sub_function The sub-function code.
+        @param data The request data after the sub-function.
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the sub-function.
+        """
+        return await self._call(self._client.diagnostics, sub_function, data, unit)
+
+    async def get_comm_event_counter(self, unit: Optional[int] = None) -> CommEventCounter:
+        """@brief Reads the communication event counter (function code 0B), see Client.get_comm_event_counter().
+        @param unit Unit id; the client's default when None.
+        @return The status word and the event counter.
+        """
+        return await self._call(self._client.get_comm_event_counter, unit)
+
+    async def get_comm_event_log(self, unit: Optional[int] = None) -> CommEventLog:
+        """@brief Reads the communication event log (function code 0C), see Client.get_comm_event_log().
+        @param unit Unit id; the client's default when None.
+        @return The status word, the counters and the event bytes.
+        """
+        return await self._call(self._client.get_comm_event_log, unit)
+
+    async def report_server_id(self, unit: Optional[int] = None) -> bytes:
+        """@brief Reads the server id report (function code 11), see Client.report_server_id().
+        @param unit Unit id; the client's default when None.
+        @return The device specific report data.
+        """
+        return await self._call(self._client.report_server_id, unit)
+
+    async def read_file_records(self, requests: Sequence[Sequence[int]], unit: Optional[int] = None) -> List[List[int]]:
+        """@brief Reads file records (function code 14), see Client.read_file_records().
+        @param requests Tuples `(file, record, length)`.
+        @param unit Unit id; the client's default when None.
+        @return The values of each sub-request.
+        """
+        return await self._call(self._client.read_file_records, requests, unit)
+
+    async def write_file_records(self, records: Sequence[Sequence[Any]], unit: Optional[int] = None) -> None:
+        """@brief Writes file records (function code 15), see Client.write_file_records().
+        @param records Tuples `(file, record, values)`.
+        @param unit Unit id; the client's default when None.
+        """
+        await self._call(self._client.write_file_records, records, unit)
+
+    async def read_fifo(self, address: int, unit: Optional[int] = None) -> List[int]:
+        """@brief Reads a FIFO queue (function code 18), see Client.read_fifo().
+        @param address FIFO pointer address.
+        @param unit Unit id; the client's default when None.
+        @return The queued raw values.
+        """
+        return await self._call(self._client.read_fifo, address, unit)
+
+    async def canopen_request(self, request: bytes, unit: Optional[int] = None) -> bytes:
+        """@brief Sends a CANopen general reference request (function code 2B, MEI 0D), see Client.canopen_request().
+        @param request The bytes after `2B 0D`.
+        @param unit Unit id; the client's default when None.
+        @return The reply bytes after `2B 0D`.
+        """
+        return await self._call(self._client.canopen_request, request, unit)
+
+    async def request(self, function_code: int, data: bytes = b"", unit: Optional[int] = None) -> bytes:
+        """@brief Sends any request, including a user-defined function code, see Client.request().
+        @param function_code The function code, 1-127.
+        @param data The request data after the function code, at most 252 bytes.
+        @param unit Unit id; the client's default when None.
+        @return The reply data after the function code.
+        @throws ModbusException If the server answered with an exception.
+        """
+        return await self._call(self._client.request, function_code, data, unit)

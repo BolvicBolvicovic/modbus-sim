@@ -5,6 +5,7 @@
 #ifndef DEVICE_H
 #define DEVICE_H
 
+#include "vlib/bits.h"
 #include "vlib/c_types.h"
 #include "vlib/arena.h"
 #include "device/behaviour.h"
@@ -42,6 +43,7 @@ typedef int (*device_custom_fn_t)(void* user, device_t* dev, u8 unit, u8 code, c
 #define DEVICE_SERVER_ID_ADDITIONAL_DATA_MAX	249
 #define DEVICE_MAX_EXTENDED_IDS	32
 #define DEVICE_MAX_POINTS	8192
+#define DEVICE_NOTE_MAX		128	/**< longest point note (127 bytes) plus the NUL */
 #define DEVICE_MAX_STRING_REGISTERS	123	/**< a whole string fits one FC 03/04 read */
 #define ADDRESS_SPACE_SIZE	65536
 
@@ -108,6 +110,8 @@ struct point_t
 	clock_field_t	clock_field;		/**< POINT_CLOCK */
 	bool		clock_utc;		/**< POINT_CLOCK: UTC instead of local time */
 	model_t		model;			/**< POINT_MODEL shape; noise modifier of POINT_RAMP */
+	/** Human note shown in the register view and web UI. device_add_point() copies a NUL-terminated string of at most DEVICE_NOTE_MAX-1 bytes; NULL means none. */
+	const char*	note;
 };
 
 /**
@@ -185,7 +189,7 @@ struct device_canopen_object_t
  */
 enum diagnostic_register_bit
 {
-	DIAG_REG_CHARACTER_OVERRUN       = 1u << 0,
+	DIAG_REG_CHARACTER_OVERRUN       = BIT0,
 };
 
 /** @brief MEI 14 (Read Device Identification) object ids. */

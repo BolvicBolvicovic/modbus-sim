@@ -22,6 +22,7 @@ Modbus RTU frames over a byte stream: a new Linux pseudo-terminal or an existing
 - `baud`
 - `frame-gap-ms`
 - `strict-t15`
+- `char-timing`
 - `broadcast-execute`
 - `parity`
 - `stop-bits`
@@ -73,6 +74,10 @@ RTU uses inter-frame silence to find frame boundaries.
   t1.5 and t3.5 inside an incomplete frame discards that partial frame. It is opt-in because
   `read()` boundaries can split valid frames on PTYs, real serial ports and other byte streams. It is
   never applied to RTU-over-TCP.
+- `(char-timing on)` models the UART instead: every received character is dated, a silence over
+  t1.5 inside a frame discards it and a silence of t3.5 ends it, and replies on a PTY or host fd are
+  paced at the line rate (11 bits per character). It needs a known baud and replaces `strict-t15`.
+  See [char-timing](../config/server/char-timing.md) for the precision a PTY or a real port gives.
 
 ## Errors
 
@@ -91,6 +96,7 @@ mogbus prints the slave path of the PTY; point your serial client at it.
 
 ## See also
 
+- [char-timing](../config/server/char-timing.md)
 - [Modbus RTU over TCP](transport-rtu-tcp.md)
 - [Modbus RTU over UDP](transport-rtu-udp.md)
 - [Unit ids and broadcast](../modbus/unit-ids.md)

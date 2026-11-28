@@ -342,9 +342,9 @@ parse_com_event(form_ctx_t* ctx, s7_pointer item, device_t* dev)
 }
 
 /**
- * @brief (note "text") is documentation for humans.
+ * @brief Device-level (note "text") is documentation for humans.
  *
- * It is checked and ignored.
+ * It is checked and ignored; a note inside a point is kept and shown next to the point.
  */
 static bool
 parse_note(form_ctx_t* ctx, s7_pointer item, device_t* dev)
@@ -825,6 +825,8 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 	point_t		point   = { 0 };
 	s64		address = 0;
 	s64		count   = 1;
+	const char*	text    = NULL;
+	const char*	shared  = NULL;
 	u32		access  = 0;
 	u32		width   = 0;
 
@@ -853,6 +855,12 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 
 	if (!parse_behaviour(ctx, options, is_bit, &point))
 		return false;
+
+	if (!form_opt_string(ctx, options, "note", &text))
+		return false;
+	if (text &&
+	    strlen(text) >= DEVICE_NOTE_MAX)
+		return form_fail(ctx, "%s: note is longer than %d bytes", form_text(ctx, item), DEVICE_NOTE_MAX - 1);
 
 	if (!form_opt_int(ctx, options, "count", 1, 65536, &count))
 		return false;
@@ -895,9 +903,15 @@ parse_point(form_ctx_t* ctx, s7_pointer item, device_t* dev, space_kind_t space)
 		const char*	error = NULL;
 
 		point.address = (u32)address + (u32)i * width;
+		point.note = i == 0 ? text : NULL;
 		error = device_add_point(dev, &point);
 		if (error)
 			return form_fail(ctx, "%s %u: %s", head, point.address, error);
+		/* count N shares the first point's copy of the note */
+		if (i == 0)
+			shared = dev->points[dev->point_count - 1].note;
+		else
+			dev->points[dev->point_count - 1].note = shared;
 	}
 	for (u32 e = 0; e < ARRAY_COUNT(ACTION_KEYS); e++)
 	{

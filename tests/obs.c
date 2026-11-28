@@ -777,6 +777,59 @@ TEST(ObsListsPointsInPages)
 	arena_release(arena);
 }
 
+TEST(ObsPointNotesAreListedAndNeverOverflowAPage)
+{
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	devs[] = { device_new(arena, 0) };
+	net_obs_t	obs;
+	char		note[DEVICE_NOTE_MAX + 1];
+	point_t		p = { .kind = POINT_STATIC, .space = SPACE_HOLDING, .type = VT_U16, .note = "Setpoint \"x\"" };
+	u32		seen = 0;
+	u32		from = 0;
+	char		request[160];
+
+	devs[0]->unit_id = 3;
+	ASSERT_EQ(device_add_point(devs[0], &p) == NULL);
+	p.address = 1;
+	p.note    = NULL;
+	ASSERT_EQ(device_add_point(devs[0], &p) == NULL);
+	guarded_obs(&obs, devs, "127.0.0.1", "", false);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices/3/points?space=holding HTTP/1.1\r\n\r\n") == 200);
+	ASSERT_EQ(strstr(g_conn.out, "\"byte_order\":\"big\",\"note\":\"Setpoint \\\"x\\\"\"},{\"address\":1,") != NULL);
+	ASSERT_EQ(strstr(g_conn.out, "\"note\"") == strstr(g_conn.out, "\"note\":\"Setpoint"));
+
+	/* The longest notes, all control bytes (six bytes each once escaped): pages end early. */
+	memset(note, 1, DEVICE_NOTE_MAX - 1);
+	note[DEVICE_NOTE_MAX - 1] = '\0';
+	p.note = note;
+	for (u32 a = 2; a < 400; a++)
+	{
+		p.address = a;
+		ASSERT_EQ(device_add_point(devs[0], &p) == NULL);
+	}
+	p.address = 400;
+	memset(note, 'x', DEVICE_NOTE_MAX);
+	note[DEVICE_NOTE_MAX] = '\0';
+	ASSERT_EQ(device_add_point(devs[0], &p) != NULL);	/* 128 bytes: refused */
+	for (;;)
+	{
+		const char* next;
+
+		snprintf(request, sizeof(request),
+			 "GET /api/devices/3/points?space=holding&from=%u&limit=200 HTTP/1.1\r\n\r\n", from);
+		ASSERT_EQ(feed_status(&obs, request) == 200);
+		for (const char* q = g_conn.out; (q = strstr(q, "{\"address\":")) != NULL; q++)
+			seen++;
+		next = strstr(g_conn.out, "],\"next\":");
+		ASSERT_EQ(next != NULL);
+		if (strncmp(next, "],\"next\":null}", 14) == 0)
+			break;
+		ASSERT_EQ(sscanf(next + 9, "%u", &from) == 1);
+	}
+	ASSERT_EQ(seen == 400);
+	arena_release(arena);
+}
+
 TEST(ObsWebPageHasTheMainElements)
 {
 	arena_t*	arena = ARENA_ALLOC();

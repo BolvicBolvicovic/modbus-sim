@@ -34,7 +34,7 @@ Keys: [certificate](tls-certificate.md), [private-key](tls-private-key.md),
 Paths are checked for non-emptiness during config load. When TLS is enabled, both `--check` and
 server startup create the OpenSSL context: a missing or unreadable certificate/key/CA, a CA whose name
 list cannot be loaded, a mismatched certificate and private key, or an invalid cipher list makes
-`--check` fail with exit status 1 and no `config OK` line (startup fails with the same error). TLS
+`--check` fail with exit status 1 and no `config OK` line with `--check=verbose` (startup fails with the same error). TLS
 1.0, TLS 1.1, SSLv3 and anonymous/NULL ciphers are always disabled, and user cipher strings cannot
 lower the configured minimum. The configured CA is advertised to clients as the acceptable client CA
 list, but revocation checking (CRL/OCSP) and Modbus Security role authorization from x.509 role OIDs

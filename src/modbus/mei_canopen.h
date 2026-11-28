@@ -5,6 +5,7 @@
 #ifndef MODBUS_MEI_CANOPEN_H
 #define MODBUS_MEI_CANOPEN_H
 
+#include "vlib/bits.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
@@ -15,12 +16,12 @@ typedef struct canopen_request_t canopen_request_t;
 /** @brief CiA 309-2 numbers protocol control bits MSB-first; these are the byte masks. */
 enum canopen_protocol_control
 {
-	CANOPEN_CTRL_ACCESS        = 0x01, /**< 0 = upload (read), 1 = download (write) */
-	CANOPEN_CTRL_ENCODED_DATA  = 0x02,
-	CANOPEN_CTRL_NETWORK_ID    = 0x04,
-	CANOPEN_CTRL_COUNTER       = 0x20,
-	CANOPEN_CTRL_EXTENDED_CTRL = 0x40,
-	CANOPEN_CTRL_EXTEND        = 0x80,
+	CANOPEN_CTRL_ACCESS        = BIT0, /**< 0 = upload (read), 1 = download (write) */
+	CANOPEN_CTRL_ENCODED_DATA  = BIT1,
+	CANOPEN_CTRL_NETWORK_ID    = BIT2,
+	CANOPEN_CTRL_COUNTER       = BIT5,
+	CANOPEN_CTRL_EXTENDED_CTRL = BIT6,
+	CANOPEN_CTRL_EXTEND        = BIT7,
 };
 
 #define CANOPEN_CTRL_UNSUPPORTED \

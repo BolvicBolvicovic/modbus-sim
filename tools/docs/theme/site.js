@@ -258,20 +258,37 @@
     var links = {};
     $$('a', toc).forEach(function (a) { links[decodeURIComponent(a.getAttribute('href').slice(1))] = a; });
     var heads = $$('.doc h2[id], .doc h3[id], .doc h4[id], .doc h5[id]').filter(function (h) { return links[h.id]; });
-    var active = null;
+    var lit = [];
     var pending = false;
     var spy = function () {
       pending = false;
-      var cur = null;
+      /* every heading whose section (up to the next heading, the last one up to the end of the page) intersects the visible band */
+      var top = $('.topbar') ? $('.topbar').getBoundingClientRect().bottom : 0;
+      var bottom = window.innerHeight;
+      var end = ($('.pager') || $('.doc')).getBoundingClientRect().top;
+      var on = [];
       for (var i = 0; i < heads.length; i++) {
-        if (heads[i].getBoundingClientRect().top <= 90) { cur = heads[i]; } else { break; }
+        var s = heads[i].getBoundingClientRect().top;
+        var e = i + 1 < heads.length ? heads[i + 1].getBoundingClientRect().top : end;
+        if (s < bottom && e > top) { on.push(i); }
       }
-      if (!cur && heads.length) { cur = heads[0]; }
-      var a = cur ? links[cur.id] : null;
-      if (a !== active) {
-        if (active) { active.classList.remove('active'); }
-        active = a;
-        if (a) { a.classList.add('active'); }
+      if (!on.length && heads.length) {
+        /* above the first heading: the first one; otherwise the last one passed */
+        var k = 0;
+        while (k + 1 < heads.length && heads[k + 1].getBoundingClientRect().top <= top) { k++; }
+        on.push(k);
+      }
+      var next = on.map(function (i) { return links[heads[i].id]; });
+      lit.forEach(function (a) { if (next.indexOf(a) < 0) { a.classList.remove('active', 'first', 'last'); } });
+      next.forEach(function (a, n) {
+        a.classList.add('active');
+        a.classList.toggle('first', n === 0);
+        a.classList.toggle('last', n === next.length - 1);
+      });
+      lit = next;
+      if (next.length && toc.scrollHeight > toc.clientHeight) {
+        var t = next[0].offsetTop, h = next[next.length - 1].offsetTop + next[next.length - 1].offsetHeight;
+        if (t < toc.scrollTop || h > toc.scrollTop + toc.clientHeight) { toc.scrollTop = Math.max(0, t - 40); }
       }
     };
     var onScroll = function () { if (!pending) { pending = true; window.requestAnimationFrame(spy); } };

@@ -18,6 +18,30 @@ tls_unavailable(char* error, u32 size)
 }
 
 bool
+net_tls_supported(void)
+{
+	return false;
+}
+
+bool
+net_tls_client_ctx_init(net_tls_ctx_t* ctx, const net_tls_client_config_t* config)
+{
+	(void)config;
+	memset(ctx, 0, sizeof(*ctx));
+	tls_unavailable(ctx->error, sizeof(ctx->error));
+	return false;
+}
+
+net_tls_conn_t*
+net_tls_client_conn_new(net_tls_ctx_t* ctx, int fd, const char* server_name)
+{
+	(void)fd;
+	(void)server_name;
+	tls_unavailable(ctx->error, sizeof(ctx->error));
+	return NULL;
+}
+
+bool
 net_tls_ctx_init(net_tls_ctx_t* ctx, const net_tls_config_t* config)
 {
 	(void)config;

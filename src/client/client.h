@@ -37,7 +37,7 @@ enum client_status_t
 	CLIENT_OK,
 	CLIENT_INVALID,		/**< bad argument or options */
 	CLIENT_NOMEM,
-	CLIENT_UNSUPPORTED,	/**< TLS, or serial lines on a platform without them */
+	CLIENT_UNSUPPORTED,	/**< TLS in a build without it, or serial lines on a platform without them */
 	CLIENT_IO,		/**< connect, send or receive failed, or the peer closed */
 	CLIENT_TIMEOUT,		/**< no complete reply before the deadline (after the retries) */
 	CLIENT_EXCEPTION,	/**< the server answered with a Modbus exception; see client_exception() */
@@ -48,16 +48,22 @@ enum client_status_t
 struct client_options_t
 {
 	client_mode_t	mode;
-	const char*	host;		/**< IP literal or "localhost"; NULL = 127.0.0.1 */
-	u16		port;
+	const char*	host;		/**< IP literal or host name (resolved at connect time); NULL = 127.0.0.1 */
+	u16		port;		/**< 0 is 802 with TLS and invalid otherwise */
 	const char*	path;		/**< serial modes */
 	u32		baud;		/**< serial modes; 0 keeps the device's speed */
 	u32		data_bits;	/**< serial modes: 7 or 8 */
 	parity_t	parity;
 	u32		stop_bits;	/**< serial modes: 1 or 2 */
-	bool		tls;		/**< not supported: client_new() fails */
 	u32		timeout_ms;	/**< per attempt; 0 = 1000 */
 	u32		retries;	/**< extra attempts after a timeout */
+	u32		byte_timeout_ms; /**< stream carriers: longest gap between the bytes of a reply; 0 = off */
+	bool		tls;		/**< TLS over TCP: CLIENT_TCP only, needs a build with TLS */
+	const char*	tls_ca_file;	/**< PEM; NULL = the system trust store */
+	const char*	tls_cert_file;	/**< PEM client certificate, or NULL */
+	const char*	tls_key_file;	/**< PEM key; NULL = the key is in tls_cert_file */
+	const char*	tls_server_name; /**< name to check and send as SNI; NULL = host */
+	bool		tls_verify;	/**< check the server certificate */
 };
 
 /**

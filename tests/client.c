@@ -244,13 +244,14 @@ TEST(ClientOptionsAndOpenErrors)
 
 	ASSERT_EQ(o.mode == MOGBUS_MODE_TCP && o.port == 1502 && strcmp(o.host, "127.0.0.1") == 0);
 	ASSERT_EQ(o.timeout_ms == 1000 && o.retries == 0 && o.data_bits == 8 && o.stop_bits == 1);
+	ASSERT_EQ(o.byte_timeout_ms == 0 && !o.tls_enabled && o.tls_verify && o.tls_ca_file == NULL);
 
 	ASSERT_EQ(mogbus_client_open(NULL, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	ASSERT_EQ(strlen(mogbus_last_error(NULL)) > 0);
 
-	o.host = "not-an-ip";
+	o.host = "not an ip!";
 	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
-	ASSERT_EQ(strstr(mogbus_last_error(NULL), "not-an-ip") != NULL);
+	ASSERT_EQ(strstr(mogbus_last_error(NULL), "not an ip!") != NULL);
 	o.host = "127.0.0.1";
 
 	o.port = 0;
@@ -263,9 +264,11 @@ TEST(ClientOptionsAndOpenErrors)
 	o.mode = MOGBUS_MODE_TCP;
 
 	o.tls_enabled = true;
+	o.mode        = MOGBUS_MODE_UDP;
 	ASSERT_EQ(mogbus_client_open(&o, &(mogbus_client_t*){ NULL }) != MOGBUS_OK);
 	ASSERT_EQ(strstr(mogbus_last_error(NULL), "TLS") != NULL);
 	o.tls_enabled = false;
+	o.mode        = MOGBUS_MODE_TCP;
 
 	o.mode = MOGBUS_MODE_RTU_DEVICE;
 	o.path = NULL;

@@ -237,21 +237,22 @@ parse_http(form_ctx_t* ctx, s7_pointer options, config_server_t* srv)
 static bool
 parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 {
-	static const char* const keys[] = { "id", "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls", "http" };
-	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls" };
-	static const char* const udp_keys[] = { "mode", "port", "bind", "seed" };
-	static const char* const ascii_udp_keys[] = { "mode", "port", "bind", "seed" };
-	static const char* const rtu_udp_keys[] = { "mode", "port", "bind", "seed", "broadcast-execute" };
-	static const char* const ascii_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms" };
-	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute" };
-	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "broadcast-execute", "parity", "stop-bits" };
-	static const char* const ascii_keys[] = { "mode", "seed", "baud", "data-bits", "parity", "stop-bits" };
+	static const char* const keys[] = { "id", "mode", "path", "port", "bind", "seed", "idle-timeout-ms", "frame-gap-ms", "baud", "strict-t15", "char-timing", "broadcast-execute", "data-bits", "parity", "stop-bits", "tls", "http", "show-registers" };
+	static const char* const tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "tls", "show-registers" };
+	static const char* const udp_keys[] = { "mode", "port", "bind", "seed", "show-registers" };
+	static const char* const ascii_udp_keys[] = { "mode", "port", "bind", "seed", "show-registers" };
+	static const char* const rtu_udp_keys[] = { "mode", "port", "bind", "seed", "broadcast-execute", "show-registers" };
+	static const char* const ascii_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "show-registers" };
+	static const char* const rtu_tcp_keys[] = { "mode", "port", "bind", "seed", "idle-timeout-ms", "baud", "frame-gap-ms", "broadcast-execute", "show-registers" };
+	static const char* const rtu_serial_keys[] = { "mode", "seed", "baud", "frame-gap-ms", "strict-t15", "char-timing", "broadcast-execute", "parity", "stop-bits", "show-registers" };
+	static const char* const ascii_keys[] = { "mode", "seed", "baud", "data-bits", "parity", "stop-bits", "show-registers" };
 	const char* const* allowed = NULL;
 	u32		allowed_count     = 0;
 	s7_pointer	options           = s7_cdr(form);
 	s64		port              = srv->port;
 	s64		seed              = srv->seed;
 	s64		idle              = srv->idle_timeout_ms;
+	s64		show              = srv->show_registers_ms;
 	s64		frame             = srv->frame_gap_ms;
 	s64		baud              = srv->baud;
 	s64		data_bits         = srv->data_bits;
@@ -260,6 +261,7 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 	u32		mode              = srv->mode;
 	u32		mode_index        = 0;
 	bool		strict_t15        = srv->strict_t15;
+	bool		char_timing       = srv->char_timing;
 	bool		broadcast_execute = srv->broadcast_execute;
 	const char*	bind              = NULL;
 	const char*	path              = NULL;
@@ -391,6 +393,9 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 	if (!form_opt_int(ctx, options, "idle-timeout-ms", 0, 86400000, &idle))
 		return false;
 
+	if (!form_opt_int(ctx, options, "show-registers", 10, 60000, &show))
+		return false;
+
 	if (!form_opt_int(ctx, options, "frame-gap-ms", 1, 60000, &frame))
 		return false;
 
@@ -401,6 +406,14 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 
 	if (!form_opt_bool(ctx, options, "strict-t15", &strict_t15))
 		return false;
+
+	if (!form_opt_bool(ctx, options, "char-timing", &char_timing))
+		return false;
+
+	if (char_timing &&
+	    baud == 0 &&
+	    mode == SERVER_MODE_RTU_PTY)
+		return form_fail(ctx, "server: char-timing needs (baud N) in rtu-pty mode");
 
 	if (!form_opt_bool(ctx, options, "broadcast-execute", &broadcast_execute))
 		return false;
@@ -448,9 +461,11 @@ parse_server(form_ctx_t* ctx, s7_pointer form, config_server_t* srv)
 		return form_fail(ctx, "http: port %u is already the Modbus server port", srv->port);
 	srv->seed              = (u32)seed;
 	srv->idle_timeout_ms   = (u32)idle;
+	srv->show_registers_ms = (u32)show;
 	srv->frame_gap_ms      = (u32)frame;
 	srv->baud              = (u32)baud;
 	srv->strict_t15        = strict_t15;
+	srv->char_timing       = char_timing;
 	srv->broadcast_execute = broadcast_execute;
 	srv->data_bits         = (u32)data_bits;
 	srv->parity            = (parity_t)parity;

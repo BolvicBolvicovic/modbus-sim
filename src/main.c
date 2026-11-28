@@ -5,22 +5,33 @@
  * A pure client of the public library API (mogbus.h); nothing here touches an internal module.
  */
 #include "mogbus.h"
-#include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define MAX_FRAME_ARGS	256
+
+typedef enum check_t check_t;
 typedef struct cli_t cli_t;
 
 /** @brief The context SIGINT/SIGTERM stop (see mogbus_stop_context_on_signals()). */
 static mogbus_t* volatile	g_ctx;
+
+/** @brief What --check does. */
+enum check_t
+{
+	CHECK_OFF,
+	CHECK_QUIET,	/**< validate, print only the error */
+	CHECK_VERBOSE,	/**< also print the summary and "config OK" */
+};
 
 /** @brief Parsed command line. */
 struct cli_t
 {
 	const char*	config_path;
 	const char*	server_id;	/* --server: the server --health probes and --web applies to */
-	bool		check_only;
+	check_t		check;
 	bool		health;
 	uint32_t	timeout_ms;
 	bool		verbose;
@@ -29,6 +40,13 @@ struct cli_t
 	bool		log_json;
 	bool		web;
 	uint32_t	show_ms;	/* --show-registers interval, 0 = off */
+	bool		decode;		/* --decode: the positional arguments are frames */
+	bool		framing_set;
+	bool		direction_set;
+	mogbus_framing_t	framing;
+	mogbus_direction_t	direction;
+	size_t		frame_count;
+	const char*	frames[MAX_FRAME_ARGS];
 };
 
 static inline void
@@ -37,9 +55,12 @@ print_usage(void)
 	puts("mogbus - Modbus TCP/UDP/RTU/ASCII device simulator\n"
 	     "\n"
 	     "Usage: mogbus [options] CONFIG.scm\n"
+	     "       mogbus --decode [--framing F] [--direction D] [HEX...]\n"
 	     "\n"
 	     "Options:\n"
-	     "  -c, --check          check the config, print a summary and exit\n"
+	     "  -c, --check[=verbose]\n"
+	     "                       check the config and exit: prints nothing when it is valid,\n"
+	     "                       the error when not; =verbose prints the summary and config OK\n"
 	     "      --health         probe a server of the config (FC 08 echo to its first device)\n"
 	     "                       and exit 0 if it answers, 1 if not; the first server unless\n"
 	     "                       --server is given\n"
@@ -49,9 +70,16 @@ print_usage(void)
 	     "  -w, --web            serve the web UI (and the control API it uses) on the HTTP endpoint;\n"
 	     "                       without (server (http ...)) in the config: 127.0.0.1 port 9102\n"
 	     "  -r, --show-registers[=MS]\n"
-	     "                       print the point values to stdout every MS ms (10-60000, default\n"
-	     "                       1000): all of them first, then only the ones that changed;\n"
-	     "                       JSON lines with --log-format json\n"
+	     "                       show the point values every MS ms (10-60000, default 1000): one\n"
+	     "                       table redrawn in place on a terminal (logs go below it), else\n"
+	     "                       all points as text lines, then only the changes; JSON lines\n"
+	     "                       with --log-format json\n"
+	     "      --decode         decode captured frames (hex, or ASCII text starting with ':')\n"
+	     "                       given as arguments or, with none, one per line on stdin; prints\n"
+	     "                       the ADU and PDU fields (--log-format json: one object per frame);\n"
+	     "                       exit 1 if a frame is malformed. No config is read\n"
+	     "      --framing F      --decode framing: auto (default), mbap, rtu or ascii\n"
+	     "      --direction D    --decode direction: auto (default), request or response\n"
 	     "  -v, --verbose        log every request\n"
 	     "      --log-format F   log lines as text (default) or json\n"
 	     "  -V, --version        print the version and exit\n"
@@ -84,41 +112,84 @@ print_usage(void)
 	     "Docs: README.md and docs/user/");
 }
 
+/** @brief Parses a decimal number in [min, max]; false for anything else. */
+static bool
+parse_number(const char* text, long min, long max, uint32_t* out)
+{
+	char*	end   = "";
+	long	value;
+
+	if (!text ||
+	    !*text)
+		return false;
+	value = strtol(text, &end, 10);
+	if (value < min ||
+	    value > max ||
+	    *end != '\0')
+		return false;
+	*out = (uint32_t)value;
+	return true;
+}
+
 /** @brief Returns false and prints a message when the arguments make no sense. */
 static bool
 parse_args(int argc, char** argv, cli_t* cli)
 {
+	static const struct flag_t
+	{
+		const char*	short_name;
+		const char*	name;
+		size_t		offset;
+	} flags[] = {
+		{ "-h", "--help",    offsetof(cli_t, show_help)    },
+		{ "-V", "--version", offsetof(cli_t, show_version) },
+		{ "-w", "--web",     offsetof(cli_t, web)          },
+		{ "-v", "--verbose", offsetof(cli_t, verbose)      },
+		{ NULL, "--health",  offsetof(cli_t, health)       },
+	};
+
 	for (int i = 1; i < argc; i++)
 	{
-		const char* arg = argv[i];
+		const char*	arg   = argv[i];
+		const char*	value = i + 1 < argc ? argv[i + 1] : NULL;
+		bool		known = false;
 
-		if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
-			cli->show_help = true;
-		else if (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0)
-			cli->show_version = true;
-		else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--check") == 0)
-			cli->check_only = true;
-		else if (strcmp(arg, "-w") == 0 || strcmp(arg, "--web") == 0)
-			cli->web = true;
-		else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--show-registers") == 0)
+		for (size_t f = 0; f < sizeof(flags) / sizeof(flags[0]); f++)
+		{
+			if (strcmp(arg, flags[f].name) == 0 ||
+			    (flags[f].short_name && strcmp(arg, flags[f].short_name) == 0))
+			{
+				*(bool*)((char*)cli + flags[f].offset) = true;
+				known = true;
+			}
+		}
+		if (known)
+			continue;
+
+		if (strcmp(arg, "-c") == 0 ||
+		    strcmp(arg, "--check") == 0)
+			cli->check = CHECK_QUIET;
+		else if (strcmp(arg, "--check=verbose") == 0)
+			cli->check = CHECK_VERBOSE;
+		else if (strncmp(arg, "--check=", 8) == 0)
+		{
+			fprintf(stderr, "--check takes no value or =verbose\n");
+			return false;
+		}
+		else if (strcmp(arg, "-r") == 0 ||
+			 strcmp(arg, "--show-registers") == 0)
 			cli->show_ms = 1000;
 		else if (strncmp(arg, "--show-registers=", 17) == 0)
 		{
-			char* end = NULL;
-			long  value = strtol(arg + 17, &end, 10);
-
-			if (end == arg + 17 || *end != '\0' || value < 10 || value > 60000)
+			if (!parse_number(arg + 17, 10, 60000, &cli->show_ms))
 			{
 				fprintf(stderr, "--show-registers needs a number of milliseconds (10-60000)\n");
 				return false;
 			}
-			cli->show_ms = (uint32_t)value;
 		}
-		else if (strcmp(arg, "--health") == 0)
-			cli->health = true;
 		else if (strcmp(arg, "--server") == 0)
 		{
-			if (i + 1 >= argc)
+			if (!value)
 			{
 				fprintf(stderr, "--server needs a server id\n");
 				return false;
@@ -127,41 +198,82 @@ parse_args(int argc, char** argv, cli_t* cli)
 		}
 		else if (strcmp(arg, "--timeout-ms") == 0)
 		{
-			char* end = NULL;
-			long  value = i + 1 < argc ? strtol(argv[i + 1], &end, 10) : 0;
-
-			if (i + 1 >= argc || end == argv[i + 1] || *end != '\0' || value < 1 || value > 600000)
+			if (!parse_number(value, 1, 600000, &cli->timeout_ms))
 			{
 				fprintf(stderr, "--timeout-ms needs a number of milliseconds (1-600000)\n");
 				return false;
 			}
-			cli->timeout_ms = (uint32_t)value;
 			i++;
 		}
-		else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0)
-			cli->verbose = true;
 		else if (strcmp(arg, "--log-format") == 0)
 		{
-			const char* value = i + 1 < argc ? argv[++i] : "";
-
-			if (strcmp(value, "json") == 0)
-				cli->log_json = true;
-			else if (strcmp(value, "text") != 0)
+			if (!value ||
+			    (strcmp(value, "json") != 0 && strcmp(value, "text") != 0))
 			{
 				fprintf(stderr, "--log-format needs text or json\n");
 				return false;
 			}
+			cli->log_json = strcmp(value, "json") == 0;
+			i++;
+		}
+		else if (strcmp(arg, "--decode") == 0)
+			cli->decode = true;
+		else if (strcmp(arg, "--framing") == 0)
+		{
+			if (!value ||
+			    !(strcmp(value, "auto") == 0 || strcmp(value, "mbap") == 0 ||
+			      strcmp(value, "rtu") == 0 || strcmp(value, "ascii") == 0))
+			{
+				fprintf(stderr, "--framing needs auto, mbap, rtu or ascii\n");
+				return false;
+			}
+			cli->framing     = strcmp(value, "mbap") == 0 ? MOGBUS_FRAMING_MBAP :
+					   strcmp(value, "rtu") == 0 ? MOGBUS_FRAMING_RTU :
+					   strcmp(value, "ascii") == 0 ? MOGBUS_FRAMING_ASCII : MOGBUS_FRAMING_AUTO;
+			cli->framing_set = true;
+			i++;
+		}
+		else if (strcmp(arg, "--direction") == 0)
+		{
+			if (!value ||
+			    !(strcmp(value, "auto") == 0 || strcmp(value, "request") == 0 ||
+			      strcmp(value, "response") == 0))
+			{
+				fprintf(stderr, "--direction needs auto, request or response\n");
+				return false;
+			}
+			cli->direction     = strcmp(value, "request") == 0 ? MOGBUS_DIRECTION_REQUEST :
+					     strcmp(value, "response") == 0 ? MOGBUS_DIRECTION_RESPONSE :
+					     MOGBUS_DIRECTION_AUTO;
+			cli->direction_set = true;
+			i++;
 		}
 		else if (arg[0] == '-')
 		{
 			fprintf(stderr, "unknown option '%s' (try --help)\n", arg);
 			return false;
 		}
-		else if (!cli->config_path)
-			cli->config_path = arg;
+		else if (cli->frame_count < MAX_FRAME_ARGS)
+			cli->frames[cli->frame_count++] = arg;	/* the config, or the frames with --decode */
 		else
 		{
-			fprintf(stderr, "unexpected argument '%s' (try --help)\n", arg);
+			fprintf(stderr, "too many arguments (try --help)\n");
+			return false;
+		}
+	}
+	if (!cli->decode &&
+	    (cli->framing_set || cli->direction_set))
+	{
+		fprintf(stderr, "--framing and --direction need --decode\n");
+		return false;
+	}
+	if (!cli->decode &&
+	    cli->frame_count > 0)
+	{
+		cli->config_path = cli->frames[0];
+		if (cli->frame_count > 1)
+		{
+			fprintf(stderr, "unexpected argument '%s' (try --help)\n", cli->frames[1]);
 			return false;
 		}
 	}
@@ -224,6 +336,15 @@ print_rtu_timing(const mogbus_server_options_t* options)
 		printf(", baud %u, t3.5 %u us (frame-gap %u ms)", options->baud, t35_us, gap_ms);
 	else
 		printf(", frame-gap %u ms (default; baud unknown)", gap_ms);
+}
+
+/** @brief Prints `prefix` and http://HOST:PORT/ (IPv6 hosts in brackets), no newline. */
+static void
+print_url(const char* prefix, const char* host, uint16_t port)
+{
+	bool ipv6 = strchr(host, ':') != NULL;
+
+	printf("%shttp://%s%s%s:%u/", prefix, ipv6 ? "[" : "", host, ipv6 ? "]" : "", port);
 }
 
 /** @brief True if the server with this id (NULL: a server without id) serves the device. */
@@ -313,17 +434,17 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 	if (options->http_bind_address)
 		printf("  HTTP /healthz, /readyz and /metrics on %s:%u%s\n", options->http_bind_address,
 		       options->http_port, options->http_control || options->http_ui ? ", control on" : "");
-	if (options->http_bind_address && options->http_ui)
+	if (options->http_bind_address &&
+	    options->http_ui)
 	{
-		const char* host = options->http_bind_address;
+		const char* host     = options->http_bind_address;
+		bool        wildcard = strcmp(host, "0.0.0.0") == 0 ||
+				       strcmp(host, "::") == 0;
 
-		/* A wildcard bind is reachable through loopback. */
-		if (strcmp(host, "0.0.0.0") == 0)
-			host = "127.0.0.1";
-		else if (strcmp(host, "::") == 0)
-			host = "::1";
-		printf("  web UI on http://%s%s%s:%u/\n", strchr(host, ':') ? "[" : "", host,
-		       strchr(host, ':') ? "]" : "", options->http_port);
+		print_url("  web UI on ", host, options->http_port);
+		if (wildcard)
+			print_url(" (reachable at ", host[0] == ':' ? "::1" : "127.0.0.1", options->http_port);
+		puts(wildcard ? ")" : "");
 	}
 	for (size_t i = 0; i < mogbus_device_count(ctx); i++)
 	{
@@ -363,95 +484,328 @@ print_summary(mogbus_t* ctx, const mogbus_server_options_t* options)
 	}
 }
 
-/** @brief Most points one device can have (DEVICE_MAX_POINTS in the library). */
-enum { SHOW_MAX_POINTS = 8192 };
-
-/** @brief FNV-1a hash of the last printed text of every point, to print only changes. */
-static uint64_t g_shown[MOGBUS_MAX_DEVICES][SHOW_MAX_POINTS];
-
-/**
- * @brief Prints the points whose value changed since the last call (all of them when @p all).
- *
- * One text line or JSON object per point, flushed at the end so a pipe sees whole snapshots.
- */
-static void
-show_registers(mogbus_t* ctx, bool all, bool json)
+/** @brief Index of the server --server names (0 without it); false when there is none. */
+static bool
+select_server(const cli_t* cli, const mogbus_server_options_t* options, size_t count, size_t* selected)
 {
-	for (size_t d = 0; d < mogbus_device_count(ctx) && d < MOGBUS_MAX_DEVICES; d++)
+	*selected = 0;
+	if (!cli->server_id)
+		return true;
+	for (size_t i = 0; i < count; i++)
 	{
-		mogbus_device_t*	dev = mogbus_device_at(ctx, d);
-		mogbus_device_info_t	info;
-		mogbus_point_t		point;
-
-		if (!mogbus_device_info(dev, &info))
-			continue;
-		for (uint32_t i = 0; i < SHOW_MAX_POINTS && mogbus_device_point_at(dev, i, &point); i++)
+		if (options[i].id &&
+		    strcmp(options[i].id, cli->server_id) == 0)
 		{
-			char		text[2 * 123 + 1] = "";
-			char		value[2 * 123 * 6 + 8];
-			uint64_t	hash = 14695981039346656037ull;
-			double		number = 0;
-			bool		is_number = point.type != MOGBUS_TYPE_STRING &&
-						    mogbus_device_get_value(dev, point.space, point.address, &number) == MOGBUS_OK;
-
-			if (point.type == MOGBUS_TYPE_STRING)
-				(void)mogbus_device_get_string(dev, point.space, point.address, text, sizeof(text));
-			if (is_number &&
-			    !isfinite(number))
-				snprintf(value, sizeof(value), json ? "null" : "%s",
-					 isnan(number) ? "nan" : number < 0 ? "-inf" : "inf");
-			else if (is_number)
-				snprintf(value, sizeof(value),
-					 point.type == MOGBUS_TYPE_F32 ? "%.7g" :
-					 point.type == MOGBUS_TYPE_F64 ? "%.15g" : "%.0f", number);
-			else
-			{
-				size_t used = 0;
-
-				value[used++] = '"';
-				for (const char* c = text; *c && used + 7 < sizeof(value); c++)
-				{
-					unsigned char ch = (unsigned char)*c;
-
-					if (ch == '"' || ch == '\\')
-					{
-						value[used++] = '\\';
-						value[used++] = (char)ch;
-					}
-					else if (ch < 0x20 || ch >= 0x7F)
-						used += (size_t)snprintf(value + used, 7, "\\u%04x", ch);
-					else
-						value[used++] = (char)ch;
-				}
-				value[used++] = '"';
-				value[used]   = '\0';
-			}
-			for (const char* c = value; *c; c++)
-				hash = (hash ^ (unsigned char)*c) * 1099511628211ull;
-			if (!all &&
-			    hash == g_shown[d][i])
-				continue;
-			g_shown[d][i] = hash;
-			if (json)
-				printf("{\"unit\":%u,\"space\":\"%s\",\"address\":%u,\"value\":%s}\n",
-				       info.unit_id, space_names[point.space], point.address, value);
-			else
-				printf("unit %u %s %u = %s\n", info.unit_id, space_names[point.space],
-				       point.address, value);
+			*selected = i;
+			return true;
 		}
 	}
-	fflush(stdout);
+	return false;
+}
+
+/** @brief --health: probes the first device of the selected server; the exit status. */
+static int
+run_health(const cli_t* cli, mogbus_t* ctx, const mogbus_server_options_t* options)
+{
+	mogbus_device_info_t	info;
+	mogbus_device_t*	first = NULL;
+
+	for (size_t i = 0; i < mogbus_device_count(ctx) && !first; i++)
+	{
+		if (serves(mogbus_device_at(ctx, i), options->id))
+			first = mogbus_device_at(ctx, i);
+	}
+	if (!first ||
+	    !mogbus_device_info(first, &info))
+	{
+		fprintf(stderr, "%s: no device to probe\n", cli->config_path);
+		return 1;
+	}
+	if (mogbus_probe(options, info.unit_id, cli->timeout_ms ? cli->timeout_ms : 2000) != MOGBUS_OK)
+	{
+		fprintf(stderr, "unhealthy: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+	return 0;
+}
+
+/** @brief --check: validates every server (TLS files, ciphers); the exit status. */
+static int
+run_check(const cli_t* cli, mogbus_t* ctx, const mogbus_server_options_t* options, size_t count)
+{
+	for (size_t i = 0; i < count; i++)
+	{
+		if (mogbus_server_check(ctx, &options[i]) == MOGBUS_OK)
+			continue;
+		if (options[i].id)
+			fprintf(stderr, "%s: server '%s': %s\n", cli->config_path, options[i].id, mogbus_last_error(ctx));
+		else
+			fprintf(stderr, "%s: cannot configure TLS: %s\n", cli->config_path, mogbus_last_error(ctx));
+		return 1;
+	}
+	if (cli->check == CHECK_VERBOSE)
+		puts("config OK");
+	return 0;
+}
+
+/** @brief Starts every server and runs them until stopped; the exit status. */
+static int
+run_servers(const cli_t* cli, mogbus_t* ctx, const mogbus_server_options_t* options, size_t count)
+{
+	int status;
+
+	mogbus_stop_context_on_signals(&g_ctx);
+
+	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
+	for (size_t i = 0; i < count; i++)
+	{
+		mogbus_server_t*	server  = NULL;
+		mogbus_result_t		failure = mogbus_server_create(ctx, &options[i], &server);
+
+		if (failure != MOGBUS_OK)
+		{
+			if (failure == MOGBUS_ERR_INVALID)
+				fprintf(stderr, "%s: %s\n", cli->config_path, mogbus_last_error(ctx));
+			return failure == MOGBUS_ERR_SERIAL ? 1 : 2;
+		}
+		if (mogbus_server_pty_name(server))
+		{
+			printf("%s%s%s%s PTY slave: %s\n", options[i].id ? "[" : "", options[i].id ? options[i].id : "",
+			       options[i].id ? "] " : "",
+			       options[i].mode == MOGBUS_MODE_RTU_PTY ? "RTU" : "ASCII",
+			       mogbus_server_pty_name(server));
+			fflush(stdout);
+		}
+	}
+	g_ctx  = ctx;
+	status = mogbus_run(ctx);
+	g_ctx  = NULL;
+	return status;
+}
+
+/** @brief Everything after the arguments are known; the exit status. */
+static int
+run(const cli_t* cli, mogbus_t* ctx)
+{
+	mogbus_server_options_t	options[MOGBUS_MAX_SERVERS];
+	size_t			count;
+	size_t			selected;
+
+	if (mogbus_load_config(ctx, cli->config_path) != MOGBUS_OK)
+	{
+		fprintf(stderr, "%s: %s\n", cli->config_path, mogbus_last_error(ctx));
+		return 1;
+	}
+	count = mogbus_config_server_count(ctx);
+	for (size_t i = 0; i < count; i++)
+	{
+		if (mogbus_config_server_options_at(ctx, i, &options[i]) != MOGBUS_OK)
+			count = 0;
+	}
+	if (count == 0)
+	{
+		fprintf(stderr, "%s: no server section could be read\n", cli->config_path);
+		return 1;
+	}
+	if (!select_server(cli, options, count, &selected))
+	{
+		fprintf(stderr, "%s: no server with id '%s'\n", cli->config_path, cli->server_id);
+		return 2;
+	}
+	if (cli->web)
+	{
+		mogbus_server_options_t* web = &options[selected];
+
+		if (!web->http_bind_address)
+		{
+			web->http_bind_address = "127.0.0.1";
+			web->http_port         = mogbus_server_options_defaults().http_port;
+		}
+		web->http_ui      = true;
+		web->http_control = true;
+	}
+	if (cli->show_ms)
+	{
+		for (size_t i = 0; i < count; i++)
+			options[i].show_registers_ms = cli->show_ms;
+	}
+	if (cli->health)
+		return run_health(cli, ctx, &options[selected]);
+	if (cli->check != CHECK_QUIET)
+	{
+		for (size_t i = 0; i < count; i++)
+			print_summary(ctx, &options[i]);
+	}
+	if (cli->check != CHECK_OFF)
+		return run_check(cli, ctx, options, count);
+	return run_servers(cli, ctx, options, count);
+}
+
+/** @brief A hex digit's value, or -1. */
+static int
+hex_value(char ch)
+{
+	if (ch >= '0' && ch <= '9')
+		return ch - '0';
+	if (ch >= 'a' && ch <= 'f')
+		return ch - 'a' + 10;
+	if (ch >= 'A' && ch <= 'F')
+		return ch - 'A' + 10;
+	return -1;
+}
+
+/**
+ * @brief Turns a frame argument into bytes: hex (spaces, ':', ',', '-' and 0x prefixes between
+ *        bytes are ignored), or, when it starts with ':', the ASCII frame text itself (CR LF added
+ *        when missing).
+ */
+static bool
+parse_frame_text(const char* text, uint8_t* out, size_t cap, size_t* len)
+{
+	size_t	n = 0;
+	int	high = -1;
+
+	while (*text == ' ' ||
+	       *text == '\t')
+		text++;
+	if (*text == ':')
+	{
+		size_t end = strlen(text);
+
+		while (end > 0 &&
+		       (text[end - 1] == '\r' || text[end - 1] == '\n' || text[end - 1] == ' ' ||
+			text[end - 1] == '\t'))
+			end--;
+		if (end >= 4 &&
+		    memcmp(text + end - 4, "\\r\\n", 4) == 0)
+			end -= 4;
+		if (end + 2 > cap)
+			return false;
+		memcpy(out, text, end);
+		out[end]     = '\r';
+		out[end + 1] = '\n';
+		*len         = end + 2;
+		return true;
+	}
+	for (; *text; text++)
+	{
+		int v;
+
+		if (*text == ' ' ||
+		    *text == '\t' ||
+		    *text == '\r' ||
+		    *text == '\n' ||
+		    *text == ':' ||
+		    *text == ',' ||
+		    *text == '-')
+			continue;
+		if (*text == '0' &&
+		    high < 0 &&
+		    (text[1] == 'x' || text[1] == 'X'))
+		{
+			text++;
+			continue;
+		}
+		v = hex_value(*text);
+		if (v < 0)
+		{
+			fprintf(stderr, "invalid character '%c' in frame\n", *text);
+			return false;
+		}
+		if (high < 0)
+			high = v;
+		else
+		{
+			if (n >= cap)
+				return false;
+			out[n++] = (uint8_t)((high << 4) | v);
+			high     = -1;
+		}
+	}
+	if (high >= 0)
+	{
+		fprintf(stderr, "odd number of hex digits in frame\n");
+		return false;
+	}
+	*len = n;
+	return true;
+}
+
+/** @brief Decodes one frame argument or stdin line; the exit status it contributes. */
+static int
+decode_one(const cli_t* cli, const char* text, bool first)
+{
+	static uint8_t	frame[4096];
+	static char	out[MOGBUS_DECODE_BUFFER_SIZE];
+	size_t		frame_len = 0;
+	size_t		out_len   = 0;
+	mogbus_result_t	result;
+
+	if (!parse_frame_text(text, frame, sizeof(frame), &frame_len))
+	{
+		fprintf(stderr, "cannot read the frame '%.40s'\n", text);
+		return 2;
+	}
+	result = mogbus_decode_frame(frame, frame_len, cli->framing, cli->direction, cli->log_json, out,
+				     sizeof(out), &out_len);
+	if (result != MOGBUS_OK &&
+	    result != MOGBUS_ERR_FRAME)
+	{
+		fprintf(stderr, "cannot decode the frame '%.40s'\n", text);
+		return 2;
+	}
+	if (!cli->log_json &&
+	    !first)
+		putchar('\n');
+	fputs(out, stdout);
+	if (cli->log_json)
+		putchar('\n');
+	return result == MOGBUS_ERR_FRAME ? 1 : 0;
+}
+
+/** @brief --decode: 0 if every frame decoded, 1 if one is malformed, 2 for unreadable input. */
+static int
+run_decode(const cli_t* cli)
+{
+	static char	line[16384];
+	int		status = 0;
+	bool		first  = true;
+
+	for (size_t i = 0; i < cli->frame_count; i++)
+	{
+		int one = decode_one(cli, cli->frames[i], first);
+
+		status = one > status ? one : status;
+		first  = false;
+	}
+	if (cli->frame_count > 0)
+		return status;
+	while (fgets(line, sizeof(line), stdin))
+	{
+		const char*	p = line;
+		int		one;
+
+		while (*p == ' ' ||
+		       *p == '\t')
+			p++;
+		if (*p == '\0' ||
+		    *p == '\n' ||
+		    *p == '\r' ||
+		    *p == '#')
+			continue;
+		one    = decode_one(cli, line, first);
+		status = one > status ? one : status;
+		first  = false;
+	}
+	return status;
 }
 
 int
 main(int argc, char** argv)
 {
-	cli_t		cli     = { 0 };
-	mogbus_t*	ctx     = NULL;
-	mogbus_server_options_t options[MOGBUS_MAX_SERVERS];
-	size_t		count   = 0;
-	size_t		selected = 0;	/* the server --health probes and --web applies to */
-	int		status  = 1;
+	cli_t		cli = { 0 };
+	mogbus_t*	ctx = NULL;
+	int		status;
 
 	if (!parse_args(argc, argv, &cli))
 		return 2;
@@ -466,7 +820,12 @@ main(int argc, char** argv)
 		return 0;
 	}
 
-	if (cli.show_help || !cli.config_path)
+	if (cli.decode &&
+	    !cli.show_help)
+		return run_decode(&cli);
+
+	if (cli.show_help ||
+	    !cli.config_path)
 	{
 		print_usage();
 		return cli.show_help ? 0 : 2;
@@ -479,152 +838,7 @@ main(int argc, char** argv)
 		fprintf(stderr, "%s\n", mogbus_last_error(NULL));
 		return 1;
 	}
-
-	if (mogbus_load_config(ctx, cli.config_path) != MOGBUS_OK)
-	{
-		fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
-		goto cleanup;
-	}
-
-	count = mogbus_config_server_count(ctx);
-	for (size_t i = 0; i < count; i++)
-	{
-		if (mogbus_config_server_options_at(ctx, i, &options[i]) != MOGBUS_OK)
-			count = 0;
-	}
-	if (count == 0)
-	{
-		fprintf(stderr, "%s: no server section could be read\n", cli.config_path);
-		goto cleanup;
-	}
-	if (cli.server_id)
-	{
-		for (selected = 0; selected < count; selected++)
-		{
-			if (options[selected].id &&
-			    strcmp(options[selected].id, cli.server_id) == 0)
-				break;
-		}
-		if (selected == count)
-		{
-			fprintf(stderr, "%s: no server with id '%s'\n", cli.config_path, cli.server_id);
-			status = 2;
-			goto cleanup;
-		}
-	}
-	if (cli.web)
-	{
-		mogbus_server_options_t* web = &options[selected];
-
-		if (!web->http_bind_address)
-		{
-			web->http_bind_address = "127.0.0.1";
-			web->http_port         = mogbus_server_options_defaults().http_port;
-		}
-		web->http_ui      = true;
-		web->http_control = true;
-	}
-	if (cli.health)
-	{
-		mogbus_device_t* first = NULL;
-
-		for (size_t i = 0; i < mogbus_device_count(ctx) && !first; i++)
-		{
-			if (serves(mogbus_device_at(ctx, i), options[selected].id))
-				first = mogbus_device_at(ctx, i);
-		}
-		mogbus_device_info_t info;
-
-		if (!first ||
-		    !mogbus_device_info(first, &info))
-		{
-			fprintf(stderr, "%s: no device to probe\n", cli.config_path);
-			goto cleanup;
-		}
-		if (mogbus_probe(&options[selected], info.unit_id, cli.timeout_ms ? cli.timeout_ms : 2000) != MOGBUS_OK)
-		{
-			fprintf(stderr, "unhealthy: %s\n", mogbus_last_error(NULL));
-			goto cleanup;
-		}
-		status = 0;
-		goto cleanup;
-	}
-	for (size_t i = 0; i < count; i++)
-		print_summary(ctx, &options[i]);
-	if (cli.check_only)
-	{
-		for (size_t i = 0; i < count; i++)
-		{
-			if (mogbus_server_check(ctx, &options[i]) != MOGBUS_OK)
-			{
-				if (options[i].id)
-					fprintf(stderr, "%s: server '%s': %s\n", cli.config_path, options[i].id,
-						mogbus_last_error(ctx));
-				else
-					fprintf(stderr, "%s: cannot configure TLS: %s\n", cli.config_path,
-						mogbus_last_error(ctx));
-				goto cleanup;
-			}
-		}
-		puts("config OK");
-		status = 0;
-		goto cleanup;
-	}
-
-	mogbus_stop_context_on_signals(&g_ctx);
-
-	/* The transport logs why it failed; the exit status tells serial from listen/TLS errors. */
-	for (size_t i = 0; i < count; i++)
-	{
-		mogbus_server_t* server = NULL;
-		mogbus_result_t	 failure = cli.web && i == selected ?
-					   mogbus_server_create(ctx, &options[i], &server) :
-					   mogbus_server_create_from_config_at(ctx, i, &server);
-
-		if (failure != MOGBUS_OK)
-		{
-			if (failure == MOGBUS_ERR_INVALID)
-				fprintf(stderr, "%s: %s\n", cli.config_path, mogbus_last_error(ctx));
-			status = failure == MOGBUS_ERR_SERIAL ? 1 : 2;
-			goto cleanup;
-		}
-		if (mogbus_server_pty_name(server))
-		{
-			printf("%s%s%s%s PTY slave: %s\n", options[i].id ? "[" : "", options[i].id ? options[i].id : "",
-			       options[i].id ? "] " : "",
-			       options[i].mode == MOGBUS_MODE_RTU_PTY ? "RTU" : "ASCII",
-			       mogbus_server_pty_name(server));
-			fflush(stdout);
-		}
-	}
-	g_ctx = ctx;
-	if (cli.show_ms == 0)
-		status = mogbus_run(ctx);
-	else
-	{
-		int64_t	next = (int64_t)mogbus_now_ms();
-		bool	all  = true;
-		int	rc;
-
-		do
-		{
-			int64_t	wait = next - (int64_t)mogbus_now_ms();
-
-			if (wait <= 0)
-			{
-				show_registers(ctx, all, cli.log_json);
-				all  = false;
-				next = (int64_t)mogbus_now_ms() + cli.show_ms;
-				wait = cli.show_ms;
-			}
-			rc = mogbus_step(ctx, (int)wait);
-		}
-		while (rc == MOGBUS_STEP_CONTINUE);
-		status = rc == MOGBUS_STEP_ERROR ? 1 : 0;
-	}
-	g_ctx = NULL;
-
-cleanup:
+	status = run(&cli, ctx);
 	mogbus_destroy(ctx);
 	return status;
 }

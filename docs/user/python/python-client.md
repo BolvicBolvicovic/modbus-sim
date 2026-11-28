@@ -18,7 +18,7 @@ with mogbus.Client(mode="tcp", host="127.0.0.1", port=1502, unit=1, timeout_ms=1
     print(c.request(0x41, b"\x01"))              # any function code: the reply data as bytes
 ```
 
-`mode` is `"tcp"`, `"udp"`, `"rtu-tcp"`, `"rtu-udp"`, `"ascii-tcp"`, `"ascii-udp"`, or `"rtu-device"` and `"ascii-device"` with `path`, `baud`, `data_bits`, `parity` and `stop_bits` for a serial line. `unit` is the default unit id; every call takes `unit=` to ask another one. The client connects on the first call (or on \ref mogbus::core::Client::connect "connect()") and again on the first call after a connection error. `retries` repeats a call that timed out.
+`mode` is `"tcp"`, `"udp"`, `"rtu-tcp"`, `"rtu-udp"`, `"ascii-tcp"`, `"ascii-udp"`, or `"rtu-device"` and `"ascii-device"` with `path`, `baud`, `data_bits`, `parity` and `stop_bits` for a serial line. `host` is an IP address or a host name; a name is resolved when the client connects (see [the C client](../library/library-client.md)). `unit` is the default unit id; every call takes `unit=` to ask another one. The client connects on the first call (or on \ref mogbus::core::Client::connect "connect()") and again on the first call after a connection error. `retries` repeats a call that timed out.
 
 | Method | Function code | Returns |
 |---|---|---|
@@ -32,10 +32,38 @@ with mogbus.Client(mode="tcp", host="127.0.0.1", port=1502, unit=1, timeout_ms=1
 | `write_registers(address, values)` | 16 | |
 | `mask_write_register(address, and_mask, or_mask)` | 22 | |
 | `read_write_registers(read_address, read_count, write_address, values)` | 23 | list of int |
-| `read_device_id()` | 43 (MEI 14) | dict of object id to bytes |
+| `read_exception_status()` | 07 | int |
+| `diagnostics(sub_function, data=b"")` | 08 | the reply data as bytes |
+| `get_comm_event_counter()` | 0B | `CommEventCounter(status, event_count)` |
+| `get_comm_event_log()` | 0C | `CommEventLog(status, event_count, message_count, events)` |
+| `report_server_id()` | 11 | the report as bytes |
+| `read_file_records([(file, record, length), ...])` | 14 | list of lists of int |
+| `write_file_records([(file, record, values), ...])` | 21 (0x15) | |
+| `read_fifo(address)` | 24 (0x18) | list of int |
+| `canopen_request(request)` | 43 (MEI 13) | the reply bytes after `2B 0D` |
+| `read_device_id(read_code=1, object_id=0)` | 43 (MEI 14) | dict of object id to bytes |
+| `read_device_identification(read_code=1, object_id=0)` | 43 (MEI 14) | `DeviceIdentification(conformity, objects)` |
 | `request(function_code, data=b"")` | any | the reply data as bytes |
 
+`read_device_id()` and `read_device_identification()` follow up a server that says more objects follow, so a device with many objects is read completely. `canopen_request()` takes and returns the raw bytes after `2B 0D`; a failure of the CANopen service raises \ref mogbus::core::ModbusException "ModbusException" with `code == 255` and the failure bytes in `.data`.
+
+```python
+print(c.read_file_records([(1, 0, 2), (1, 4, 1)]))     # [[10, 11], [14]]
+print(c.read_fifo(100))                                  # [4660, 22136, 42]
+print(c.read_device_identification(3).objects)           # every object, however many replies it took
+```
+
 Registers are raw 16-bit values; decode floats and strings yourself, for example with `struct.pack(">HH", *regs)`.
+
+## Byte timeout and TLS
+
+`byte_timeout_ms=50` fails a call with `Status.TIMEOUT` when, once the first byte of a reply has arrived, no further byte comes within 50 ms (stream and serial modes; `timeout_ms` still bounds the whole wait). TLS is `Client(tls=True, tls_ca_file=..., tls_cert_file=..., tls_key_file=..., tls_server_name=..., tls_verify=True)` in `"tcp"` mode, with port 802 by default; the server is verified against `tls_ca_file` (the system trust store when omitted) and `tls_server_name` (`host` when omitted). A library built without TLS raises `MogbusError` with `Status.UNSUPPORTED`. See [the C client](../library/library-client.md) for the details.
+
+```python
+with mogbus.Client(host="plc.example", tls=True, tls_ca_file="ca.pem",
+                   tls_cert_file="client.pem", tls_key_file="client.key") as c:
+    print(c.read_holding_registers(0, 4))
+```
 
 ## Errors
 
@@ -62,8 +90,13 @@ with mogbus.Context() as ctx:
 
 The server must be started (`start()`): the client blocks until the reply arrives, so it cannot share the thread that steps the server. A Client takes its own lock per call, so threads may share one, though it handles one request at a time; use one Client per thread to talk in parallel.
 
+## From asyncio
+
+\ref mogbus::core::AsyncClient "AsyncClient" has the same constructor and methods as coroutines (`await c.read_holding_registers(0, 4)`) and never blocks the event loop; see [asyncio](python-asyncio.md).
+
 ## Where next
 
 - [Talking to a Modbus server from C](../library/library-client.md) for the C API under it.
+- [Using mogbus in an asyncio program](python-asyncio.md) to serve in the event loop and use `AsyncClient`.
 - [Testing with pytest or unittest](python-testing.md) to use a Client and a server in one test.
 - [User-defined function codes](../modbus/user-defined-function-codes.md#calling-a-user-defined-code-with-the-mogbus-client) for `request()` with a vendor code.

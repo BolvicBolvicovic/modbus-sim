@@ -68,10 +68,10 @@ Create `my-device.scm`:
 Check it without starting the server:
 
 ```bash
-./mogbus --check my-device.scm
+./mogbus --check=verbose my-device.scm
 ```
 
-`--check` prints the same summary as a normal start (transport, devices, point counts, faults) and
+`--check=verbose` prints the same summary as a normal start (plain `--check` prints nothing unless the file is wrong) (transport, devices, point counts, faults) and
 validates the server settings, including TLS files, without opening any socket or device. Then run
 it and read the new points:
 

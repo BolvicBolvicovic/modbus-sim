@@ -214,7 +214,8 @@ def render_point(p):
     if p.count > 1:
         parts.append("(count %d)" % p.count)
     if p.note:
-        parts.append("(note %s)" % q(p.note))
+        note = p.note.encode("utf-8")[:127].decode("utf-8", "ignore")   # mogbus notes hold 127 bytes
+        parts.append("(note %s)" % q(note))
     lines = ["(%s %d" % (p.table, p.addr)]
     for part in parts:
         if len(lines[-1]) + 1 + len(part) > 100:
@@ -1412,7 +1413,7 @@ def main(argv=None):
             tmp.close()
             path = tmp.name
         try:
-            r = subprocess.run([os.environ.get("MOGBUS_BIN", "./mogbus"), "--check", path],
+            r = subprocess.run([os.environ.get("MOGBUS_BIN", "./mogbus"), "--check=verbose", path],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             sys.stderr.write(r.stdout)
             if r.returncode != 0:

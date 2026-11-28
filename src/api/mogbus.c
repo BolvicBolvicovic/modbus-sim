@@ -19,8 +19,8 @@
 #include "os/os_socket.h"
 #include "os/os_time.h"
 #include "server/server.h"
-#include "server/server_limits.h"
 #include "util/log.h"
+#include "view/view.h"
 #include "vlib/arena.h"
 #include "vlib/macros.h"
 #if WITH_CONFIG
@@ -33,6 +33,8 @@
 #include <string.h>
 
 /** @brief The public enums are mapped by value, so they must match the internal ones. */
+_Static_assert((int)VIEW_MAX_DEVICES == (int)SERVER_MAX_DEVICES, "view and context device limits differ");
+_Static_assert(MOGBUS_MAX_POINTS == DEVICE_MAX_POINTS, "public and internal point limits differ");
 _Static_assert((int)MOGBUS_COIL == (int)SPACE_COIL &&
 	       (int)MOGBUS_DISCRETE == (int)SPACE_DISCRETE &&
 	       (int)MOGBUS_INPUT == (int)SPACE_INPUT &&
@@ -113,6 +115,8 @@ struct mogbus_server_t
 	u32		device_count;
 	mogbus_frame_fn	frame_fn;	/**< frame hook of the host, or NULL */
 	void*		frame_user;
+	mogbus_connection_fn conn_fn;	/**< connection hook of the host, or NULL */
+	void*		conn_user;
 	/** @brief Copies of the option strings, so they outlive the caller's buffers. */
 	struct strings_t
 	{
@@ -138,6 +142,7 @@ struct mogbus_t
 	bool		has_config;
 #endif
 	net_poll_group_t group;		/**< scratch of the shared wait of mogbus_step() */
+	view_t		view;		/**< live register view, open while a server asked for it */
 	device_t*	devices[SERVER_MAX_DEVICES];
 	u32		device_count;
 	mogbus_server_t* servers[MOGBUS_MAX_SERVERS];
@@ -235,6 +240,7 @@ mogbus_destroy(mogbus_t* ctx)
 		if (ctx->servers[i] && ctx->servers[i]->in_use)
 			mogbus_server_close(ctx->servers[i]);
 	}
+	view_close(&ctx->view);
 	os_mutex_destroy(&ctx->lock);
 	arena_release(ctx->arena);	/* the context lives in its own arena */
 }
@@ -478,6 +484,7 @@ mogbus_device_point_at(const mogbus_device_t* handle, uint32_t index, mogbus_poi
 	out->read_only   = point->read_only;
 	out->clock_field = (mogbus_clock_field_t)point->clock_field;
 	out->clock_utc   = point->clock_utc;
+	out->note        = point->note;
 	return true;
 }
 
@@ -611,6 +618,7 @@ mogbus_device_add_point(mogbus_device_t* handle, const mogbus_point_t* in)
 	point.order   = (word_order_t)in->word_order;
 	point.byte_order = (byte_order_t)in->byte_order;
 	point.read_only  = in->read_only;
+	point.note       = in->note;
 	if (point.type == VT_STRING)
 	{
 		if (in->length > DEVICE_MAX_STRING_REGISTERS)
@@ -1106,6 +1114,20 @@ validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st, devic
 	{
 		return fail(ctx, MOGBUS_ERR_INVALID, "this mode needs an open fd");
 	}
+	if (o->show_registers_ms != 0 &&
+	    (o->show_registers_ms < 10 || o->show_registers_ms > 60000))
+	{
+		return fail(ctx, MOGBUS_ERR_INVALID, "show_registers_ms must be 0 or 10 to 60000");
+	}
+	if (o->char_timing &&
+	    o->mode != SERVER_MODE_RTU_PTY &&
+	    o->mode != SERVER_MODE_RTU_DEVICE &&
+	    o->mode != SERVER_MODE_RTU_FD)
+		return fail(ctx, MOGBUS_ERR_INVALID, "char_timing is only valid in the RTU serial modes");
+	if (o->char_timing &&
+	    o->baud == 0 &&
+	    o->mode != SERVER_MODE_RTU_DEVICE)
+		return fail(ctx, MOGBUS_ERR_INVALID, "char_timing needs a baud rate");
 	if ((o->data_bits != 7 && o->data_bits != 8) ||
 	    (o->stop_bits != 1 && o->stop_bits != 2) ||
 	    (unsigned)o->parity > PARITY_SPACE)
@@ -1183,6 +1205,10 @@ create_server(mogbus_t* ctx, server_options_t o, mogbus_server_t** out)
 		return error;
 	}
 
+	if (o.show_registers_ms &&
+	    !view_open(&ctx->view, ctx->arena, o.show_registers_ms))
+		return fail(ctx, MOGBUS_ERR_NOMEM, "out of memory opening the register view");
+
 	o.devices      = s->devices;
 	o.device_count = s->device_count;
 	rc = server_init(&s->server, &o);
@@ -1199,6 +1225,8 @@ create_server(mogbus_t* ctx, server_options_t o, mogbus_server_t** out)
 	s->in_use     = true;
 	s->frame_fn   = NULL;
 	s->frame_user = NULL;
+	s->conn_fn    = NULL;
+	s->conn_user  = NULL;
 	*out = s;
 	return MOGBUS_OK;
 }
@@ -1217,6 +1245,7 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 	}
 	*o = (server_options_t){
 		.id                       = in->id,
+		.show_registers_ms        = in->show_registers_ms,
 		.mode                     = (server_mode_t)in->mode,
 		.bind_address             = in->bind_address ? in->bind_address : "127.0.0.1",
 		.http_bind_address        = in->http_bind_address,
@@ -1232,6 +1261,7 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 		.frame_gap_ms             = in->frame_gap_ms,
 		.baud                     = in->baud,
 		.strict_t15               = in->strict_t15,
+		.char_timing              = in->char_timing,
 		.broadcast_execute        = in->broadcast_execute,
 		.data_bits                = in->data_bits,
 		.parity                   = (parity_t)in->parity,
@@ -1319,6 +1349,7 @@ mogbus_config_server_options_at(mogbus_t* ctx, size_t index, mogbus_server_optio
 	o = server_options_from_config(&ctx->config, (u32)index);
 	*out = (mogbus_server_options_t){
 		.id                             = o.id,
+		.show_registers_ms              = o.show_registers_ms,
 		.mode                           = (mogbus_mode_t)o.mode,
 		.bind_address                   = o.bind_address,
 		.port                           = o.port,
@@ -1334,6 +1365,7 @@ mogbus_config_server_options_at(mogbus_t* ctx, size_t index, mogbus_server_optio
 		.frame_gap_ms                   = o.frame_gap_ms,
 		.baud                           = o.baud,
 		.strict_t15                     = o.strict_t15,
+		.char_timing                    = o.char_timing,
 		.broadcast_execute              = o.broadcast_execute,
 		.data_bits                      = o.data_bits,
 		.parity                         = (mogbus_parity_t)o.parity,
@@ -1406,6 +1438,104 @@ mogbus_server_step(mogbus_server_t* server, int max_wait_ms)
 	return server_step(&server->server, max_wait_ms);
 }
 
+/**
+ * @brief Runs the gather phase of a group step for `servers` and copies the wait table out.
+ *
+ * Returns MOGBUS_ERR_INVALID (nothing copied) if `cap` is too small. The timeout is 0 when a
+ * gathered step already reports done/error (stop requested), so the host steps at once.
+ */
+static mogbus_result_t
+poll_fds_of(mogbus_t* ctx, server_t* const* servers, u32 n, mogbus_poll_fd_t* out, size_t cap,
+	    size_t* count, int* timeout_ms)
+{
+	net_poll_group_t*	group = &ctx->group;
+	u32			live  = 0;
+	bool			ready = false;
+
+	group->phase      = NET_POLL_GATHER;
+	group->count      = 0;
+	group->timeout_ms = -1;
+	for (u32 i = 0; i < n; i++)
+	{
+		server_t* s = servers[i];
+
+		if (!s ||
+		    s->done)
+			continue;
+		s->obs.group = group;
+		if (server_step(s, -1) == NET_STEP_CONTINUE)
+			live++;
+		else
+			ready = true;
+		s->obs.group = NULL;
+	}
+	*count      = group->count;
+	*timeout_ms = (ready || !live) ? 0 : (group->timeout_ms < 0 || group->timeout_ms > 1000) ? 1000 : group->timeout_ms;
+	if (group->count > cap)
+		return fail(ctx, MOGBUS_ERR_INVALID, "poll table needs %u entries, got room for %zu", group->count, cap);
+	*count = 0;
+	for (u32 i = 0; i < group->count; i++)
+	{
+		const os_wait_entry_t* e = &group->entries[i];
+
+		if (!os_socket_valid(e->fd))
+			continue;
+		out[(*count)++] = (mogbus_poll_fd_t){
+			.fd     = (uint64_t)e->fd,
+			.events = ((e->events & OS_WAIT_IN) ? MOGBUS_POLL_IN : 0) |
+				  ((e->events & OS_WAIT_OUT) ? MOGBUS_POLL_OUT : 0),
+		};
+	}
+	return MOGBUS_OK;
+}
+
+mogbus_result_t
+mogbus_server_poll_fds(mogbus_server_t* server, mogbus_poll_fd_t* out, size_t cap, size_t* count,
+		       int* timeout_ms)
+{
+	server_t*	one;
+	LOCK(server ? server->ctx : NULL);
+
+	if (!server ||
+	    !server->in_use ||
+	    !count ||
+	    !timeout_ms ||
+	    (!out && cap))
+		return MOGBUS_ERR_INVALID;
+	one = &server->server;
+	return poll_fds_of(server->ctx, &one, 1, out, cap, count, timeout_ms);
+}
+
+mogbus_result_t
+mogbus_poll_fds(mogbus_t* ctx, mogbus_poll_fd_t* out, size_t cap, size_t* count, int* timeout_ms)
+{
+	server_t*	servers[MOGBUS_MAX_SERVERS] = { NULL };
+	mogbus_result_t	rc;
+	LOCK(ctx);
+
+	if (!ctx ||
+	    !count ||
+	    !timeout_ms ||
+	    (!out && cap))
+		return MOGBUS_ERR_INVALID;
+	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
+	{
+		if (ctx->servers[i] &&
+		    ctx->servers[i]->in_use)
+			servers[i] = &ctx->servers[i]->server;
+	}
+	rc = poll_fds_of(ctx, servers, MOGBUS_MAX_SERVERS, out, cap, count, timeout_ms);
+	if (rc == MOGBUS_OK &&
+	    ctx->view.interval_ms)
+	{
+		u32 due = view_wait_ms(&ctx->view, os_now_ms());
+
+		if ((u32)*timeout_ms > due)
+			*timeout_ms = (int)due;
+	}
+	return rc;
+}
+
 void
 mogbus_server_stop(mogbus_server_t* server)
 {
@@ -1456,6 +1586,7 @@ int
 mogbus_step(mogbus_t* ctx, int max_wait_ms)
 {
 	server_t*	servers[MOGBUS_MAX_SERVERS] = { NULL };
+	int		rc;
 	LOCK(ctx);
 
 	for (u32 i = 0; i < MOGBUS_MAX_SERVERS; i++)
@@ -1464,7 +1595,17 @@ mogbus_step(mogbus_t* ctx, int max_wait_ms)
 		    ctx->servers[i]->in_use)
 			servers[i] = &ctx->servers[i]->server;
 	}
-	return server_group_step(servers, MOGBUS_MAX_SERVERS, &ctx->group, max_wait_ms);
+	if (ctx->view.interval_ms)
+	{
+		u32 due = view_wait_ms(&ctx->view, os_now_ms());
+
+		if (max_wait_ms < 0 ||
+		    (u32)max_wait_ms > due)
+			max_wait_ms = due > 60000 ? 60000 : (int)due;
+	}
+	rc = server_group_step(servers, MOGBUS_MAX_SERVERS, &ctx->group, max_wait_ms);
+	view_update(&ctx->view, ctx->devices, ctx->device_count, os_now_ms());
+	return rc;
 }
 
 int
@@ -1482,6 +1623,7 @@ mogbus_run(mogbus_t* ctx)
 		    ctx->servers[i]->in_use)
 			server_close(&ctx->servers[i]->server);
 	}
+	view_close(&ctx->view);
 	return rc == MOGBUS_STEP_ERROR ? 1 : 0;
 }
 
@@ -1538,6 +1680,36 @@ mogbus_server_set_frame_hook(mogbus_server_t* server, mogbus_frame_fn fn, void* 
 	server->frame_user        = user;
 	server->server.obs.frame_fn   = fn ? frame_trampoline : NULL;
 	server->server.obs.frame_user = server;
+	return MOGBUS_OK;
+}
+
+/** @brief Adapts the net-layer connection hook to the public one. */
+static void
+conn_trampoline(void* user, u64 id, const char* peer, net_close_reason_t reason)
+{
+	mogbus_server_t*	server = user;
+	mogbus_connection_t	event  = {
+		.connected = reason == NET_CLOSE_NONE,
+		.id        = id,
+		.mode      = (mogbus_mode_t)server->server.mode,
+		.peer      = peer,
+		.reason    = (mogbus_close_reason_t)reason,
+	};
+
+	server->conn_fn(server->conn_user, server, &event);
+}
+
+mogbus_result_t
+mogbus_server_set_connection_hook(mogbus_server_t* server, mogbus_connection_fn fn, void* user)
+{
+	LOCK(server ? server->ctx : NULL);
+	if (!server ||
+	    !server->in_use)
+		return fail(server ? server->ctx : NULL, MOGBUS_ERR_INVALID, "a running server is required");
+	server->conn_fn              = fn;
+	server->conn_user            = user;
+	server->server.obs.conn_fn   = fn ? conn_trampoline : NULL;
+	server->server.obs.conn_user = server;
 	return MOGBUS_OK;
 }
 

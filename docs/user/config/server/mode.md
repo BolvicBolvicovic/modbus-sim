@@ -48,7 +48,7 @@ serial line options and RTU timing options are rejected at load time.
   datagram must hold exactly one complete frame; anything else (no CR LF, extra bytes, two frames,
   bad LRC) is ignored and counted as an FC08 `0x000C` communication error on every device, and empty
   or longer than 515 byte datagrams are dropped without counting.
-- `rtu-udp`: `baud`, `frame-gap-ms` and `strict-t15` are rejected because datagram boundaries delimit
+- `rtu-udp`: `baud`, `frame-gap-ms`, `strict-t15` and `char-timing` are rejected because datagram boundaries delimit
   frames, so there is no t3.5/t1.5 timing. Unit ids follow the `rtu-tcp` rule (1-247). A datagram must
   hold exactly one valid RTU frame (CRC checked); otherwise it is ignored.
 

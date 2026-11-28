@@ -7,10 +7,10 @@
 
 #include "os/os_socket.h"
 #include "os/os_wait.h"
+#include "net/net_obs.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
 
-typedef struct net_obs_t net_obs_t;
 typedef struct net_tcp_conn_t net_tcp_conn_t;
 typedef struct net_tcp_pool_t net_tcp_pool_t;
 
@@ -29,6 +29,8 @@ struct net_tcp_conn_t
 {
 	os_socket_t	fd;		/**< OS_SOCKET_INVALID (-1) when the slot is free */
 	u64		last_activity_ms;
+	u64		id;		/**< connection id, unique per pool */
+	bool		announced;	/**< the connection hook saw it open, so it will see it close */
 	char		peer[NET_TCP_PEER_SIZE];
 };
 
@@ -47,6 +49,7 @@ struct net_tcp_pool_t
 	os_socket_t	listen_fd;
 	u64		accept_backoff_until_ms;
 	bool		accept_backoff_logged;
+	u64		last_id;	/**< last connection id handed out */
 	net_obs_t*	obs;	/**< connection metrics; NULL records nothing */
 	void*		ctx;
 	void		(*on_accept)(void* ctx, net_tcp_conn_t* conn, u64 now_ms);
@@ -60,7 +63,8 @@ int	net_tcp_pool_listen(net_tcp_pool_t* pool, const char* bind_address, u16 port
 /** @brief Accepts until it would block, applying the shared backoff and connection setup. */
 void	net_tcp_pool_accept(net_tcp_pool_t* pool);
 
-void	net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn);
+/** @brief Closes a connection; @p reason goes to the connection hook (once per announced connection). */
+void	net_tcp_pool_close_conn(net_tcp_pool_t* pool, net_tcp_conn_t* conn, net_close_reason_t reason);
 void	net_tcp_pool_close_idle(net_tcp_pool_t* pool, u64 now_ms);
 
 /**

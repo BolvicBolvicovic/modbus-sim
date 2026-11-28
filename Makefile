@@ -230,14 +230,14 @@ TEST_SRCS   := $(filter-out tests/tests_utils/tls_client.c,$(TEST_SRCS))
 endif
 # These tests start the real binary or call config_load; the others run unchanged.
 ifeq ($(WITH_CONFIG),0)
-TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/tcp_server.c \
+TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/decode_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/tcp_server.c \
                             tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
                             tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif
 # These fork, use PTYs, termios, poll() or POSIX sockets directly, or spawn the binary through
 # tests_utils/test_support.c; they stay out of the Windows test binary (docs/dev/architecture.md).
-TESTS_POSIX_ONLY = tests/api.c tests/client.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
-                   tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c \
+TESTS_POSIX_ONLY = tests/api.c tests/poll_fds.c tests/client.c tests/client_calls.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
+                   tests/decode_cli.c tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c \
                    tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
                    tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/threads.c tests/udp_server.c \
                    tests/tests_utils/test_support.c tests/tests_utils/tls_client.c
@@ -296,6 +296,7 @@ python-tests: $(LIB_SHARED)
 # and conftest.py need pytest and are not run here.
 python-examples: $(LIB_SHARED)
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/embed.py
+	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/asyncio_server.py
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 examples/python/pump_station.py
 	MOGBUS_LIB=$(CURDIR)/$(LIB_SHARED) PYTHONPATH=python python3 -m unittest discover -s examples/python -p test_pump_station.py
 
@@ -314,7 +315,7 @@ $(BIN): $(BUILD_STAMP) $(MAIN_OBJ) $(LIB_VARIANT)
 endif
 
 # `make tests` runs the scopes selected by WHAT (comma-separated: c, python, docs, all, auto;
-# tools/test_scope.sh explains its choice on stderr). auto picks scopes from the changed files;
+# tools/changes.sh explains its choice on stderr). auto picks scopes from the changed files;
 # when CI is set the default is c. SUITES (comma-separated vtest suite names, empty = all) limits
 # the c scope.
 ifdef CI
@@ -324,7 +325,7 @@ WHAT ?= auto
 endif
 SUITES ?=
 ifneq ($(filter tests,$(MAKECMDGOALS)),)
-TEST_SCOPES := $(shell ./tools/test_scope.sh '$(WHAT)')
+TEST_SCOPES := $(shell ./tools/changes.sh scope '$(WHAT)')
 ifneq ($(.SHELLSTATUS),0)
 $(error invalid WHAT)
 endif
@@ -332,7 +333,7 @@ endif
 tests: $(addprefix tests-,$(TEST_SCOPES))
 tests-python: python-tests python-examples $(PROGRAMS)
 tests-docs: docs $(PROGRAMS)
-	./tools/check_doc_examples.sh ./$(BIN)
+	./tools/check_docs.sh examples ./$(BIN)
 
 # Windows tests run under Wine; the toolchain shims and the nm export check are Linux-only.
 ifeq ($(PLATFORM),win32)
@@ -488,7 +489,7 @@ FUZZ_CC      ?= clang
 FUZZ_DIR      = build/fuzz
 FUZZ_NAMES    = $(patsubst tests/fuzz/fuzz_%.c,%,$(sort $(wildcard tests/fuzz/fuzz_*.c)))
 FUZZ_BINS     = $(addprefix $(FUZZ_DIR)/fuzz_,$(FUZZ_NAMES))
-FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/device/*.c src/util/*.c src/os/*_$(PLATFORM).c)) \
+FUZZ_SRCS     = $(sort $(wildcard src/modbus/*.c src/decode/*.c src/device/*.c src/util/*.c src/os/*_$(PLATFORM).c)) \
 		src/net/net_common.c src/net/net_control.c src/net/net_obs.c src/net/rtu_framer.c src/webui/webui.c
 FUZZ_FLAGS    = -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
 		-DWITH_TLS=0 -DWITH_CONFIG=0 $(INC) -Itests/fuzz
@@ -501,22 +502,18 @@ $(FUZZ_DIR)/fuzz_%: tests/fuzz/fuzz_%.c tests/fuzz/fuzz_common.h $(FUZZ_SRCS) $(
 fuzz: $(FUZZ_BINS)
 
 fuzz-run: fuzz
-	./tools/run_fuzz.sh $(FUZZ_SECONDS) $(FUZZ_NAMES)
+	python3 tools/fuzz.py $(FUZZ_SECONDS) $(FUZZ_NAMES)
 
 # Documentation site in build/docs (needs doxygen and python3; warnings are errors): Doxygen XML
 # and the source browser (build/docs/internals), a check that every file, struct, union, enum and
 # opaque typedef has a brief, then tools/docs/build.py renders the site from the XML.
 docs:
 	mkdir -p build/docs && doxygen Doxyfile
-	./tools/check_doc_briefs.sh
+	./tools/check_docs.sh briefs
 	python3 tools/docs/build.py
 
-# Builds the reference-template fixtures (tools/docs/fixtures) into build/docs-fixtures.
-docs-fixtures:
-	./tools/docs/fixtures.sh
-
 clean:
-	$(RM) -r $(DIST_DIR) build/docs build/docs-fixtures $(FUZZ_DIR)
+	$(RM) -r $(DIST_DIR) build/docs $(FUZZ_DIR)
 	rm -f $(REV_STAMP) $(WEBUI_DATA) $(WEBUI_DATA).tmp
 	rm -f $(ALL_OBJS) $(ALL_DEPS) $(ALL_LIBS) $(BUILD_STAMP) $(BIN) $(TESTS) $(ASAN_BIN) $(ASAN_TESTS) \
 		$(LIB_STATIC) $(LIB_SHARED) $(EXAMPLE_SO) $(EXAMPLE_A) $(CLIENT_SO) $(CLIENT_A) $(TUTORIAL_SO) $(TUTORIAL_A) $(TESTS).times $(ASAN_TESTS).times \
@@ -531,4 +528,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib python python-tests python-examples lib-check tests tests-c tests-python tests-docs asan dist docs docs-fixtures fuzz fuzz-run clean distclean re commands FORCE
+.PHONY: all dev lib python python-tests python-examples lib-check tests tests-c tests-python tests-docs asan dist docs fuzz fuzz-run clean distclean re commands FORCE

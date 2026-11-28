@@ -50,7 +50,7 @@ The vetoes of step 4 are counted like any exception the simulator answers: one `
 
 ## Stopping on signals
 
-The library installs no signal handlers unless asked. For a console program, @ref mogbus_stop_on_signals "mogbus_stop_on_signals()" does what `main.c` does: SIGINT and SIGTERM stop the server stored in a slot you own, and SIGPIPE is ignored (a TLS write can raise it when a client vanishes). It is process-wide, so call it once, and the slot must stay valid for the life of the process. The handler does nothing while the slot is NULL, so install it before creating the server and store the server afterwards:
+The library installs no signal handlers unless asked. For a console program, @ref mogbus_stop_on_signals "mogbus_stop_on_signals()" does what `main.c` does: SIGINT and SIGTERM stop the server stored in a slot you own, and SIGPIPE is ignored. It is process-wide, so call it once, and the slot must stay valid for the life of the process. The handler does nothing while the slot is NULL, so install it before creating the server and store the server afterwards:
 
 The program keeps the server in a global that the signal handler reads, installs the handler before the server exists and stores the server once it is created (the second snippet is the end of the server creation of step 2):
 
@@ -73,7 +73,7 @@ metrics:
   mogbus_connections_total 1
 ```
 
-If you install your own handler instead, have it call `mogbus_server_stop()` on the server (and ignore SIGPIPE in a TLS build).
+If you install your own handler instead, have it call `mogbus_server_stop()` on the server.
 
 ## Shutting down
 

@@ -67,3 +67,4 @@ print(client.read_file_record([record]).records[0].record_data.hex())   # 123456
 
 - [Write File Record (0x15)](fc15-write-file-record.md)
 - [Config reference: file records](../config/device/file.md)
+- From C: @ref mogbus_client_read_file_records "mogbus_client_read_file_records()" ([the client](../library/library-client.md)); from Python: [the Python client](../python/python-client.md)

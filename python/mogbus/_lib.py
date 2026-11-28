@@ -78,6 +78,7 @@ class PointC(ctypes.Structure):
         ("read_only", ctypes.c_bool),
         ("clock_field", ctypes.c_int),
         ("clock_utc", ctypes.c_bool),
+        ("note", ctypes.c_char_p),
     ]
 
 
@@ -112,7 +113,13 @@ class ServerOptionsC(ctypes.Structure):
         ("http_ui", ctypes.c_bool),
         ("http_allowed_hosts", ctypes.c_char_p),
         ("id", ctypes.c_char_p),
+        ("show_registers_ms", ctypes.c_uint32),
+        ("char_timing", ctypes.c_bool),
     ]
+
+
+class PollFdC(ctypes.Structure):
+    _fields_ = [("fd", ctypes.c_uint64), ("events", ctypes.c_uint32)]
 
 
 class ClientOptionsC(ctypes.Structure):
@@ -128,6 +135,21 @@ class ClientOptionsC(ctypes.Structure):
         ("tls_enabled", ctypes.c_bool),
         ("timeout_ms", ctypes.c_uint32),
         ("retries", ctypes.c_uint32),
+        ("byte_timeout_ms", ctypes.c_uint32),
+        ("tls_ca_file", ctypes.c_char_p),
+        ("tls_cert_file", ctypes.c_char_p),
+        ("tls_key_file", ctypes.c_char_p),
+        ("tls_server_name", ctypes.c_char_p),
+        ("tls_verify", ctypes.c_bool),
+    ]
+
+
+class ClientFileRecordC(ctypes.Structure):
+    _fields_ = [
+        ("file", ctypes.c_uint16),
+        ("record", ctypes.c_uint16),
+        ("length", ctypes.c_uint16),
+        ("values", ctypes.POINTER(ctypes.c_uint16)),
     ]
 
 
@@ -160,8 +182,19 @@ class FrameC(ctypes.Structure):
     ]
 
 
+class ConnectionC(ctypes.Structure):
+    _fields_ = [
+        ("connected", ctypes.c_bool),
+        ("id", ctypes.c_uint64),
+        ("mode", ctypes.c_int),
+        ("peer", ctypes.c_char_p),
+        ("reason", ctypes.c_int),
+    ]
+
+
 ACCESS_FN = ctypes.CFUNCTYPE(ctypes.c_uint8, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(AccessC))
 FRAME_FN = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(FrameC))
+CONNECTION_FN = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ConnectionC))
 WRITTEN_FN = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(AccessC))
 FUNCTION_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint8, ctypes.c_uint8,
                               ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint8),
@@ -285,15 +318,38 @@ _sig("mogbus_client_read_write_registers", _c.c_int, _ptr, _c.c_uint8, _c.c_uint
      _p(_c.c_uint16), _c.c_uint16, _c.c_uint16, _p(_c.c_uint16))
 _sig("mogbus_client_read_device_id", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
      _p(_c.c_size_t))
+_sig("mogbus_client_read_device_identification", _c.c_int, _ptr, _c.c_uint8, _c.c_uint8, _c.c_uint8,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t), _p(_c.c_uint8))
+_sig("mogbus_client_read_exception_status", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8))
+_sig("mogbus_client_diagnostics", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_client_get_comm_event_counter", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint16),
+     _p(_c.c_uint16))
+_sig("mogbus_client_get_comm_event_log", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint16), _p(_c.c_uint16),
+     _p(_c.c_uint16), _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_client_report_server_id", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_size_t))
+_sig("mogbus_client_read_file_records", _c.c_int, _ptr, _c.c_uint8, _p(ClientFileRecordC), _c.c_size_t)
+_sig("mogbus_client_write_file_records", _c.c_int, _ptr, _c.c_uint8, _p(ClientFileRecordC), _c.c_size_t)
+_sig("mogbus_client_read_fifo", _c.c_int, _ptr, _c.c_uint8, _c.c_uint16, _p(_c.c_uint16), _c.c_size_t,
+     _p(_c.c_size_t))
+_sig("mogbus_client_canopen_request", _c.c_int, _ptr, _c.c_uint8, _p(_c.c_uint8), _c.c_size_t,
+     _p(_c.c_uint8), _c.c_size_t, _p(_c.c_size_t))
+_sig("mogbus_decode_frame", _c.c_int, _c.c_char_p, _c.c_size_t, _c.c_int, _c.c_int, _c.c_bool, _c.c_char_p,
+     _c.c_size_t, _p(_c.c_size_t))
 _sig("mogbus_rtu_timing", None, _c.c_uint32, _c.c_uint32, _p(_c.c_uint32), _p(_c.c_uint32))
 _sig("mogbus_now_ms", _c.c_uint64)
 _sig("mogbus_server_step", _c.c_int, _ptr, _c.c_int)
+_sig("mogbus_step", _c.c_int, _ptr, _c.c_int)
 _sig("mogbus_server_stop", None, _ptr)
+_sig("mogbus_server_poll_fds", _c.c_int, _ptr, _p(PollFdC), _c.c_size_t, _p(_c.c_size_t), _p(_c.c_int))
+_sig("mogbus_poll_fds", _c.c_int, _ptr, _p(PollFdC), _c.c_size_t, _p(_c.c_size_t), _p(_c.c_int))
 _sig("mogbus_server_run", _c.c_int, _ptr)
 _sig("mogbus_server_close", None, _ptr)
 _sig("mogbus_server_metrics", _c.c_size_t, _ptr, _c.c_char_p, _c.c_size_t)
 _sig("mogbus_server_pty_name", _c.c_char_p, _ptr)
 _sig("mogbus_server_set_frame_hook", _c.c_int, _ptr, FRAME_FN, _ptr)
+_sig("mogbus_server_set_connection_hook", _c.c_int, _ptr, CONNECTION_FN, _ptr)
 _sig("mogbus_set_log_sink", None, LOG_FN, _ptr)
 _sig("mogbus_set_log_level", None, _c.c_int)
 _sig("mogbus_set_log_format", None, _c.c_int)

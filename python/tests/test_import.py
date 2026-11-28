@@ -860,7 +860,7 @@ class Examples(ImportCase):
     def test_mogbus_accepts_the_examples(self):
         for scm in self.COMMANDS:
             with self.subTest(scm=scm):
-                r = subprocess.run([mogbus_bin(), "--check", str(ROOT / "examples" / "import" / scm)],
+                r = subprocess.run([mogbus_bin(), "--check=verbose", str(ROOT / "examples" / "import" / scm)],
                                    capture_output=True, text=True)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn("config OK", r.stdout)
