@@ -32,7 +32,7 @@ tags() {
 	case $1 in
 	src/*|tests/*|include/*|profiles/*|Makefile|vlib|vlib/*|.gitmodules|third_party/s7/*|\
 	examples/*.c|tools/run_tests.sh|tools/check_toolchain.sh|tools/check_deps.sh|\
-	tools/check_reproducible.sh|tools/gen_sbom.sh|tools/fuzz.py)
+	tools/check_reproducible.sh|tools/check_install.sh|tools/gen_sbom.sh|tools/fuzz.py)
 		t="$t c" ;;
 	esac
 	case $1 in

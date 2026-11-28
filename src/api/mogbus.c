@@ -1139,10 +1139,29 @@ validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st, devic
 	o->bind_address = copy_string(ctx, st->bind, sizeof(st->bind), o->bind_address, "bind address", &ok);
 	o->http_bind_address = copy_string(ctx, st->http_bind, sizeof(st->http_bind), o->http_bind_address,
 					   "HTTP bind address", &ok);
-	if (ok && o->http_bind_address && !os_ip_is_literal(o->http_bind_address))
+	/* Names are resolved here so a typo fails with its own message; the transport resolves again to bind. */
+	for (u32 i = 0; i < 2 && ok; i++)
 	{
-		return fail(ctx, MOGBUS_ERR_INVALID, "HTTP bind address '%s' is not a valid IPv4 or IPv6 address",
-			    o->http_bind_address);
+		const char*	host = i == 0 ? o->bind_address : o->http_bind_address;
+		os_addr_t	addr;
+
+		if (host &&
+		    i == 0 &&
+		    (o->mode == SERVER_MODE_RTU_PTY ||
+		     o->mode == SERVER_MODE_RTU_DEVICE ||
+		     o->mode == SERVER_MODE_RTU_FD ||
+		     o->mode == SERVER_MODE_ASCII_PTY ||
+		     o->mode == SERVER_MODE_ASCII_DEVICE ||
+		     o->mode == SERVER_MODE_ASCII_FD))
+			continue;
+		if (host &&
+		    !os_ip_is_literal(host) &&
+		    (!os_host_name_valid(host) ||
+		     os_resolve(host, 0, false, &addr, 1) == 0))
+		{
+			return fail(ctx, MOGBUS_ERR_INVALID, "%sbind address '%s' is not an IP address and does not resolve to one",
+				    i == 0 ? "" : "HTTP ", host);
+		}
 	}
 	if (o->http_allowed_hosts && !net_obs_hosts_valid(o->http_allowed_hosts))
 	{

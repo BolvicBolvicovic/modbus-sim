@@ -5,7 +5,7 @@ Serves the HTTP endpoint with `/healthz`, `/readyz` and `/metrics`, and optional
 ## Syntax
 
 ```scheme
-(http (port N) (bind "ADDR") (control on|off) (ui on|off) (allowed-host "NAME")...)
+(http (port N) (bind "ADDR or HOST") (control on|off) (ui on|off) (allowed-host "NAME")...)
 ```
 
 ## Default
@@ -23,6 +23,8 @@ off (no endpoint). When present: port `9102`, bind `"127.0.0.1"`, control `off`,
 - `/metrics`: Prometheus text format: requests by function code, responses by outcome, rejected
   frames, response latency histogram, connections, and per device requests, exceptions, fired faults
   and comm errors.
+
+`bind` is an IP address or a host name, resolved and bound like the [server bind](bind.md) (IPv4 first, first address that binds); the `Host` check of `/api/` and the page then expects that name as written.
 
 In TCP modes the HTTP port must differ from the Modbus port. `(control on)` (default `off`) also
 serves the unauthenticated `/api/` control API that reads and writes registers and sets or clears

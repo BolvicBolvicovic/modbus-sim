@@ -68,27 +68,51 @@ net_handle_hangup(pending_response_t* pending)
 	return false;
 }
 
-bool
-net_bind_addr(const char* bind_address, u16 port, os_addr_t* addr)
+u32
+net_bind_addrs(const char* bind_address, u16 port, bool datagram, os_addr_t* out)
 {
-	if (os_addr_parse(addr, bind_address, port))
-		return true;
-	LOG_WARN("bind address '%s' is not a valid IPv4 or IPv6 address", bind_address);
-	return false;
+	os_addr_t	found[NET_BIND_ADDR_MAX];
+	u32		n;
+	u32		count = 0;
+
+	if (os_addr_parse(&out[0], bind_address, port))
+		return 1;
+	n = os_resolve(bind_address, port, datagram, found, NET_BIND_ADDR_MAX);
+	if (n == 0)
+	{
+		LOG_WARN("bind address '%s' is not an IP address and does not resolve to one", bind_address);
+		return 0;
+	}
+	/* IPv4 first, so "localhost" binds 127.0.0.1 whatever order the resolver answers in. */
+	for (u32 i = 0; i < n; i++)
+	{
+		if (!os_addr_is_ipv6(&found[i]))
+			out[count++] = found[i];
+	}
+	for (u32 i = 0; i < n; i++)
+	{
+		if (os_addr_is_ipv6(&found[i]))
+			out[count++] = found[i];
+	}
+	return count;
 }
 
 os_socket_t
 net_tcp_listen(const char* bind_address, u16 port, int backlog)
 {
-	os_addr_t	addr;
-	os_socket_t	s;
+	os_addr_t	addrs[NET_BIND_ADDR_MAX];
+	u32		n = net_bind_addrs(bind_address, port, false, addrs);
 
-	if (!net_bind_addr(bind_address, port, &addr))
-		return OS_SOCKET_INVALID;
-	s = os_tcp_listen(&addr, backlog);
-	if (s == OS_SOCKET_INVALID)
-		LOG_WARN("cannot listen on %s:%u: %s", bind_address, port, os_last_error_text());
-	return s;
+	for (u32 i = 0; i < n; i++)
+	{
+		os_socket_t s = os_tcp_listen(&addrs[i], backlog);
+
+		if (s != OS_SOCKET_INVALID)
+			return s;
+		if (i + 1 == n)
+			LOG_WARN("cannot listen on %s:%u: %s", bind_address, port, os_last_error_text());
+	}
+	return OS_SOCKET_INVALID;
 }
 
 u32

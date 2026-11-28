@@ -146,6 +146,12 @@ os_resolve(const char* host, u16 port, bool datagram, os_addr_t* out, u32 cap)
 	return n;
 }
 
+bool
+os_addr_is_ipv6(const os_addr_t* addr)
+{
+	return family_of(addr) == AF_INET6;
+}
+
 void
 os_addr_text(const os_addr_t* addr, char* out, u32 size)
 {

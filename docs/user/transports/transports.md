@@ -7,16 +7,16 @@ A config selects exactly one mode. Every mode serves the same devices and the sa
 
 | Mode | Transport | Server entries allowed with `mode` |
 |---|---|---|
-| [`tcp`](transport-tcp.md) | Modbus TCP (MBAP) over TCP (IPv4 or IPv6 literal bind), optionally [TLS-wrapped](transport-tls.md) | `port`, `bind`, `seed`, `idle-timeout-ms`, `tls` |
+| [`tcp`](transport-tcp.md) | Modbus TCP (MBAP) over TCP (IP address or host name bind), optionally [TLS-wrapped](transport-tls.md) | `port`, `bind`, `seed`, `idle-timeout-ms`, `tls` |
 | [`rtu-pty`](transport-rtu.md) | Modbus RTU over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `frame-gap-ms`, `strict-t15`, `char-timing`, `broadcast-execute`, `parity`, `stop-bits` |
 | [`rtu-device`](transport-rtu.md) | Modbus RTU over an existing byte-stream device | `path`, plus the `rtu-pty` entries |
-| [`rtu-tcp`](transport-rtu-tcp.md) | Modbus RTU frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
+| [`rtu-tcp`](transport-rtu-tcp.md) | Modbus RTU frames over a TCP listen socket (IP address or host name bind) | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
 | [`ascii-pty`](transport-ascii.md) | Modbus ASCII over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `data-bits`, `parity`, `stop-bits` |
 | [`ascii-device`](transport-ascii.md) | Modbus ASCII over an existing byte-stream device | `path`, plus the `ascii-pty` entries |
-| [`ascii-tcp`](transport-ascii-tcp.md) | Raw Modbus ASCII frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms` |
-| [`udp`](transport-udp.md) | Modbus UDP: one MBAP ADU per datagram (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed` |
-| [`ascii-udp`](transport-ascii-udp.md) | Modbus ASCII: one `:`...CR LF frame per UDP datagram (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed` |
-| [`rtu-udp`](transport-rtu-udp.md) | Modbus RTU frames, one per UDP datagram (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `broadcast-execute` |
+| [`ascii-tcp`](transport-ascii-tcp.md) | Raw Modbus ASCII frames over a TCP listen socket (IP address or host name bind) | `port`, `bind`, `seed`, `idle-timeout-ms` |
+| [`udp`](transport-udp.md) | Modbus UDP: one MBAP ADU per datagram (IP address or host name bind) | `port`, `bind`, `seed` |
+| [`ascii-udp`](transport-ascii-udp.md) | Modbus ASCII: one `:`...CR LF frame per UDP datagram (IP address or host name bind) | `port`, `bind`, `seed` |
+| [`rtu-udp`](transport-rtu-udp.md) | Modbus RTU frames, one per UDP datagram (IP address or host name bind) | `port`, `bind`, `seed`, `broadcast-execute` |
 
 `mode` itself is allowed in every mode. Device modes require `(path "PATH")`; other modes reject it.
 Any other entry is rejected at load time, even when its value is the default. See the
@@ -28,8 +28,9 @@ TCP-family listeners (`tcp`, `rtu-tcp`, `ascii-tcp`) and the UDP modes (`udp`, `
 `rtu-udp`) bind to loopback (`127.0.0.1`) by default, so they accept only local clients. Bind
 explicitly to `0.0.0.0` (or `::` for IPv6) to accept remote connections.
 
-- `bind` takes a plain IPv4 or IPv6 literal address. Scoped link-local literals such as
-  `"fe80::1%eth0"` are rejected by the config validator.
+- `bind` takes an IPv4 or IPv6 literal or a host name (resolved when the server is created, IPv4
+  first, first address that binds wins; see [bind](../config/server/bind.md)). Scoped link-local
+  literals such as `"fe80::1%eth0"` are rejected by the config validator.
 - IPv6 listen sockets set `IPV6_V6ONLY`, so `"0.0.0.0"` and `"::"` listen on separate address
   families and cannot both be used. A config may contain at most one `(server ...)` block (defaults
   apply if omitted), and there is no dual-stack option.

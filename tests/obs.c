@@ -607,6 +607,20 @@ TEST(ObsHostCheckProtectsApiAndPage)
 	guarded_obs(&obs, devs, "fe80::1", "", true);
 	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: [fe80::1]:9102\r\n\r\n") == 200);
 
+	/* A bind that is a host name is the name the Host header must carry (loopback names always pass);
+	 * a client using the resolved IP address needs (allowed-host). */
+	guarded_obs(&obs, devs, "myhost.lab", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: myhost.lab:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: MyHost.Lab\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: localhost:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: other.lab\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: myhost.lab.evil.example\r\n\r\n") == 403);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 10.0.0.5\r\n\r\n") == 403);
+	guarded_obs(&obs, devs, "localhost", "", true);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: localhost:9102\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n") == 200);
+	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: evil.example\r\n\r\n") == 403);
+
 	/* A wildcard bind accepts any IP literal, but a name only when allowed. */
 	guarded_obs(&obs, devs, "0.0.0.0", "sim.lab,Mogbus", true);
 	ASSERT_EQ(feed_status(&obs, "GET /api/devices HTTP/1.1\r\nHost: 10.1.2.3:9102\r\n\r\n") == 200);

@@ -1036,7 +1036,7 @@ enum mogbus_tls_version_t
 struct mogbus_server_options_t
 {
 	mogbus_mode_t	mode;			/**< transport */
-	const char*	bind_address;		/**< TCP-family and UDP modes; "0.0.0.0" opts in to remote access */
+	const char*	bind_address;		/**< TCP-family and UDP modes: an IP address or a host name (resolved at creation, IPv4 first); "0.0.0.0" opts in to remote access */
 	uint16_t	port;			/**< TCP-family and UDP modes; use 802 by convention with TLS */
 	const char*	path;			/**< *_DEVICE modes */
 	int		fd;			/**< *_FD modes: yours, never closed by the library */
@@ -1058,7 +1058,7 @@ struct mogbus_server_options_t
 	mogbus_tls_version_t tls_min_version;	/**< minimum TLS version */
 	const char*	tls_ciphers_1_2;	/**< NULL = OpenSSL default */
 	const char*	tls_ciphersuites_1_3;	/**< NULL = OpenSSL default */
-	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint; NULL = off */
+	const char*	http_bind_address;	/**< HTTP /healthz, /readyz, /metrics endpoint: an IP address or a host name; NULL = off */
 	uint16_t	http_port;		/**< endpoint port, used when http_bind_address is set */
 	bool		http_control;		/**< serve the runtime control API under /api/ (needs the endpoint; no authentication) */
 	bool		http_ui;		/**< serve the web UI on `/` (needs the endpoint; implies http_control) */
@@ -1175,7 +1175,7 @@ MOGBUS_API mogbus_result_t	mogbus_server_check(mogbus_t* ctx, const mogbus_serve
  * @param unit_id Unit to ask; not 0 (broadcast is never answered).
  * @param timeout_ms Time to wait for the reply.
  * @return MOGBUS_OK for the echo or a Modbus exception reply; MOGBUS_ERR_INVALID for a serial or
- *         fd mode, unit 0, a bind address that is not an IP address or NULL options;
+ *         fd mode, unit 0, a bind address that is neither an IP address nor a resolvable host name or NULL options;
  *         MOGBUS_ERR_PROBE for a timeout, a refused connection or a malformed reply. With no
  *         context the message is kept per thread: mogbus_last_error(NULL).
  */
@@ -2090,6 +2090,99 @@ MOGBUS_API mogbus_result_t	mogbus_client_read_fifo(mogbus_client_t* client, uint
 MOGBUS_API mogbus_result_t	mogbus_client_canopen_request(mogbus_client_t* client, uint8_t unit,
 							      const uint8_t* request, size_t request_len,
 							      uint8_t* reply, size_t cap, size_t* reply_len);
+
+/**
+ * @brief Decodes one number from registers, the way a point of that type, word order and byte order is read.
+ *
+ * It reads 1 register for U16/S16, 2 for U32/S32/F32 and 4 for U64/S64/F64 (the register layouts are
+ * in the table at mogbus_point_t, for example ABCD is MOGBUS_WORDS_HIGH_FIRST with MOGBUS_BYTES_BIG).
+ * It is the code that serves the points, so what a client reads back with the same type and orders
+ * is what mogbus_value_to_registers() wrote. 64-bit integers go through a double and lose precision
+ * above 2^53: use mogbus_registers_to_u64() for those. It needs no context and no lock, and keeps no
+ * error message.
+ *
+ * @param regs The registers, in the order they came off the wire (low address first); at least as many as the type uses.
+ * @param type The register encoding; not MOGBUS_TYPE_BOOL or MOGBUS_TYPE_STRING (see mogbus_registers_to_text()).
+ * @param word_order Which register of a 32- or 64-bit value comes first; ignored for 16-bit types.
+ * @param byte_order MOGBUS_BYTES_LITTLE swaps the two bytes of every register.
+ * @param out Receives the value.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL argument or a type that is not numeric.
+ */
+MOGBUS_API mogbus_result_t	mogbus_registers_to_value(const uint16_t* regs, mogbus_value_type_t type,
+							  mogbus_word_order_t word_order,
+							  mogbus_byte_order_t byte_order, double* out);
+
+/**
+ * @brief Encodes one number into registers, the inverse of mogbus_registers_to_value().
+ *
+ * Integer types clamp to their range, round fractions and take NaN as 0; the float types keep NaN
+ * and infinity, and a finite value outside the float32 range becomes an infinity.
+ *
+ * @param value The number.
+ * @param type The register encoding; not MOGBUS_TYPE_BOOL or MOGBUS_TYPE_STRING.
+ * @param word_order Which register of a 32- or 64-bit value comes first; ignored for 16-bit types.
+ * @param byte_order MOGBUS_BYTES_LITTLE swaps the two bytes of every register.
+ * @param regs Receives the registers: room for 4 (1, 2 or 4 are written).
+ * @param count Receives how many registers were written; may be NULL.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL @p regs or a type that is not numeric.
+ */
+MOGBUS_API mogbus_result_t	mogbus_value_to_registers(double value, mogbus_value_type_t type,
+							  mogbus_word_order_t word_order,
+							  mogbus_byte_order_t byte_order, uint16_t* regs,
+							  size_t* count);
+
+/**
+ * @brief Decodes a 64-bit integer from 4 registers exactly (mogbus_registers_to_value() rounds above 2^53).
+ *
+ * The result is the 64-bit pattern: cast it to int64_t for a MOGBUS_TYPE_S64 value.
+ *
+ * @param regs 4 registers, low address first.
+ * @param word_order Which register comes first.
+ * @param byte_order MOGBUS_BYTES_LITTLE swaps the two bytes of every register.
+ * @param out Receives the 64 bits.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL argument.
+ */
+MOGBUS_API mogbus_result_t	mogbus_registers_to_u64(const uint16_t* regs, mogbus_word_order_t word_order,
+							mogbus_byte_order_t byte_order, uint64_t* out);
+
+/**
+ * @brief Encodes a 64-bit integer into 4 registers exactly; cast an int64_t to uint64_t for a MOGBUS_TYPE_S64 value.
+ *
+ * @param value The 64 bits.
+ * @param word_order Which register comes first.
+ * @param byte_order MOGBUS_BYTES_LITTLE swaps the two bytes of every register.
+ * @param regs Receives 4 registers.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL @p regs.
+ */
+MOGBUS_API mogbus_result_t	mogbus_u64_to_registers(uint64_t value, mogbus_word_order_t word_order,
+							mogbus_byte_order_t byte_order, uint16_t* regs);
+
+/**
+ * @brief Decodes text from registers (two ASCII bytes each, the first byte in the high byte unless the byte order is little).
+ *
+ * The text ends at the first zero byte or after 2 * @p count bytes; @p out is always terminated.
+ *
+ * @param regs The registers.
+ * @param count How many registers hold the text.
+ * @param byte_order MOGBUS_BYTES_LITTLE swaps the two bytes of every register.
+ * @param out Receives the text.
+ * @param cap Size of @p out; 2 * @p count + 1 holds any text.
+ * @return MOGBUS_OK, MOGBUS_ERR_INVALID for a NULL argument or a zero @p cap, or MOGBUS_ERR_NOMEM when the text was cut to fit (what fits is written).
+ */
+MOGBUS_API mogbus_result_t	mogbus_registers_to_text(const uint16_t* regs, size_t count,
+							 mogbus_byte_order_t byte_order, char* out, size_t cap);
+
+/**
+ * @brief Encodes text into registers, padding with zero bytes (the inverse of mogbus_registers_to_text()).
+ *
+ * @param text The text, at most 2 * @p count bytes.
+ * @param count How many registers to fill, 1 to 123.
+ * @param byte_order MOGBUS_BYTES_LITTLE swaps the two bytes of every register.
+ * @param regs Receives @p count registers.
+ * @return MOGBUS_OK, or MOGBUS_ERR_INVALID for a NULL argument, a bad @p count or text that does not fit.
+ */
+MOGBUS_API mogbus_result_t	mogbus_text_to_registers(const char* text, size_t count,
+							 mogbus_byte_order_t byte_order, uint16_t* regs);
 
 #ifdef __cplusplus
 }

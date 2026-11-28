@@ -867,7 +867,7 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	clash                   = o;
 	clash.port              = ts_free_port();
 	ASSERT_EQ(mogbus_server_create(ctx, &clash, &(mogbus_server_t*){ NULL }) == MOGBUS_ERR_LISTEN);
-	clash.http_bind_address = "localhost";
+	clash.http_bind_address = "bad host!";
 	ASSERT_EQ(mogbus_server_create(ctx, &clash, &(mogbus_server_t*){ NULL }) == MOGBUS_ERR_INVALID && strstr(mogbus_last_error(ctx), "HTTP bind address") != NULL);
 	clash.http_bind_address = "127.0.0.1";
 	clash.http_allowed_hosts = "a b";
@@ -878,6 +878,68 @@ TEST(ApiServesHealthAndMetricsOverHttp)
 	mogbus_server_stop(server);
 	ASSERT_EQ(mogbus_server_step(server, 0) == MOGBUS_STEP_DONE);
 	mogbus_server_close(server);
+	mogbus_destroy(ctx);
+}
+
+TEST(ApiBindsHostNames)
+{
+	static const char UNRESOLVABLE[] = "mogbus-no-such-host.invalid";
+	mogbus_t*	ctx = NULL;
+	mogbus_device_t* dev;
+	mogbus_point_t	p = holding(0, 0x1234);
+	mogbus_server_options_t o = mogbus_server_options_defaults();
+	mogbus_server_t* server;
+	static char	text[40000];
+	u8		resp[MODBUS_MAX_PDU];
+	u32		len = 0;
+	int		fd;
+
+	mogbus_create(&ctx);
+	ASSERT_EQ(ctx != NULL);
+	mogbus_add_device(ctx, 1, "names", &dev);
+	ASSERT_EQ(dev != NULL && mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+
+	/* A name resolves at creation; IPv4 is tried first, so "localhost" is 127.0.0.1. */
+	o.bind_address      = "localhost";
+	o.port              = ts_free_port();
+	o.http_bind_address = "localhost";
+	o.http_port         = ts_free_port();
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
+	ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK && server != NULL);
+	fd = ts_connect_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0 && ts_mbap_send(fd, 1, 9, READ_HOLDING, sizeof(READ_HOLDING)));
+	ASSERT_EQ(pump(server, fd) && ts_mbap_recv(fd, 1, 9, resp, &len, 1000));
+	ASSERT_EQ(len == 4 && resp[2] == 0x12 && resp[3] == 0x34);
+	close(fd);
+	ASSERT_EQ(http_get(server, o.http_port, "/healthz", text, sizeof(text)));
+	ASSERT_EQ(strncmp(text, "HTTP/1.1 200 OK", 15) == 0);
+	mogbus_server_close(server);
+
+	/* The same for a datagram transport. */
+	o.mode = MOGBUS_MODE_UDP;
+	o.http_bind_address = NULL;
+	o.port = ts_free_port();
+	ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_OK && server != NULL);
+	fd = ts_udp_loopback(o.port, AF_INET, 1000);
+	ASSERT_EQ(fd >= 0 && ts_mbap_send(fd, 1, 7, READ_HOLDING, sizeof(READ_HOLDING)));
+	ASSERT_EQ(pump(server, fd) && ts_udp_mbap_recv(fd, 1, 7, resp, &len, 1000));
+	close(fd);
+	mogbus_server_close(server);
+
+	/* A name that does not resolve fails with its own message, in check and in create. */
+	o = mogbus_server_options_defaults();
+	o.bind_address = UNRESOLVABLE;
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "does not resolve") != NULL);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), UNRESOLVABLE) != NULL);
+	ASSERT_EQ(mogbus_server_create(ctx, &o, &server) == MOGBUS_ERR_INVALID && server == NULL);
+	o = mogbus_server_options_defaults();
+	o.http_bind_address = UNRESOLVABLE;
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "HTTP bind address") != NULL);
+	ASSERT_EQ(strstr(mogbus_last_error(ctx), "does not resolve") != NULL);
+	o.http_bind_address = "bad host!";
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_ERR_INVALID);
 	mogbus_destroy(ctx);
 }
 

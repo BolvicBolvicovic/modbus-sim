@@ -131,9 +131,9 @@ mogbus_probe(const mogbus_server_options_t* options, uint8_t unit_id, uint32_t t
 		host = "127.0.0.1";
 	else if (strcmp(host, "::") == 0)
 		host = "::1";
-	if (!os_addr_parse(&addr, host, options->port))
+	if (os_resolve(host, options->port, datagram, &addr, 1) == 0)
 	{
-		probe_err("bind address '%s' is not an IP address", host);
+		probe_err("bind address '%s' is not an IP address and does not resolve to one", host);
 		return MOGBUS_ERR_INVALID;
 	}
 

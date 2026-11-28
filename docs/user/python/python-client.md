@@ -53,7 +53,14 @@ print(c.read_fifo(100))                                  # [4660, 22136, 42]
 print(c.read_device_identification(3).objects)           # every object, however many replies it took
 ```
 
-Registers are raw 16-bit values; decode floats and strings yourself, for example with `struct.pack(">HH", *regs)`.
+Registers are raw 16-bit values. \ref mogbus::core::registers_to_value "registers_to_value()" and \ref mogbus::core::value_to_registers "value_to_registers()" decode and encode numbers with the encoding of the simulator's points, for every type and every word and byte order (`ABCD` is `high-first` with `big`, `CDAB` is `low-first` with `big`, `BADC` and `DCBA` use `little`); \ref mogbus::core::registers_to_text "registers_to_text()" and \ref mogbus::core::text_to_registers "text_to_registers()" do the same for ASCII text. 64-bit integers are exact.
+
+```python
+regs = c.read_holding_registers(0, 2)
+temperature = mogbus.registers_to_value(regs, "f32", word_order="low-first")   # 25.0
+c.write_registers(20, mogbus.value_to_registers(25.0, "f32", word_order="low-first"))
+print(mogbus.registers_to_text(c.read_holding_registers(40, 8)))
+```
 
 ## Byte timeout and TLS
 

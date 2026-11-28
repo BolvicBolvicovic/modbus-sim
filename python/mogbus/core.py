@@ -2115,6 +2115,117 @@ def decode_frame(data, framing="auto", direction="auto", as_dict: bool = False) 
     return json.loads(text) if as_dict else text
 
 
+_VALUE_WIDTH = {ValueType.U16: 1, ValueType.S16: 1, ValueType.U32: 2, ValueType.S32: 2, ValueType.F32: 2,
+                ValueType.U64: 4, ValueType.S64: 4, ValueType.F64: 4}
+
+
+def _value_args(type, word_order, byte_order):
+    type = _coerce(ValueType, type, "type")
+    if type not in _VALUE_WIDTH:
+        raise MogbusError("type must be a numeric ValueType (BOOL and STRING have no register value)",
+                          Status.INVALID)
+    return (type, int(type), int(_coerce(WordOrder, word_order, "word_order")),
+            int(_coerce(ByteOrder, byte_order, "byte_order")))
+
+
+def registers_to_value(registers, type=ValueType.U16, word_order=WordOrder.HIGH_FIRST,
+                       byte_order=ByteOrder.BIG) -> Union[int, float]:
+    """@brief Decodes one number from raw registers, as a point of that type and orders is read.
+
+    It is the code that serves the points (`mogbus_registers_to_value()`), so it also decodes what a
+    client read from a mogbus server. The four usual layouts of 32-bit values are `ABCD`
+    (`HIGH_FIRST`, `BIG`), `CDAB` (`LOW_FIRST`, `BIG`), `BADC` (`HIGH_FIRST`, `LITTLE`) and `DCBA`
+    (`LOW_FIRST`, `LITTLE`). Only as many registers as the type uses are read (1, 2 or 4).
+    @param registers The raw 16-bit register values, low address first, as `Client.read_holding_registers()` returns them.
+    @param type A ValueType or its name (`"f32"`, `"s64"`...); `U16` by default. Not `BOOL` or `STRING`.
+    @param word_order A WordOrder or its name: which register of a 32 or 64-bit value comes first.
+    @param byte_order A ByteOrder or its name; `LITTLE` swaps the two bytes of every register.
+    @return An int for the integer types (U64 and S64 are exact) and a float for `F32` and `F64`.
+    @throws MogbusError For a type that is not numeric, an unknown order or too few registers.
+    """
+    kind, code, word, byte = _value_args(type, word_order, byte_order)
+    width = _VALUE_WIDTH[kind]
+    regs = [int(r) for r in registers]
+    if len(regs) < width:
+        raise MogbusError(f"{kind.name} needs {width} register{'s' if width > 1 else ''}, got {len(regs)}",
+                          Status.INVALID)
+    if any(not 0 <= r <= 0xFFFF for r in regs[:width]):
+        raise MogbusError("registers are 16-bit unsigned values", Status.INVALID)
+    array = (ctypes.c_uint16 * width)(*regs[:width])
+    if kind in (ValueType.U64, ValueType.S64):
+        raw = ctypes.c_uint64()
+        code = lib.mogbus_registers_to_u64(array, word, byte, ctypes.byref(raw))
+        if code != Status.OK:
+            raise MogbusError("cannot decode the registers", Status(code))
+        return raw.value - (1 << 64) if kind == ValueType.S64 and raw.value >= 1 << 63 else raw.value
+    out = ctypes.c_double()
+    status = lib.mogbus_registers_to_value(array, code, word, byte, ctypes.byref(out))
+    if status != Status.OK:
+        raise MogbusError("cannot decode the registers", Status(status))
+    return out.value if kind in (ValueType.F32, ValueType.F64) else int(out.value)
+
+
+def value_to_registers(value, type=ValueType.U16, word_order=WordOrder.HIGH_FIRST,
+                       byte_order=ByteOrder.BIG) -> List[int]:
+    """@brief Encodes one number into raw registers, the inverse of registers_to_value().
+
+    Integer types clamp to their range, round fractions and take NaN as 0; `F32` and `F64` keep NaN
+    and infinity (`mogbus_value_to_registers()`). An int given for `U64` or `S64` is encoded exactly.
+    @param value The number.
+    @param type A ValueType or its name; `U16` by default. Not `BOOL` or `STRING`.
+    @param word_order A WordOrder or its name: which register of a 32 or 64-bit value comes first.
+    @param byte_order A ByteOrder or its name; `LITTLE` swaps the two bytes of every register.
+    @return The registers (1, 2 or 4 ints), low address first, ready for `Client.write_registers()`.
+    @throws MogbusError For a type that is not numeric or an unknown order.
+    """
+    kind, code, word, byte = _value_args(type, word_order, byte_order)
+    regs = (ctypes.c_uint16 * 4)()
+    if kind in (ValueType.U64, ValueType.S64) and isinstance(value, int) and not isinstance(value, bool):
+        low, high = (-(1 << 63), (1 << 63) - 1) if kind == ValueType.S64 else (0, (1 << 64) - 1)
+        status = lib.mogbus_u64_to_registers(min(max(value, low), high) & ((1 << 64) - 1), word, byte, regs)
+    else:
+        count = ctypes.c_size_t()
+        status = lib.mogbus_value_to_registers(float(value), code, word, byte, regs, ctypes.byref(count))
+    if status != Status.OK:
+        raise MogbusError("cannot encode the value", Status(status))
+    return list(regs)[:_VALUE_WIDTH[kind]]
+
+
+def registers_to_text(registers, byte_order=ByteOrder.BIG) -> str:
+    """@brief Decodes ASCII text from registers (two characters each) up to the first zero byte.
+    @param registers The raw register values holding the text.
+    @param byte_order A ByteOrder or its name; `LITTLE` swaps the two bytes of every register.
+    @return The text.
+    @throws MogbusError For more than 123 registers or an unknown byte order.
+    """
+    regs = [int(r) & 0xFFFF for r in registers]
+    out = ctypes.create_string_buffer(2 * len(regs) + 1)
+    status = lib.mogbus_registers_to_text((ctypes.c_uint16 * max(len(regs), 1))(*regs), len(regs),
+                                          int(_coerce(ByteOrder, byte_order, "byte_order")), out, len(out))
+    if status != Status.OK:
+        raise MogbusError("cannot decode the text (at most 123 registers)", Status(status))
+    return out.value.decode("ascii", errors="replace")
+
+
+def text_to_registers(text: str, count: int, byte_order=ByteOrder.BIG) -> List[int]:
+    """@brief Encodes ASCII text into `count` registers, padding with zero bytes.
+    @param text The text, at most `2 * count` ASCII characters.
+    @param count How many registers to fill, 1 to 123.
+    @param byte_order A ByteOrder or its name; `LITTLE` swaps the two bytes of every register.
+    @return The registers.
+    @throws MogbusError For text that does not fit or is not ASCII, a bad count or an unknown byte order.
+    """
+    try:
+        data = text.encode("ascii")
+    except UnicodeEncodeError:
+        raise MogbusError("text must be ASCII", Status.INVALID) from None
+    regs = (ctypes.c_uint16 * max(count, 1))()
+    status = lib.mogbus_text_to_registers(data, count, int(_coerce(ByteOrder, byte_order, "byte_order")), regs)
+    if status != Status.OK:
+        raise MogbusError(f"cannot encode the text into {count} registers", Status(status))
+    return list(regs)[:count]
+
+
 def library_version() -> str:
     """@brief The version of the loaded library (`mogbus_version()`).
     @return The version string.

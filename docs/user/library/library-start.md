@@ -60,6 +60,13 @@ cc -Iinclude pump_station.c lib/libmogbus.a -lm -lssl -lcrypto -o pump_station
 cc -Iinclude pump_station.c -Llib -lmogbus -Wl,-rpath,'$ORIGIN/lib' -o pump_station
 ```
 
+With `pkg-config` the flags come from `mogbus.pc`, which [`make install`](../building.md#install) writes (the release tarball has it in `lib/pkgconfig/`; point `PKG_CONFIG_PATH` at that directory, or install into a prefix pkg-config already searches):
+
+```bash
+cc $(pkg-config --cflags mogbus) pump_station.c $(pkg-config --libs mogbus) -o pump_station            # shared
+cc $(pkg-config --cflags mogbus) pump_station.c $(pkg-config --static --libs mogbus) -o pump_station   # --static also adds -lm and OpenSSL
+```
+
 A library built without TLS (`make WITH_TLS=0`) needs neither `-lssl` nor `-lcrypto`, and creating a server with `tls_enabled` then fails with an error. A library built without the config loader (`make WITH_CONFIG=0`) has the same header and symbols, but @ref mogbus_load_config "mogbus_load_config()" returns `MOGBUS_ERR_UNSUPPORTED` and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" returns NULL, both with `built without config support` in `mogbus_last_error()`. See [Build from source](../building.md) for all build options.
 
 With a shared library, `LD_LIBRARY_PATH` works instead of the rpath. The version is available at run time from @ref mogbus_version "mogbus_version()" and at compile time from `MOGBUS_VERSION_MAJOR`, `MOGBUS_VERSION_MINOR` and `MOGBUS_VERSION_PATCH`. The tutorial program is POSIX (it uses `fork` and `poll`); the library API is the same in the [native Windows build](../windows/windows-native.md).

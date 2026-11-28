@@ -26,9 +26,16 @@ assets per architecture: `mogbus-X.Y.Z-linux-<arch>.tar.gz` and
 `make dist` (prod build only; `BUILD=dev`, `SAN=1` and `WITH_CONFIG=0` are refused) writes
 `dist/mogbus-<version>-linux-<arch>.tar.gz`, `dist/<same>.spdx.json` and `dist/SHA256SUMS`
 (`<arch>` is `uname -m`). The tarball has one top directory `mogbus-<version>-linux-<arch>/` with
-`bin/mogbus`, `lib/libmogbus.a`, `lib/libmogbus.so`, `include/mogbus.h`,
+`bin/mogbus`, `lib/libmogbus.a`, `lib/libmogbus.so`, `lib/pkgconfig/mogbus.pc`, `include/mogbus.h`,
 `share/doc/mogbus/` (README.md, LICENSE, NOTICE.md, the user docs `docs/user/`) and `share/mogbus/profiles/*.scm`.
-`make clean` removes `dist/`.
+`make clean` removes `dist/`. The tree is staged with `make install DESTDIR=... PREFIX= PC_RELOCATABLE=1` (see
+[Install](../user/building.md#install)), so the tarball and a normal install cannot drift apart;
+`PC_RELOCATABLE=1` writes `prefix=${pcfiledir}/../..` into `mogbus.pc` so the unpacked tree is usable
+from anywhere. The shared library keeps the soname `libmogbus.so` until 1.0 (a versioned soname would
+need `libmogbus.so.N` plus a symlink in the build tree, the rpath examples and the Python loader).
+`tools/check_install.sh` (run by `make lib-check`) installs into a temporary `DESTDIR`, builds
+`examples/embed_tcp.c` against it through `pkg-config --cflags --libs mogbus` (shared and `--static`),
+runs both and checks that `make uninstall` leaves no file.
 
 The binary links OpenSSL dynamically (`libssl.so.3`, `libcrypto.so.3`, glibc): install `libssl3`
 (Debian/Ubuntu) on the target. Use a `WITH_TLS=0` source build for a binary without OpenSSL.

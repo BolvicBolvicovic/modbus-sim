@@ -77,9 +77,27 @@ if (mogbus_client_read_holding_registers(c, 1, 0, 4, regs) != MOGBUS_OK)
 
 mogbus_client_read_coils(c, 1, 0, 8, bits);
 mogbus_client_write_register(c, 1, 10, 500);
-mogbus_client_write_registers(c, 1, 20, 2, (uint16_t[]){ 0x41C8, 0x0000 });
+mogbus_client_write_registers(c, 1, 20, 2, (uint16_t[]){ 0x41C8, 0x0000 });	/* the float 25.0, by hand */
 mogbus_client_mask_write_register(c, 1, 30, 0x00FF, 0x0F00);
 ```
+
+### Floats, 32-bit and 64-bit integers and text
+
+Registers are raw 16-bit values. @ref mogbus_registers_to_value "mogbus_registers_to_value()" and @ref mogbus_value_to_registers "mogbus_value_to_registers()" turn them into numbers and back with the same encoding the simulator uses for its points, in any of the four layouts of a 32-bit value (`ABCD` is `MOGBUS_WORDS_HIGH_FIRST` with `MOGBUS_BYTES_BIG`, `CDAB` is `MOGBUS_WORDS_LOW_FIRST` with `MOGBUS_BYTES_BIG`, `BADC` and `DCBA` use `MOGBUS_BYTES_LITTLE`; the table is at @ref mogbus_point_t). They are what libmodbus calls `modbus_get_float_abcd()` and friends, for every type and order. They need no client and no context.
+
+```c
+uint16_t regs[2];
+double   temperature;
+size_t   count;
+
+mogbus_client_read_holding_registers(c, 1, 0, 2, regs);
+mogbus_registers_to_value(regs, MOGBUS_TYPE_F32, MOGBUS_WORDS_LOW_FIRST, MOGBUS_BYTES_BIG, &temperature);
+
+mogbus_value_to_registers(25.0, MOGBUS_TYPE_F32, MOGBUS_WORDS_LOW_FIRST, MOGBUS_BYTES_BIG, regs, &count);
+mogbus_client_write_registers(c, 1, 20, (uint16_t)count, regs);
+```
+
+A double holds integers exactly up to 2^53; for a 64-bit integer above that use @ref mogbus_registers_to_u64 "mogbus_registers_to_u64()" and @ref mogbus_u64_to_registers "mogbus_u64_to_registers()" (cast to `int64_t` for a signed value). Text is two ASCII characters per register: @ref mogbus_registers_to_text "mogbus_registers_to_text()" and @ref mogbus_text_to_registers "mogbus_text_to_registers()". Failures are only `MOGBUS_ERR_INVALID` (a NULL argument, a type that is not numeric, an unknown order, text that does not fit) and, for the text read, `MOGBUS_ERR_NOMEM` when the buffer was too small; there is no error message to read.
 
 | Call | Function code |
 |---|---|

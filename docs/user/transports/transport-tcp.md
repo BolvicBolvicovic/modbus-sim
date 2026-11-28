@@ -28,7 +28,7 @@ Modbus TCP: MBAP-framed requests over a TCP listen socket, optionally wrapped in
   another in order. Up to 32 clients are served at once; more are refused.
 - A client that sends a header with a protocol id other than 0, or an impossible length, is
   disconnected.
-- `bind` accepts a plain IPv4 or IPv6 literal. The default is loopback; accepting remote clients
+- `bind` accepts an IPv4 or IPv6 literal or a host name. The default is loopback; accepting remote clients
   needs an explicit `(bind "0.0.0.0")` or `(bind "::")`. See [bind addresses](transports.md#bind-addresses).
 - MBAP has no checksum, so `(fault (kind corrupt) (mode checksum))` is rejected.
 - A request for a unit id that no device has gets exception 0B, unless a device has

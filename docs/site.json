@@ -489,6 +489,7 @@
             {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "ActionInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
             {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing", "Frame", "Connection"]},
             {"title": "Decoding frames", "items": ["decode_frame"]},
+            {"title": "Register values", "items": ["registers_to_value", "value_to_registers", "registers_to_text", "text_to_registers"]},
             {"title": "Client", "items": ["Client", "AsyncClient", "ModbusException", "CommEventCounter", "CommEventLog", "DeviceIdentification"]},
             {"title": "Logging and errors", "items": ["set_log_level", "set_log_format", "set_log_sink", "library_version", "MogbusError", "Status"]},
             {"title": "Enumerations", "items": ["Space", "ValueType", "WordOrder", "ByteOrder", "RampMode", "ClockField", "AccessKind", "AccessTarget", "FrameDirection", "Framing", "Direction", "CloseReason", "Mode", "Parity", "TlsVersion", "FaultKind", "LogLevel", "LogFormat"]}

@@ -107,7 +107,8 @@ Because a browser on the same machine can be tricked into talking to a local ser
 page also check each request:
 
 - **Host** (DNS rebinding): the `Host` header, port ignored, must be `localhost`, `127.0.0.1`,
-  `[::1]`, the specific bind address, or a name from [allowed-host](../config/server/http-allowed-host.md).
+  `[::1]`, the specific bind address (the name as written when `bind` is a host name; a client that
+  uses the resolved IP address needs `allowed-host`), or a name from [allowed-host](../config/server/http-allowed-host.md).
   With a wildcard bind (`0.0.0.0`, `::`) any IP literal is also accepted, so a DNS name must be
   listed with `allowed-host` (library: `http_allowed_hosts`, comma-separated). Otherwise the answer is 403.
   A request without a `Host` header (HTTP/1.0, for example `curl -0`) is allowed.

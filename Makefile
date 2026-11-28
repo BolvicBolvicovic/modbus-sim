@@ -230,14 +230,14 @@ TEST_SRCS   := $(filter-out tests/tests_utils/tls_client.c,$(TEST_SRCS))
 endif
 # These tests start the real binary or call config_load; the others run unchanged.
 ifeq ($(WITH_CONFIG),0)
-TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/decode_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/tcp_server.c \
+TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/decode_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/host_name_cli.c tests/tcp_server.c \
                             tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
                             tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif
 # These fork, use PTYs, termios, poll() or POSIX sockets directly, or spawn the binary through
 # tests_utils/test_support.c; they stay out of the Windows test binary (docs/dev/architecture.md).
 TESTS_POSIX_ONLY = tests/api.c tests/poll_fds.c tests/client.c tests/client_calls.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
-                   tests/decode_cli.c tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c \
+                   tests/decode_cli.c tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c tests/host_name_cli.c \
                    tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
                    tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/threads.c tests/udp_server.c \
                    tests/tests_utils/test_support.c tests/tests_utils/tls_client.c
@@ -394,7 +394,7 @@ $(TUTORIAL_SO): $(TUTORIAL_SRC) include/mogbus.h $(LIB_SHARED)
 $(TUTORIAL_A): $(TUTORIAL_SRC) include/mogbus.h $(LIB_STATIC)
 	$(CC) $(CFLAGS) -Iinclude $< $(LIB_STATIC) $(LINK_FLAGS) -o $@ $(LIBS)
 
-lib-check: $(EXAMPLE_SO) $(EXAMPLE_A) $(CLIENT_SO) $(CLIENT_A) $(TUTORIAL_SO) $(TUTORIAL_A)
+lib-check: $(EXAMPLE_SO) $(EXAMPLE_A) $(CLIENT_SO) $(CLIENT_A) $(TUTORIAL_SO) $(TUTORIAL_A) $(PROGRAMS)
 	@bad=$$(nm -D --defined-only $(LIB_SHARED) | awk '{print $$3}' | \
 		grep -vE '^(mogbus_|_init$$|_fini$$|_edata$$|_end$$|__bss_start$$)' || true); \
 	if [ -n "$$bad" ]; then echo "$(LIB_SHARED) exports non-API symbols:" $$bad >&2; exit 1; fi; \
@@ -405,6 +405,7 @@ lib-check: $(EXAMPLE_SO) $(EXAMPLE_A) $(CLIENT_SO) $(CLIENT_A) $(TUTORIAL_SO) $(
 	./$(CLIENT_A)
 	./$(TUTORIAL_SO) $(TUTORIAL_ARGS) > /dev/null
 	./$(TUTORIAL_A) $(TUTORIAL_ARGS) > /dev/null
+	MAKE='$(MAKE)' CC='$(CC)' ./tools/check_install.sh
 endif
 
 $(TESTS): $(BUILD_STAMP) $(TEST_OBJS) $(CFG_S7_OBJ)
@@ -457,6 +458,55 @@ VERSION     = $(shell awk '/^\#define MOGBUS_VERSION_(MAJOR|MINOR|PATCH)/ { v = 
 ARCH        = $(shell uname -m)
 DIST_NAME   = mogbus-$(VERSION)-linux-$(ARCH)
 DIST_DIR    = dist
+
+# `make install` puts the binary, both libraries, the header, a pkg-config file, the profiles and
+# the user docs under $(DESTDIR)$(PREFIX); `make uninstall` removes them again. The shared library
+# keeps the plain soname libmogbus.so (pre-1.0: there is no ABI version to put in a soname yet).
+# mogbus.pc is written here, not built: it holds the prefix, the version and, in a TLS build, the
+# OpenSSL requirement of the static library. PC_RELOCATABLE=1 (make dist) makes it relative to its
+# own directory, so an unpacked tarball works wherever it is put.
+PREFIX      ?= /usr/local
+DESTDIR     ?=
+BINDIR      ?= $(PREFIX)/bin
+LIBDIR      ?= $(PREFIX)/lib
+INCLUDEDIR  ?= $(PREFIX)/include
+DATADIR     ?= $(PREFIX)/share
+ifeq ($(PLATFORM),posix)
+install: $(PROGRAMS) lib
+	install -d $(DESTDIR)$(LIBDIR)/pkgconfig $(DESTDIR)$(INCLUDEDIR) $(DESTDIR)$(DATADIR)/doc/mogbus/docs
+	install -m 644 $(LIB_STATIC) $(DESTDIR)$(LIBDIR)/libmogbus.a
+	install -m 755 $(LIB_SHARED) $(DESTDIR)$(LIBDIR)/$(LIB_SHARED)
+	install -m 644 include/mogbus.h $(DESTDIR)$(INCLUDEDIR)/mogbus.h
+	@{ if [ -n "$(PC_RELOCATABLE)" ]; then \
+		echo 'prefix=$${pcfiledir}/../..'; echo 'libdir=$${prefix}/lib'; echo 'includedir=$${prefix}/include'; \
+	else \
+		echo 'prefix=$(PREFIX)'; echo 'libdir=$(LIBDIR)'; echo 'includedir=$(INCLUDEDIR)'; \
+	fi; \
+	echo; echo 'Name: mogbus'; echo 'Description: Modbus device simulator and client library'; \
+	echo 'URL: https://github.com/BolvicBolvicovic/mogbus'; echo 'Version: $(VERSION)'; \
+	echo 'Cflags: -I$${includedir}'; echo 'Libs: -L$${libdir} -lmogbus'; \
+	$(if $(filter 1,$(WITH_TLS)),echo 'Requires.private: openssl';) echo 'Libs.private: -lm'; \
+	} > $(DESTDIR)$(LIBDIR)/pkgconfig/mogbus.pc
+	chmod 644 $(DESTDIR)$(LIBDIR)/pkgconfig/mogbus.pc
+	cp README.md LICENSE NOTICE.md $(DESTDIR)$(DATADIR)/doc/mogbus/
+	cp -R docs/user/. $(DESTDIR)$(DATADIR)/doc/mogbus/docs/
+	find $(DESTDIR)$(DATADIR)/doc/mogbus -type d -exec chmod 755 {} + && \
+		find $(DESTDIR)$(DATADIR)/doc/mogbus -type f -exec chmod 644 {} +
+ifneq ($(PROGRAMS),)
+	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(DATADIR)/mogbus/profiles
+	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/$(BIN)
+	install -m 644 profiles/*.scm $(DESTDIR)$(DATADIR)/mogbus/profiles/
+endif
+
+uninstall:
+	$(RM) $(DESTDIR)$(BINDIR)/$(BIN) $(DESTDIR)$(LIBDIR)/libmogbus.a $(DESTDIR)$(LIBDIR)/$(LIB_SHARED) \
+		$(DESTDIR)$(LIBDIR)/pkgconfig/mogbus.pc $(DESTDIR)$(INCLUDEDIR)/mogbus.h
+	$(RM) -r $(DESTDIR)$(DATADIR)/doc/mogbus $(DESTDIR)$(DATADIR)/mogbus
+else
+install uninstall:
+	$(error make install is for PLATFORM=posix)
+endif
+
 dist:
 ifneq ($(BUILD)$(SAN)$(WITH_CONFIG)$(PLATFORM),prod01posix)
 	$(error make dist needs BUILD=prod, SAN=0, WITH_CONFIG=1 and PLATFORM=posix)
@@ -465,14 +515,8 @@ endif
 	@epoch=$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct 2>/dev/null)}; \
 	[ -n "$$epoch" ] || { echo "make dist: set SOURCE_DATE_EPOCH (no git history)" >&2; exit 1; }; \
 	stage=$(DIST_DIR)/$(DIST_NAME); \
-	$(RM) -r $(DIST_DIR) && mkdir -p $$stage/bin $$stage/lib $$stage/include \
-		$$stage/share/doc/mogbus/docs $$stage/share/mogbus/profiles && \
-	cp $(BIN) $$stage/bin/ && cp $(LIB_STATIC) $(LIB_SHARED) $$stage/lib/ && \
-	cp include/mogbus.h $$stage/include/ && \
-	cp README.md LICENSE NOTICE.md $$stage/share/doc/mogbus/ && \
-	cp -r docs/user/. $$stage/share/doc/mogbus/docs/ && cp profiles/*.scm $$stage/share/mogbus/profiles/ && \
-	find $$stage -type d -exec chmod 755 {} + && find $$stage -type f -exec chmod 644 {} + && \
-	chmod 755 $$stage/bin/$(BIN) $$stage/lib/$(LIB_SHARED) && \
+	$(RM) -r $(DIST_DIR) && mkdir -p $$stage && \
+	$(MAKE) install DESTDIR=$(CURDIR)/$$stage PREFIX= PC_RELOCATABLE=1 && \
 	tar -C $(DIST_DIR) --sort=name --mtime=@$$epoch --owner=0 --group=0 --numeric-owner \
 		--format=gnu -cf - $(DIST_NAME) | gzip -n -9 > $(DIST_DIR)/$(DIST_NAME).tar.gz && \
 	SOURCE_DATE_EPOCH=$$epoch ./tools/gen_sbom.sh $(DIST_DIR)/$(DIST_NAME).tar.gz $$stage/bin/$(BIN) \
@@ -528,4 +572,4 @@ commands:
 
 -include $(DEPS)
 
-.PHONY: all dev lib python python-tests python-examples lib-check tests tests-c tests-python tests-docs asan dist docs fuzz fuzz-run clean distclean re commands FORCE
+.PHONY: all dev lib install uninstall python python-tests python-examples lib-check tests tests-c tests-python tests-docs asan dist docs fuzz fuzz-run clean distclean re commands FORCE
