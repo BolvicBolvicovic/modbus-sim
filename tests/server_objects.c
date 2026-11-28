@@ -296,6 +296,7 @@ rtu_exchange(rtu_server_t** servers, u32 n, int fd, u8 unit, u16* value)
 	return true;
 }
 
+#ifndef _WIN32	/* byte-stream fd modes do not exist on Windows */
 TEST(ServerObjectsTwoRtuServersSteppedFromHostEndOnEofOrStop)
 {
 	arena_t*		arena = ARENA_ALLOC();
@@ -342,7 +343,9 @@ TEST(ServerObjectsTwoRtuServersSteppedFromHostEndOnEofOrStop)
 	close(pb[1]);
 	arena_release(arena);
 }
+#endif
 
+#ifndef _WIN32	/* byte-stream fd modes do not exist on Windows */
 TEST(ServerObjectsAsciiServerSteppedFromHost)
 {
 	arena_t*		arena = ARENA_ALLOC();
@@ -380,6 +383,7 @@ TEST(ServerObjectsAsciiServerSteppedFromHost)
 	close(fds[1]);
 	arena_release(arena);
 }
+#endif
 
 TEST(ServerObjectsRtuTcpAndAsciiTcpStopAndReopen)
 {

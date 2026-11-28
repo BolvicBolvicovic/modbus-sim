@@ -434,7 +434,7 @@ $(REV_STAMP): FORCE
 	@printf '%s\n' '$(GIT_REVISION)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GIT_REVISION)' > $@
 
 ifeq ($(PLATFORM),win32)
-TEST_INC    = -Itests/tests_utils/compat
+TEST_INC    = -Itests/tests_utils/compat -include tests/tests_utils/test_os.h
 endif
 tests/%$(OBJEXT): tests/%.c
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) $(TEST_INC) -Ivlib -c $< -o $@

@@ -3,8 +3,8 @@
 mogbus is a Linux program. On Windows you run it in a Linux environment that Windows provides: Docker Desktop or WSL2.
 
 Docker Desktop and WSL2 (Windows Subsystem for Linux 2) both run the normal Linux build. An
-experimental [native Windows build](windows-native.md) of the network modes exists too; it is not
-released yet.
+experimental [native Windows build](windows-native.md) of the network modes exists too (a zip in the
+GitHub releases).
 
 ## Which route to use
 

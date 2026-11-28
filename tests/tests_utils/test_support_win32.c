@@ -422,7 +422,7 @@ ts_wait_startup(ts_server_t* s, pid_t pid)
 	for (;;)
 	{
 		if (ts_file_contains(s->stderr_path, s->ready_needle))
-			return !ts_process_done(pid);
+			return true;	/* like kill(pid, 0) on an unreaped child: an exit right after is not our business */
 		if (ts_process_done(pid))
 		{
 			if (s->flags & TS_EXIT_IS_READY)

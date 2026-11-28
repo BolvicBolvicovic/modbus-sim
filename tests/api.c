@@ -1120,6 +1120,7 @@ TEST(ApiConfigFunctionsFailWithoutConfigSupport)
 }
 #endif
 
+#ifndef _WIN32	/* fd mode does not exist on Windows */
 TEST(ApiServesAnExistingFdInRtuAndAsciiModes)
 {
 	static const mogbus_mode_t modes[] = { MOGBUS_MODE_RTU_FD, MOGBUS_MODE_ASCII_FD };
@@ -1166,6 +1167,7 @@ TEST(ApiServesAnExistingFdInRtuAndAsciiModes)
 		mogbus_destroy(ctx);
 	}
 }
+#endif
 
 typedef struct sink_t sink_t;
 struct sink_t
@@ -2311,6 +2313,10 @@ TEST(ApiFrameHookSeesRewritesAndDropsFramesOnEveryTransport)
 
 			if (cases[c].checksum && (modes[m].mode == MOGBUS_MODE_TCP || modes[m].mode == MOGBUS_MODE_UDP))
 				continue;
+#ifdef _WIN32
+			if (modes[m].fd)	/* fd modes do not exist on Windows */
+				continue;
+#endif
 			snprintf(name, sizeof(name), "%s %s", modes[m].name, cases[c].name);
 			test_case = name;
 			memset(&frame_log, 0, sizeof(frame_log));

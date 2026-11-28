@@ -13,13 +13,17 @@ A release is a tag `vX.Y.Z` whose version equals `MOGBUS_VERSION_MAJOR/MINOR/PAT
    `SOURCE_DATE_EPOCH` set to the tagged commit time. The `publish` job then writes a combined
    `SHA256SUMS`, creates build provenance attestations (`actions/attest-build-provenance`) and the
    GitHub release (`gh release create --generate-notes`).
-4. Dry run: start the workflow manually (`workflow_dispatch`); it builds and uploads workflow
+4. The `build-windows` job (`windows-latest`, MSYS2 MinGW-w64) runs the Windows tests and
+   `make PLATFORM=win32 CROSS= WITH_TLS=0 dist`; its zip and SBOM join the same `SHA256SUMS`
+   and attestations.
+5. Dry run: start the workflow manually (`workflow_dispatch`); it builds and uploads workflow
    artifacts only and publishes nothing.
 
 Releases are x86_64 only for now: the test framework (`vlib/vtest.h`) uses x86
 intrinsics, so the tests cannot run on aarch64 and untested binaries are not published. Release
 assets per architecture: `mogbus-X.Y.Z-linux-<arch>.tar.gz` and
-`mogbus-X.Y.Z-linux-<arch>.spdx.json`, plus one `SHA256SUMS`.
+`mogbus-X.Y.Z-linux-<arch>.spdx.json`, plus one `SHA256SUMS`; for Windows `mogbus-X.Y.Z-windows-x86_64.zip`
+and `mogbus-X.Y.Z-windows-x86_64.spdx.json` (see [Windows zip](#windows-zip)).
 
 ## Tarball layout
 
@@ -43,6 +47,18 @@ The binary links OpenSSL dynamically (`libssl.so.3`, `libcrypto.so.3`, glibc): i
 `mogbus --version` prints `mogbus X.Y.Z (<git describe>)`; the revision is passed only to `main.c`
 and is omitted outside a git checkout (`GIT_REVISION=` also disables it). A tagged commit gives
 `vX.Y.Z`, a dirty tree appends `-dirty`.
+
+## Windows zip
+
+`make PLATFORM=win32 CROSS= WITH_TLS=0 dist` (MSYS2 MinGW-w64 shell with Python; `BUILD=prod`,
+`WITH_CONFIG=1`, `WITH_TLS=0` required) writes `dist/mogbus-<version>-windows-x86_64.zip`, its
+`.spdx.json` and `dist/SHA256SUMS`. The zip has one top directory with `bin/` (`mogbus.exe`,
+`mogbus.dll`), `lib/` (`libmogbus.dll.a`, and `libmogbus.win32.a` renamed `libmogbus.a`), `include/mogbus.h`,
+`profiles/`, `docs/` (the user docs), `README.md`, `LICENSE` and `NOTICE.md`. It is reproducible for one
+toolchain: `tools/make_zip.py` sorts the entries and fixes timestamps (`SOURCE_DATE_EPOCH`), modes and
+compression level (the bytes still depend on the zlib of the Python that writes it), and the PE links
+pass `--no-insert-timestamp`. The SBOM lists the imported system DLLs (`ws2_32.dll`, ...) instead of
+`DT_NEEDED` entries. Windows TLS is not shipped (the zip is a `WITH_TLS=0` build).
 
 ## Verifying a download
 

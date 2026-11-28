@@ -475,10 +475,31 @@ serial adapters through usbipd-win).
   `--dynamicbase --nxcompat --high-entropy-va`, next to `libmogbus.win32.a`, `mogbus.dll` (+
   `libmogbus.dll.a`) and `mogbus-tests.exe`. TLS is not ported (`net_tls.c` is POSIX only, Windows
   builds use `net_tls_stub.c`).
-- Tests: `TESTS_POSIX_ONLY` in the Makefile lists the tests that fork, use PTYs/termios/`poll()` or
-  spawn the binary through `test_support.c`; `make PLATFORM=win32 tests` runs the rest under Wine.
-  The CI job `windows-cross` runs `tools/win32_check.sh`: cross build, unit tests under Wine,
-  `mogbus.exe` in all six network modes with `--health`, `modbus_probe.py` and pymodbus interop.
+- Stop request: besides the console events, `os_console_on_stop()` creates the named event
+  `Local\\mogbus-stop-<pid>` and a thread that waits for it; signalling it is the same as Ctrl-C and
+  needs no shared console (the test harness uses it, `tests/tests_utils/test_support_win32.c`).
+- Tests: `TESTS_POSIX_ONLY` in the Makefile lists only what needs a PTY or termios (`ascii_cli.c`,
+  `rtu_cli.c`, `rtu_server.c`, `serial.c`) plus the TLS client. Everything else builds for Windows:
+  `tests/tests_utils/test_support.c` is the portable half (sockets, frames, free ports) and
+  `test_support_win32.c` the Windows half (`CreateProcess` with only the three standard handles
+  inherited and a kill-on-close job object instead of `fork`, the stop event instead of `SIGTERM`,
+  temporary files in `%TEMP%`, `ts_exec()` for command-line tests without a shell, a loopback
+  `socketpair`). `tests/tests_utils/test_os.h` (reached through the shims in
+  `tests/tests_utils/compat/`, which only the Windows build puts on the include path) maps the POSIX
+  socket and descriptor names the tests use (`close`, `read`, `write`, `poll`, `setsockopt`, `SHUT_WR`, ...)
+  and the wait-status macros (a status is the plain exit code) onto Winsock. Tests that only make
+  sense on Linux (`/proc`, `RLIMIT_NOFILE`, a forked child that receives SIGTERM) are guarded by
+  `#ifndef _WIN32` inside their file. Test-only code may include OS headers; the `src/os` rule is for `src/`.
+- CI: job `windows-native` (`windows-latest`, MSYS2 MinGW-w64 with `CROSS=` empty) builds, runs
+  the C tests through the same `tools/run_tests.sh` (MSYS2 `timeout`/`xargs`), the Python package
+  tests and examples against `mogbus.dll` (`PYTHON=python`), and the pymodbus interop against
+  `mogbus.exe` in all six network modes. Job `windows-cross` stays: it is the quick Linux-hosted
+  cross-build check (`tools/win32_check.sh`: unit tests under Wine, `mogbus.exe` in every mode with the native
+  `--health`, `modbus_probe.py` and pymodbus), it needs no Windows runner and it is what to run locally
+  without Windows. Both are gated by the `changes` job like the other build jobs.
+- Release: `make PLATFORM=win32 CROSS= WITH_TLS=0 dist` writes `dist/mogbus-<version>-windows-x86_64.zip`
+  (`tools/make_zip.py`: sorted entries, `SOURCE_DATE_EPOCH` timestamps, fixed modes; PE links use
+  `--no-insert-timestamp`), the SBOM (`tools/gen_sbom.sh` reads PE imports with `objdump -p`) and `SHA256SUMS`; see [Releases](release.md).
 
 ## Roadmap
 

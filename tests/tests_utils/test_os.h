@@ -49,7 +49,15 @@ typedef ULONG nfds_t;
 #define MSG_NOSIGNAL 0
 #endif
 
+/* <winbase.h> macros that collide with enumerators of the tests. */
+#undef PARITY_NONE
+#undef PARITY_ODD
+#undef PARITY_EVEN
+#undef PARITY_MARK
+#undef PARITY_SPACE
+
 /* <excpt.h> macros that collide with member names of the tests. */
+#undef ERROR
 #undef exception_code
 #undef exception_info
 #undef abnormal_termination

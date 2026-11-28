@@ -102,6 +102,7 @@ TEST(ServerFacadeTcpServesOneRequestThenStops)
 	arena_release(arena);
 }
 
+#ifndef _WIN32	/* fd and PTY modes do not exist on Windows */
 TEST(ServerFacadeServesAnExistingFdInRtuAndAsciiModes)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -149,7 +150,9 @@ TEST(ServerFacadeServesAnExistingFdInRtuAndAsciiModes)
 	}
 	arena_release(arena);
 }
+#endif
 
+#ifndef _WIN32	/* fd and PTY modes do not exist on Windows */
 TEST(ServerFacadeOpensPtyAndReportsSlaveName)
 {
 	arena_t*	arena = ARENA_ALLOC();
@@ -179,6 +182,7 @@ TEST(ServerFacadeOpensPtyAndReportsSlaveName)
 	ASSERT_EQ(server_init(&s, &o) == 1);
 	arena_release(arena);
 }
+#endif
 
 TEST(ServerFacadeCheckTlsOnlyValidatesWhenEnabled)
 {

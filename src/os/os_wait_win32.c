@@ -60,6 +60,13 @@ os_wait(os_wait_entry_t* entries, u32 count, int timeout_ms)
 		{
 			if (entries[i].fd == OS_SOCKET_INVALID)
 				entries[i].revents = 0;
+			/* WSAPoll reports a peer's FIN (half-close) as POLLHUP; poll() reports POLLIN
+			 * (read returns 0) and keeps POLLHUP for a fully closed connection. Servers rely
+			 * on that to finish a pending response after a client's shutdown(SHUT_WR). */
+			else if ((entries[i].revents & POLLHUP) &&
+				 !(entries[i].revents & POLLERR) &&
+				 (entries[i].events & OS_WAIT_IN))
+				entries[i].revents = (entries[i].revents & ~POLLHUP) | OS_WAIT_IN;
 			if (entries[i].revents)
 				rc++;
 		}

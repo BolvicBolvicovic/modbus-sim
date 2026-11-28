@@ -16,10 +16,8 @@ outstanding work is listed here. When an item is done, document it there and rem
   - COM ports: a COM-port wait of its own (`os_wait` is now a bare `poll`/`WSAPoll` over sockets, so
     this needs a separate wrapper again: overlapped COM I/O plus `WaitForMultipleObjects`, comm events) and `DCB`/`COMMTIMEOUTS` setup in `os_serial_win32.c`; there is no PTY on Windows, so
     tests would use a com0com pair.
-  - A portable `test_support`, which would bring most of `TESTS_POSIX_ONLY` to Windows.
-  - Tests on `windows-latest` (unit, Python, interop), native COM tests with com0com.
+  - Native COM tests with com0com on `windows-latest` (needs the COM-port wait above).
   - OpenSSL (or Schannel) for TLS.
-  - Windows release artifacts.
 - Gateway/forwarder: a device whose tables are served by a real remote Modbus device. Why: pymodbus
   has `RemoteDeviceContext` for TCP-to-serial gateways.
 

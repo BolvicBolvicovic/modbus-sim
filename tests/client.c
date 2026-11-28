@@ -523,16 +523,21 @@ serial_round_trip(mogbus_mode_t server_mode, mogbus_mode_t client_mode)
 	fx_stop(&fx);
 }
 
+#ifndef _WIN32	/* serial ports and PTYs do not exist on Windows */
 TEST(ClientSerialRtuOverPty)
 {
 	serial_round_trip(MOGBUS_MODE_RTU_PTY, MOGBUS_MODE_RTU_DEVICE);
 }
+#endif
 
+#ifndef _WIN32	/* serial ports and PTYs do not exist on Windows */
 TEST(ClientSerialAsciiOverPty)
 {
 	serial_round_trip(MOGBUS_MODE_ASCII_PTY, MOGBUS_MODE_ASCII_DEVICE);
 }
+#endif
 
+#ifndef _WIN32	/* serial ports and PTYs do not exist on Windows */
 TEST(ClientSerialDeviceMissing)
 {
 	mogbus_client_options_t o = mogbus_client_options_defaults();
@@ -546,6 +551,7 @@ TEST(ClientSerialDeviceMissing)
 	ASSERT_EQ(strstr(mogbus_client_last_error(c), "/nonexistent/ttyX") != NULL);
 	mogbus_client_close(c);
 }
+#endif
 
 TEST(ClientIsIndependentOfAnyContext)
 {
