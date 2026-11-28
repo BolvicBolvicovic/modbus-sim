@@ -469,3 +469,114 @@ TEST(ExprRejectsIllTypedNodes)
 		expect_failure(nodes, 0, &ctx);
 	}
 }
+
+static val_t
+eval2(expr_kind_t kind, f64 a, f64 b, expr_failure_t* why)
+{
+	expr_node_t nodes[] = { binary(kind, 1, 2), num(a), num(b) };
+	expr_ctx_t ctx = context(NULL, 8);
+	val_t out = { .type = VAL_NUM, .n = 99 };
+
+	if (!expr_eval(nodes, 0, &ctx, &out))
+		out = (val_t){ .type = VAL_NUM, .n = 99 };
+	*why = ctx.failure;
+	return out;
+}
+
+TEST(ExprModIsFlooredAndFailsOnZero)
+{
+	expr_failure_t why;
+
+	ASSERT_EQ(eval2(EXPR_MOD, 7, 3, &why).n == 1 && why == EXPR_FAIL_NONE);
+	ASSERT_EQ(eval2(EXPR_MOD, -7, 3, &why).n == 2);
+	ASSERT_EQ(eval2(EXPR_MOD, 7, -3, &why).n == -2);
+	ASSERT_EQ(eval2(EXPR_MOD, -7, -3, &why).n == -1);
+	ASSERT_EQ(eval2(EXPR_MOD, 5.5, 2, &why).n == 1.5);
+	eval2(EXPR_MOD, 5, 0, &why);
+	ASSERT_EQ(why == EXPR_FAIL_DIV_ZERO);
+}
+
+TEST(ExprRoundingAndAbs)
+{
+	static const struct { expr_kind_t kind; f64 in, want; } CASES[] = {
+		{ EXPR_ABS, -2.5, 2.5 }, { EXPR_ABS, 3, 3 },
+		{ EXPR_FLOOR, -1.5, -2 }, { EXPR_FLOOR, 1.5, 1 },
+		{ EXPR_ROUND, 0.5, 0 }, { EXPR_ROUND, 1.5, 2 }, { EXPR_ROUND, 2.5, 2 },
+		{ EXPR_ROUND, -0.5, -0.0 }, { EXPR_ROUND, -1.5, -2 }, { EXPR_ROUND, 2.4, 2 },
+		{ EXPR_TRUNCATE, -1.9, -1 }, { EXPR_TRUNCATE, 1.9, 1 },
+	};
+	expr_node_t bad[] = { node(EXPR_FLOOR), boolean(true) };
+	expr_ctx_t bad_ctx = context(NULL, 4);
+
+	for (u32 i = 0; i < (sizeof(CASES) / sizeof(CASES[0])); i++)
+	{
+		expr_node_t nodes[2];
+		expr_ctx_t ctx = context(NULL, 4);
+		val_t out = { 0 };
+
+		nodes[0] = node(CASES[i].kind);
+		nodes[0].a = 1;
+		nodes[1] = num(CASES[i].in);
+		ASSERT_SUCCESS(expr_eval(nodes, 0, &ctx, &out));
+		ASSERT_EQ(out.type == VAL_NUM && out.n == CASES[i].want && ctx.budget == 2);
+	}
+	bad[0].a = 1;
+	expect_failure(bad, 0, &bad_ctx);
+	ASSERT_EQ(bad_ctx.failure == EXPR_FAIL_TYPE);
+}
+
+TEST(ExprBitOperators)
+{
+	expr_failure_t why;
+	const f64 max = 9007199254740991.0;
+
+	ASSERT_EQ(eval2(EXPR_BIT_AND, 12, 10, &why).n == 8);
+	ASSERT_EQ(eval2(EXPR_BIT_OR, 12, 10, &why).n == 14);
+	ASSERT_EQ(eval2(EXPR_BIT_XOR, 12, 10, &why).n == 6);
+	ASSERT_EQ(eval2(EXPR_BIT_AND, max, max, &why).n == max);
+	ASSERT_EQ(eval2(EXPR_BIT_XOR, max, 1, &why).n == max - 1);
+	ASSERT_EQ(eval2(EXPR_SHIFT, 3, 4, &why).n == 48);
+	ASSERT_EQ(eval2(EXPR_SHIFT, 48, -4, &why).n == 3);
+	ASSERT_EQ(eval2(EXPR_SHIFT, max, -53, &why).n == 0);
+	ASSERT_EQ(eval2(EXPR_SHIFT, 1, 52, &why).n == 4503599627370496.0);
+	ASSERT_EQ(eval2(EXPR_SHIFT, 0, 53, &why).n == 0);
+
+	eval2(EXPR_BIT_AND, 1.5, 1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_BIT_OR, 1, -1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_BIT_XOR, max + 1, 1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_BIT_AND, NAN, 1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_SHIFT, 1, 53, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_SHIFT, 4503599627370496.0, 1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_SHIFT, 1, 54, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_SHIFT, 1, -54, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_SHIFT, 1, 0.5, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+}
+
+TEST(ExprBitSetTestsOneBit)
+{
+	expr_failure_t why;
+	val_t out = eval2(EXPR_BIT_SET, 5, 1, &why);
+
+	ASSERT_EQ(why == EXPR_FAIL_NONE && out.type == VAL_BOOL && !out.b);
+	out = eval2(EXPR_BIT_SET, 5, 2, &why);
+	ASSERT_EQ(out.type == VAL_BOOL && out.b);
+	out = eval2(EXPR_BIT_SET, 9007199254740991.0, 52, &why);
+	ASSERT_EQ(out.type == VAL_BOOL && out.b);
+	eval2(EXPR_BIT_SET, 5, 53, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_BIT_SET, 5, -1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_BIT_SET, 5, 1.5, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+	eval2(EXPR_BIT_SET, -5, 1, &why);
+	ASSERT_EQ(why == EXPR_FAIL_RANGE);
+}

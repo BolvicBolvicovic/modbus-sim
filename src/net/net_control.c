@@ -25,6 +25,9 @@ enum
 	POINTS_DEFAULT_LIMIT = 100,
 	POINTS_MAX_LIMIT     = 200,	/* ~125 bytes each without a note */
 	POINT_ENTRY_MAX      = 960,	/* worst entry: fields plus a note escaped to 6 bytes per byte */
+	ACTIONS_DEFAULT_LIMIT = 50,
+	ACTIONS_MAX_LIMIT    = 256,
+	ACTION_ENTRY_MAX     = 4096,	/* worst case of one listed action: 16 params with 63-char names */
 };
 
 static const char* const SPACE_NAMES[SPACE_COUNT] = {
@@ -35,7 +38,7 @@ static const char* const SPACE_NAMES[SPACE_COUNT] = {
 };
 
 /** @brief The JSON fields a request body may carry; a body with any other key is rejected. */
-enum { F_VALUES, F_VALUE, F_PERCENT, F_DELAY_MS, F_EXCEPTION_CODE, F_MODE, F_COUNT };
+enum { F_VALUES, F_VALUE, F_PERCENT, F_DELAY_MS, F_EXCEPTION_CODE, F_MODE, F_NAME, F_COUNT };
 
 /** @brief A parsed control request body. */
 struct body_t
@@ -45,11 +48,12 @@ struct body_t
 	u32	value_count;
 	f64	values[MAX_VALUES];
 	char	mode[16];
+	char	name[MACHINE_NAME_MAX];
 };
 
 static const char* const BODY_KEYS[F_COUNT] = {
 	[F_VALUES] = "values", [F_VALUE] = "value", [F_PERCENT] = "percent",
-	[F_DELAY_MS] = "delay_ms", [F_EXCEPTION_CODE] = "exception_code", [F_MODE] = "mode",
+	[F_DELAY_MS] = "delay_ms", [F_EXCEPTION_CODE] = "exception_code", [F_MODE] = "mode", [F_NAME] = "name",
 };
 
 static const char*
@@ -134,6 +138,8 @@ parse_body(const char* p, body_t* b)
 		p = skip_ws(p + 1);
 		if (f == F_MODE)
 			p = read_string(p, b->mode, sizeof(b->mode));
+		else if (f == F_NAME)
+			p = read_string(p, b->name, sizeof(b->name));
 		else if (f == F_VALUES)
 		{
 			if (*p != '[')
@@ -159,7 +165,8 @@ parse_body(const char* p, body_t* b)
 		else
 			p = read_number(p, &b->num[f]);
 		if (!p)
-			return f == F_MODE ? "mode must be a string" : "field must be a number";
+			return f == F_MODE ? "mode must be a string" :
+			       f == F_NAME ? "name must be a string" : "field must be a number";
 		b->has[f] = true;
 		p = skip_ws(p);
 	}
@@ -342,6 +349,53 @@ list_points(const device_t* dev, space_kind_t space, u32 from, u32 limit, char* 
 	return used < cap ? used : fail(out, cap, status, 500, "response too large");
 }
 
+/*
+ * One page of the point actions, in the device's action order (space, address, read before
+ * write). `from` is an index; a page ends at `limit` entries or when the buffer could not hold
+ * another worst-case entry, and `next` is the index to continue from (null at the end).
+ */
+static u32
+list_actions(const device_t* dev, u32 from, u32 limit, char* out, u32 cap, int* status)
+{
+	u32	used = 0;
+	u32	n = 0;
+	u32	i = from;
+
+	put(out, cap, &used, "{\"actions\":[");
+	for (const action_instance_t* a = device_action_at(dev, i); a; a = device_action_at(dev, ++i))
+	{
+		char name[2 * MACHINE_NAME_MAX + 2];
+
+		if (n == limit ||
+		    used + ACTION_ENTRY_MAX > cap)
+			break;
+		log_json_escape(name, sizeof(name), a->name);
+		put(out, cap, &used,
+		    "%s{\"space\":\"%s\",\"address\":%u,\"event\":\"%s\",\"name\":\"%s\",\"params\":[",
+		    n ? "," : "", SPACE_NAMES[a->space], a->address,
+		    a->event == ACTION_ON_WRITE ? "write" : "read", name);
+		for (u32 p = 0; p < a->param_count; p++)
+		{
+			const val_t* v = &a->vars[p];
+
+			log_json_escape(name, sizeof(name), a->defs[p].name);
+			put(out, cap, &used, "%s{\"name\":\"%s\",\"type\":\"%s\",\"value\":", p ? "," : "",
+			    name, v->type == VAL_BOOL ? "bool" : "number");
+			if (v->type == VAL_BOOL)
+				put(out, cap, &used, "%d}", v->b ? 1 : 0);
+			else
+				put(out, cap, &used, "%.15g}", v->n);
+		}
+		put(out, cap, &used, "]}");
+		n++;
+	}
+	if (device_action_at(dev, i))
+		put(out, cap, &used, "],\"next\":%u}", i);
+	else
+		put(out, cap, &used, "],\"next\":null}");
+	return used < cap ? used : fail(out, cap, status, 500, "response too large");
+}
+
 static u32
 list_faults(const device_t* dev, char* out, u32 cap)
 {
@@ -377,7 +431,7 @@ put_fault(net_obs_t* obs, device_t* dev, fault_kind_t kind, const body_t* b, cha
 	fault_t		fault = { .percent = 100 };
 	const char*	error;
 
-	if ((b->has[F_VALUES] || b->has[F_VALUE]) ||
+	if ((b->has[F_VALUES] || b->has[F_VALUE] || b->has[F_NAME]) ||
 	    (b->has[F_DELAY_MS] && kind != FAULT_DELAY) ||
 	    (b->has[F_EXCEPTION_CODE] && kind != FAULT_EXCEPTION) ||
 	    (b->has[F_MODE] && kind != FAULT_CORRUPT))
@@ -421,8 +475,8 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 		   const char* body, char* out, u32 cap, int* status)
 {
 	static body_t	parsed;		/* ~4 KB: kept off the stack; the server is single-threaded */
-	const char*	seg[6];
-	u32		seg_len[6];
+	const char*	seg[7];
+	u32		seg_len[7];
 	u32		nseg = 0;
 	bool		get = strcmp(method, "GET") == 0;
 	bool		put_m = strcmp(method, "PUT") == 0;
@@ -435,8 +489,8 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 	u32		used = 0;
 	u64		now_ms = os_now_ms();
 
-	/* Split "/api/a/b/c" into segments; more than 5 after "api" is simply unknown. */
-	for (const char* p = path + strlen("/api/"); *p && nseg < 6;)
+	/* Split "/api/a/b/c" into segments; more than 6 after "api" is simply unknown. */
+	for (const char* p = path + strlen("/api/"); *p && nseg < 7;)
 	{
 		u32 len = (u32)strcspn(p, "/");
 
@@ -447,7 +501,7 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 		if (*p == '/')
 			p++;
 	}
-	if (nseg < 1 || seg_len[0] != 7 || memcmp(seg[0], "devices", 7) != 0 || nseg > 5)
+	if (nseg < 1 || seg_len[0] != 7 || memcmp(seg[0], "devices", 7) != 0 || nseg > 6)
 		return fail(out, cap, status, 404, "unknown path");
 
 	*status = 200;
@@ -490,6 +544,67 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 		    limit == 0)
 			return fail(out, cap, status, 400, "from must be 0-65535 and limit 1-200");
 		return list_points(dev, (space_kind_t)space, from, limit, out, cap, status);
+	}
+
+	if (seg_len[2] == 7 && memcmp(seg[2], "actions", 7) == 0)
+	{
+		u32		from = 0;
+		u32		limit = ACTIONS_DEFAULT_LIMIT;
+		action_event_t	event = ACTION_ON_READ;
+		val_t		current = { 0 };
+		val_t		next = { 0 };
+
+		if (nseg == 3)
+		{
+			if (!get)
+				return fail(out, cap, status, 405, "method not allowed");
+			if (!query_uint(query, "from", 65535, &from) ||
+			    !query_uint(query, "limit", ACTIONS_MAX_LIMIT, &limit) ||
+			    limit == 0)
+				return fail(out, cap, status, 400, "from must be 0-65535 and limit 1-256");
+			return list_actions(dev, from, limit, out, cap, status);
+		}
+		if (nseg != 6)
+			return fail(out, cap, status, 404, "unknown path");
+		if (!put_m)
+			return fail(out, cap, status, 405, "method not allowed");
+		for (u32 s = 0; s < SPACE_COUNT; s++)
+		{
+			if (strlen(SPACE_NAMES[s]) == seg_len[3] &&
+			    memcmp(SPACE_NAMES[s], seg[3], seg_len[3]) == 0)
+				space = s;
+		}
+		if (space == SPACE_COUNT)
+			return fail(out, cap, status, 404, "unknown space");
+		if (!parse_uint(seg[4], seg_len[4], 65535, &address))
+			return fail(out, cap, status, 400, "address must be a number from 0 to 65535");
+		if (seg_len[5] == 5 && memcmp(seg[5], "write", 5) == 0)
+			event = ACTION_ON_WRITE;
+		else if (seg_len[5] != 4 || memcmp(seg[5], "read", 4) != 0)
+			return fail(out, cap, status, 404, "event must be read or write");
+		error = parse_body(body, &parsed);
+		if (error)
+			return fail(out, cap, status, 400, error);
+		if (!parsed.has[F_NAME] || !parsed.has[F_VALUE] || parsed.has[F_VALUES] ||
+		    parsed.has[F_PERCENT] || parsed.has[F_DELAY_MS] || parsed.has[F_EXCEPTION_CODE] ||
+		    parsed.has[F_MODE])
+			return fail(out, cap, status, 400, "body must be {\"name\": STRING, \"value\": NUMBER}");
+		if (!device_action_param_get(dev, (space_kind_t)space, address, event, parsed.name, &current))
+			return fail(out, cap, status, 404, "no such action parameter");
+		next.type = current.type;
+		if (current.type == VAL_BOOL)
+		{
+			if (parsed.num[F_VALUE] != 0 &&
+			    parsed.num[F_VALUE] != 1)
+				return fail(out, cap, status, 422, "a boolean parameter takes 0 or 1");
+			next.b = parsed.num[F_VALUE] != 0;
+		}
+		else
+			next.n = parsed.num[F_VALUE];
+		device_action_param_set(dev, (space_kind_t)space, address, event, parsed.name, &next);
+		LOG_INFO("control: device %u action %s %u %s param set", dev->unit_id,
+			 SPACE_NAMES[space], address, event == ACTION_ON_WRITE ? "write" : "read");
+		return done(out, cap, status);
 	}
 
 	if (seg_len[2] == 6 && memcmp(seg[2], "faults", 6) == 0)
@@ -565,7 +680,8 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 		if (error)
 			return fail(out, cap, status, 400, error);
 		if (!parsed.has[F_VALUE] || parsed.has[F_VALUES] || parsed.has[F_PERCENT] ||
-		    parsed.has[F_DELAY_MS] || parsed.has[F_EXCEPTION_CODE] || parsed.has[F_MODE])
+		    parsed.has[F_DELAY_MS] || parsed.has[F_EXCEPTION_CODE] || parsed.has[F_MODE] ||
+		    parsed.has[F_NAME])
 			return fail(out, cap, status, 400, "body must be {\"value\": NUMBER}");
 		if (space_is_bit((space_kind_t)space))
 		{
@@ -615,7 +731,7 @@ net_control_handle(net_obs_t* obs, const char* method, const char* path, const c
 			return fail(out, cap, status, 400, error);
 		if (!parsed.has[F_VALUES] || parsed.value_count == 0 ||
 		    parsed.has[F_VALUE] || parsed.has[F_PERCENT] || parsed.has[F_DELAY_MS] ||
-		    parsed.has[F_EXCEPTION_CODE] || parsed.has[F_MODE])
+		    parsed.has[F_EXCEPTION_CODE] || parsed.has[F_MODE] || parsed.has[F_NAME])
 			return fail(out, cap, status, 400, "body must be {\"values\": [NUMBER, ...]}");
 		if (parsed.value_count > (bits ? MAX_BITS : MAX_REGISTERS))
 			return fail(out, cap, status, 400, "too many values");

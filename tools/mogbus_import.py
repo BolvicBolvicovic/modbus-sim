@@ -30,6 +30,7 @@ WIDTH = {"u16": 1, "s16": 1, "u32": 2, "s32": 2, "float32": 2, "u64": 4, "s64": 
 INT_RANGE = {"u16": (0, 65535), "s16": (-32768, 32767), "u32": (0, 2**32 - 1),
              "s32": (-2**31, 2**31 - 1), "u64": (0, 2**64 - 1), "s64": (-2**63, 2**63 - 1)}
 MAX_POINTS = 8192
+MAX_ACTIONS = 256  # ACTION_MAX_INSTANCES in src/device/action.h
 NET_MODES = ("tcp", "rtu-tcp", "ascii-tcp", "udp", "rtu-udp", "ascii-udp")
 DEVICE_MODES = ("rtu-device", "ascii-device")
 PTY_MODES = ("rtu-pty", "ascii-pty")
@@ -92,6 +93,7 @@ class Report:
     def __init__(self):
         self.warnings = []
         self.errors = []
+        self.actions = {}      # custom pymodbus action -> stub: name, params {name: (default, text)}, skipped
 
     def warn(self, msg):
         if msg not in self.warnings:
@@ -120,6 +122,7 @@ class Point:
     noun: str = "cell"
     first: int = 0
     last: int = 0
+    on_read: str = ""           # (on-read ...) attaching the stub of a custom pymodbus action
 
     @property
     def width(self):
@@ -206,6 +209,8 @@ def render_point(p):
         parts.extend(p.extra)
     elif p.value is not None:
         parts.append(static_text(p))
+    if p.on_read:
+        parts.append(p.on_read)
     if p.count > 1:
         parts.append("(count %d)" % p.count)
     if p.note:
@@ -253,6 +258,16 @@ def render_config(res, rep, tool_line):
     out.append("")
     if res.server:
         out += [res.server, ""]
+    for orig, stub in rep.actions.items():
+        out.append("; TODO: port the pymodbus action %s (Python) to statements" % q(orig))
+        out.append("; The body only keeps the current value; replace it with the logic of the original.")
+        for key, why in stub["skipped"]:
+            out.append("; parameter %s not imported: %s" % (q(key), why))
+        out.extend("; parameter %s is the param %s" % (q(k), n) for k, n in stub["keys"].items() if k != n)
+        out.append("(define-action " + stub["name"])
+        out.extend("  (param %s %s)" % (k, v[1]) for k, v in stub["params"].items())
+        out.append("  (set! self self))")
+        out.append("")
     for k, dev in enumerate([res] + res.more):
         if k:
             out.append("")
@@ -1013,6 +1028,9 @@ def pm_device(dev, dname, args, rep):
     pts = pm_points(cells, shared, sizes, args, rep)
     if len(sum(([p] * p.count for p in pts), [])) > MAX_POINTS:
         rep.error("more than %d points; a mogbus device holds at most %d" % (MAX_POINTS, MAX_POINTS))
+    if sum(1 for p in pts if p.on_read) > MAX_ACTIONS:
+        rep.error("more than %d cells with a custom action; a mogbus device holds at most %d point "
+                  "actions (a bits cell counts 16, twice with shared blocks)" % (MAX_ACTIONS, MAX_ACTIONS))
     res = Result(name=args.name if args.name and not args.all_devices else dname, unit_id=1, points=pts,
                  source="pymodbus simulator file %s, device %r" % (os.path.basename(args.file), dname))
     if setup.get("shared blocks"):
@@ -1067,6 +1085,68 @@ def pm_server(srv, sname, rep):
     return ""
 
 
+BUILTIN_ACTIONS = ("increment", "random", "uptime", "reset", "timestamp")
+RESERVED_NAMES = {"coil", "discrete", "input", "holding", "now-ms", "elapsed-ms", "mod", "abs", "floor",
+                  "round", "truncate", "bit-and", "bit-or", "bit-xor", "shift", "min", "max", "and", "or",
+                  "not", "if", "set!", "when", "unless", "var", "param", "self"}
+
+
+def mogbus_name(text, taken):
+    """A valid mogbus action or param name (lowercase letters, digits, -, <= 63) not in `taken`."""
+    n = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
+    if not n or not n[0].isalpha():
+        n = "action-" + n if n else "action"
+    n = n[:63].rstrip("-")
+    if n in RESERVED_NAMES:
+        n = n + "-action"
+    base, k = n, 1
+    while n in taken:
+        k += 1
+        n = "%s-%d" % (base[:63 - len(str(k)) - 1], k)
+    return n
+
+
+def pm_stub_use(action, params, rep, where):
+    """Registers the stub of a custom action (first use gives the param defaults); returns the on-read form."""
+    stub = rep.actions.get(action)
+    first = stub is None
+    if first:
+        stub = rep.actions[action] = {
+            "name": mogbus_name(action, {s["name"] for s in rep.actions.values()}),
+            "params": {}, "keys": {}, "skipped": []}
+    overrides = []
+    for key, v in sorted((params if isinstance(params, dict) else {}).items()):
+        is_bool = isinstance(v, bool)
+        if not (is_bool or (isinstance(v, (int, float)) and math.isfinite(v))):
+            if first:
+                stub["skipped"].append((key, "not a number or boolean"))
+            continue
+        text = ("#t" if v else "#f") if is_bool else num(v)
+        if key not in stub["keys"]:
+            if not first:
+                rep.warn("%s: parameter %r of action %r has no default in its first use; not imported"
+                         % (where, key, action))
+                continue
+            if len(stub["params"]) >= 16:
+                stub["skipped"].append((key, "at most 16 params"))
+                continue
+            pname = mogbus_name(key, set(stub["params"]) | {"self"})
+            stub["keys"][key] = pname
+            stub["params"][pname] = (v, text)
+            continue
+        pname = stub["keys"][key]
+        default = stub["params"][pname][0]
+        if isinstance(default, bool) != is_bool:
+            rep.warn("%s: parameter %r of action %r changes type between uses; not imported"
+                     % (where, key, action))
+        elif v != default:
+            overrides.append("(%s %s)" % (pname, text))
+    if first:
+        rep.warn("%s: action %r is a custom Python action; imported as the stub define-action %s "
+                 "to fill in (every cell using it gets an on-read)" % (where, action, stub["name"]))
+    return "(on-read (%s%s))" % (stub["name"], "".join(" " + o for o in overrides))
+
+
 RESET_DEGRADATION = "(degradation (fail-after-ms 0))"
 
 
@@ -1105,6 +1185,8 @@ def pm_behaviour(p, ctype, value, action, params, args, rep, where):
         p.value = None
     elif action == "reset":
         p.extra = [static_text(p), RESET_DEGRADATION]
+    elif isinstance(action, str):
+        p.on_read = pm_stub_use(action, params, rep, where)
     else:
         rep.warn("%s: action %r has no mogbus equivalent; the initial value is kept static" %
                  (where, action))
@@ -1172,7 +1254,8 @@ def pm_points(cells, shared, sizes, args, rep):
             if not targets:
                 rep.warn("%s: not reachable by any function code in this layout; skipped" % where)
                 continue
-            if c.action and c.action != "reset":
+            custom = isinstance(c.action, str) and c.action not in BUILTIN_ACTIONS
+            if c.action and c.action != "reset" and not custom:
                 rep.warn("%s: action %r on bits is not supported; the value is kept static" %
                          (where, c.action))
             if idx * 16 + 15 > 65535:
@@ -1187,6 +1270,9 @@ def pm_points(cells, shared, sizes, args, rep):
                     if c.action == "reset":
                         p.extra = [static_text(p), RESET_DEGRADATION]
                         p.src += ", action reset"
+                    elif custom:
+                        p.on_read = pm_stub_use(c.action, c.params, rep, where)
+                        p.src += ", action %s" % c.action
                     pts.append(p)
             continue
         targets = reg_target(idx)
@@ -1231,7 +1317,8 @@ def group_points(pts):
         if (prev is not None and prev.table == p.table and prev.type == p.type and
                 prev.addr + prev.width * prev.count == p.addr and prev.value == p.value and
                 prev.extra == p.extra and prev.length == p.length and
-                prev.padding == p.padding and prev.read_only == p.read_only and prev.src == p.src and p.type != "string"):
+                prev.padding == p.padding and prev.read_only == p.read_only and prev.src == p.src and p.type != "string" and
+                not p.on_read and not prev.on_read):
             prev.count += 1
             prev.last = p.first
         else:

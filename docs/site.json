@@ -111,6 +111,13 @@
                 "docs/user/observability/api/api-set-fault.md",
                 "docs/user/observability/api/api-clear-fault.md"
               ]
+            },
+            {
+              "title": "Actions",
+              "entries": [
+                "docs/user/observability/api/api-list-actions.md",
+                "docs/user/observability/api/api-set-action-param.md"
+              ]
             }
           ]
         }
@@ -453,6 +460,22 @@
             }
           ]
         },
+        {
+          "index": "docs/user/config/actions/index.md",
+          "title": "Point actions",
+          "groups": [
+            {
+              "title": "Point actions",
+              "entries": [
+                "docs/user/config/actions/define-action.md",
+                "docs/user/config/actions/param.md",
+                "docs/user/config/actions/on-read.md",
+                "docs/user/config/actions/on-write.md",
+                "docs/user/config/actions/self.md"
+              ]
+            }
+          ]
+        },
         {"page": "docs/user/config/errors.md", "errors": true, "errors_from": ["docs/user/config/format.md"]},
         "docs/user/command-line.md",
         {
@@ -463,7 +486,7 @@
           "pyapi": "python/mogbus/core.py",
           "title": "Python API",
           "groups": [
-            {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
+            {"title": "Context and devices", "items": ["Context", "Device", "DeviceInfo", "PointInfo", "ActionInfo", "FaultInfo", "CustomFunctionCode", "Access", "Ramp"]},
             {"title": "Servers", "items": ["serve", "Served", "Server", "ServerOptions", "probe", "probe_or_raise", "RtuTiming", "rtu_timing", "Frame", "Connection"]},
             {"title": "Decoding frames", "items": ["decode_frame"]},
             {"title": "Register values", "items": ["registers_to_value", "value_to_registers", "registers_to_text", "text_to_registers"]},

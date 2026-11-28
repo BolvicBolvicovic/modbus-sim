@@ -128,6 +128,7 @@ class LayoutTest(unittest.TestCase):
                                                      ("custom_fcs[0]", _lib._CustomFc)]))
         expected.update(mine("A", _lib.AccessC, []))
         expected.update(mine("FR", _lib.FrameC, []))
+        expected.update(mine("AC", _lib.ActionC, [("params[0]", _lib._ActionParam)]))
         expected.update(mine("CN", _lib.ConnectionC, []))
         expected.update(mine("CO", _lib.ClientOptionsC, []))
         expected.update(mine("PF", _lib.PollFdC, []))
@@ -146,12 +147,14 @@ class LayoutTest(unittest.TestCase):
             self.skipTest("include/mogbus.h not found")
         text = header.read_text()
         nested = {"P": {"ramp": _lib._Ramp},
-                  "I": {"faults": _lib._FaultInfo, "custom_fcs": _lib._CustomFc}}
+                  "I": {"faults": _lib._FaultInfo, "custom_fcs": _lib._CustomFc},
+                  "AC": {"params": _lib._ActionParam}}
         for key, tag, cls in (("O", "mogbus_server_options_t", _lib.ServerOptionsC),
                               ("P", "mogbus_point_t", _lib.PointC),
                               ("I", "mogbus_device_info_t", _lib.DeviceInfoC),
                               ("A", "mogbus_access_t", _lib.AccessC),
                               ("FR", "mogbus_frame_t", _lib.FrameC),
+                              ("AC", "mogbus_action_t", _lib.ActionC),
                               ("CN", "mogbus_connection_t", _lib.ConnectionC),
                               ("CO", "mogbus_client_options_t", _lib.ClientOptionsC),
                               ("PF", "mogbus_poll_fd_t", _lib.PollFdC),
@@ -574,6 +577,65 @@ class LogTest(unittest.TestCase):
         self.assertTrue(any(p.get("event") for p in parsed))
         with self.assertRaises(MogbusError):
             mogbus.set_log_level("loud")
+
+
+class ActionParamTest(unittest.TestCase):
+    CONFIG = ('(server (mode tcp) (port 15031))'
+              '(define-action gate (param on #t) (param level 1.5) (set! self (if on level 0)))'
+              '(device (unit-id 1) (holding 0 (static 0) (on-read (gate))) '
+              '(coil 4 (static #f) (on-write (set! self #f))))')
+
+    def load(self, ctx, tmp):
+        path = Path(tmp) / "actions.scm"
+        path.write_text(self.CONFIG)
+        ctx.load_config(path)
+        return ctx.find_device(1)
+
+    def test_actions_listing_and_param_roundtrip(self):
+        with mogbus.Context() as ctx, tempfile.TemporaryDirectory() as tmp:
+            dev = self.load(ctx, tmp)
+            actions = dev.actions()
+            self.assertEqual([(a.space, a.address, a.event, a.name) for a in actions],
+                             [(mogbus.Space.COIL, 4, "write", ""), (mogbus.Space.HOLDING, 0, "read", "gate")])
+            self.assertEqual(actions[0].params, {})
+            self.assertEqual(actions[1].params, {"on": True, "level": 1.5})
+            dev.set_action_param("holding", 0, "read", "level", 7)
+            self.assertEqual(dev.get_action_param("holding", 0, "read", "level"), 7.0)
+            dev.set_action_param(mogbus.Space.HOLDING, 0, "read", "on", False)
+            self.assertIs(dev.get_action_param("holding", 0, "read", "on"), False)
+            dev.set_action_param("holding", 0, "read", "on", 1)
+            self.assertEqual(dev.actions()[1].params, {"on": True, "level": 7.0})
+
+    def test_param_errors(self):
+        with mogbus.Context() as ctx, tempfile.TemporaryDirectory() as tmp:
+            dev = self.load(ctx, tmp)
+            for args, text in ((("holding", 0, "read", "nope", 1), "no parameter 'nope'"),
+                               (("holding", 0, "write", "on", 1), "no parameter 'on'"),
+                               (("holding", 0, "read", "on", 2), "takes 0 or 1"),
+                               (("holding", 0, "read", "level", float("nan")), "finite")):
+                with self.assertRaisesRegex(MogbusError, text) as caught:
+                    dev.set_action_param(*args)
+                self.assertEqual(caught.exception.status, mogbus.Status.INVALID)
+            with self.assertRaises(MogbusError):
+                dev.set_action_param("holding", 0, "later", "on", 1)
+            with self.assertRaisesRegex(MogbusError, "no parameter"):
+                dev.get_action_param("holding", 9, "read", "on")
+
+    def test_http_actions(self):
+        import urllib.request
+        http_port = free_port()
+        with mogbus.serve(config_text=self.CONFIG, port=0, http_bind_address="127.0.0.1",
+                          http_port=http_port, http_control=True) as srv:
+            base = f"http://127.0.0.1:{http_port}/api/devices/1/actions"
+            req = urllib.request.Request(base + "/holding/0/read", method="PUT",
+                                         data=b'{"name":"level","value":3}',
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5).close()
+            self.assertEqual(srv.device(1).get_action_param("holding", 0, "read", "level"), 3.0)
+            with urllib.request.urlopen(base, timeout=5) as r:
+                listing = json.load(r)
+            self.assertIsNone(listing["next"])
+            self.assertEqual(listing["actions"][1]["params"][1], {"name": "level", "type": "number", "value": 3})
 
 
 class ControlApiTest(unittest.TestCase):

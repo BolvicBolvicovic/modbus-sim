@@ -20,7 +20,9 @@ enum expr_kind_t
 	EXPR_NOW_MS, EXPR_ELAPSED_MS,
 	EXPR_ADD, EXPR_SUB, EXPR_MUL, EXPR_DIV, EXPR_MIN, EXPR_MAX,
 	EXPR_LT, EXPR_LE, EXPR_GT, EXPR_GE, EXPR_EQ,
-	EXPR_AND, EXPR_OR, EXPR_NOT, EXPR_IF
+	EXPR_AND, EXPR_OR, EXPR_NOT, EXPR_IF,
+	EXPR_MOD, EXPR_ABS, EXPR_FLOOR, EXPR_ROUND, EXPR_TRUNCATE,
+	EXPR_BIT_AND, EXPR_BIT_OR, EXPR_BIT_XOR, EXPR_SHIFT, EXPR_BIT_SET
 };
 
 #define EXPR_NO_CHILD UINT16_MAX
@@ -43,6 +45,7 @@ enum expr_failure_t
 	EXPR_FAIL_DIV_ZERO,
 	EXPR_FAIL_POINT,
 	EXPR_FAIL_TYPE,
+	EXPR_FAIL_RANGE,	/**< bit operand not a whole number in 0..2^53-1, or shift/bit index out of range */
 };
 
 /** @brief Inputs and limits of one expression evaluation. */
@@ -57,5 +60,8 @@ struct expr_ctx_t
 };
 
 bool expr_eval(const expr_node_t* nodes, u16 root, expr_ctx_t* ctx, val_t* out);
+
+/** @brief Log text of an evaluation failure ("" for EXPR_FAIL_NONE or an unknown value). */
+const char* expr_failure_text(expr_failure_t why);
 
 #endif

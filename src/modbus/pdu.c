@@ -27,13 +27,22 @@ modbus_exception(u8* resp, u8 function, u8 code)
 
 /* --- access hook --- */
 
-/** @brief Runs the host's read hook for a range already known to be readable; 0 or an exception. */
+/**
+ * @brief Runs the host's read hook, then the on-read point actions, for a range already known
+ *        to be readable; 0 or an exception.
+ *
+ * A veto from the hook stops everything. A failed action answers exception 04. Callers read the
+ * table again afterwards because hook and actions may have changed it.
+ */
 static u8
 access_read(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count)
 {
 	device_access_t	access = { .space = space, .address = address, .count = count, .function_code = fc };
+	u8		code = dev->access_fn ? dev->access_fn(dev->access_user, dev, &access) : 0;
 
-	return dev->access_fn ? dev->access_fn(dev->access_user, dev, &access) : 0;
+	if (code)
+		return code;
+	return device_actions_on_read(dev, space, address, count) ? 0 : EXC_SLAVE_DEVICE_FAILURE;
 }
 
 /**
@@ -63,14 +72,20 @@ access_call(device_t* dev, const device_access_t* access)
 	return dev->access_fn ? dev->access_fn(dev->access_user, dev, access) : 0;
 }
 
-/** @brief Tells the host's post-write hook that a client write of a table range was applied. */
-static void
+/**
+ * @brief Tells the host's post-write hook that a client write of a table range was applied,
+ *        then runs the on-write point actions.
+ *
+ * Returns 0 or exception 04 when an action failed; the write stays applied.
+ */
+static u8
 written_table(device_t* dev, u8 fc, space_kind_t space, u32 address, u32 count, const u16* values)
 {
 	device_access_t	access = { .write = true, .space = space, .address = address, .count = count, .values = values, .function_code = fc };
 
 	if (dev->written_fn)
 		dev->written_fn(dev->written_user, dev, &access);
+	return device_actions_on_write(dev, space, address, count) ? 0 : EXC_SLAVE_DEVICE_FAILURE;
 }
 
 /* --- reads --- */
@@ -93,7 +108,7 @@ read_bits(device_t* dev, space_kind_t space, const u8* req, u32 req_len, u8* res
 
 	if (!device_read(dev, space, address, qty, bits))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	if (dev->access_fn)
+	if (dev->access_fn || dev->actions)
 	{
 		u8 code = access_read(dev, req[0], space, address, qty);
 
@@ -132,7 +147,7 @@ read_registers(device_t* dev, space_kind_t space, const u8* req, u32 req_len, u8
 
 	if (!device_read(dev, space, address, qty, words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	if (dev->access_fn)
+	if (dev->access_fn || dev->actions)
 	{
 		u8 code = access_read(dev, req[0], space, address, qty);
 
@@ -178,7 +193,12 @@ write_single_coil(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_COIL, address, 1, &bit))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	written_table(dev, req[0], SPACE_COIL, address, 1, &bit);
+	{
+		u8 code = written_table(dev, req[0], SPACE_COIL, address, 1, &bit);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -203,7 +223,12 @@ write_single_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &value))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	written_table(dev, req[0], SPACE_HOLDING, address, 1, &value);
+	{
+		u8 code = written_table(dev, req[0], SPACE_HOLDING, address, 1, &value);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -238,7 +263,12 @@ write_multiple_coils(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_COIL, address, qty, bits))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	written_table(dev, req[0], SPACE_COIL, address, qty, bits);
+	{
+		u8 code = written_table(dev, req[0], SPACE_COIL, address, qty, bits);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -273,7 +303,12 @@ write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, qty, words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	written_table(dev, req[0], SPACE_HOLDING, address, qty, words);
+	{
+		u8 code = written_table(dev, req[0], SPACE_HOLDING, address, qty, words);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 
 	memcpy(resp, req, 5);
 	return 5;
@@ -328,7 +363,12 @@ read_write_multiple_registers(device_t* dev, const u8* req, u32 req_len, u8* res
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, write_addr, write_qty, write_words))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	written_table(dev, req[0], SPACE_HOLDING, write_addr, write_qty, write_words);
+	{
+		u8 code = written_table(dev, req[0], SPACE_HOLDING, write_addr, write_qty, write_words);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 
 	/* Write happens before read; result reflects post-write values (including overlap). */
 	{
@@ -698,7 +738,12 @@ mask_write_register(device_t* dev, const u8* req, u32 req_len, u8* resp)
 	}
 	if (!device_client_write(dev, SPACE_HOLDING, address, 1, &result))
 		return modbus_exception(resp, req[0], EXC_ILLEGAL_DATA_ADDRESS);
-	written_table(dev, req[0], SPACE_HOLDING, address, 1, &result);
+	{
+		u8 code = written_table(dev, req[0], SPACE_HOLDING, address, 1, &result);
+
+		if (code)
+			return modbus_exception(resp, req[0], code);
+	}
 
 	memcpy(resp, req, 7);
 	return 7;
@@ -1340,7 +1385,7 @@ custom_respond(device_t* dev, const device_custom_fc_t* fc, const u8* req, u32 r
 
 				if (!device_read(dev, c->space, c->address, c->count, words))
 					return modbus_exception(resp, fc->code, EXC_ILLEGAL_DATA_ADDRESS);
-				if (dev->access_fn)
+				if (dev->access_fn || dev->actions)
 				{
 					u8 code = access_read(dev, fc->code, c->space, c->address, c->count);
 

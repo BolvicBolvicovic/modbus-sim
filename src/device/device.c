@@ -3,6 +3,7 @@
  * @brief Simulated device: data tables, points, reads and writes, file records, FIFOs, identification.
  */
 #include "device/device.h"
+#include "device/action.h"
 #include "device/machine.h"
 #include "os/os_time.h"
 #include <math.h>
@@ -464,6 +465,7 @@ device_restart(device_t* dev, u64 now_ms)
 	}
 	device_reset_models(dev, now_ms);
 	device_machines_restart(dev, now_ms);
+	device_actions_restart(dev);
 	/* Reboot re-arms every fault schedule from the new start time. The restart
 	 * kind keeps its own progress so a scheduled restart advances through its
 	 * steps and stops instead of re-arming itself forever; an overlay restart
@@ -609,8 +611,8 @@ device_get_point(const device_t* dev, space_kind_t space, u32 address, val_t* ou
 	return true;
 }
 
-bool
-device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in)
+static bool
+set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in, bool machine)
 {
 	const point_t*	point = NULL;
 	u16		words[4] = { 0 };
@@ -630,8 +632,23 @@ device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in
 	for (u32 i = 0; i < value_width(point->type); i++)
 		dev->spaces[space].value[address + i] = words[i];
 
-	dev->points[index].kind = POINT_MACHINE;
+	if (machine)
+		dev->points[index].kind = POINT_MACHINE;
+	else if (dev->points[index].kind != POINT_MACHINE)
+		dev->points[index].kind = POINT_STATIC;
 	return true;
+}
+
+bool
+device_set_point(device_t* dev, space_kind_t space, u32 address, const val_t* in)
+{
+	return set_point(dev, space, address, in, true);
+}
+
+bool
+device_set_point_host(device_t* dev, space_kind_t space, u32 address, const val_t* in)
+{
+	return set_point(dev, space, address, in, false);
 }
 
 bool

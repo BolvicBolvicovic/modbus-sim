@@ -15,6 +15,8 @@ Defines a point in one of the four Modbus tables, at an address a client can rea
   (noise ...)         ; optional, registers only: added to any of the above
   (degradation ...)   ; optional: drift, noise growth, stuck and fail over time
   (access ...)        ; coil and holding only: read-write (default) or read-only
+  (on-read ...)       ; optional: action run on every client read (single points only)
+  (on-write ...)      ; optional: action run after a client write (coil and holding only)
   (count N)           ; optional: repeat for N consecutive points
   (note "Text"))      ; optional comment, at most 127 bytes, shown next to the point
 ```
@@ -87,4 +89,5 @@ Read the first address, then one that is not defined:
 - [type](type.md)
 - [access](access.md)
 - [count](count.md)
+- [point actions](../actions/index.md)
 - [behaviours](../behaviours/index.md)

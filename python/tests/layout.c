@@ -15,6 +15,7 @@ main(void)
 	typedef mogbus_device_info_t I;
 	typedef mogbus_access_t A;
 	typedef mogbus_frame_t FR;
+	typedef mogbus_action_t AC;
 	typedef mogbus_connection_t CN;
 	typedef mogbus_client_options_t CO;
 	typedef mogbus_poll_fd_t PF;
@@ -45,6 +46,9 @@ main(void)
 	F(A, target); F(A, file); F(A, node); F(A, subindex); F(A, index); F(A, data); F(A, data_len);
 	SIZE(FR);
 	F(FR, direction); F(FR, mode); F(FR, peer); F(FR, data); F(FR, len); F(FR, capacity);
+	SIZE(AC);
+	F(AC, space); F(AC, address); F(AC, on_write); F(AC, name); F(AC, param_count); F(AC, params);
+	F(AC, params[0].name); F(AC, params[0].is_bool); F(AC, params[0].flag); F(AC, params[0].number);
 	SIZE(CN);
 	F(CN, connected); F(CN, id); F(CN, mode); F(CN, peer); F(CN, reason);
 	SIZE(CO);

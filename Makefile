@@ -230,7 +230,7 @@ TEST_SRCS   := $(filter-out tests/tests_utils/tls_client.c,$(TEST_SRCS))
 endif
 # These tests start the real binary or call config_load; the others run unchanged.
 ifeq ($(WITH_CONFIG),0)
-TEST_SRCS   := $(filter-out tests/config.c tests/ascii_cli.c tests/decode_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/host_name_cli.c tests/tcp_server.c \
+TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tests/decode_cli.c tests/rtu_cli.c tests/show_registers_cli.c tests/multi_server_cli.c tests/host_name_cli.c tests/tcp_server.c \
                             tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
                             tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif

@@ -1,6 +1,6 @@
 # Runtime control API
 
-With `(control on)` the HTTP endpoint also serves a JSON API under `/api/` that changes the running server: list the configured points, read and write registers and bits, set a point's decoded value, and add or remove faults.
+With `(control on)` the HTTP endpoint also serves a JSON API under `/api/` that changes the running server: list the configured points, read and write registers and bits, set a point's decoded value, add or remove faults, and change the params of point actions.
 
 It is off by default, and while it is off every `/api/` path answers 404.
 
@@ -44,10 +44,10 @@ request with an `Origin` header must come from the same `http://host:port` with
 | 200 | Done |
 | 400 | Malformed JSON, an unknown or misplaced field, a missing required field, a bad number in the URL, or `count`, `space`, `from` or `limit` out of range |
 | 403 | `Host` not allowed, or a cross-origin or non-JSON request with an `Origin` header (see Security) |
-| 404 | Unknown path, unit, space or fault kind, or `DELETE` of a fault that is not set |
+| 404 | Unknown path, unit, space, fault kind, or action or param, or `DELETE` of a fault that is not set |
 | 405 | Wrong method for that path |
 | 413 | `Content-Length` over 1024 |
-| 422 | The device refuses: undefined or out-of-range address, a point driven by a machine or by the host, or a fault value out of range or invalid for this transport |
+| 422 | The device refuses: undefined or out-of-range address, a point driven by a machine or by the host, a fault value out of range or invalid for this transport, or a boolean action param given something other than 0 or 1 |
 
 ## Two ways to write
 
@@ -64,6 +64,7 @@ curl -s -X PUT -d '{"values":[1234]}' http://127.0.0.1:9102/api/devices/1/holdin
 curl -s http://127.0.0.1:9102/api/devices/1/holding/0?count=1
 curl -s -X PUT -d '{"exception_code":6}' http://127.0.0.1:9102/api/devices/1/faults/exception
 curl -s -X DELETE http://127.0.0.1:9102/api/devices/1/faults/exception
+curl -s -X PUT -d '{"name":"step","value":5}' http://127.0.0.1:9102/api/devices/1/actions/holding/0/read
 ```
 
 ## See also

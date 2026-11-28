@@ -33,6 +33,26 @@ class DeviceInfoC(ctypes.Structure):
     ]
 
 
+class _ActionParam(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_char_p),
+        ("is_bool", ctypes.c_bool),
+        ("flag", ctypes.c_bool),
+        ("number", ctypes.c_double),
+    ]
+
+
+class ActionC(ctypes.Structure):
+    _fields_ = [
+        ("space", ctypes.c_int),
+        ("address", ctypes.c_uint32),
+        ("on_write", ctypes.c_bool),
+        ("name", ctypes.c_char_p),
+        ("param_count", ctypes.c_uint32),
+        ("params", _ActionParam * 16),
+    ]
+
+
 class _Ramp(ctypes.Structure):
     _fields_ = [
         ("from_", ctypes.c_double),
@@ -247,6 +267,11 @@ _sig("mogbus_device_count", _c.c_size_t, _ptr)
 _sig("mogbus_device_at", _ptr, _ptr, _c.c_size_t)
 _sig("mogbus_device_info", _c.c_bool, _ptr, _p(DeviceInfoC))
 _sig("mogbus_device_point_at", _c.c_bool, _ptr, _c.c_uint32, _p(PointC))
+_sig("mogbus_device_action_at", _c.c_bool, _ptr, _c.c_uint32, _p(ActionC))
+_sig("mogbus_device_set_action_param", _c.c_int, _ptr, _c.c_int, _c.c_uint32, _c.c_bool, _c.c_char_p,
+     _c.c_double)
+_sig("mogbus_device_get_action_param", _c.c_int, _ptr, _c.c_int, _c.c_uint32, _c.c_bool, _c.c_char_p,
+     _p(_c.c_double))
 _sig("mogbus_device_add_point", _c.c_int, _ptr, _p(PointC))
 _sig("mogbus_device_read", _c.c_int, _ptr, _c.c_int, _c.c_uint32, _c.c_uint32, _p(_c.c_uint16))
 _sig("mogbus_device_write", _c.c_int, _ptr, _c.c_int, _c.c_uint32, _c.c_uint32, _p(_c.c_uint16))

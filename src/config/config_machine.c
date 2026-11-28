@@ -4,6 +4,7 @@
  */
 #include "config/config_machine.h"
 #include "config/config_fault.h"
+#include "device/action.h"
 #include "vlib/macros.h"
 #include <math.h>
 #include <stdarg.h>
@@ -15,6 +16,8 @@ typedef struct machine_state_t machine_state_t;
 typedef struct staged_stmt_t staged_stmt_t;
 typedef struct top_list_t top_list_t;
 typedef struct compile_t compile_t;
+typedef struct action_def_t action_def_t;
+typedef struct action_pending_t action_pending_t;
 typedef enum operand_rule_t operand_rule_t;
 typedef enum result_rule_t result_rule_t;
 typedef struct expr_form_t expr_form_t;
@@ -36,6 +39,7 @@ static const char* const HANDLER_NAMES[HANDLER_COUNT] = {
 #define MACHINE_POINT_REF_MAX \
 	(MACHINE_MAX_MACHINES * (MACHINE_MAX_STATEMENTS + MACHINE_MAX_EXPR_NODES + \
 				 MACHINE_MAX_WRITE_HANDLERS + 1))
+#define ACTION_MAX_DEFS 64
 #define EMITTED_NONE UINT16_MAX
 #define NO_CHILD_SLOT UINT16_MAX
 
@@ -50,6 +54,22 @@ struct point_ref_t
 	const char*	text;		/**< copy of the s7 form in the scratch arena */
 };
 
+/** @brief A top-level (define-action ...): its name and the items after it. */
+struct action_def_t
+{
+	char		name[MACHINE_NAME_MAX];
+	s7_pointer	body;	/**< params, vars and statements */
+};
+
+/** @brief An (on-read ...)/(on-write ...) body of the current device, compiled at its end. */
+struct action_pending_t
+{
+	space_kind_t	space;
+	u32		address;
+	action_event_t	event;
+	s7_pointer	body;	/**< the items after on-read/on-write */
+};
+
 /** @brief Parser state lives in the scratch arena, never in a device or machine_def_t. */
 struct machine_state_t
 {
@@ -58,6 +78,10 @@ struct machine_state_t
 	u16		ref_by_stmt[MACHINE_MAX_MACHINES][MACHINE_MAX_STATEMENTS];
 	u16		state_register_ref[MACHINE_MAX_MACHINES];
 	u16		write_ref[MACHINE_MAX_MACHINES][MACHINE_MAX_WRITE_HANDLERS];
+	action_def_t	action_defs[ACTION_MAX_DEFS];	/**< kept for the whole file */
+	u16		action_def_count;
+	action_pending_t action_pending[ACTION_MAX_INSTANCES];	/**< bodies of the current device */
+	u16		action_pending_count;
 };
 
 /** @brief A parsed statement waiting for its children before it is emitted in order. */
@@ -96,6 +120,12 @@ struct compile_t
 	top_list_t	tops[MACHINE_MAX_STATES][HANDLER_COUNT];
 	top_list_t	write_tops[MACHINE_MAX_WRITE_HANDLERS];
 	u16		emitted[MACHINE_MAX_STATEMENTS];
+	/** Point actions only: the device whose points the body reads, and the attached point. */
+	device_t*	action_dev;
+	space_kind_t	self_space;
+	u32		self_address;
+	u16		param_count;	/**< the first variables are read-only parameters */
+	const char*	owner;		/**< error prefix replacing the machine/state one */
 };
 
 #define EXPR_ARITY_ANY UINT8_MAX
@@ -137,6 +167,7 @@ static bool compile_point(compile_t*, s7_pointer, const expr_form_t*, val_type_t
 static bool compile_nullary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_binary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_logical(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
+static bool compile_unary(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_not(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 static bool compile_if(compile_t*, s7_pointer, const expr_form_t*, val_type_t*, u16*);
 
@@ -157,6 +188,16 @@ static const expr_form_t EXPR_FORMS[] = {
 	{ "/",         EXPR_DIV,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
 	{ "min",       EXPR_MIN,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
 	{ "max",       EXPR_MAX,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "mod",       EXPR_MOD,        compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "abs",       EXPR_ABS,        compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "floor",     EXPR_FLOOR,      compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "round",     EXPR_ROUND,      compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "truncate",  EXPR_TRUNCATE,   compile_unary,   OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 2, 2 },
+	{ "bit-and",   EXPR_BIT_AND,    compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "bit-or",    EXPR_BIT_OR,     compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "bit-xor",   EXPR_BIT_XOR,    compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "shift",     EXPR_SHIFT,      compile_binary,  OPERAND_NUMBERS,   RESULT_NUM,  SPACE_COUNT, 3, 3 },
+	{ "bit-set?",  EXPR_BIT_SET,    compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
 	{ "<",         EXPR_LT,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
 	{ "<=",        EXPR_LE,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
 	{ ">",         EXPR_GT,         compile_binary,  OPERAND_NUMBERS,   RESULT_BOOL, SPACE_COUNT, 3, 3 },
@@ -229,6 +270,8 @@ fail_at(compile_t* c, s7_pointer form, const char* fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(detail, sizeof(detail), fmt, ap);
 	va_end(ap);
+	if (c->owner)
+		return form_fail(c->ctx, "%s: %s: %s", c->owner, form_text(c->ctx, form), detail);
 	return form_fail(c->ctx, "machine '%s', state '%s', %s: %s",
 			 c->machine_name ? c->machine_name : "(unknown)",
 			 c->state_name ? c->state_name : "(none)",
@@ -402,6 +445,19 @@ boolean_operand_ok(const expr_form_t* spec, val_type_t type)
 	return spec->operands != OPERAND_BOOLEANS || type == VAL_BOOL;
 }
 
+/** @brief Point actions resolve points while compiling: configured and not a string. */
+static bool
+action_point_ok(compile_t* c, s7_pointer form, space_kind_t space, u32 address, const char* what)
+{
+	u32 index = device_find_point(c->action_dev, space, address);
+
+	if (index == DEVICE_MAX_POINTS)
+		return fail_at(c, form, "%s must name the first address of a configured point", what);
+	if (c->action_dev->points[index].type == VT_STRING)
+		return fail_at(c, form, "a string point has no number to read or write");
+	return true;
+}
+
 static bool
 compile_point(compile_t* c, s7_pointer form, const expr_form_t* spec,
 	      val_type_t* type, u16* root)
@@ -411,8 +467,14 @@ compile_point(compile_t* c, s7_pointer form, const expr_form_t* spec,
 	u16		ref = 0;
 	expr_node_t	node = { 0 };
 
-	if (!parse_point_form(c, form, &space, &address) ||
-	    !add_point_ref(c, form, space, address, EMITTED_NONE, &ref))
+	if (!parse_point_form(c, form, &space, &address))
+		return false;
+	if (c->action_dev)
+	{
+		if (!action_point_ok(c, form, space, address, "point read"))
+			return false;
+	}
+	else if (!add_point_ref(c, form, space, address, EMITTED_NONE, &ref))
 		return false;
 	node.kind = spec->kind;
 	node.space = (u8)space;
@@ -423,7 +485,8 @@ compile_point(compile_t* c, s7_pointer form, const expr_form_t* spec,
 	*type = form_type(spec, VAL_NUM);
 	if (!add_node(c, form, node, root))
 		return false;
-	c->state->point_refs[ref - 1].expr_index = *root;
+	if (!c->action_dev)
+		c->state->point_refs[ref - 1].expr_index = *root;
 	return true;
 }
 
@@ -505,6 +568,28 @@ compile_logical(compile_t* c, s7_pointer form, const expr_form_t* spec,
 }
 
 static bool
+compile_unary(compile_t* c, s7_pointer form, const expr_form_t* spec,
+	      val_type_t* type, u16* root)
+{
+	val_type_t	first_type = VAL_NUM;
+	u16		first = 0;
+	expr_node_t	node = { 0 };
+
+	if (s7_list_length(c->ctx->sc, form) != spec->max_len)
+		return fail_at(c, form, "expected exactly one operand");
+	if (!compile_expr(c, s7_cadr(form), &first_type, &first))
+		return false;
+	if (first_type != VAL_NUM)
+		return fail_at(c, form, "operand must be a number");
+	node.kind = spec->kind;
+	node.a = first;
+	node.b = EXPR_NO_CHILD;
+	node.c = EXPR_NO_CHILD;
+	*type = form_type(spec, VAL_NUM);
+	return add_node(c, form, node, root);
+}
+
+static bool
 compile_not(compile_t* c, s7_pointer form, const expr_form_t* spec,
 	    val_type_t* type, u16* root)
 {
@@ -578,8 +663,22 @@ compile_expr(compile_t* c, s7_pointer form, val_type_t* type, u16* root)
 
 	if (s7_is_symbol(form))
 	{
-		u16 index = find_var(c->def, s7_symbol_name(form));
+		u16 index = MACHINE_MAX_VARS;
 
+		if (strcmp(s7_symbol_name(form), "self") == 0)
+		{
+			if (!c->action_dev)
+				return fail_at(c, form, "self is only valid in point actions");
+			node.kind = EXPR_POINT;
+			node.space = (u8)c->self_space;
+			node.a = EXPR_NO_CHILD;
+			node.b = EXPR_NO_CHILD;
+			node.c = EXPR_NO_CHILD;
+			node.address = c->self_address;
+			*type = space_is_bit(c->self_space) ? VAL_BOOL : VAL_NUM;
+			return add_node(c, form, node, root);
+		}
+		index = find_var(c->def, s7_symbol_name(form));
 		if (index == MACHINE_MAX_VARS)
 			return fail_at(c, form, "unknown variable name");
 		node.kind = EXPR_VAR;
@@ -636,7 +735,17 @@ compile_set(compile_t* c, s7_pointer form, bool top)
 
 	if (s7_list_length(c->ctx->sc, form) != 3)
 		return fail_at(c, form, "expected (set! TARGET EXPR)");
-	if (s7_is_symbol(target))
+	if (s7_is_symbol(target) &&
+	    strcmp(s7_symbol_name(target), "self") == 0)
+	{
+		if (!c->action_dev)
+			return fail_at(c, target, "self is only valid in point actions");
+		stmt.target_kind = TARGET_POINT;
+		stmt.space = (u8)c->self_space;
+		stmt.address = c->self_address;
+		target_type = space_is_bit(c->self_space) ? VAL_BOOL : VAL_NUM;
+	}
+	else if (s7_is_symbol(target))
 	{
 		tname = s7_symbol_name(target);
 		if (!name_ok(tname))
@@ -644,6 +753,8 @@ compile_set(compile_t* c, s7_pointer form, bool top)
 		stmt.var_index = find_var(c->def, tname);
 		if (stmt.var_index == MACHINE_MAX_VARS)
 			return fail_at(c, target, "unknown variable name");
+		if (stmt.var_index < c->param_count)
+			return fail_at(c, target, "a param is read-only");
 		stmt.target_kind = TARGET_VAR;
 		target_type = c->def->vars[stmt.var_index].initial.type;
 	}
@@ -658,7 +769,12 @@ compile_set(compile_t* c, s7_pointer form, bool top)
 		stmt.space = (u8)space;
 		stmt.address = address;
 		target_type = space_is_bit(space) ? VAL_BOOL : VAL_NUM;
-		if (!add_point_ref(c, target, space, address, EMITTED_NONE, &ref_index))
+		if (c->action_dev)
+		{
+			if (!action_point_ok(c, target, space, address, "set! target"))
+				return false;
+		}
+		else if (!add_point_ref(c, target, space, address, EMITTED_NONE, &ref_index))
 			return false;
 	}
 	else
@@ -833,23 +949,26 @@ flatten_statements(compile_t* c)
 }
 
 static bool
-parse_var(compile_t* c, s7_pointer form)
+parse_var(compile_t* c, s7_pointer form, const char* head)
 {
 	machine_var_def_t* var = NULL;
 	val_t		initial = { 0 };
 	const char*	name = NULL;
 
 	if (s7_list_length(c->ctx->sc, form) != 3 || !s7_is_symbol(s7_cadr(form)))
-		return fail_at(c, form, "expected (var NAME LITERAL)");
+		return fail_at(c, form, "expected (%s NAME LITERAL)", head);
 	name = s7_symbol_name(s7_cadr(form));
 	if (!name_ok(name))
 		return fail_at(c, s7_cadr(form), "bad variable name");
+	if (strcmp(name, "self") == 0)
+		return fail_at(c, s7_cadr(form), "self is a reserved name");
 	if (find_var(c->def, name) != MACHINE_MAX_VARS)
 		return fail_at(c, form, "duplicate variable name");
 	if (c->def->var_count >= MACHINE_MAX_VARS)
 		return fail_at(c, form, "MACHINE_MAX_VARS exceeded");
 	if (!parse_literal(c->ctx, s7_caddr(form), &initial))
-		return fail_at(c, form, "variable literal must be a finite number, #t or #f");
+		return fail_at(c, form, "%s literal must be a finite number, #t or #f",
+			       strcmp(head, "var") == 0 ? "variable" : head);
 	var = &c->def->vars[c->def->var_count++];
 	strcpy(var->name, name);
 	var->initial = initial;
@@ -1214,7 +1333,7 @@ parse_machine(compile_t* c, s7_pointer form, const char* machine_text, device_t*
 			if (phase != PHASE_VAR)
 				return fail_machine(c, form_text(c->ctx, item),
 						    "var must precede states and transitions");
-			if (!parse_var(c, item))
+			if (!parse_var(c, item, "var"))
 				return false;
 			continue;
 		}
@@ -1297,6 +1416,249 @@ config_machine_add(form_ctx_t* ctx, s7_pointer form, device_t* dev)
 	c.state = state;
 	c.def = &def;
 	return parse_machine(&c, form, text, dev);
+}
+
+/** @brief Heads a body cannot start a use of a defined action with. */
+static bool
+action_body_head(const char* head)
+{
+	return strcmp(head, "set!") == 0 ||
+	       strcmp(head, "when") == 0 ||
+	       strcmp(head, "unless") == 0 ||
+	       strcmp(head, "var") == 0 ||
+	       strcmp(head, "param") == 0;
+}
+
+/**
+ * @brief Reads the (param ...) and (var ...) items at the start of an action body.
+ *
+ * Stops at the first other item and returns it in `rest`.
+ */
+static bool
+parse_action_header(compile_t* c, s7_pointer items, bool allow_param, s7_pointer* rest)
+{
+	bool		seen_var = false;
+	s7_pointer	p = items;
+
+	for (; s7_is_pair(p); p = s7_cdr(p))
+	{
+		s7_pointer item = s7_car(p);
+
+		if (is_head(item, "param"))
+		{
+			if (!allow_param)
+				return fail_at(c, item, "param is only valid in define-action");
+			if (seen_var)
+				return fail_at(c, item, "param must precede var");
+			if (!parse_var(c, item, "param"))
+				return false;
+			c->param_count++;
+		}
+		else if (is_head(item, "var"))
+		{
+			seen_var = true;
+			if (!parse_var(c, item, "var"))
+				return false;
+		}
+		else
+			break;
+	}
+	*rest = p;
+	return true;
+}
+
+bool
+config_action_define(form_ctx_t* ctx, s7_pointer form)
+{
+	machine_state_t* state = get_machine_state(ctx);
+	compile_t	c = { 0 };
+	machine_def_t	def = { 0 };
+	char		owner[MACHINE_NAME_MAX + 32];
+	const char*	name = NULL;
+	s7_pointer	rest = NULL;
+	u32		statements = 0;
+
+	if (!state)
+		return false;
+	if (s7_list_length(ctx->sc, form) < 3 ||
+	    !s7_is_symbol(s7_cadr(form)))
+		return form_fail(ctx, "%s: expected (define-action NAME ITEM ... STATEMENT ...)",
+				 form_text(ctx, form));
+	name = s7_symbol_name(s7_cadr(form));
+	if (!name_ok(name) ||
+	    find_expr_form(name) ||
+	    action_body_head(name) ||
+	    strcmp(name, "self") == 0)
+		return form_fail(ctx, "define-action: bad action name '%s' (lowercase letters, digits and -, not a statement, expression, var, param or self)",
+				 name);
+	for (u16 i = 0; i < state->action_def_count; i++)
+	{
+		if (strcmp(state->action_defs[i].name, name) == 0)
+			return form_fail(ctx, "define-action '%s' is defined more than once", name);
+	}
+	if (state->action_def_count >= ACTION_MAX_DEFS)
+		return form_fail(ctx, "too many define-action forms (max %d)", ACTION_MAX_DEFS);
+
+	snprintf(owner, sizeof(owner), "define-action '%s'", name);
+	c.ctx = ctx;
+	c.state = state;
+	c.def = &def;
+	c.owner = owner;
+	if (!parse_action_header(&c, s7_cddr(form), true, &rest))
+		return false;
+	for (s7_pointer p = rest; s7_is_pair(p); p = s7_cdr(p))
+	{
+		if (!statement_form(s7_car(p)))
+			return fail_at(&c, s7_car(p), "expected a statement like (set! v 1); param and var must come first");
+		statements++;
+	}
+	if (statements == 0)
+		return form_fail(ctx, "%s: an action needs at least one statement", owner);
+
+	strcpy(state->action_defs[state->action_def_count].name, name);
+	state->action_defs[state->action_def_count++].body = s7_cddr(form);
+	return true;
+}
+
+bool
+config_action_defer(form_ctx_t* ctx, space_kind_t space, u32 address, action_event_t event,
+		    s7_pointer body)
+{
+	machine_state_t* state = get_machine_state(ctx);
+
+	if (!state)
+		return false;
+	if (state->action_pending_count >= ACTION_MAX_INSTANCES)
+		return form_fail(ctx, "too many point actions on one device (max %d)", ACTION_MAX_INSTANCES);
+	state->action_pending[state->action_pending_count++] = (action_pending_t){
+		.space = space,
+		.address = address,
+		.event = event,
+		.body = body,
+	};
+	return true;
+}
+
+static bool
+compile_pending_action(form_ctx_t* ctx, machine_state_t* state, device_t* dev,
+		       const action_pending_t* pending)
+{
+	compile_t	c = { 0 };
+	machine_def_t	def = { 0 };
+	char		owner[MACHINE_NAME_MAX + 128];
+	const action_def_t* adef = NULL;
+	s7_scheme*	sc = ctx->sc;
+	s7_pointer	first = s7_is_pair(pending->body) ? s7_car(pending->body) : s7_nil(sc);
+	const char*	head = form_head_name(first);
+	const char*	error = NULL;
+	s7_pointer	rest = NULL;
+	top_list_t*	list = &c.tops[0][HANDLER_TICK];
+	u32		given = 0;
+
+	snprintf(owner, sizeof(owner), "device '%s': %s %u %s", dev->name,
+		 space_name(pending->space), pending->address,
+		 pending->event == ACTION_ON_READ ? "on-read" : "on-write");
+	c.ctx = ctx;
+	c.state = state;
+	c.def = &def;
+	c.action_dev = dev;
+	c.self_space = pending->space;
+	c.self_address = pending->address;
+	c.owner = owner;
+	def.state_count = 1;
+	strcpy(def.states[0].name, "action");
+	c.handler = HANDLER_TICK;
+
+	if (head &&
+	    s7_is_null(sc, s7_cdr(pending->body)) &&
+	    !action_body_head(head))
+	{
+		for (u16 i = 0; i < state->action_def_count; i++)
+		{
+			if (strcmp(state->action_defs[i].name, head) == 0)
+				adef = &state->action_defs[i];
+		}
+		if (!adef)
+			return form_fail(ctx, "%s: unknown action %s", owner, head);
+		snprintf(owner, sizeof(owner), "device '%s': %s %u %s (action '%s')", dev->name,
+			 space_name(pending->space), pending->address,
+			 pending->event == ACTION_ON_READ ? "on-read" : "on-write", adef->name);
+		if (!parse_action_header(&c, adef->body, true, &rest))
+			return false;
+		for (s7_pointer p = s7_cdr(first); s7_is_pair(p); p = s7_cdr(p))
+		{
+			s7_pointer	arg = s7_car(p);
+			const char*	pname = NULL;
+			val_t		value = { 0 };
+			u16		index = 0;
+
+			if (s7_list_length(sc, arg) != 2 ||
+			    !s7_is_symbol(s7_car(arg)))
+				return fail_at(&c, arg, "expected (PARAM VALUE)");
+			pname = s7_symbol_name(s7_car(arg));
+			index = find_var(&def, pname);
+			if (index >= c.param_count)
+				return fail_at(&c, arg, "unknown param '%s' for action '%s'", pname,
+					       adef->name);
+			if ((given & (1u << index)) != 0)
+				return fail_at(&c, arg, "param '%s' is given more than once", pname);
+			given |= 1u << index;
+			if (!parse_literal(ctx, s7_cadr(arg), &value))
+				return fail_at(&c, arg, "param value must be a finite number, #t or #f");
+			if (value.type != def.vars[index].initial.type)
+				return fail_at(&c, arg, "param '%s' takes a %s", pname,
+					       def.vars[index].initial.type == VAL_BOOL ? "boolean" : "number");
+			def.vars[index].initial = value;
+		}
+	}
+	else if (!parse_action_header(&c, pending->body, false, &rest))
+		return false;
+
+	for (s7_pointer p = rest; s7_is_pair(p); p = s7_cdr(p))
+	{
+		u16 top_index = (u16)c.staged_count;
+
+		if (!compile_stmt(&c, s7_car(p), true))
+			return false;
+		if (list->count >= MACHINE_MAX_STATEMENTS)
+			return fail_at(&c, s7_car(p), "MACHINE_MAX_STATEMENTS exceeded");
+		list->indices[list->count++] = top_index;
+	}
+	if (list->count == 0)
+		return form_fail(ctx, "%s: an action needs at least one statement", owner);
+	if (!flatten_statements(&c))
+		return false;
+	error = device_add_action(dev, pending->space, pending->address, pending->event,
+				  adef ? adef->name : "", c.param_count, &def);
+	if (error)
+		return form_fail(ctx, "%s: %s", owner, error);
+	return true;
+}
+
+bool
+config_action_compile(form_ctx_t* ctx, device_t* dev)
+{
+	machine_state_t* state = ctx->machine_state;
+
+	if (!state)
+		return true;
+	for (u16 i = 0; i < state->action_pending_count; i++)
+	{
+		if (!compile_pending_action(ctx, state, dev, &state->action_pending[i]))
+			return false;
+	}
+	state->action_pending_count = 0;
+	return true;
+}
+
+bool
+config_action_finalize(form_ctx_t* ctx, device_t* dev)
+{
+	const char* error = device_finalize_actions(dev);
+
+	if (error)
+		return form_fail(ctx, "device '%s': %s", dev->name, error);
+	return true;
 }
 
 static const char*

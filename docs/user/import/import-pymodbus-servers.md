@@ -17,9 +17,11 @@ Anything else gets a warning and no server section.
 
 ## Not supported
 
-- Custom Python actions: the initial value is kept as a static value and a warning is written. Other
-  actions on `bits` and strings likewise. (`timestamp` on registers is mapped to clock points and
-  `reset` to a failing read, see [the reset action](import-pymodbus.md).)
+- The code of custom Python actions: it is Python and cannot be imported, so each custom action
+  becomes a stub to fill in (see [custom actions](import-pymodbus.md)). The other actions on `bits`
+  and strings keep the initial value as a static value and a warning is written. (`timestamp` on
+  registers is mapped to clock points and `reset` to a failing read, see
+  [the reset action](import-pymodbus.md).)
 - `invalid`: ignored. Every address without a point already answers exception 02 in mogbus.
 - `type exception` (rejecting requests that split a 32-bit value) and the pymodbus HTTP interface.
 - A pymodbus server with a `device_id` answers that unit id only, and the importer follows it; without

@@ -10,6 +10,7 @@
 #ifndef FUZZ_COMMON_H
 #define FUZZ_COMMON_H
 
+#include "device/action.h"
 #include "device/device.h"
 #include "modbus/mbap.h"
 #include "modbus/pdu.h"
@@ -85,6 +86,19 @@ fuzz_device(void)
 	p.static_value = 0;
 	p.model        = (model_t){ .degradation = { .has_fail = true, .fail_after_ms = 100 } };
 	FUZZ_CHECK(device_add_point(dev, &p) == NULL);
+	{
+		/* A point action with a number and a boolean parameter, for /api/.../actions. */
+		static machine_def_t body;
+
+		body.var_count = 2;
+		body.state_count = 1;
+		snprintf(body.vars[0].name, sizeof(body.vars[0].name), "step");
+		body.vars[0].initial = (val_t){ .type = VAL_NUM, .n = 1 };
+		snprintf(body.vars[1].name, sizeof(body.vars[1].name), "on");
+		body.vars[1].initial = (val_t){ .type = VAL_BOOL, .b = true };
+		FUZZ_CHECK(device_add_action(dev, SPACE_HOLDING, 0, ACTION_ON_READ, "act", 2, &body) == NULL);
+		FUZZ_CHECK(device_add_action(dev, SPACE_HOLDING, 1, ACTION_ON_WRITE, "", 0, &body) == NULL);
+	}
 	device_reset_models(dev, 0);
 	p = (point_t){ .space = SPACE_HOLDING, .kind = POINT_STATIC, .type = VT_U64, .address = 300,
 		       .static_value = 1e15 };
