@@ -7,7 +7,7 @@
  * writes with an access hook, keeps an event log in file records and a level history in a FIFO,
  * and shuts down on Ctrl-C. `--self-test` makes the program its own Modbus client and exits 0 when
  * every check passes. Only "mogbus.h" is included from the library; see
- * docs/user/library/library-start.md.
+ * docs/user/tutorial/tutorial-start.md.
  */
 #include "mogbus.h"
 #include <arpa/inet.h>

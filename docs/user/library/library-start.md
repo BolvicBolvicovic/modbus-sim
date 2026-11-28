@@ -1,44 +1,19 @@
 # Embedding mogbus in C
 
-Build a Modbus test harness around mogbus: a program that owns a simulated water pumping station, runs the process behind it, and serves it to the client you want to test.
+Link the mogbus library into your own program: create devices, serve them over any transport from your own loop, move their values from the host side and veto or react to client requests.
 
-The `mogbus` binary is one front end. The same code is a static and a shared library with a small C API, so your own program can create devices, serve them over any transport from its own loop, move their values from the host side and veto or react to client requests. This tutorial walks through one realistic program, step by step. The API itself is described in the @ref mogbus.h "C API reference"; the tutorial links to it and does not repeat signatures.
+The `mogbus` binary is one front end. The same code is a static and a shared library with a small C API, so a program can be a Modbus test harness. The API itself is described in the @ref mogbus.h "C API reference". The [pumping station tutorial](../tutorial/tutorial-start.md) builds one realistic harness step by step, with the C code next to the config and the Python version; the pages below are the reference for what it uses.
 
 From Python, see [Using mogbus from Python](../python/python-start.md): a `ctypes` package over `libmogbus.so`.
 
-## The job
+## Pages
 
-A team is writing a SCADA screen and a data logger for a water pumping station. The real PLC is not available, and they want to test their code against something that behaves like it, including alarms, refused writes and an event log. The harness serves unit 1, "Pump station", with these points:
-
-| Table | Address | Type | Meaning |
-|---|---|---|---|
-| holding | 0-1 | float32 | level setpoint (m), default 2.5, writable |
-| holding | 2 | u16 | mode: 0 off, 1 auto, 2 manual (default 1) |
-| holding | 10-17 | string, 8 registers | site name, `NORTH-01`, read-only |
-| coil | 0 | bit | pump run command (manual mode) |
-| discrete | 0 | bit | high-level alarm |
-| discrete | 1 | bit | low-level alarm |
-| discrete | 2 | bit | pump running feedback |
-| input | 0-1 | float32 | tank level (m) |
-| input | 2-3 | float32 | outflow (m3/h) |
-| input | 4 | u16 | motor current, 0.1 A units |
-| input | 10-11 | u32 | pump run seconds |
-
-The program adds an inlet temperature ramp (input 6), a wall-clock minute (input 20), an event log in file 1 and a level history in a FIFO at address 0. The same station is built from a config file in [the app tutorial](../tutorial-app.md) and from Python in [the Python tutorial](../python/python-start.md).
-
-## What the tutorial covers
-
-The complete program is
-[`examples/tutorial/pump_station.c`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/tutorial/pump_station.c).
-Each step explains one part of it, and the code shown in a step is quoted from that file.
-
-1. [Build the device](library-device.md): context, device, points of every kind, strings, read-only points, ramps, clock fields, file records, FIFO and building the device from a config file.
-2. [Serve it from your own loop](library-serve.md): server options and modes, `mogbus_server_step`, probing, errors, the HTTP endpoint and web UI.
-3. [Simulate the process from the host](library-simulate.md): client writes against host writes, decoded and raw values, strings.
-4. [Guard clients and keep records](library-hooks.md): the access hook, file records as an event log, a FIFO refreshed on demand.
-5. [Observe, shut down, lifetimes and threading](library-lifetimes.md): logging, metrics, signals, ownership rules.
-
-The [Python tutorial](../python/python-start.md) follows the same five steps.
+- [Devices and points](library-device.md): context, points of every type, strings, ramps, file records, FIFOs, devices from a config file.
+- [Servers](library-serve.md): options, several servers, your own loop or event loop, probing, the HTTP endpoint.
+- [Host writes](library-simulate.md): client writes against host writes, decoded and raw values, strings.
+- [Hooks](library-hooks.md): the access hook, the post-write hook, vendor function codes, frame and connection hooks.
+- [Logging, shutdown, lifetimes and threading](library-lifetimes.md)
+- [The C client](library-client.md)
 
 ## Build and link
 
@@ -73,7 +48,7 @@ With a shared library, `LD_LIBRARY_PATH` works instead of the rpath. The version
 
 ## Run it
 
-Build the tutorial program with one of the commands above (from a checkout, with `examples/tutorial/pump_station.c` as the source) and run it for a few seconds:
+Build the tutorial program ([the tutorial](../tutorial/tutorial-start.md)) with one of the commands above (from a checkout, with `examples/tutorial/pump_station.c` as the source) and run it for a few seconds:
 
 ```bash
 ./pump_station --seconds 7 --port 1502
@@ -97,11 +72,12 @@ The options belong to the tutorial program, not to mogbus; they are parsed by it
 
 - `--port N` sets the Modbus TCP port and `--seconds N` stops the program after N seconds (the default is to run until Ctrl-C).
 - `--speed X` (default 10) scales the simulated time.
-- `--self-test` makes the program its own Modbus client: it serves the station, sends a series of requests to itself, prints one `ok` or `FAIL` line for each check and exits 0 when every check passed. The steps below quote those lines to show what each API call does on the wire.
-- `--config FILE` loads a config file first (see [step 1](library-device.md#building-the-device-from-a-config-file)), `--unit N` moves the station to another unit id so it can coexist with the devices of that file, `--http PORT` turns on the web UI and `--verbose` logs every request.
+- `--self-test` makes the program its own Modbus client: it serves the station, sends a series of requests to itself, prints one `ok` or `FAIL` line for each check and exits 0 when every check passed. The tutorial quotes those lines to show what each API call does on the wire.
+- `--config FILE` loads a config file first (see [devices and points](library-device.md#building-the-device-from-a-config-file)), `--unit N` moves the station to another unit id so it can coexist with the devices of that file, `--http PORT` turns on the web UI and `--verbose` logs every request.
 
 ## See also
 
 - @ref mogbus.h "C API reference"
 - [Using mogbus from Python](../python/python-start.md)
+- [Pumping station tutorial](../tutorial/tutorial-start.md)
 - [Config reference](../config/format.md)

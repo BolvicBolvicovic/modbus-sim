@@ -1,6 +1,6 @@
-# Step 6: Test your client against the station
+# Testing with mogbus in Python
 
-> **Summary:** Turn the station into a test fixture: a fresh simulated plant per test, simulated time under the test's control, unittest or pytest.
+Turn the station into a test fixture: a fresh simulated plant per test, simulated time under the test's control, unittest or pytest.
 
 The point of all this is to test *your* code, so the last step is to put the station in a fixture and
 write tests for the kind of code you ship. The example has two small functions standing in for it (a
@@ -12,7 +12,7 @@ status screen and a setpoint raiser) in
 `running_station()` in the example builds the device, installs the hook, pins the inflow so every run
 has the same curve, serves on free loopback ports with the control API on, and closes everything on
 exit. The process model is *not* ticking: a test moves simulated time by calling `process.tick()`,
-which makes tests fast and deterministic. The function yields a `Station`, a small object that holds `ctx`, `dev`, `process`, `policy`, `server` and the ports, and has `client()` (a new `Client` of step 2) and `http(method, path, body)` (a call to the runtime control API of [step 5](python-lifetimes.md#runtime-control)). The excerpt omits the lines that also install the post-write hook and the vendor function code of [step 4](python-hooks.md).
+which makes tests fast and deterministic. The function yields a `Station`, a small object that holds `ctx`, `dev`, `process`, `policy`, `server` and the ports, and has `client()` (a new `Client`) and `http(method, path, body)` (a call to the runtime control API of [runtime control](python-lifetimes.md#runtime-control)). The excerpt omits the lines that also install the post-write hook and the vendor function code of the [hooks](python-hooks.md).
 
 ```python
 @contextlib.contextmanager
@@ -132,7 +132,7 @@ simpler fixture around \ref mogbus::core::serve "serve()" with a config is in
 
 - One context per test, closed by a `with` or a cleanup, so ports and threads never leak.
 - Move simulated time with a function, not `time.sleep()`: put the model behind `tick(dt)` and keep
-  the thread of [step 5](python-lifetimes.md#threads-and-locks) for demos.
+  the thread of [threads and locks](python-lifetimes.md#threads-and-locks) for demos.
 - Use `probe()` or a first request to wait for readiness; the transport listens as soon as
   `serve()` returns, so a client can connect before the first step.
 - Assert on the audit trail and on the metrics (`Server.metrics()`) to check what your client sent,
@@ -141,7 +141,7 @@ simpler fixture around \ref mogbus::core::serve "serve()" with a config is in
   delays, dropped replies and disconnects.
 
 Frame hooks, which show and rewrite what a server sends, are covered in
-[step 4](python-hooks.md#watching-and-rewriting-frames).
+[hooks](python-hooks.md#watching-and-rewriting-frames).
 
 ## Where next
 
@@ -157,5 +157,6 @@ Frame hooks, which show and rewrite what a server sends, are covered in
 ## See also
 
 - [Using mogbus from Python](python-start.md)
-- [Step 5: Observe, shut down, lifetimes and threading](python-lifetimes.md)
+- [Logs, control, threads and lifetimes](python-lifetimes.md)
+- [Tutorial step 7: Test your client](../tutorial/tutorial-test.md)
 - \ref core.py "Python API reference"

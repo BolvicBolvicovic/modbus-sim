@@ -1,35 +1,6 @@
-# Step 1: Build the device
+# Devices and points in C
 
-> **Summary:** Create a context, add the pumping-station device to it and describe its points, strings, ramps, a clock field, an event log and a FIFO, either in code or from a config file.
-
-## The program's state
-
-The tutorial program keeps what it needs in one struct, `struct station`. This step uses only its first field; the others are introduced in the steps that need them:
-
-```c
-struct station
-{
-	mogbus_device_t*	dev;		/* the device built in this step */
-	double			level;		/* tank level, m (step 3) */
-	...
-	unsigned		refused;	/* writes vetoed by the hook (step 4) */
-};
-```
-
-`dev` is the handle of the pumping-station device, a `mogbus_device_t*` that the library gives out when a device is added. Every later call that reads or changes the station takes it. The program also names every address of the scenario in an enum, so the code says `HOLD_SETPOINT` instead of `0`:
-
-```c
-enum
-{
-	HOLD_SETPOINT = 0,	/* holding 0-1: float32, metres */
-	HOLD_MODE     = 2,	/* holding 2: u16 */
-	HOLD_SITE     = 10,	/* holding 10-17: string of 8 registers */
-	COIL_RUN      = 0,
-	...
-};
-```
-
-These are the addresses of the table in [the job](library-start.md#the-job). The function `build_device(ctx, st, unit)` fills a `struct station` and returns a status code; the sections below quote its parts.
+Create a context, add the pumping-station device to it and describe its points, strings, ramps, a clock field, an event log and a FIFO, either in code or from a config file.
 
 ## Context and device
 
@@ -89,7 +60,7 @@ The site name is a string point: `length` registers of two ASCII characters, hol
   ok   FC 16 on the read-only site name: exception 02
 ```
 
-Host code can still change a read-only point, which is what lets the station update things clients must not write; [step 3](library-simulate.md) shows how.
+Host code can still change a read-only point, which is what lets the station update things clients must not write; [host writes](library-simulate.md) shows how.
 
 ## Ramps and clock fields
 
@@ -115,28 +86,9 @@ return error != MOGBUS_OK ? error : mogbus_device_add_fifo(st->dev, FIFO_ADDRESS
 
 @ref mogbus_device_add_file_record "mogbus_device_add_file_record()" adds the file records (clients read them with FC 14 and write them with FC 15), and @ref mogbus_device_add_fifo "mogbus_device_add_fifo()" adds the queue (clients read it with FC 18); the last two arguments are the initial number of values and their array, here none. A file holds records numbered up to 9999, added in ranges of 1 to 126 records that must not overlap (at most 16 files and 64 ranges per file); a FIFO holds up to 31 values, and storage always has room for all 31 so it can grow later. CANopen objects for FC 2B/0D work the same way with @ref mogbus_device_add_canopen_object "mogbus_device_add_canopen_object()". [Step 4](library-hooks.md) fills and guards these.
 
-## Check what you built
-
-@ref mogbus_device_info "mogbus_device_info()" fills a snapshot: name, unit id, points per table, configured faults and user-defined function codes. After `build_device()`, `main()` prints it:
-
-```c
-mogbus_device_info_t info;
-
-mogbus_device_info(st.dev, &info);
-printf("device \"%s\", unit %u: %u holding, %u input, %u coil, %u discrete points\n", info.name,
-       info.unit_id, info.point_count[MOGBUS_HOLDING], info.point_count[MOGBUS_INPUT],
-       info.point_count[MOGBUS_COIL], info.point_count[MOGBUS_DISCRETE]);
-```
-
-```text
-device "Pump station", unit 1: 3 holding, 6 input, 1 coil, 3 discrete points
-```
-
-Holding counts three points (setpoint, mode, site name), input six, coil one and discrete three. @ref mogbus_find_device "mogbus_find_device()", @ref mogbus_device_count "mogbus_device_count()" and @ref mogbus_device_at "mogbus_device_at()" look devices up or enumerate them in order.
-
 ## Building the device from a config file
 
-The same station can be written as a config file (see [the app tutorial](../tutorial-app.md)). @ref mogbus_load_config "mogbus_load_config()" adds the devices of a file to the context and remembers its `(server ...)` section; on failure the context is unchanged and `mogbus_last_error(ctx)` says why. A config can describe what the API cannot build: machines, faults and user-defined function codes matched by request pattern. Code-built and loaded devices can be mixed in one context.
+The same station can be written as a config file (see [the tutorial](../tutorial/tutorial-start.md)). @ref mogbus_load_config "mogbus_load_config()" adds the devices of a file to the context and remembers its `(server ...)` section; on failure the context is unchanged and `mogbus_last_error(ctx)` says why. A config can describe what the API cannot build: machines, faults and user-defined function codes matched by request pattern. Code-built and loaded devices can be mixed in one context.
 
 The tutorial program takes `--config FILE`. `main()` loads the file before it builds the station, so the station is added next to the devices of the file. In the excerpt, `config` is the path from the command line, `options` the server options the program will use (step 2) and `from_config` a temporary of the same type:
 
@@ -161,6 +113,3 @@ serving 3 device(s) on 127.0.0.1:41347
 
 @ref mogbus_device_set_any_unit "mogbus_device_set_any_unit()" makes one device answer every unit id nobody else has, like `(any-unit on)`.
 
-## Next
-
-- [Step 2: Serve it from your own loop](library-serve.md)

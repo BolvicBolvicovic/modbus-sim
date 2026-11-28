@@ -8,8 +8,21 @@
       "items": [
         "docs/user/get-started.md",
         "docs/user/features.md",
-        "docs/user/building.md",
-        "docs/user/tutorial-app.md"
+        "docs/user/building.md"
+      ]
+    },
+    {
+      "title": "Tutorial",
+      "items": [
+        "docs/user/tutorial/tutorial-start.md",
+        "docs/user/tutorial/tutorial-device.md",
+        "docs/user/tutorial/tutorial-serve.md",
+        "docs/user/tutorial/tutorial-simulate.md",
+        "docs/user/tutorial/tutorial-guard.md",
+        "docs/user/tutorial/tutorial-faults.md",
+        "docs/user/tutorial/tutorial-observe.md",
+        "docs/user/tutorial/tutorial-test.md",
+        "docs/user/tutorial/tutorial-ship.md"
       ]
     },
     {

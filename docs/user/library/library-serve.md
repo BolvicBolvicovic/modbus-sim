@@ -1,8 +1,8 @@
-# Step 2: Serve it from your own loop
+# Serving from C
 
-> **Summary:** Pick a transport, create the server, and step it from the program's own loop instead of handing the thread over.
+Pick a transport, create the server, and step it from the program's own loop instead of handing the thread over.
 
-A server (`mogbus_server_t*`, created below) exposes the devices of the context at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [step 1](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
+A server (`mogbus_server_t*`, created below) exposes the devices of the context at the moment it is created, over one transport. Devices added later are not served, so build the devices first, as in [devices and points](library-device.md). A context holds up to `MOGBUS_MAX_SERVERS` servers.
 
 ## Several servers
 
@@ -24,11 +24,11 @@ Every transport of the `mogbus` binary is a `mogbus_mode_t`: Modbus TCP (optiona
 
 The `*_FD` modes take a byte-stream file descriptor you own (a socketpair or a PTY master), which makes a test harness possible without any network: one end is the simulator, the other the client under test. The library never closes it.
 
-If you loaded a config in step 1, @ref mogbus_config_server_options "mogbus_config_server_options()" gives you its `(server ...)` section as options, and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" creates the server from it directly. The tutorial program starts from the file's options when there is one, and lets `--port` override the port.
+If you loaded a config (see [devices and points](library-device.md#building-the-device-from-a-config-file)), @ref mogbus_config_server_options "mogbus_config_server_options()" gives you its `(server ...)` section as options, and @ref mogbus_server_create_from_config "mogbus_server_create_from_config()" creates the server from it directly. The tutorial program starts from the file's options when there is one, and lets `--port` override the port.
 
 ## Check, then create
 
-@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and hands the server back through its last parameter (NULL on failure). In `main()`, `ctx` is the context of step 1 and `g_server` a global that step 5 explains (it lets Ctrl-C stop the server):
+@ref mogbus_server_check "mogbus_server_check()" validates options exactly like create (device path, fd, serial line, string lengths, TLS files through a throwaway TLS context) without opening anything, so a port that is in use still passes. @ref mogbus_server_create "mogbus_server_create()" then starts the transport and hands the server back through its last parameter (NULL on failure). In `main()`, `ctx` is the context and `g_server` a global that [stopping](library-lifetimes.md#stopping-on-signals) explains (it lets Ctrl-C stop the server):
 
 ```c
 if (mogbus_server_check(ctx, &options) != MOGBUS_OK) { ... }
@@ -44,14 +44,14 @@ On failure @ref mogbus_server_create "mogbus_server_create()" returns a @ref mog
 
 ## The loop
 
-You own the thread. @ref mogbus_server_step "mogbus_server_step()" runs one poll iteration (accept, read, answer, write whatever is ready) and returns after at most `max_wait_ms` (0 = do not block, -1 = until the server's next deadline). Interleave it with your own work. In the tutorial program, `now_s()` is the program's clock in seconds, `st` the `struct station` of step 1, `speed` the `--speed` factor and `simulate()` the process model of [step 3](library-simulate.md); each pass of the loop advances the simulation by the real time elapsed since the last pass:
+You own the thread. @ref mogbus_server_step "mogbus_server_step()" runs one poll iteration (accept, read, answer, write whatever is ready) and returns after at most `max_wait_ms` (0 = do not block, -1 = until the server's next deadline). Interleave it with your own work. In the tutorial program, `now_s()` is the program's clock in seconds, `st` the `struct station` of the tutorial program, `speed` the `--speed` factor and `simulate()` the process model of [host writes](library-simulate.md); each pass of the loop advances the simulation by the real time elapsed since the last pass:
 
 ```c
 while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
 {
 	double t = now_s();
 
-	simulate(&st, (t - last) * speed);   /* step 3 */
+	simulate(&st, (t - last) * speed);   /* host writes */
 	last = t;
 	...
 }
@@ -103,28 +103,6 @@ In a real program a probe thread or an external `mogbus --health` does the same.
   ok   mogbus_probe answers from a child process
 ```
 
-## The program as its own client
-
-Everything the tutorial shows about requests is checked by `--self-test`, a mode of the tutorial program (not of mogbus) in which the program sends Modbus TCP requests to its own server and prints an `ok` or `FAIL` line for each expectation, as quoted in the steps. It needs no second thread or process because it steps the server itself. The helper `exchange()` writes one request on a connected socket `fd`, then steps the server between reads until the reply is complete:
-
-```c
-for (int i = 0; i < 2000; i++)
-{
-	if (mogbus_server_step(server, 1) != MOGBUS_STEP_CONTINUE) return -1;
-	if (poll(&pfd, 1, 0) > 0) { n = read(fd, reply + got, 260 - got); ... }
-	if (got >= 7 && got >= 6 + (size_t)(reply[4] << 8 | reply[5])) return (int)got - 7;
-}
-```
-
-The checks that follow use it, and the reads are real Modbus traffic:
-
-```text
-  ok   FC 03 reads the setpoint, 2.5 m
-  ok   FC 03 reads the site name string
-```
-
-The same trick tests any harness that needs a client and a server in one process. The self-test is how the tutorial program is verified, so the `ok` lines in these pages can be reproduced by running it.
-
 ## An HTTP endpoint and the web UI
 
 The options also carry the observability endpoint. With `--http PORT` the tutorial program sets three fields before creating the server (`http_port` is the number from the command line):
@@ -141,6 +119,3 @@ options.http_ui = true;
 
 `show_registers_ms` (10 to 60000; 0 = off) asks the context to show the points of all its devices while it is stepped: a table redrawn in place when stdout is a terminal, text or JSON lines otherwise (full snapshot, then changes), the same view as `mogbus --show-registers`. It is drawn by @ref mogbus_step "mogbus_step()" and @ref mogbus_run "mogbus_run()", at the smallest interval any live server asked for, and the log lines go below the table while it is on (a host log sink installed with @ref mogbus_set_log_sink "mogbus_set_log_sink()" keeps them). See [show-registers](../config/server/show-registers.md).
 
-## Next
-
-- [Step 3: Simulate the process from the host](library-simulate.md)

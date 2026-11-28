@@ -1,54 +1,16 @@
-# Step 4: Guard clients and keep records
+# Hooks in C
 
-> **Summary:** Install an access hook that vets client writes, react after accepted writes, log events in file records, and serve a FIFO that is refreshed just before a client reads it.
+Install an access hook that vets client writes, react after accepted writes, log events in file records, and serve a FIFO that is refreshed just before a client reads it.
 
 An access hook (@ref mogbus_access_fn "mogbus_access_fn") runs on the Modbus client path of one device. It is the embedded counterpart of subclassing a datastore: refresh a value right before a read, react to a write, or veto it. Install it with @ref mogbus_device_set_access_hook "mogbus_device_set_access_hook()" (NULL removes it; a device has one hook and a new one replaces it):
 
-In the tutorial program, `main()` installs its function `on_access` on the station's device, passing the address of its `struct station` (see [step 1](library-device.md#the-programs-state)) as the `user` pointer, which the library hands back to the hook on every call:
+In the tutorial program, `main()` installs its function `on_access` on the station's device, passing the address of its `struct station` (see [step 1](../tutorial/tutorial-device.md)) as the `user` pointer, which the library hands back to the hook on every call:
 
 ```c
 mogbus_device_set_access_hook(st.dev, on_access, &st);
 ```
 
 The hook gets the `user` pointer, the device and a @ref mogbus_access_t "mogbus_access_t" describing the request: `kind` (read or write), the `target`, the `function_code` and the fields the target uses. For the four tables those are `space`, the first `address`, the `count` of registers or bits and, for writes, the raw `values` about to be stored (bits as 0 or 1; NULL for reads). Return 0 to let the request go on, or a Modbus exception code to answer instead. A vetoed write changes nothing, so [writes stay all-or-nothing](../modbus/writes.md).
-
-## Rules for the station
-
-`on_access` in the example enforces what the real PLC would:
-
-- while the mode is off, every write but the mode register is refused with exception 04 (server device failure);
-- a setpoint outside 0.5 to 4.5 m, or half of the float32, is refused with exception 03;
-- a mode above 2 is refused with exception 03;
-- the event log is the host's: client writes to it get exception 01.
-
-The excerpts below are from `on_access`, where `a` is the `mogbus_access_t` of the request, `dev` the device, `st` the station struct recovered from `user`, and `float_of()` a helper that decodes two registers as a float32. The first rule reads the current mode with the host-side `mogbus_device_get_value()` (a host call, so it does not trigger the hook again) and refuses any write but a single write to the mode register while the station is off; the second decodes the float32 the client is writing and refuses it outside the range:
-
-```c
-mogbus_device_get_value(dev, MOGBUS_HOLDING, HOLD_MODE, &mode);
-if (mode == MODE_OFF &&
-    !(a->space == MOGBUS_HOLDING && a->address == HOLD_MODE && a->count == 1))
-{
-	st->refused++;
-	return 4;
-}
-...
-double sp = float_of(a->values + (HOLD_SETPOINT - a->address));
-if (!(sp >= 0.5 && sp <= 4.5))
-	return 3;
-```
-
-A client may write a range that overlaps the setpoint partly (an FC 16 over holding 1-2), so the hook checks both registers of the float are in the range or none. The self-test tries each rule:
-
-```text
-  ok   FC 16 setpoint 9.0 m is refused by the hook: exception 03
-  client write: FC 10, holding address 0, 2 item(s)
-  ok   FC 16 setpoint 3.0 m is accepted
-  ok   FC 06 mode 7 is refused: exception 03
-  ok   FC 05 while off is refused: exception 04
-  ok   FC 15 on the event log is refused: exception 01
-```
-
-The `client write:` line is the post-write hook (see below) logging every accepted write: a data logger under test can be checked against it. Calls from the host side (`mogbus_device_write`, `set_value`, the HTTP control API, machines) never reach the hook.
 
 ## Where the hook runs
 
@@ -112,42 +74,6 @@ mogbus_device_add_function_code(st.dev, FC_STATUS_BLOCK, status_block, &st);
 - FC 15 (Write File Record): after validation, the write hook runs for every sub-request in order before anything is written; a nonzero return writes nothing.
 - FC 18 (Read FIFO Queue): after the address is known to exist and before the queue is read.
 - FC 2B/0D (CANopen): once the object exists and the range is inside it. A veto is answered as the extended failure `CE` with the SDO abort code `0x08000020`, whatever nonzero value is returned, because the CANopen response has no place for a Modbus exception code (see [CANopen General Reference](../modbus/fc2b-0d-canopen-general-reference.md)).
-
-## An event log in file records
-
-Clients read the event log with FC 14; the host appends to it. The layout is the program's own: record 1 counts the events, records 2 to 100 are a ring of codes (high byte what, `EVT_*` constants such as `EVT_PUMP` and `EVT_MODE`; low byte the value). The program's `log_event(st, code)`, called by `simulate()` and by the post-write hook, appends one code: it picks the next slot of the ring from the event counter `st->events` and writes with @ref mogbus_device_write_file_records "mogbus_device_write_file_records()", a host call that does not trigger the hook:
-
-```c
-uint16_t slot = (uint16_t)(2 + st->events % (LOG_RECORDS - 1));
-uint16_t count = (uint16_t)++st->events;
-
-mogbus_device_write_file_records(st->dev, LOG_FILE, slot, 1, &code);
-mogbus_device_write_file_records(st->dev, LOG_FILE, 1, 1, &count);
-```
-
-@ref mogbus_device_read_file_records "mogbus_device_read_file_records()" reads them from the host. Both fail, changing nothing, if any record is undefined. The simulation logs pump starts and stops and alarms; the post-write hook logs accepted setpoint and mode writes (`EVT_SETPOINT | setpoint*10`, `EVT_MODE | mode`). The self-test's FC 14 request reads record 1:
-
-```text
-  ok   FC 14 reads the event counter (at least 5 events)
-```
-
-## A FIFO refreshed on read
-
-FC 18 returns a queue of up to 31 values. `simulate()` keeps the last 31 level samples (in centimetres, newest last) in `st->samples`, `st->sample_count` of them; the first branch of `on_access` copies them into the queue right before a client reads it (`a->address` is the queue's pointer address):
-
-```c
-if (a->target == MOGBUS_TARGET_FIFO)
-{
-	mogbus_device_set_fifo(dev, (uint16_t)a->address, (uint16_t)st->sample_count, st->samples);
-	return 0;
-}
-```
-
-@ref mogbus_device_set_fifo "mogbus_device_set_fifo()" replaces the queue's contents (0 to 31 values), host side. Refreshing in the hook means the queue costs nothing between reads.
-
-```text
-  ok   FC 18 returns the last 31 level samples
-```
 
 ## CANopen objects
 
@@ -228,6 +154,3 @@ mogbus_server_set_connection_hook(server, on_connection, NULL);
 
 The hook runs with the context lock held on the thread that steps or closes the server, must not block, and must not close or step the server; it may call `mogbus_*` functions. A server has one hook, a new one replaces it and NULL removes it. It is not part of a config.
 
-## Next
-
-- [Step 5: Observe, shut down, lifetimes and threading](library-lifetimes.md)

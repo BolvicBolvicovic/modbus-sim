@@ -1,6 +1,6 @@
-# Step 4: Guard clients and keep records
+# Hooks in Python
 
-> **Summary:** Install an access hook that vets client writes, react after accepted writes, log events in file records, serve an alarm FIFO, answer a vendor function code and watch or rewrite frames.
+Install an access hook that vets client writes, react after accepted writes, log events in file records, serve an alarm FIFO, answer a vendor function code and watch or rewrite frames.
 
 ## The access hook
 
@@ -8,7 +8,7 @@ The real controller does not accept every write. An *access hook* gives the simu
 manners: \ref mogbus::core::Device::set_access_hook "Device.set_access_hook()" installs a callable
 that runs on every Modbus client request to the device (never on host calls) and either lets it
 through or answers an exception. The example's hook is an instance of its class `Policy`, which keeps
-the device, the `Process` of [step 3](python-simulate.md), a list `audit` of the writes it accepted and
+the device, the `Process` of the [tutorial](../tutorial/tutorial-simulate.md), a list `audit` of the writes it accepted and
 a counter `refused`. It refuses setpoints outside 0.5 to 4.5 m, half a float32 and modes above 2:
 
 ```python
@@ -79,7 +79,7 @@ hook only records what it let through. Writing to the site name never reaches th
 
 > **Note:** The hook runs on the server thread with the context lock held. The lock is reentrant, so
 > the hook can call the methods of its own device (the example's hook appends to the event log), but
-> it must stay short. See [step 5](python-lifetimes.md#threads-and-locks).
+> it must stay short. See [threads and locks](python-lifetimes.md#threads-and-locks).
 
 ## Reacting after a write
 
@@ -104,55 +104,6 @@ dev.set_written_hook(policy.written)
 
 An exception in the hook is printed and swallowed: the write stays applied. Faults do not change
 this: the hook also runs when the response is then dropped.
-
-## An event log and an alarm FIFO
-
-The file record and the FIFO added in [step 1](python-device.md#file-records-and-a-fifo) are filled
-from the host with \ref mogbus::core::Device::write_file_records "Device.write_file_records()" and
-\ref mogbus::core::Device::set_fifo "Device.set_fifo()" (and their `read_` partners). The event log
-(file 1) keeps the ten most recent event codes, shifted at every event; the FIFO keeps the most recent
-alarms. `Process.event(code)` appends to both; the codes are the `EV_*` constants of the example, such
-as `EV_PUMP_ON`, `EV_HIGH_ON` or `EV_SETPOINT`:
-
-```python
-def event(self, code):
-    log = self.dev.read_file_records(EVENT_FILE, 0, EVENT_RECORDS)
-    self.dev.write_file_records(EVENT_FILE, 0, log[1:] + [code])
-    if code in (EV_HIGH_ON, EV_LOW_ON):
-        self.alarms = (self.alarms + [code])[-31:]
-        self.dev.set_fifo(ALARM_FIFO, self.alarms)
-```
-
-`tick()` of step 3 calls `event()` when the pump or an alarm changes state. Now the operator switches
-to manual mode and leaves the pump off: the tank fills until the high-level alarm, then the pump is
-started and the tank empties until the low-level alarm. The client reads both stores with its
-`file_records()` and `fifo()` methods:
-
-```python
-while not process.high:
-    process.tick(10.0)
-print("high-level alarm:", plc.discrete(HIGH_ALARM)[0], "level", round(plc.read_f32(4, LEVEL), 2))
-plc.write_coil(RUN_COMMAND, True)
-while not process.low:
-    process.tick(10.0)
-print("low-level alarm:", plc.discrete(LOW_ALARM)[0], "level", round(plc.read_f32(4, LEVEL), 2))
-print("event log (file 1):", plc.file_records(EVENT_FILE, 0, EVENT_RECORDS))
-print("alarm FIFO:", plc.fifo(ALARM_FIFO))
-```
-
-```text
-high-level alarm: 1 level 4.0
-low-level alarm: 1 level 0.46
-event log (file 1): [0, 5, 6, 5, 6, 7, 1, 5, 2, 3]
-alarm FIFO: [1, 3]
-```
-
-The codes: 5 and 6 pump on and off, 7 a setpoint change by a client, 1 and 2 high alarm on and off, 3
-low alarm on. The FIFO keeps only alarm-on events, oldest first, and a read does not consume it.
-
-> **Note:** Clients can write file records (function code 0x15) unless your access hook vetoes them.
-> The example's hook does not refuse them; add a rule on `access.target ==
-> mogbus.AccessTarget.FILE_RECORD` for a log that only the host may write.
 
 ## A vendor function code
 
@@ -184,7 +135,7 @@ The request goes through the same path as any other: faults, listen-only, counte
 receives and sends (the counterpart of pymodbus `trace_packet`) and lets a test rewrite or drop
 them, which fixed faults cannot do. The hook gets a `Frame` (`direction`, `mode`, `peer`, `data`,
 `capacity`) and returns `None` to pass it on, the replacement bytes, or `b""` to drop it. This example
-is not part of the tutorial program: `server` is the started server of step 2 and `log` a list. It
+is not part of the tutorial program: `server` is the started server and `log` a list. It
 records every frame and breaks the last byte of every answer:
 
 ```python
@@ -224,13 +175,10 @@ called. Every announced connection gets exactly one close event, also when the s
 clients connected. The rules are in
 [Guard clients and keep records](../library/library-hooks.md#watching-connections).
 
-## Next
-
-- [Step 5: Observe, shut down, lifetimes and threading](python-lifetimes.md)
-
 ## See also
 
-- [Step 4 in C](../library/library-hooks.md)
+- [Hooks in C](../library/library-hooks.md)
+- [Tutorial step 4: Guard clients and keep records](../tutorial/tutorial-guard.md)
 - [Writes are all-or-nothing](../modbus/writes.md)
 - [File record reads (0x14)](../modbus/fc14-read-file-record.md) and [FIFO reads (0x18)](../modbus/fc18-read-fifo-queue.md)
 - \ref core.py "Python API reference"

@@ -24,7 +24,7 @@ while the config is read. Linux first (the OS calls live in `src/os`); on Window
 
 ## Where to read more
 
-New here? The [pumping station tutorial](tutorial-app.md) walks through most of these features.
+New here? The [pumping station tutorial](tutorial/tutorial-start.md) walks through most of these features.
 
 | Feature | Page |
 |---|---|

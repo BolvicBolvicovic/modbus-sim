@@ -1,6 +1,6 @@
-# Step 5: Observe, shut down, lifetimes and threading
+# Logs, control, threads and lifetimes in Python
 
-> **Summary:** See what your client does to the station through logs, metrics and the runtime control API, run the process model on its own thread beside the server, and know who holds the lock and how to close cleanly.
+See what your client does to the station through logs, metrics and the runtime control API, run the process model on its own thread beside the server, and know who holds the lock and how to close cleanly.
 
 ## Logs
 
@@ -38,7 +38,7 @@ that logs (the server thread while a server is started), so keep it short and do
 
 \ref mogbus::core::Server::metrics "Server.metrics()" returns the Prometheus text of the server:
 requests per function code, exceptions, connections, bytes. It is the same text that `/metrics` serves
-on the HTTP endpoint the example enabled in step 2. With `server` the started server, the example
+on the HTTP endpoint the example enabled when serving. With `server` the started server, the example
 prints two counters:
 
 ```python
@@ -58,11 +58,11 @@ A test can assert on those counters ("my logger polled the input registers once 
 ## Runtime control
 
 `http_control=True` in \ref mogbus::core::ServerOptions "ServerOptions" (with the HTTP endpoint on,
-which the options of step 2 set with `http_bind_address` and `http_port`) turns on the
+which the server options of the example set with `http_bind_address` and `http_port`) turns on the
 [runtime control API](../observability/api/control-api.md): another process, or the test itself, can
 read and write values and inject faults while the server runs. Here the test makes the station answer
 exception 06 (busy) to find out what its client does, then clears the fault (`options` are the server
-options of step 2):
+options of the example):
 
 ```python
 base = f"http://127.0.0.1:{options.http_port}"
@@ -175,12 +175,9 @@ Who runs where:
 - A fallible call raises \ref mogbus::core::MogbusError "MogbusError" carrying the status code and
   the message of the C library (`mogbus_last_error`).
 
-## Next
-
-- [Step 6: Test your client](python-testing.md) turns the station into a fixture.
-
 ## See also
 
-- [Step 5 in C](../library/library-lifetimes.md)
+- [Lifetimes and threading in C](../library/library-lifetimes.md)
+- [Tutorial step 8: Stop it and ship it](../tutorial/tutorial-ship.md)
 - [Metrics reference](../observability/metrics/metrics.md)
 - \ref core.py "Python API reference"

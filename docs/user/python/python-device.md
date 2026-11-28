@@ -1,6 +1,6 @@
-# Step 1: Build the device
+# Devices and points in Python
 
-> **Summary:** Create a context, add the pumping-station device to it and describe its points, strings, a ramp, an event log and a FIFO, either in code or from a config file.
+Create a context, add the pumping-station device to it and describe its points, strings, a ramp, an event log and a FIFO, either in code or from a config file.
 
 ## Context and device
 
@@ -10,8 +10,8 @@ unit id (the address a client puts in its requests) and a name and returns a
 \ref mogbus::core::Device "Device", the handle every later call uses.
 \ref mogbus::core::Device::add_point "Device.add_point()" adds points to the device's four tables. The
 function `build_station(ctx)` of the example does all of it and returns the device; the code below is
-its body. `SETPOINT`, `MODE` and the other capitalised names are the register addresses introduced in
-[the station table](python-start.md#the-station):
+its body. `SETPOINT`, `MODE` and the other capitalised names are the register addresses of
+[the station table](../tutorial/tutorial-start.md#the-station):
 
 ```python
 def build_station(ctx):
@@ -49,7 +49,7 @@ Each call passes the table, the first address, the type and the start value. Thi
 The site name is a `string` point: `length` registers of two ASCII characters each, holding or input
 table only, starting with `text`. The call is the third line of `build_station`; `read_only=True`
 makes every Modbus write that touches the point fail with exception 02, while the host can still
-change it with \ref mogbus::core::Device::set_string "Device.set_string()". Step 2 shows a client
+change it with \ref mogbus::core::Device::set_string "Device.set_string()". The [tutorial](../tutorial/tutorial-serve.md) shows a client
 trying to write it.
 
 ## A ramp
@@ -60,7 +60,7 @@ a client sees a live-looking value without any code of yours running. `word_orde
 the float32 send its low register first, the way some legacy meters do; `byte_order="little"` would
 swap the bytes of every register as well, and together they give the four classic layouts. A ramp
 stops being automatic when something writes it: a client write turns it static, and a host
-\ref mogbus::core::Device::set_value "Device.set_value()" makes it host-owned (step 3 pins it that
+\ref mogbus::core::Device::set_value "Device.set_value()" makes it host-owned (the [tutorial](../tutorial/tutorial-simulate.md) pins it that
 way).
 
 ## File records and a FIFO
@@ -77,36 +77,8 @@ dev.add_fifo(ALARM_FIFO, [])
 
 The arguments are the file number, the first record and its initial values for
 \ref mogbus::core::Device::add_file_record "Device.add_file_record()", and the pointer address and
-the initial values for \ref mogbus::core::Device::add_fifo "Device.add_fifo()". [Step 4](python-hooks.md)
+the initial values for \ref mogbus::core::Device::add_fifo "Device.add_fifo()". [Hooks](python-hooks.md)
 fills and guards them.
-
-## Check what you built
-
-\ref mogbus::core::Device::info "Device.info()" returns a snapshot (name, unit id, points per table,
-faults, function codes). The program creates the context, builds the station, prints the snapshot, reads
-the site name from the host and then tries to add a point that overlaps the setpoint's second
-register, which is rejected:
-
-```python
-ctx = mogbus.Context()
-dev = build_station(ctx)
-info = dev.info()
-print(f"{info.name!r}, unit {info.unit_id}, points per table: {info.point_counts}")
-print("site name from the host:", dev.get_string("holding", SITE_NAME))
-try:
-    dev.add_point("holding", 1, "u16", 0)      # overlaps the setpoint's second register
-except mogbus.MogbusError as exc:
-    print("rejected:", exc)
-```
-
-```text
-'Pump station', unit 1, points per table: {'coil': 1, 'discrete': 3, 'input': 5, 'holding': 3}
-site name from the host: NORTH-01
-rejected: address is already used by another point
-```
-
-Holding counts three points (setpoint, mode, site name), input five (level, outflow, current, inflow,
-run seconds) and discrete three.
 
 ## Building the device from a config file
 
@@ -146,13 +118,10 @@ the Python API cannot create; the host side (`set_value()`, hooks) still works o
 so a profile and a few lines of Python often replace a whole model class. To mix both, load a file into
 a context you already have with \ref mogbus::core::Context::load_config "Context.load_config()"; its
 `(server ...)` section is then available from
-\ref mogbus::core::Context::config_server_options "Context.config_server_options()", which step 2 uses.
-
-## Next
-
-- [Step 2: Serve it and read it](python-serve.md)
+\ref mogbus::core::Context::config_server_options "Context.config_server_options()", which [serving](python-serve.md) uses.
 
 ## See also
 
-- [Step 1 in C](../library/library-device.md)
+- [Devices and points in C](../library/library-device.md)
+- [Tutorial step 1: Build the device](../tutorial/tutorial-device.md)
 - \ref core.py "Python API reference"

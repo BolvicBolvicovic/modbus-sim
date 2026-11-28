@@ -7,7 +7,7 @@ pump, the alarms follow the level. A tiny stdlib client (modbus_tcp.py) plays th
 SCADA / data logger / control code". Exit status 0 means every check passed.
 
 From a checkout:  make python && PYTHONPATH=python python3 examples/python/pump_station.py
-Walk-through:     docs/user/python/python-start.md
+Walk-through:     docs/user/tutorial/tutorial-start.md
 """
 import contextlib
 import json
@@ -23,7 +23,7 @@ from modbus_tcp import Client, ModbusException
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Register map (the same on every tutorial of the documentation).
+# Register map (the same on every route of the tutorial).
 SETPOINT, MODE, SITE_NAME = 0, 2, 10          # holding: float32, u16, string of 8 registers
 RUN_COMMAND = 0                               # coil
 HIGH_ALARM, LOW_ALARM, RUNNING = 0, 1, 2      # discrete inputs

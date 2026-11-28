@@ -2,7 +2,7 @@
 
 > **Summary:** Serve a simulated device inside your own event loop with `await server.serve()` (no background thread) and talk to any Modbus server with `AsyncClient`, next to pymodbus-style async code.
 
-The threaded `Server.start()` of [step 2](python-serve.md) does not plug into an event loop. For programs that already run one, mogbus has an asyncio form of both sides: \ref mogbus::core::Server::serve "Server.serve()" steps the server on the loop, and \ref mogbus::core::AsyncClient "AsyncClient" is a \ref mogbus::core::Client "Client" whose calls are coroutines. The threaded mode is unchanged and stays the simplest choice for tests that do not use asyncio.
+The threaded `Server.start()` of [serving from Python](python-serve.md) does not plug into an event loop. For programs that already run one, mogbus has an asyncio form of both sides: \ref mogbus::core::Server::serve "Server.serve()" steps the server on the loop, and \ref mogbus::core::AsyncClient "AsyncClient" is a \ref mogbus::core::Client "Client" whose calls are coroutines. The threaded mode is unchanged and stays the simplest choice for tests that do not use asyncio.
 
 ## Serving in the loop
 
@@ -75,7 +75,7 @@ The C client blocks, so every AsyncClient owns one worker thread and runs each c
 
 ## See also
 
-- [Step 2: Serve it and read it](python-serve.md) for the threaded server.
+- [Serving from Python](python-serve.md) for the threaded server.
 - [Talking to a Modbus server from Python](python-client.md) for the synchronous client.
 - [Driving the server from your own event loop](../library/library-serve.md#driving-the-server-from-your-own-event-loop) for the C calls under it.
 - \ref core.py "Python API reference"

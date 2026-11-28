@@ -1,6 +1,6 @@
-# Step 5: Observe, shut down, lifetimes and threading
+# Logging, shutdown, lifetimes and threading in C
 
-> **Summary:** Route the library's log lines, read metrics, stop cleanly on Ctrl-C, and know which thread may touch what.
+Route the library's log lines, read metrics, stop cleanly on Ctrl-C, and know which thread may touch what.
 
 ## Logging
 
@@ -46,13 +46,13 @@ metrics:
   mogbus_device_exceptions_total{unit="10",code="4"} 1
 ```
 
-The vetoes of step 4 are counted like any exception the simulator answers: one `01` (event log write), two `03` (setpoint 9.0 and mode 7) and one `04` (coil while off). A test can assert on them instead of parsing logs.
+The vetoes of the [guard step](../tutorial/tutorial-guard.md) are counted like any exception the simulator answers: one `01` (event log write), two `03` (setpoint 9.0 and mode 7) and one `04` (coil while off). A test can assert on them instead of parsing logs.
 
 ## Stopping on signals
 
 The library installs no signal handlers unless asked. For a console program, @ref mogbus_stop_on_signals "mogbus_stop_on_signals()" does what `main.c` does: SIGINT and SIGTERM stop the server stored in a slot you own, and SIGPIPE is ignored. It is process-wide, so call it once, and the slot must stay valid for the life of the process. The handler does nothing while the slot is NULL, so install it before creating the server and store the server afterwards:
 
-The program keeps the server in a global that the signal handler reads, installs the handler before the server exists and stores the server once it is created (the second snippet is the end of the server creation of step 2):
+The program keeps the server in a global that the signal handler reads, installs the handler before the server exists and stores the server once it is created (the second snippet is the end of the server creation in [serving from C](library-serve.md#check-then-create)):
 
 ```c
 static mogbus_server_t* volatile g_server;
@@ -62,7 +62,7 @@ mogbus_stop_on_signals(&g_server);
 g_server = server;
 ```
 
-@ref mogbus_server_stop "mogbus_server_stop()" is async-signal-safe and may come from another thread: the next `mogbus_server_step` returns `MOGBUS_STEP_DONE` and the loop in step 2 ends. Press Ctrl-C while the example runs:
+@ref mogbus_server_stop "mogbus_server_stop()" is async-signal-safe and may come from another thread: the next `mogbus_server_step` returns `MOGBUS_STEP_DONE` and the loop of the tutorial ends. Press Ctrl-C while the example runs:
 
 ```text
 level 2.25 m, pump ON, events 9, client writes 0 ok / 0 refused
@@ -77,7 +77,7 @@ If you install your own handler instead, have it call `mogbus_server_stop()` on 
 
 ## Shutting down
 
-When the loop ends, `main()` jumps to its `done:` label (which error paths use too), clears the slot, then closes in order (`server` may be NULL, `ctx` is the context of step 1):
+When the loop ends, `main()` jumps to its `done:` label (which error paths use too), clears the slot, then closes in order (`server` may be NULL, `ctx` is the context):
 
 ```c
 done:
@@ -103,7 +103,7 @@ done:
 - **No lock for stopping.** @ref mogbus_server_stop "mogbus_server_stop()", @ref mogbus_stop "mogbus_stop()" and the signal helpers only set a flag, so they are async-signal-safe and may come from any thread or a signal handler. A step that is waiting for I/O notices the flag within one second (sooner when a request arrives or a timer is due), then `mogbus_server_step()` returns `MOGBUS_STEP_DONE`.
 - **Not covered.** @ref mogbus_destroy "mogbus_destroy()" and @ref mogbus_server_close "mogbus_server_close()" free what other threads may be using: stop the server, wait for the thread that steps it (join it), then close. A client is used by one thread at a time (one client per thread to talk in parallel, see [the client](library-client.md#threads-and-the-server)). The message of `mogbus_last_error(ctx)` is shared by the threads of a context, so another thread's failure can replace it before you read it; the return code is always yours. Log level, format and sink are process-wide: set them before starting threads.
 - **Why always on.** There is no build or runtime switch. An uncontended lock costs tens of nanoseconds, against microseconds to milliseconds for the I/O of every request, so an option would only add API surface and a mode in which a second thread silently corrupts a device.
-- @ref mogbus_probe "mogbus_probe()" blocks, so call it from another thread or process, as in step 2.
+- @ref mogbus_probe "mogbus_probe()" blocks, so call it from another thread or process, as in [serving from C](library-serve.md#check-that-it-answers).
 - Logging is process-wide: a sink is called on whichever thread logs, so make it safe for the threads that step servers.
 
 The [Python package](../python/python-lifetimes.md#threads-and-locks) adds its own lock per context on top and an optional stepping thread.
@@ -113,4 +113,4 @@ The [Python package](../python/python-lifetimes.md#threads-and-locks) adds its o
 - [Config reference](../config/format.md) for machines, faults and user-defined function codes the API cannot build, and [profiles](../profiles/using-profiles.md) to load with `mogbus_load_config`.
 - [Transports](../transports/transports.md) for the serial, PTY and fd modes, and [TLS](../transports/transport-tls.md) to serve Modbus TCP over TLS from `mogbus_server_options_t`.
 - [Observability](../observability/logs.md) for the log fields, `/metrics` and the control API.
-- [Python tutorial](../python/python-start.md) to do the same from Python.
+- [Pumping station tutorial](../tutorial/tutorial-start.md), with the same program in config, C and Python.

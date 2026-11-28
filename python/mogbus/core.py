@@ -4,7 +4,7 @@
 The package wraps the C library with `ctypes` (no compiled
 extension, standard library only, Python 3.9 or newer). Everything below is importable from
 `mogbus`; the names are the ones of `include/mogbus.h` in snake_case. See the
-[Python tutorial](../../docs/user/python/python-start.md) for a walk-through.
+[pumping station tutorial](../../docs/user/tutorial/tutorial-start.md) for a walk-through.
 
 ## Names
 
