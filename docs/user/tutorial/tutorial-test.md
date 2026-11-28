@@ -1,98 +1,171 @@
 # Step 7: Test your client
 
-> **Summary:** Turn the station into a test fixture: a fresh simulated plant per test, simulated time under the test's control, and your own client code run against it in CI.
+> **Summary:** Use the station as a test fixture: a fresh simulated plant for every test, a fault or a sensor value set by the test, and your own client code run against it in CI.
 
-The point of all this is to test *your* code, so the last working step is to put the station in a
-fixture and write tests for the kind of code you ship. The routes differ in who starts the station:
+The point of all this is to test *your* code: the SCADA screen, the data logger. The tests below check one
+small function that reads the tank level, standing in for your own code. The routes differ in who starts
+the station:
 
-- **Config**: a server process, started once for the whole run (or per test script), with a probe to wait for readiness. Behaviour that depends on time (the machines of step 3) is real time.
-- **C**: the test program is the server and the client; the tutorial program's `--self-test` steps the server between reads, so there is no second thread or process, and simulated time is a function call.
-- **Python**: a fixture in one function builds a context per test, serves it on free loopback ports and closes it on exit, and the model is not ticking, so a test moves simulated time with `process.tick()`.
+- **Scheme / Bash**: a server process, started before the test and stopped after it. The script waits with `mogbus --health` until the station answers.
+- **C**: the same, with a test program written with the C client. The test program is a client only; the station is the `mogbus` program or your own server program.
+- **Python**: a test starts its own station inside the test process, on a free port, with `mogbus.serve()`; nothing is left running when the test ends.
 
-```bash
-./mogbus examples/tutorial/pump-station.scm &
-server=$!
-until ./mogbus --health examples/tutorial/pump-station.scm; do sleep 0.2; done
-./tools/modbus_probe.py discrete 0 3            # or your client under test
-kill $server
-```
+## A test in C, run by a script
+
+`test_level.c` is the client code under test (`read_level()`) and the test itself. The script starts the
+station, waits until it answers, runs the test and stops the station. Its exit status is the status of the
+test, so a CI system can use it as it is.
 
 ```c
-for (int i = 0; i < 2000; i++)
+/* test_level.c - a test for the code that reads the tank level; the exit status is the result. */
+#include <math.h>
+#include <stdio.h>
+#include "mogbus.h"
+
+/* The code under test: read the tank level (input registers 0 and 1, a float32) in metres. */
+static mogbus_result_t
+read_level(mogbus_client_t* plc, double* level)
 {
-	if (mogbus_server_step(server, 1) != MOGBUS_STEP_CONTINUE) return -1;
-	if (poll(&pfd, 1, 0) > 0) { n = read(fd, reply + got, 260 - got); ... }
-	if (got >= 7 && got >= 6 + (size_t)(reply[4] << 8 | reply[5])) return (int)got - 7;
+	uint16_t registers[2] = { 0, 0 };
+	mogbus_result_t result = mogbus_client_read_input_registers(plc, 1, 0, 2, registers);
+
+	if (result != MOGBUS_OK)
+		return result;
+	return mogbus_registers_to_value(registers, MOGBUS_TYPE_F32, MOGBUS_WORDS_HIGH_FIRST,
+					 MOGBUS_BYTES_BIG, level);
+}
+
+int
+main(void)
+{
+	mogbus_client_t* plc = NULL;
+	mogbus_client_options_t options = mogbus_client_options_defaults(); /* TCP to 127.0.0.1:1502 */
+	double level = 0;
+
+	if (mogbus_client_open(&options, &plc) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+	if (read_level(plc, &level) != MOGBUS_OK)
+	{
+		fprintf(stderr, "FAIL: %s\n", mogbus_client_last_error(plc));
+		return 1;
+	}
+
+	/* station.scm starts the tank at 2.5 m. */
+	if (fabs(level - 2.5) > 0.001)
+	{
+		fprintf(stderr, "FAIL: expected a level of 2.5 m, read %.3f m\n", level);
+		return 1;
+	}
+	printf("PASS: level %.1f m\n", level);
+
+	mogbus_client_close(plc);
+	return 0;
 }
 ```
 
-```python
-@contextlib.contextmanager
-def running_station():
-    with mogbus.Context() as ctx:
-        dev = build_station(ctx)
-        process = Process(dev)
-        policy = Policy(dev, process)
-        dev.set_access_hook(policy)
-        dev.set_value("input", INFLOW, 40.0)        # no ramp: the same level curve on every run
-        options = mogbus.ServerOptions(port=free_port(), http_bind_address="127.0.0.1",
-                                       http_port=free_port(), http_control=True)
-        with ctx.serve(options).start() as server:
-            yield Station(ctx, dev, process, policy, server, options)
-```
-
-Free ports (`free_port()`, or `port=0` with \ref mogbus::core::serve "serve()") matter as soon as tests
-run in parallel: any two tests may run at once. The `Station` the Python fixture yields holds `ctx`,
-`dev`, `process`, `policy`, `server` and the ports, and has `client()` (a new `Client`) and `http(method,
-path, body)` (a call to the control API of [step 5](tutorial-faults.md)). The excerpt omits the lines
-that also install the post-write hook and the vendor function code of step 4.
-
-## Tests with unittest
-
-pytest is not required. The Python example has two small functions standing in for the code you ship (a
-status screen, `read_status()`, and a setpoint raiser, `raise_setpoint()`) in
-[`test_pump_station.py`](https://github.com/BolvicBolvicovic/mogbus/blob/main/examples/python/test_pump_station.py).
-`ps` is the `pump_station` module, `self.station` and `self.plc` the station and its client:
-
-```python
-def test_setpoint_rules(self):
-    self.assertTrue(raise_setpoint(self.plc, 1.0))
-    self.assertEqual(read_status(self.plc)["setpoint"], 3.5)
-    self.assertFalse(raise_setpoint(self.plc, 10.0))          # exception 03
-    self.assertEqual(read_status(self.plc)["setpoint"], 3.5)  # unchanged
-    self.assertEqual(self.station.policy.refused, 1)
-```
-
-and one that checks the client survives an injected exception 06 from the control API:
-
-```python
-def test_client_survives_an_injected_exception(self):
-    self.station.http("PUT", "/api/devices/1/faults/exception", {"exception_code": 6})
-    with self.assertRaises(ModbusException) as raised:
-        read_status(self.plc)
-    self.assertEqual(raised.exception.code, 6)
-    self.station.http("DELETE", "/api/devices/1/faults/exception")
-    self.assertEqual(read_status(self.plc)["site"], "NORTH-01")
-```
+The script, saved as `run_tests.sh`:
 
 ```bash
-make python-examples      # builds libmogbus.so, runs pump_station.py and these tests
+#!/bin/sh
+# run_tests.sh - start the station, run the test, stop the station.
+
+./mogbus station.scm &       # the station, in the background
+station=$!
+
+until ./mogbus --health station.scm; do   # wait until it answers a Modbus request
+    sleep 0.2
+done
+
+./test_level                 # your test: for the C route, test_level.c
+status=$?                    # 0 means the test passed
+
+kill $station                # stop the station
+exit $status
 ```
 
+Build the test as `test_level` (see the [start page](tutorial-start.md#before-you-start)) and run the script with
+`sh run_tests.sh`, from the repository root, where `./mogbus` and `station.scm` are:
+
 ```text
-.......
-----------------------------------------------------------------------
-Ran 8 tests in 0.183s
+unhealthy: connect 127.0.0.1:1502: Connection refused
+PASS: level 2.5 m
+```
+
+The first line is the script waiting for the server to start: `--health` fails until the station answers.
+The station also prints its log lines. A script for the Scheme / Bash route is the same with your own
+client in place of `./test_level`, for example `./tools/modbus_probe.py input 0 2 --as float32`.
+
+## A test in Python
+
+Python builds the station inside the test. `mogbus.serve()` loads a config, serves it on a background
+thread and stops it when the `with` block ends; `port=0` means "pick a free port", so tests can run in
+parallel. The station of a test can also come from text, with a fault in it:
+
+```python
+# test_station.py - tests for a small piece of client code, run against the pump station.
+import contextlib
+import unittest
+
+import mogbus
+
+
+def read_level(plc):
+    """The code under test: read the tank level (input registers 0 and 1, a float32) in metres."""
+    registers = plc.read_input_registers(0, 2)
+    return mogbus.registers_to_value(registers, "f32")
+
+
+class StationTest(unittest.TestCase):
+    def setUp(self):
+        # A fresh station for every test. port=0 picks a free port, so tests can run in
+        # parallel; the station is stopped when the test ends.
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.station = stack.enter_context(mogbus.serve(config="station.scm", port=0))
+        self.plc = stack.enter_context(mogbus.Client(port=self.station.port, unit=1))
+
+    def test_reads_the_level(self):
+        # Play the sensor: set the tank level to 3.25 m on the station's side ...
+        self.station.device(1).set_value("input", 0, 3.25)
+        # ... and check that the client code sees it.
+        self.assertEqual(read_level(self.plc), 3.25)
+
+    def test_busy_station(self):
+        # A station that answers every request with exception 06 (server device busy).
+        config = """
+        (device (unit-id 1)
+          (input 0 (type float32) (static 2.5))
+          (fault (kind exception) (code 6) (percent 100)))
+        """
+        with mogbus.serve(config_text=config, port=0) as busy:
+            with mogbus.Client(port=busy.port, unit=1) as plc:
+                with self.assertRaises(mogbus.ModbusException) as raised:
+                    read_level(plc)
+                self.assertEqual(raised.exception.code, 6)
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+Run it with `python3 -m unittest test_station -v` (with `PYTHONPATH=python` as before). It needs no
+test framework other than the `unittest` of the standard library. After the log lines of the
+stations it ends with:
+
+```text
+Ran 2 tests in 0.030s
 
 OK
 ```
 
-The C program is checked the same way (`make lib-check` runs `--self-test`, which prints one `ok` or
-`FAIL` line per check and exits 0 when all pass). The same files are the pytest fixtures and tests in
-`conftest.py` and `test_station.py`; pytest is not a dependency of mogbus, so CI does not run them.
-Fixtures, pytest, and habits that keep tests reliable (one context per test, simulated time as a
-function, `probe()` for readiness, assertions on the audit trail and the metrics) are in
-[Testing with mogbus in Python](../python/python-testing.md).
+The test sets the level with `set_value` on the device of the running station: it is the same call a
+program of step 3 uses to play the sensor. Faults come from the config (as in `test_busy_station`) or from
+the control API of [step 5](tutorial-faults.md). Fixtures for pytest, the habits that keep tests reliable (one
+context per test, simulated time as a function, `probe()` for readiness, assertions on the metrics of
+[step 6](tutorial-observe.md)) are in [Testing with mogbus in Python](../python/python-testing.md).
 
 ## Next
 

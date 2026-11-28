@@ -1,68 +1,63 @@
 # Step 3: Make it behave
 
-> **Summary:** Make the station move like a plant: the tank fills, the pump runs, the alarms follow the level and the motor current follows the pump, either described in the config (behaviours and a machine) or driven from the host program.
+> **Summary:** Make the station move like a plant: the tank fills, the pump runs in auto or manual mode, the alarms follow the level and the motor current follows the pump, described in the config or computed by your own program.
 
-A client sees a device only through its tables. The *process* behind them (water in, water out, a motor
-drawing current) is yours to model, and the routes do it differently:
+So far every value is fixed. The *process* behind the tables (water in, water out, a motor drawing
+current) is yours to model, and the routes do it differently:
 
-- **Config**: you describe the process in the file, and the simulator computes it. Behaviours and machines are evaluated when a request arrives, not on a timer, so an idle server costs nothing. This is the only route that has [`sine`](../config/behaviours/sine.md), [`lag`](../config/behaviours/lag.md), [`noise`](../config/behaviours/noise.md) and [machines](../config/machines/index.md).
-- **C and Python**: the host program owns the model. Your own code decides the tank level and pushes the measurements to the device with the host side of the API, between steps of the server loop. Nothing is computed per request.
+- **Scheme / Bash**: you describe the process in the config file and mogbus computes it, at the moment a request arrives. Nothing runs between requests.
+- **C and Python**: your program computes the process and writes the measurements into the device with `set_value`, once per pass of its own loop. This is how a host program plays the part of the physical plant.
 
-## Live values without code
+Both routes model the same plant:
 
-Replace the single input of step 1 with live ones (config route). Outflow is a noisy sine, the motor
-current follows the "pump running" bit with a lag, and the clock register shows the time of the machine
-running mogbus:
+- The tank gains 2 cm per second while the pump is stopped and loses 4 cm per second while it runs.
+- Mode 0 (off): the pump is stopped. Mode 1 (auto): it starts when the level is more than 0.3 m above the setpoint and stops when the level is more than 0.3 m below it. Mode 2 (manual): it follows the run command coil.
+- The high-level alarm is on above 4 m, the low-level alarm below 1 m.
+- The motor current is 12 A while the pump runs.
+
+## The model
+
+Save this as `pump-station.scm`. It is the device of step 1 with live values and two *machines*, small
+state machines that own some points. The C and Python programs do the same work in code.
 
 ```scheme
+; pump-station.scm - the pump station of step 1 with live values and a process behind them.
+
 (server (mode tcp) (port 1502) (seed 7))
 
 (device
   (name "Pump station")
   (unit-id 1)
 
-  (holding 0 (type float32) (static 2.5))
-  (holding 2 (type u16) (static 1))
+  ; Holding registers, coil and discrete inputs: as in step 1.
+  (holding 0 (type float32) (static 2.5))      ; level setpoint in metres
+  (holding 2 (type u16) (static 1))            ; mode: 0 off, 1 auto, 2 manual
   (holding 10 (type string) (length 8) (access read-only) (static "NORTH-01"))
-  (coil 0)
-  (discrete 0)
-  (discrete 1)
-  (discrete 2)
+  (coil 0)                                     ; pump run command (manual mode)
+  (discrete 0)                                 ; high-level alarm, set by the alarms machine
+  (discrete 1)                                 ; low-level alarm, set by the alarms machine
+  (discrete 2)                                 ; pump running, set by the pump machine
 
+  ; Tank level in metres and pump run time in seconds: the pump machine below writes them.
   (input 0 (type float32) (static 2.5))
+  (input 10 (type u32) (static 0))
+
+  ; Outflow in m3/h: 40 plus or minus 6 over a two-minute period, with some random noise.
   (input 2 (type float32)
     (sine (offset 40) (amplitude 6) (period-ms 120000))
     (noise (amplitude 0.8) (every-ms 500) (distribution gaussian)))
+
+  ; Motor current in tenths of an ampere: heads for 12.0 A (120) while "pump running" is on
+  ; and back to 0 when it is off, closing 63% of the gap every 1.5 seconds.
   (input 4 (type u16)
     (lag (target (discrete 2)) (tau-ms 1500) (gain 120))
     (noise (amplitude 2) (every-ms 250)))
-  (input 10 (type u32) (static 0))
-  (input 20 (type u32) (clock unix)))
-```
 
-- `sine` is `offset + amplitude * sin(...)`: 40 m3/h plus or minus 6 over a two-minute period; `noise` adds a reproducible disturbance on top.
-- `lag` follows a goal like a first-order system: the current heads for `120` (12.0 A) while the "pump running" bit is 1 and back to 0 when it is 0, closing 63% of the gap every 1.5 s. A target can be any configured point.
-- [`clock`](../config/behaviours/clock.md) shows `unix` seconds; it needs an integer type of at least 32 bits.
-- `(seed 7)` makes the random parts of machines reproducible ([seed](../config/server/seed.md)); the noise is reproducible on its own.
+  ; Wall clock, seconds since 1970.
+  (input 20 (type u32) (clock unix))
 
-## The process
-
-Level and run seconds should depend on what the pump does. The model is the same in every route: the
-tank fills while the pump is off and drains while it runs; in auto mode (mode 1) the pump starts above
-the setpoint plus a band and stops below the setpoint minus the band, in manual mode (2) it follows the
-run command coil, in mode 0 it is off; the high alarm trips near the top of the tank and the low alarm
-near the bottom.
-
-In the config it is a [machine](../config/machines/index.md): a small state machine that owns some
-points, added inside the device next to the points. The tank gains 2 cm per second with the pump off and
-loses 4 cm per second with it on, and the band is 0.3 m. In C and Python it is a function that runs
-between server steps: it reads what clients wrote (setpoint, mode, run command), decides whether the
-pump runs, integrates the level over `dt` simulated seconds and publishes the measurements. The C
-program's `simulate(st, dt)` advances 0.02 m/s up and 0.05 m/s of drain (band 0.2 m); the Python class
-`Process` has `tick(dt)` with m3/h flows over a 2 m2 tank (band 0.25 m). The addresses and alarm limits differ per
-program but the idea does not.
-
-```scheme
+  ; The pump. The tank gains 2 cm per second while the pump is stopped and loses 4 cm per
+  ; second while it runs. (elapsed-ms) is the time since the machine last ran.
   (machine pump
     (initial stopped)
     (var seconds 0)
@@ -76,227 +71,266 @@ program but the idea does not.
                (set! seconds (+ seconds (/ (elapsed-ms) 1000)))
                (set! (input 10) seconds)))
 
+    ; Start: auto mode (holding 2 = 1) and the level above setpoint + 0.3 m, or manual mode
+    ; (holding 2 = 2) and the run command coil on.
     (transition stopped running
       (when (or (and (= (holding 2) 1) (> (input 0) (+ (holding 0) 0.3)))
                 (and (= (holding 2) 2) (coil 0)))))
+    ; Stop: mode off, or auto mode and the level below setpoint - 0.3 m, or manual mode and
+    ; the run command off.
     (transition running stopped
       (when (or (= (holding 2) 0)
                 (and (= (holding 2) 1) (< (input 0) (- (holding 0) 0.3)))
                 (and (= (holding 2) 2) (not (coil 0)))))))
 
+  ; The alarms: high above 4 m, low below 1 m.
   (machine alarms
     (initial watching)
     (state watching
       (on-tick (set! (discrete 0) (> (input 0) 4))
-               (set! (discrete 1) (< (input 0) 1)))))
+               (set! (discrete 1) (< (input 0) 1))))))
 ```
 
 ```c
-/* the start of simulate(): what the clients wrote */
-mogbus_device_get_value(dev, MOGBUS_HOLDING, HOLD_MODE, &mode);
-mogbus_device_get_value(dev, MOGBUS_HOLDING, HOLD_SETPOINT, &setpoint);
-mogbus_device_read(dev, MOGBUS_COIL, COIL_RUN, 1, &coil);
-...
-/* its end: publish the measurements */
-mogbus_device_set_value(dev, MOGBUS_INPUT, IN_LEVEL, st->level);
-mogbus_device_set_value(dev, MOGBUS_INPUT, IN_CURRENT, pump ? 85 : 0);
-mogbus_device_set_value(dev, MOGBUS_INPUT, IN_RUN_SECONDS, (double)(uint32_t)st->run_s);
-mogbus_device_set_value(dev, MOGBUS_DISCRETE, DISC_HIGH, st->high);
-```
+/* simulate.c - serve the pump station and run its process from the host program. */
+#include <stdbool.h>
+#include <stdio.h>
+#include "mogbus.h"
 
-```python
-def tick(self, dt):
-    dev = self.dev
-    setpoint = dev.get_value("holding", SETPOINT)
-    mode = int(dev.get_value("holding", MODE))
-    level = dev.get_value("input", LEVEL)
-    if mode == AUTO:
-        if level >= setpoint + 0.25:
-            self.pump = True
-        elif level <= setpoint - 0.25:
-            self.pump = False
-    elif mode == MANUAL:
-        self.pump = bool(dev.get_value("coil", RUN_COMMAND))
-    else:
-        self.pump = False
-    outflow = PUMP_FLOW if self.pump else 0.0
-    inflow = dev.get_value("input", INFLOW)
-    level = min(max(level + (inflow - outflow) / 3600.0 * dt / TANK_AREA, 0.0), TANK_HEIGHT)
-    ...
-    dev.set_value("input", LEVEL, level)
-    dev.set_value("input", OUTFLOW, outflow)
-    dev.set_value("input", CURRENT, round(10 * (10 + 2 * level)) if self.pump else 0)
-    dev.set_value("input", RUN_SECONDS, int(self.seconds))
-    dev.set_value("discrete", RUNNING, self.pump)
-```
-
-- **Config.** `elapsed-ms` is the time since the machine last ran, so the result does not depend on how often a client polls. The `transition` lines are the control logic: `(holding 2)` is the mode, `(holding 0)` the setpoint and `(coil 0)` the run command, all of which a client can write. See [state](../config/machines/state.md), [transition](../config/machines/transition.md), [statements](../config/machines/statements.md) and [expressions](../config/machines/expressions.md). The second machine, `alarms`, shows that machines on one device can read each other's points.
-- **C.** @ref mogbus_device_get_value "mogbus_device_get_value()" returns the decoded value of the point that starts at an address (a float32 comes back as the number, not two registers); @ref mogbus_device_read "mogbus_device_read()" returns raw registers and is exact for any type. Reads advance ramps first and never invoke the access hook. `simulate()` runs in the server loop of [step 2](tutorial-serve.md#who-steps-the-server).
-- **Python.** `Process` holds the device and the state of the plant; the constants `PUMP_FLOW`, `TANK_AREA` and `TANK_HEIGHT` describe it, and the elided lines raise and clear the alarms, which [step 4](tutorial-guard.md) logs. Because the model is a function of simulated time, a test can fast-forward it (`tick(10.0)` is ten seconds) instead of sleeping.
-
-## Reacting to reads and writes
-
-A config can also run statements when a client reads or writes a point (config route only). The
-motor-hours register of a station could count how often the SCADA polls it, and a coil could reset
-the count; this snippet is the pattern of the
-[`read-actions` profile](https://github.com/BolvicBolvicovic/mogbus/blob/main/profiles/read-actions.scm), not part of the tutorial file:
-
-```scheme
-(define-action rolling-counter
-  (param step 1)
-  (param limit 65535)
-  (set! self (if (>= (+ self step) limit) 0 (+ self step))))
-
-(device (unit-id 1)
-  (holding 0 (static 0)
-    (on-read (rolling-counter (step 5) (limit 100)))))
-```
-
-See [point actions](../config/actions/index.md). A C or Python host does this with the access and
-post-write hooks of [step 4](tutorial-guard.md) instead, which also see the request.
-
-## Who owns a point
-
-A point a config machine writes belongs to it: a client write to the level or the alarms fails with
-exception 02, so the simulation keeps control ([point ownership](../config/machines/points.md)). In C
-and Python the host does the same with `set_value`, and the two kinds of write stay apart:
-
-- **Clients** change what a real client may change: setpoint, mode and run command. What they write is what `get_value` returns next, so the host reads its inputs the same way.
-- **The host** changes what the plant would measure, with @ref mogbus_device_set_value "mogbus_device_set_value()" / \ref mogbus::core::Device::set_value "Device.set_value()". The point becomes *host-owned*: a ramp stops moving it, a client write to it is refused with exception 02, and `read_only` is ignored. It works on every table.
-
-@ref mogbus_device_write "mogbus_device_write()" / \ref mogbus::core::Device::write "Device.write()" are the raw-register versions: they behave as a client request without the network (they turn a ramp static and leave the point writable by clients, which is why the run command coil keeps working in manual mode). The C program mirrors the pump into the coil with it outside manual mode:
-
-```c
-if (mode != MODE_MANUAL && coil != pump)
+int
+main(void)
 {
-	uint16_t v = pump;
+	mogbus_t* ctx = NULL;
+	mogbus_server_t* server = NULL;
+	mogbus_device_t* dev = NULL;
 
-	mogbus_device_write(dev, MOGBUS_COIL, COIL_RUN, 1, &v);
+	if (mogbus_create(&ctx) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+	if (mogbus_load_config(ctx, "station.scm") != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+	dev = mogbus_find_device(ctx, 1); /* the device with unit id 1 */
+
+	mogbus_server_options_t options = mogbus_server_options_defaults();
+
+	if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+
+	/* The state of the process, kept by the program. */
+	double level = 2.5;      /* tank level in metres */
+	bool pump = false;       /* true while the pump runs */
+	double run_seconds = 0;  /* how long the pump has run */
+	uint64_t last_ms = mogbus_now_ms();
+
+	while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
+	{
+		/* Seconds since the previous pass of this loop. */
+		uint64_t now_ms = mogbus_now_ms();
+		double seconds = (double)(now_ms - last_ms) / 1000.0;
+
+		last_ms = now_ms;
+
+		/* What a client may have written: the setpoint (holding 0), the mode (holding 2)
+		 * and the run command (coil 0). The calls below can only fail when no point starts
+		 * at the address, and the points of step 1 are there, so the results are not checked. */
+		double setpoint = 0;
+		double mode = 0;
+		double run_command = 0;
+
+		mogbus_device_get_value(dev, MOGBUS_HOLDING, 0, &setpoint);
+		mogbus_device_get_value(dev, MOGBUS_HOLDING, 2, &mode);
+		mogbus_device_get_value(dev, MOGBUS_COIL, 0, &run_command);
+
+		/* Does the pump run? Mode 0 is off, 1 is auto (start 0.3 m above the setpoint, stop
+		 * 0.3 m below it), 2 is manual (follow the run command). */
+		if (mode == 0)
+			pump = false;
+		if (mode == 1 && level > setpoint + 0.3)
+			pump = true;
+		if (mode == 1 && level < setpoint - 0.3)
+			pump = false;
+		if (mode == 2)
+			pump = run_command != 0;
+
+		/* The tank gains 2 cm per second, and loses 4 cm per second while the pump runs. */
+		level += (pump ? -0.04 : 0.02) * seconds;
+		if (level < 0)
+			level = 0;
+		if (level > 5)
+			level = 5;
+		if (pump)
+			run_seconds += seconds;
+
+		/* Publish what a sensor would measure. Clients can read these but not write them. */
+		mogbus_device_set_value(dev, MOGBUS_INPUT, 0, level);                    /* level, m */
+		mogbus_device_set_value(dev, MOGBUS_INPUT, 4, pump ? 120 : 0);           /* motor 12.0 A */
+		mogbus_device_set_value(dev, MOGBUS_INPUT, 10, run_seconds);             /* run time, s */
+		mogbus_device_set_value(dev, MOGBUS_DISCRETE, 0, level > 4);             /* high alarm */
+		mogbus_device_set_value(dev, MOGBUS_DISCRETE, 1, level < 1);             /* low alarm */
+		mogbus_device_set_value(dev, MOGBUS_DISCRETE, 2, pump);                  /* pump running */
+	}
+
+	mogbus_destroy(ctx);
+	return 0;
 }
 ```
 
-| | `set_value` | `write` |
-|---|---|---|
-| Addressing | a point's first address, decoded number | raw registers |
-| Read-only point / input / discrete | works | works |
-| Afterwards a client write | exception 02 (host-owned) | allowed as before |
-| Ramp | stops | becomes static |
-| Machines | like a machine output | runs on-write handlers |
-
-The Python inlet flow of step 1 is a ramp, which would make the tank's inflow change every second; the
-simulation needs a repeatable inflow, so the program takes the point over from the clock (from now on
-it is host-owned and stays at 40 m3/h):
-
 ```python
-dev.set_value("input", INFLOW, 40.0)
+# simulate.py - serve the pump station and run its process from the script.
+import time
+import mogbus
+
+with mogbus.Context() as ctx:
+    ctx.load_config("station.scm")
+    dev = ctx.find_device(1)  # the device with unit id 1
+
+    level = 2.5               # tank level in metres
+    pump = False              # True while the pump runs
+    run_seconds = 0.0         # how long the pump has run
+    last = time.monotonic()
+
+    try:
+        with ctx.serve(mogbus.ServerOptions(port=1502)).start():  # serves on a background thread
+            while True:
+                time.sleep(0.1)
+                now = time.monotonic()
+                seconds = now - last   # seconds since the previous pass of this loop
+                last = now
+
+                # What a client may have written: the setpoint (holding 0), the mode (holding 2)
+                # and the run command (coil 0).
+                setpoint = dev.get_value("holding", 0)
+                mode = dev.get_value("holding", 2)
+                run_command = dev.get_value("coil", 0)
+
+                # Does the pump run? Mode 0 is off, 1 is auto (start 0.3 m above the setpoint,
+                # stop 0.3 m below it), 2 is manual (follow the run command).
+                if mode == 0:
+                    pump = False
+                if mode == 1 and level > setpoint + 0.3:
+                    pump = True
+                if mode == 1 and level < setpoint - 0.3:
+                    pump = False
+                if mode == 2:
+                    pump = run_command != 0
+
+                # The tank gains 2 cm per second, and loses 4 cm per second while the pump runs.
+                level += (-0.04 if pump else 0.02) * seconds
+                level = min(max(level, 0.0), 5.0)
+                if pump:
+                    run_seconds += seconds
+
+                # Publish what a sensor would measure. Clients can read these but not write them.
+                dev.set_value("input", 0, level)                  # level, m
+                dev.set_value("input", 4, 120 if pump else 0)     # motor current, 12.0 A
+                dev.set_value("input", 10, run_seconds)           # run time, s
+                dev.set_value("discrete", 0, level > 4)           # high alarm
+                dev.set_value("discrete", 1, level < 1)           # low alarm
+                dev.set_value("discrete", 2, pump)                # pump running
+    except KeyboardInterrupt:
+        pass                  # Ctrl-C ends the script; the with blocks have closed everything
 ```
 
-Strings go through @ref mogbus_device_get_string "mogbus_device_get_string()" / `Device.get_string()` and
-`set_string()`; unlike `set_value` they do not make the point host-owned. Full rules:
-[host side in C](../library/library-simulate.md), [in Python](../python/python-simulate.md).
+- **Scheme / Bash.** `sine` and `noise` make the outflow wander around 40 m3/h, and `lag` makes the motor current follow the "pump running" bit like a real motor ([`sine`](../config/behaviours/sine.md), [`noise`](../config/behaviours/noise.md), [`lag`](../config/behaviours/lag.md), [`clock`](../config/behaviours/clock.md)). `(seed 7)` makes the random parts repeat on every run ([`seed`](../config/server/seed.md)). The `pump` machine is the control logic: its `transition` lines read the mode, the setpoint and the coil that a client can write, and `elapsed-ms` is the time since the machine last ran, so the result does not depend on how often a client polls. See [machines](../config/machines/index.md) and [expressions](../config/machines/expressions.md).
+- **C.** The program loads `station.scm` of step 1 (without machines) and does the computing itself, between two calls of @ref mogbus_server_step "mogbus_server_step()". It reads what a client may have written with @ref mogbus_device_get_value "mogbus_device_get_value()" and publishes the measurements with @ref mogbus_device_set_value "mogbus_device_set_value()". Both take the table and the first address of the point.
+- **Python.** The same, with \ref mogbus::core::Device::get_value "Device.get_value()" and \ref mogbus::core::Device::set_value "Device.set_value()". The server runs on its own thread, and the loop of the script is the plant. `Ctrl-C` ends the script.
 
-## Run it and watch
+If you load `pump-station.scm` with `mogbus_load_config()` / `Context.load_config()` in a C or Python
+program instead, the machines run there as well and you do not need the loop: use whichever you prefer,
+not both.
 
-In the config route the machines run as soon as the server starts:
+## Watch it run
+
+Start the server of your route: `./mogbus pump-station.scm`, `./simulate` (build `simulate.c` as in the
+[start page](tutorial-start.md#before-you-start)) or `PYTHONPATH=python python3 simulate.py`. Then watch
+the tank level from a second terminal. `--watch 1` repeats the read every second:
 
 ```bash
-./mogbus examples/tutorial/pump-station.scm
+./tools/modbus_probe.py --watch 1 input 0 2 --as float32
 ```
 
-and from a second terminal:
+```text
+[2.5212600231170654]
+[2.5412800312042236]
+[2.5612800121307373]
+[2.581279993057251]
+```
+
+The level climbs 0.02 m per second. In auto mode it passes 2.8 m, the setpoint plus 0.3 m, after about 15
+seconds: the pump starts and the level falls 0.04 m per second until it reaches 2.2 m, where the pump stops
+and the level climbs again. The other values:
 
 ```bash
-./tools/modbus_probe.py discrete 0 3                 # high, low, running
-./tools/modbus_probe.py input 2 2 --as float32       # outflow
-./tools/modbus_probe.py input 20 2 --as u32          # wall clock
-./tools/modbus_probe.py --watch 5 input 0 2 --as float32
+./tools/modbus_probe.py discrete 0 3                 # high alarm, low alarm, pump running
+./tools/modbus_probe.py input 2 2 --as float32       # outflow, m3/h (Scheme / Bash route only)
+./tools/modbus_probe.py input 20 2 --as u32          # wall clock (Scheme / Bash route only)
 ```
 
-```text
-[0, 0, 0]
-[40.29308319091797]
-[1795777594]
-[2.5212199687957764]
-[2.6212198734283447]
-[2.721219778060913]
-[2.821239709854126]
-[2.62123966217041]
-[2.4211995601654053]
-[2.2211995124816895]
-[2.0211594104766846]
-```
+The outflow and the wall clock are moved by the config of the Scheme / Bash route; in the C and Python
+programs of this step they keep the fixed values of step 1 (the ramp and the wall clock of step 1 still
+move).
 
-`--watch` goes before the command. The level rises 0.1 m a poll, the pump starts above 2.8 m and the
-level falls until it stops below 2.2 m. The Python program has no wall time to wait for: it moves a
-minute at a time (six ticks of ten seconds) while the client polls the level, the pump feedback and the
-run seconds:
+## Start the pump by hand
 
-```python
-print("minute  level  pump  run-s")
-for minute in range(0, 8):
-    if minute:
-        for _ in range(6):
-            process.tick(10.0)
-    print(f"{minute:6d}  {plc.read_f32(4, LEVEL):5.2f}  {plc.discrete(RUNNING)[0]:4d}  "
-          f"{plc.input(RUN_SECONDS, 2)[1]:5d}")
-```
-
-```text
-minute  level  pump  run-s
-     0   2.00     0      0
-     1   2.33     0      0
-     2   2.67     0      0
-     3   2.50     1     40
-     4   2.33     0     80
-     5   2.67     0     80
-     6   2.50     1    120
-     7   2.33     0    160
-```
-
-The inflow of 40 m3/h fills the 2 m2 tank by 0.33 m a minute; at 2.75 m (setpoint plus the 0.25 m
-band) the auto mode starts the pump, which takes the level down faster than it fills. The run seconds
-are a `u32` in two registers; the example prints the low word, which is the second. The C self-test
-calls `simulate(st, 1.0)` directly to move simulated time without waiting. After a client switches the
-station off, it calls it for 100 simulated seconds and checks what a client then reads:
-
-```text
-  ok   FC 06 switches the station off
-  ok   100 s later the high-level alarm is set
-  ok   FC 04 reads a level above 4 m
-```
-
-## Write from a client
-
-Switch to manual mode and start the pump by hand. These commands work against the config server and
-against the C program, which serves the same mode, run command and running bit:
+Switch to manual mode (mode 2) and set the run command coil. The pump starts and the motor current climbs
+towards 12 A, which is 120 in tenths of an ampere:
 
 ```bash
 ./tools/modbus_probe.py write-reg 2 2        # mode 2 = manual
 ./tools/modbus_probe.py write-coil 0 on      # run command
-./tools/modbus_probe.py discrete 2 1         # running -> [1]
-./tools/modbus_probe.py input 10 2 --as u32  # run seconds, counting
-```
-
-With the config route poll `input 4` once a second and the motor current climbs towards 12 A (`lag`
-follows its target as requests arrive, so a client that polls rarely sees it jump):
-
-```bash
-./tools/modbus_probe.py --watch 1 input 4 1
+./tools/modbus_probe.py discrete 2 1         # pump running
+./tools/modbus_probe.py --watch 1 input 4 1  # motor current, 0.1 A
 ```
 
 ```text
+ok
+ok
+[1]
 [0]
-[60]
-[90]
-[105]
-[114]
+[58]
+[86]
+[102]
+[112]
 [117]
 ```
 
-Writes a real device would refuse are refused here too: a write to the read-only site name or to an
-address with no point answers `error: exception 0x02: illegal data address`, and so does a client write
-to the level, which the machine owns. Writing a ramp, sine or clock point freezes it at the written
-value, which is how a test changes a "sensor" ([client writes](../config/behaviours/client-writes.md)).
+The two `ok` are the writes and `[1]` is "pump running". The motor current of the Scheme / Bash route
+follows the pump with the `lag` of the config, over a few seconds. The C and Python programs write 120 as
+soon as the pump runs, so they print `[120]` at once.
+
+Writes a real device would refuse are refused here too: a write to the read-only site name, to an address
+with no point, or to the tank level, which the machine (or the host program) owns, answers `error:
+exception 0x02: illegal data address`. Writing a point that moves by itself with a ramp, sine or clock
+freezes it at the written value, which is how a test changes a sensor ([client
+writes](../config/behaviours/client-writes.md)).
+
+## Who owns a point
+
+A point that a machine or the host program writes belongs to it, and a client write to it fails with
+exception 02: the simulation stays in control. In C and Python this is the difference between the two ways
+to change a value from the host:
+
+| | `set_value` | `write` |
+|---|---|---|
+| Address | first address of a point, a decoded number | raw registers |
+| Works on read-only points, inputs, discrete inputs | yes | yes |
+| Afterwards a client write to the point | refused with exception 02 | allowed as before |
+| A ramp | stops | becomes static |
+
+Use `set_value` (@ref mogbus_device_set_value "mogbus_device_set_value()", \ref mogbus::core::Device::set_value "Device.set_value()") for what a sensor would
+measure, and `write` (@ref mogbus_device_write "mogbus_device_write()", \ref mogbus::core::Device::write "Device.write()") when the host should act like a client. Details: [the host
+side in C](../library/library-simulate.md) and [in Python](../python/python-simulate.md).
+
+A config can also run statements when a client reads or writes a point, for example a counter that
+increases at every read: [point actions](../config/actions/index.md).
 
 ## Next
 

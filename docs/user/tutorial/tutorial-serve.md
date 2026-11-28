@@ -1,211 +1,141 @@
 # Step 2: Serve it and read it
 
-> **Summary:** Pick a transport, start the server, check that it answers and read the station with a client, the way your own code will.
+> **Summary:** Start the server on Modbus TCP port 1502, check that it answers and read the station with a client, the way your own code will.
 
-A server exposes every device its context has at the moment it is created, over one transport. Devices
-added later are not served, so build the devices first, as in [step 1](tutorial-device.md). One
-context holds up to 8 servers, each over its own transport, all over the same devices.
+A server shows the devices of its context to Modbus clients over one transport. In this step the device
+comes from the `station.scm` file of [step 1](tutorial-device.md). Devices added after the server was
+created are not served, so build the devices first.
 
 ## Start the server
 
-With the config route, the `mogbus` binary is the server: it reads the `(server ...)` form and runs
-until Ctrl-C. In C you set the options of a @ref mogbus_server_options_t "mogbus_server_options_t" and
-create the server yourself; in Python you fill \ref mogbus::core::ServerOptions "ServerOptions". In
-both, the defaults are those of a config file (TCP on `127.0.0.1:1502`, loopback only; `0.0.0.0` is an
-explicit opt-in for remote access), and a check validates the options without opening anything, so a
-port that is in use still passes.
+Pick the address to listen on and the transport (Modbus TCP here). The default, and what the examples
+write out, is `127.0.0.1` port 1502: only this computer can connect. Use `0.0.0.0` only when you want
+other computers to reach the station.
 
 ```bash
-./mogbus --check=verbose station.scm
 ./mogbus station.scm
 ```
 
 ```c
-mogbus_server_options_t options = mogbus_server_options_defaults();
-...
-options.mode = MOGBUS_MODE_TCP;
-options.bind_address = "127.0.0.1";
-options.port = free_port();
-...
-if (mogbus_server_check(ctx, &options) != MOGBUS_OK) { ... }
-if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
+/* serve.c - serve the pump station of step 1 over Modbus TCP until the process is killed. */
+#include <stdio.h>
+#include "mogbus.h"
+
+int
+main(void)
 {
-	fprintf(stderr, "server: %s\n", mogbus_last_error(ctx));
-	goto done;
+	mogbus_t* ctx = NULL;
+	mogbus_server_t* server = NULL;
+
+	if (mogbus_create(&ctx) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+
+	/* Load the device from the file of step 1 (the same device the code of step 1 builds). */
+	if (mogbus_load_config(ctx, "station.scm") != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+
+	/* Where to listen. These are the defaults, written out: Modbus TCP on the port 1502,
+	 * reachable from this computer only ("0.0.0.0" would open it to the network). */
+	mogbus_server_options_t options = mogbus_server_options_defaults();
+
+	options.mode = MOGBUS_MODE_TCP;
+	options.bind_address = "127.0.0.1";
+	options.port = 1502;
+
+	if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+	printf("serving unit 1 on 127.0.0.1:1502, press Ctrl-C to stop\n");
+
+	/* The server only works while you call mogbus_server_step(): it accepts connections, reads
+	 * requests and sends answers, waiting at most 100 ms for something to do. It returns
+	 * MOGBUS_STEP_CONTINUE as long as the server runs. */
+	while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
+	{
+	}
+
+	mogbus_destroy(ctx);
+	return 0;
 }
-g_server = server;
 ```
 
 ```python
-options = mogbus.ServerOptions(port=free_port(), http_bind_address="127.0.0.1", http_port=free_port(),
-                               http_control=True)
-ctx.check_server(options)
-server = ctx.serve(options).start()
-print("alive:", mogbus.probe(options, 1, 1000))
+# serve.py - serve the pump station of step 1 and read it with a Modbus client.
+import mogbus
+
+with mogbus.Context() as ctx:
+    # Load the device from the file of step 1 (the same device the code of step 1 builds).
+    ctx.load_config("station.scm")
+
+    # Where to listen: Modbus TCP on port 1502, reachable from this computer only
+    # ("0.0.0.0" would open it to the network).
+    options = mogbus.ServerOptions(mode="tcp", bind_address="127.0.0.1", port=1502)
+
+    # start() serves on a background thread, so the script can go on and be the client.
+    with ctx.serve(options).start():
+        # A client for 127.0.0.1:1502; every call below talks to unit 1.
+        with mogbus.Client(host="127.0.0.1", port=1502, unit=1) as plc:
+            # Holding registers 0 and 1: the setpoint, a float32 in two registers.
+            registers = plc.read_holding_registers(0, 2)
+            setpoint = mogbus.registers_to_value(registers, "f32")
+            print(f"setpoint: registers {registers} = {setpoint} m")
+
+            # Holding registers 10 to 17: the site name, 8 registers of two characters.
+            name_registers = plc.read_holding_registers(10, 8)
+            print("site name:", mogbus.registers_to_text(name_registers))
+
+            # Writing the read-only site name is refused with Modbus exception 02.
+            try:
+                plc.write_register(10, 0x4F4B)
+            except mogbus.ModbusException as exc:
+                print("write to the site name refused: exception", exc.code)
+
+        print("health check:", mogbus.probe(options, 1, 1000))  # True while the server answers
 ```
 
-- `free_port()` is a helper of both programs: it binds port 0 and reads back the port the OS chose, so tests can run in parallel.
-- The Python options also turn on the HTTP endpoint with the control API, which [step 5](tutorial-faults.md) uses.
-- @ref mogbus_server_create "mogbus_server_create()" hands the server back through its last parameter (NULL on failure) and returns a @ref mogbus_result_t "mogbus_result_t" that tells why: `MOGBUS_ERR_INVALID` (bad options, no devices, a limit), `MOGBUS_ERR_SERIAL` (serial device or PTY) or `MOGBUS_ERR_LISTEN` (port in use or TLS setup). `mogbus` maps serial to exit status 1 and listen to 2. `g_server` is a global that [step 8](tutorial-ship.md) explains.
-- \ref mogbus::core::Server::start "Server.start()" runs the server on a background thread, so your program keeps control of the process.
+- **Scheme / Bash.** The `mogbus` program reads the `(server ...)` form of the file and serves until you press Ctrl-C. Add `--check` to validate the file without opening a port.
+- **C.** @ref mogbus_server_options_defaults "mogbus_server_options_defaults()" returns the same defaults as a config file. @ref mogbus_server_create "mogbus_server_create()" opens the port: it fails with `MOGBUS_ERR_LISTEN` when the port is in use. Your program runs the server itself with @ref mogbus_server_step "mogbus_server_step()"; the steps after this one put their own work in that loop. Ctrl-C ends the program at once: [step 8](tutorial-ship.md) shows a clean shutdown.
+- **Python.** \ref mogbus::core::Context::serve "Context.serve()" makes the server and \ref mogbus::core::Server::start "Server.start()" runs it on a background thread, so the script continues and can be a client of its own server.
 
-## Transports
-
-The same devices can be served over any transport: Modbus TCP (optionally with TLS), UDP, RTU, ASCII,
-RTU and ASCII over TCP or UDP, and PTY or serial ports for RTU and ASCII. In a config it is the `mode`
-of the server, in the options it is the `mode` field (a `MOGBUS_MODE_*` value in C such as
-`MOGBUS_MODE_RTU_TCP`, a string in Python). In C, which fields a mode reads is listed on @ref mogbus_server_options_t "the options
-struct"; fields a mode does not use are ignored.
+The same devices can be served over any other transport (Modbus UDP, RTU or ASCII over TCP, a serial line
+or a PTY) by changing only the `mode`; the devices do not change. For example, RTU frames over TCP:
 
 ```scheme
 (server (mode rtu-tcp) (port 1502))
 ```
 
-```python
-with mogbus.Context() as ctx2:
-    ctx2.load_config(str(ROOT / "profiles" / "flow-meter.scm"))
-    wanted = ctx2.config_server_options()
-    print(f"the profile asks for {wanted.mode.name.lower()} on port {wanted.port}")
-    for mode in ("tcp", "udp", "rtu-tcp", "ascii-tcp"):
-        ctx2.check_server(wanted, mode=mode, port=free_port())
-    rtu = mogbus.ServerOptions(mode="rtu-tcp", port=free_port())
-    with ctx2.serve(rtu).start():
-        alive = mogbus.probe(rtu, 1, 1000)
-        print("rtu-tcp server probe:", alive)
-    print("RTU timing at 19200 baud:", mogbus.rtu_timing(19200))
-```
-
-```text
-the profile asks for tcp on port 1502
-rtu-tcp server probe: True
-RTU timing at 19200 baud: RtuTiming(t35_us=2006, gap_ms=3)
-```
-
-The Python example loads a profile into a second context, checks the same options in four transports
-(the keyword arguments of `check_server` override fields), serves one of them and probes it;
-\ref mogbus::core::rtu_timing "rtu_timing()" tells the t3.5 and inter-frame gap a serial server would use at
-a baud rate. See [Transports](../transports/transports.md) for the modes, including
-[RTU over TCP](../transports/transport-rtu-tcp.md), [UDP](../transports/transport-udp.md), a PTY for a serial
-client ([RTU](../transports/transport-rtu.md)) and [TLS](../transports/transport-tls.md), and the C
-[options and several servers](../library/library-serve.md).
-
-## Who steps the server
-
-The `mogbus` binary runs the server loop for you. In Python `Server.start()` steps it on a background
-thread (and `await server.serve()` fits an [asyncio program](../python/python-asyncio.md)). In C you own the
-thread: @ref mogbus_server_step "mogbus_server_step()" runs one poll iteration (accept, read, answer,
-write whatever is ready) and returns after at most `max_wait_ms`. Interleave it with your own work; the
-wait doubles as your loop's timer, so 100 ms here means the simulation of [step 3](tutorial-simulate.md)
-advances at least ten times a second even with no clients. This part is C only:
-
 ```c
-while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
-{
-	double t = now_s();
-
-	simulate(&st, (t - last) * speed);
-	last = t;
-	...
-}
-```
-
-It returns `MOGBUS_STEP_CONTINUE`, `MOGBUS_STEP_DONE` (stopped, or the byte-stream peer went away) or
-`MOGBUS_STEP_ERROR`. If you have nothing else to do, @ref mogbus_server_run "mogbus_server_run()" steps
-until stopped. Requests are answered inside the step, so the simulation, the hooks of step 4 and a host
-write never run concurrently with a request; a long computation between steps still delays every client.
-Hosts with an event loop of their own, see [serving from C](../library/library-serve.md#driving-the-server-from-your-own-event-loop).
-
-## Check that it answers
-
-`--health` is a client of the server's Modbus port: one real request (FC 08 echo) to the first device,
-exit status 0 when it answers. @ref mogbus_probe "mogbus_probe()" and \ref mogbus::core::probe "probe()" are the same
-check as a function, which is how a test waits for a server to be ready; it works for the network
-modes (a wildcard bind is reached through loopback, a TLS server is only connected to).
-
-```bash
-./mogbus --health station.scm; echo $?       # 0 while the server runs
-```
-
-```c
-pid_t pid = fork();
-if (pid == 0)
-{
-	bool ok = mogbus_probe(options, unit, 2000) == MOGBUS_OK;
-	...
-	_exit(ok ? 0 : 1);
-}
-for (int i = 0; i < 1000; i++)
-{
-	if (waitpid(pid, &status, WNOHANG) == pid)
-		return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-	mogbus_server_step(server, 5);
-}
+options.mode = MOGBUS_MODE_RTU_TCP; /* in serve.c above, before mogbus_server_create() */
 ```
 
 ```python
-print("alive:", mogbus.probe(options, 1, 1000))
+options = mogbus.ServerOptions(mode="rtu-tcp", port=1502)  # instead of the options of serve.py above
 ```
 
-```text
-alive: True
-```
-
-(The text block is the Python output; the C program prints `ok   mogbus_probe answers from a child
-process`.) `mogbus_probe()` blocks, so the thread that steps the C server cannot call it: the program's
-`probe_self()` forks a child that probes while the parent keeps stepping until the child exits. A
-real program uses a probe thread or an external `mogbus --health`. See [Health check](../deployment/health-check.md).
+[Transports](../transports/transports.md) lists the modes and what each one needs.
 
 ## Read it with a client
 
-Any Modbus client works against `127.0.0.1:1502`, unit 1. The Config and C routes use
-[`tools/modbus_probe.py`](https://github.com/BolvicBolvicovic/mogbus/blob/main/tools/modbus_probe.py),
-a Modbus TCP client with no dependencies, from a second terminal; the Python program uses its own small
-`Client` (class of `modbus_tcp.py`), whose methods read and write raw registers (`holding()`,
-`input()`, `discrete()`), decode a float32 (`read_f32(function code, address)`, where 3 reads holding
-and 4 input registers) or a string, and raise `ModbusException` with the exception code when the
-server answers an exception.
+Any Modbus client can talk to `127.0.0.1:1502`, unit 1. The Python script above already is one: it reads the
+setpoint (holding 0-1, a float32 in two registers) and the site name (holding 10-17), and tries to write
+the read-only name. For the Scheme and C routes, a server runs in one terminal and a client in a second. For
+the client, use the tiny Python tool `tools/modbus_probe.py` (no dependencies):
 
 ```bash
 ./tools/modbus_probe.py holding 0 2 --as float32     # setpoint
 ./tools/modbus_probe.py holding 10 8 --as string     # site name
-./tools/modbus_probe.py discrete 0 3                 # high, low, running
-./tools/modbus_probe.py input 0 2 --as float32       # level
-./tools/modbus_probe.py write-reg 10 5               # read-only site name
+./tools/modbus_probe.py discrete 0 3                 # high alarm, low alarm, pump running
+./tools/modbus_probe.py input 0 2 --as float32       # tank level
+./tools/modbus_probe.py write-reg 10 5               # write the read-only site name
 ```
-
-```c
-for (int i = 0; i < 2000; i++)
-{
-	if (mogbus_server_step(server, 1) != MOGBUS_STEP_CONTINUE) return -1;
-	if (poll(&pfd, 1, 0) > 0) { n = read(fd, reply + got, 260 - got); ... }
-	if (got >= 7 && got >= 6 + (size_t)(reply[4] << 8 | reply[5])) return (int)got - 7;
-}
-```
-
-```python
-with Client(options.port) as plc:
-    print("site:", plc.read_string(SITE_NAME, 8))
-    print("setpoint:", plc.read_f32(3, SETPOINT), "mode:", plc.holding(MODE)[0])
-    print("level registers:", plc.input(LEVEL, 2), "-> level", plc.read_f32(4, LEVEL))
-    try:
-        plc.write_registers(SITE_NAME, [0x4F4B])
-    except ModbusException as exc:
-        print("write to the read-only name:", exc)
-```
-
-The C route reads with `--self-test`, a mode of the tutorial program (not of mogbus) in which the
-program is its own Modbus client: its helper `exchange()` writes one request on a socket, then steps
-the server between reads until the reply is complete, so it needs no second thread or process. The
-same trick tests any harness that needs a client and a server in one process. Each check prints an `ok`
-or `FAIL` line and the program exits 0 when all pass:
-
-```text
-  ok   FC 03 reads the setpoint, 2.5 m
-  ok   FC 03 reads the site name string
-```
-
-The `modbus_probe.py` commands print (the last one is refused: the site name is read-only, and an
-address with no point at all answers the same):
 
 ```text
 [2.5]
@@ -215,33 +145,101 @@ address with no point at all answers the same):
 error: exception 0x02: illegal data address
 ```
 
-and the Python program:
+or, for the C route, a client program of your own. The C library has a client too:
+
+```c
+/* read.c - a Modbus client: read the pump station's setpoint and site name from the server. */
+#include <stdio.h>
+#include "mogbus.h"
+
+int
+main(void)
+{
+	mogbus_client_t* plc = NULL;
+
+	/* The client defaults are TCP to 127.0.0.1:1502, the address of the server of this step. */
+	mogbus_client_options_t options = mogbus_client_options_defaults();
+
+	if (mogbus_client_open(&options, &plc) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+
+	/* Holding registers 0 and 1 of unit 1: the setpoint, a float32 in two registers. */
+	uint16_t registers[2] = { 0, 0 };
+	double setpoint = 0;
+
+	if (mogbus_client_read_holding_registers(plc, 1, 0, 2, registers) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_client_last_error(plc));
+		return 1;
+	}
+	mogbus_registers_to_value(registers, MOGBUS_TYPE_F32, MOGBUS_WORDS_HIGH_FIRST,
+				  MOGBUS_BYTES_BIG, &setpoint);
+	printf("setpoint: registers %u %u = %.1f m\n", (unsigned)registers[0], (unsigned)registers[1],
+	       setpoint);
+
+	/* Holding registers 10 to 17 of unit 1: the site name, 8 registers of two characters. */
+	uint16_t name_registers[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	char site[17] = "";
+
+	if (mogbus_client_read_holding_registers(plc, 1, 10, 8, name_registers) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_client_last_error(plc));
+		return 1;
+	}
+	mogbus_registers_to_text(name_registers, 8, MOGBUS_BYTES_BIG, site, sizeof site);
+	printf("site name: %s\n", site);
+
+	/* Writing the read-only site name is refused with Modbus exception 02. */
+	if (mogbus_client_write_register(plc, 1, 10, 0x4F4B) != MOGBUS_OK)
+		printf("write to the site name refused: exception %u\n",
+		       (unsigned)mogbus_client_last_exception(plc));
+
+	mogbus_client_close(plc);
+	return 0;
+}
+```
+
+Build it like the server, start `./serve` in one terminal and run `./read` in another. It prints:
 
 ```text
-site: NORTH-01
-setpoint: 2.5 mode: 1
-level registers: [16384, 0] -> level 2.0
-write to the read-only name: function 0x10 failed with exception 02
+setpoint: registers 16416 0 = 2.5 m
+site name: NORTH-01
+write to the site name refused: exception 2
 ```
 
-`[16384, 0]` is 2.0 as an IEEE float32 (`0x4000 0x0000`), high word first as the default word order
-says. The inlet flow ramp of step 1 is read with the words swapped, as that legacy meter sends them,
-and moves by itself:
-
-```python
-first = plc.read_f32(4, INFLOW, low_first=True)
-time.sleep(1.2)
-second = plc.read_f32(4, INFLOW, low_first=True)
-print(f"inlet flow moved by itself: {first:.0f} -> {second:.0f} m3/h")
-```
+The Python script prints the same three lines (its register list is written `[16416, 0]`), then the
+health check:
 
 ```text
-inlet flow moved by itself: 20 -> 24 m3/h
+setpoint: registers [16416, 0] = 2.5 m
+site name: NORTH-01
+write to the site name refused: exception 2
+health check: True
 ```
 
-The exact numbers depend on when you start; they climb by 4 every second. The rules for refused
-writes are in [client writes](../config/behaviours/client-writes.md) and [Modbus
-exceptions](../modbus/exceptions.md).
+`16416 0` are the two registers `0x4020 0x0000` of the float32 2.5, high word first. The write to the site
+name is refused with exception 02, as for an address with no point at all: see [client
+writes](../config/behaviours/client-writes.md) and [Modbus exceptions](../modbus/exceptions.md). The client
+calls are those of the [C client](../library/library-client.md) and the [Python
+client](../python/python-client.md).
+
+## Check that the server answers
+
+`mogbus --health station.scm` sends one real Modbus request (function code 08, echo) to the first device
+and exits with status 0 when it answers. It works against the Scheme / Bash server and against the C and
+Python programs, since all of them serve port 1502:
+
+```bash
+./mogbus --health station.scm; echo $?       # 0 while a server is running
+```
+
+The Python script above ends with the same check as a function, \ref mogbus::core::probe "probe()". In C,
+@ref mogbus_probe "mogbus_probe()" is the same check, but it waits for the answer, so the thread that
+steps the server must not call it: use `mogbus --health`, or call it from another process or thread. See
+[Health check](../deployment/health-check.md).
 
 ## Next
 
