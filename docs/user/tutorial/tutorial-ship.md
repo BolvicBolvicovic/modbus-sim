@@ -1,106 +1,218 @@
 # Step 8: Stop it and ship it
 
-> **Summary:** Stop the station cleanly on Ctrl-C or on a shutdown, run the process model on its own thread beside the server, know who holds the lock, and run the config route in a container.
+> **Summary:** Stop the station cleanly on Ctrl-C or on a shutdown, let a second thread update it while the server runs, and run the config route in a container.
 
 ## Stopping
 
-The `mogbus` binary stops on SIGINT and SIGTERM with exit status 0 (which is what `docker stop`
-needs). A library program installs no signal handlers unless asked.
+The `mogbus` program stops on SIGINT (Ctrl-C) and SIGTERM with exit status 0, which is what `docker stop`
+needs. A program of your own installs no signal handlers unless you ask:
 
 ```bash
-./mogbus examples/tutorial/pump-station.scm      # press Ctrl-C
+./mogbus pump-station.scm      # press Ctrl-C
 ```
 
 ```c
-static mogbus_server_t* volatile g_server;
-...
-mogbus_stop_on_signals(&g_server);
-...
-g_server = server;
-...
-done:
-	g_server = NULL;
-	mogbus_server_close(server);
-	mogbus_destroy(ctx);
+/* stop.c - serve the pump station until Ctrl-C or a SIGTERM, then shut down cleanly. */
+#include <stdio.h>
+#include "mogbus.h"
+
+/* The signal handler of the library stops the server stored here. It must be a global. */
+static mogbus_server_t* volatile running_server = NULL;
+
+int
+main(void)
+{
+	mogbus_t* ctx = NULL;
+	mogbus_server_t* server = NULL;
+
+	/* From now on SIGINT (Ctrl-C) and SIGTERM (what `docker stop` sends) stop the server that
+	 * is stored in running_server. Call this once, before creating the server. */
+	mogbus_stop_on_signals(&running_server);
+
+	if (mogbus_create(&ctx) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+	if (mogbus_load_config(ctx, "station.scm") != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+
+	mogbus_server_options_t options = mogbus_server_options_defaults();
+
+	if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+	running_server = server; /* the signals can stop it now */
+
+	/* After a signal, mogbus_server_step() returns MOGBUS_STEP_DONE and the loop ends. */
+	while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
+	{
+	}
+
+	running_server = NULL;
+	mogbus_destroy(ctx); /* closes the server and frees everything */
+	printf("stopped cleanly\n");
+	return 0;
+}
 ```
 
 ```python
+# stop.py - serve the pump station until Ctrl-C or a SIGTERM, then shut down cleanly.
+import signal
+import threading
+
+import mogbus
+
+stop = threading.Event()  # set when a signal arrives
+
+# SIGINT (Ctrl-C) and SIGTERM (what `docker stop` sends) set the event instead of killing the script.
+signal.signal(signal.SIGINT, lambda signum, frame: stop.set())
+signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
+
 with mogbus.Context() as ctx:
-    with ctx.serve(options).start() as server:
-        ...                     # leaving the blocks closes the server, then the context
+    ctx.load_config("station.scm")
+    with ctx.serve(mogbus.ServerOptions(port=1502)).start():
+        stop.wait()  # sleeps until a signal sets the event
+
+# Leaving the with blocks closed the server, then the context.
+print("stopped cleanly")
 ```
 
-- **C.** @ref mogbus_stop_on_signals "mogbus_stop_on_signals()" does what `main.c` does: SIGINT and SIGTERM stop the server stored in a slot you own, and SIGPIPE is ignored. It is process-wide, so call it once, and the slot must stay valid for the life of the process. The handler does nothing while the slot is NULL, so install it before creating the server and store the server afterwards (the last assignment of step 2). @ref mogbus_server_stop "mogbus_server_stop()" is async-signal-safe and may come from another thread: the next `mogbus_server_step()` returns `MOGBUS_STEP_DONE` and the loop of step 2 ends. When it ends, `main()` jumps to its `done:` label (error paths use it too), clears the slot and closes in order: @ref mogbus_server_close "mogbus_server_close()" closes the transport and drops client connections (a file descriptor you passed in stays open), @ref mogbus_destroy "mogbus_destroy()" closes every server still open and releases all the memory; both accept NULL.
-- **Python.** The package installs no signal handlers: a script that should stop on Ctrl-C catches `KeyboardInterrupt` in the main thread and leaves its `with` blocks, which close the server and then the context. `Server.stop()` takes no lock and joins the background thread; `Context.close()` stops and joins every thread first and closing twice is safe. After it, devices and servers raise `MogbusError("context is closed")`, so stop your own threads before closing the context.
+- **C.** @ref mogbus_stop_on_signals "mogbus_stop_on_signals()" makes SIGINT and SIGTERM stop the server whose address is in the variable you give it. The variable must be a global, and it must stay valid as long as the process runs. @ref mogbus_destroy "mogbus_destroy()" closes the server and frees everything.
+- **Python.** The script sets an event when a signal arrives, and leaving the `with` blocks closes the server, then the context. Stop your own threads before the context is closed.
 
-Pressing Ctrl-C while the C program runs prints:
+Press Ctrl-C, or run `kill -TERM` on the process: each prints `stopped cleanly`, and the library logs
+`stopped`.
 
-```text
-level 2.25 m, pump ON, events 9, client writes 0 ok / 0 refused
-^C
-stopping
-metrics:
-  mogbus_requests_total{fc="8"} 1
-  mogbus_connections_total 1
+## A second thread
+
+So far one thread did everything. A program that models the plant often has a second thread, for
+example one that updates measurements while the first serves clients. mogbus locks its context, so
+calls like `set_value` are safe from any thread while the server runs, and each call waits at most for the
+request being answered at that moment.
+
+This program adds one second to the pump run time (input registers 10 and 11) every second, from its own thread:
+
+```c
+/* thread.c - a second thread updates the station while the main thread serves clients. */
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
+#include "mogbus.h"
+
+/* Runs on its own thread: adds one second to the "pump run time" (input registers 10 and 11)
+ * every second. The library locks the context itself, so calling it from here while the main
+ * thread serves is safe. */
+static void*
+count_seconds(void* argument)
+{
+	mogbus_device_t* dev = argument;
+
+	for (int seconds = 1; ; seconds++)
+	{
+		sleep(1);
+		mogbus_device_set_value(dev, MOGBUS_INPUT, 10, seconds);
+	}
+	return NULL;
+}
+
+int
+main(void)
+{
+	mogbus_t* ctx = NULL;
+	mogbus_server_t* server = NULL;
+
+	if (mogbus_create(&ctx) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(NULL));
+		return 1;
+	}
+	if (mogbus_load_config(ctx, "station.scm") != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+
+	mogbus_server_options_t options = mogbus_server_options_defaults();
+
+	if (mogbus_server_create(ctx, &options, &server) != MOGBUS_OK)
+	{
+		fprintf(stderr, "error: %s\n", mogbus_last_error(ctx));
+		return 1;
+	}
+
+	pthread_t counter;
+
+	if (pthread_create(&counter, NULL, count_seconds, mogbus_find_device(ctx, 1)) != 0)
+	{
+		fprintf(stderr, "error: cannot start the thread\n");
+		return 1;
+	}
+
+	/* This thread only serves. Press Ctrl-C to stop the whole program. */
+	while (mogbus_server_step(server, 100) == MOGBUS_STEP_CONTINUE)
+	{
+	}
+
+	return 0;
+}
 ```
-
-## A model on its own thread
-
-So far the C and Python programs advanced simulated time by themselves: C from its loop, Python by
-calling `tick()` in the demo. A live simulation ticks on its own thread while clients are being served
-(the config route has no such thread; the simulator evaluates machines when requests arrive). The Python
-`Process.start()` starts one that calls `tick()` every 50 ms with the real time elapsed times `speed`,
-which stretches simulated time (600 means ten simulated minutes per real second) and keeps tests short:
 
 ```python
-def start(self, speed=1.0, period=0.05):
-    def loop():
-        last = time.monotonic()
-        while not self._stop.wait(period):
-            now = time.monotonic()
-            self.tick((now - last) * speed)
-            last = now
-    self._stop.clear()
-    self.thread = threading.Thread(target=loop, name="process", daemon=True)
-    self.thread.start()
+# thread.py - a second thread updates the station while the server answers clients.
+import threading
+
+import mogbus
+
+with mogbus.Context() as ctx:
+    ctx.load_config("station.scm")
+    dev = ctx.find_device(1)  # the device with unit id 1
+    stop = threading.Event()  # set to end the counting thread
+
+    def count_seconds():
+        """Runs on its own thread: adds one second to the "pump run time" (input registers 10
+        and 11) every second. The library locks the context itself, so this is safe."""
+        seconds = 0
+        while not stop.wait(1.0):  # waits one second, or returns True as soon as stop is set
+            seconds += 1
+            dev.set_value("input", 10, seconds)
+
+    counter = threading.Thread(target=count_seconds)
+    counter.start()
+
+    with ctx.serve(mogbus.ServerOptions(port=1502)).start():
+        with mogbus.Client(port=1502, unit=1) as plc:
+            threading.Event().wait(3.5)  # wait a few seconds, as a SCADA screen would
+            registers = plc.read_input_registers(10, 2)
+            print("pump run time:", mogbus.registers_to_value(registers, "u32"), "s")
+
+    stop.set()    # stop the thread before the context is closed
+    counter.join()
 ```
 
-The model calls the device from its thread while the server thread answers clients; that is safe
-because both go through the context lock. The example puts the station in auto mode, lets the thread
-run until the pump starts, then switches the mode off over Modbus:
-
-```python
-plc.write_registers(MODE, [AUTO])
-process.start(speed=600.0)          # ten simulated minutes per second
-wait_for(lambda: plc.discrete(RUNNING)[0] == 1)
-print("auto mode: pump running =", bool(plc.discrete(RUNNING)[0]))
-plc.write_registers(MODE, [OFF])
-wait_for(lambda: plc.discrete(RUNNING)[0] == 0)
-process.stop()
-print("mode off: pump running =", bool(plc.discrete(RUNNING)[0]))
-```
+Build the C program with `-lpthread` if your system needs it. After a few seconds the Python script prints:
 
 ```text
-auto mode: pump running = True
-mode off: pump running = False
+pump run time: 3 s
 ```
 
-In C the same thing is any thread calling `mogbus_device_*` while another runs
-@ref mogbus_server_run "mogbus_server_run()": every call that takes a context, device or server holds one
-recursive lock of that context, a step releases it while it waits for I/O and holds it while it
-answers requests, so a host call waits at most for the request being served. Hooks and log sinks run on
-the thread that steps the server with the lock held, so keep them short and let them wait for nothing.
-Stop the server and join the thread that steps it before `mogbus_destroy()`. The full rules (what the
-lock covers, what it does not, string and error lifetimes) are in [lifetimes and threading in
-C](../library/library-lifetimes.md#threading) and [in Python](../python/python-lifetimes.md#threads-and-locks).
+and from another terminal, against the C program, `./tools/modbus_probe.py input 10 2 --as u32` prints the
+seconds since it started. The rules (what the lock covers, what it does not, and that hooks and log sinks
+run with it held) are in [lifetimes and threading in C](../library/library-lifetimes.md#threading) and
+[in Python](../python/python-lifetimes.md#threads-and-locks).
 
 ## Run it in a container
 
-This part is the config route: the image holds the `mogbus` binary. A container needs the server to
-listen on every interface, so make a copy of the config for it:
+This part is the Scheme / Bash route: the image holds the `mogbus` program and your config. A container
+needs the server to listen on every interface, so make a copy of the config for it:
 
 ```bash
-sed 's/(port 1502) (seed 7)/(port 1502) (bind "0.0.0.0") (seed 7)/; s/(http (port 9102))/(http (port 9102) (bind "0.0.0.0"))/' \
+sed 's/(port 1502) (seed 7)/(port 1502) (bind "0.0.0.0") (seed 7)/; s/(http (port 9102) (control on))/(http (port 9102) (bind "0.0.0.0"))/' \
   examples/tutorial/pump-station.scm > pump-container.scm
 docker build --build-arg VERSION=0.0.1 -t mogbus:0.0.1 .
 docker run --rm -p 127.0.0.1:1502:1502 -p 127.0.0.1:9102:9102 \
@@ -108,11 +220,13 @@ docker run --rm -p 127.0.0.1:1502:1502 -p 127.0.0.1:9102:9102 \
 ./tools/modbus_probe.py input 0 2 --as float32      # from the host
 ```
 
-The mounted file must be readable by UID 10001. The image has a `HEALTHCHECK` that runs `--health`, runs
-as an unprivileged user and needs no writable filesystem. See [Docker](../deployment/docker.md),
-[Docker Compose](../deployment/docker-compose.md) and [Kubernetes](../deployment/kubernetes.md). A
-C or Python harness is a program you ship the way you ship any other; an image can run it under a
-supervisor of your choice, with the stop rules above.
+The first `sed` expression opens the Modbus port and the second the HTTP endpoint to the container
+network; `-p 127.0.0.1:...` keeps both on loopback of the host. The control API is left off in the
+container copy. The mounted file must be readable by UID 10001. The image has a `HEALTHCHECK` that runs `--health`, runs as an
+unprivileged user and needs no writable filesystem. See [Docker](../deployment/docker.md), [Docker
+Compose](../deployment/docker-compose.md) and [Kubernetes](../deployment/kubernetes.md). A C or Python
+program is shipped the way you ship any other program; an image can run it under a supervisor of your choice, with the
+stop rules above.
 
 ## Where next
 
