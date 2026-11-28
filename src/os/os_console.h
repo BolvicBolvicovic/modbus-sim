@@ -21,7 +21,7 @@ typedef _Atomic sig_atomic_t os_stop_flag_t;
  * The handler runs in signal context: it may only do async-signal-safe work.
  *
  * On Windows the handler also runs on Ctrl-C, Ctrl-Break, console close, logoff and shutdown,
- * and when another process signals the named event `Local\\mogbus-stop-<pid>` (<pid> is the
+ * and when another process signals the named event `Local\\mogbus-stop-PID` (PID is the
  * decimal process id; OpenEvent + SetEvent), which needs no shared console.
  */
 void	os_console_on_stop(void (*handler)(void));

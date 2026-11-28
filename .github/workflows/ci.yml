@@ -225,14 +225,14 @@ jobs:
             mingw-w64-x86_64-python
 
       - name: Build mogbus.exe, mogbus.dll and the test binary
-        run: make -j4 PLATFORM=win32 WITH_TLS=0 all lib mogbus-tests.exe
+        run: make -j4 PLATFORM=win32 CROSS= WITH_TLS=0 all lib mogbus-tests.exe
 
       # tools/run_tests.sh runs under MSYS2 with no Wine wrapper: the tests run natively.
       - name: Unit and integration tests
-        run: make PLATFORM=win32 WITH_TLS=0 WINE= tests WHAT=c
+        run: make PLATFORM=win32 CROSS= WITH_TLS=0 WINE= tests WHAT=c
 
       - name: Python package tests and examples
-        run: make PLATFORM=win32 WITH_TLS=0 PYTHON=python python-tests python-examples
+        run: make PLATFORM=win32 CROSS= WITH_TLS=0 PYTHON=python python-tests python-examples
 
       - name: pymodbus interoperability
         run: |
