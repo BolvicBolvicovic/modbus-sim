@@ -88,6 +88,12 @@ sha256sum -c dist/SHA256SUMS      # compare with the published SHA256SUMS
 twice in two temporary copies of the tree (different absolute paths) and fails with a diff of
 sha256 sums if anything differs; CI runs it in the `reproducible` job.
 
+## Documentation site
+
+The CI `docs` job builds the site (`make docs`). On pushes to `main`, the `pages` job deploys
+`build/docs` to GitHub Pages at https://bolvicbolvicovic.github.io/mogbus/ (no `gh-pages` branch,
+nothing generated is committed). One-time setup: repository Settings, Pages, Source: "GitHub Actions".
+
 ## Rules that keep builds reproducible
 
 - Compile with `-ffile-prefix-map=$(CURDIR)=.` (`REPRO_FLAGS`, also for s7 and the `.so` link);
