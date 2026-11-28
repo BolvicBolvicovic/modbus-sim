@@ -9,7 +9,7 @@
 #ifndef NET_OBS_H
 #define NET_OBS_H
 
-#include "modbus/pdu.h"
+#include "modbus/pdu.h" // IWYU pragma: keep
 #include "os/os_mutex.h"
 #include "os/os_socket.h"
 #include "os/os_wait.h"
@@ -31,10 +31,10 @@ enum
 	NET_OBS_HTTP_CONNS	= 4,	/**< concurrent HTTP clients; others wait in the backlog */
 	NET_OBS_HTTP_IN		= 1024,	/**< request head limit */
 	NET_OBS_HTTP_BODY	= 1024,	/**< request body limit (runtime control) */
-	NET_OBS_HTTP_OUT	= 32768,	/**< response limit, enough for 16 fully used devices */
-	NET_OBS_HOST_MAX	= 128,		/**< longest bind address kept for the Host check */
-	NET_OBS_HOSTS_MAX	= 256,		/**< allowed Host names, comma-separated, with the NUL */
-	NET_OBS_HOSTS_COUNT	= 8,		/**< most allowed Host names */
+	NET_OBS_HTTP_OUT	= 32768,/**< response limit, enough for 16 fully used devices */
+	NET_OBS_HOST_MAX	= 128,	/**< longest bind address kept for the Host check */
+	NET_OBS_HOSTS_MAX	= 256,	/**< allowed Host names, comma-separated, with the NUL */
+	NET_OBS_HOSTS_COUNT	= 8,	/**< most allowed Host names */
 	NET_OBS_HTTP_TIMEOUT_MS	= 2000,	/**< a connection must be done within this */
 	NET_OBS_POLL_MAX	= 64,	/**< transport fds plus endpoint fds per wait */
 	NET_OBS_GROUP_MAX	= 512,	/**< most entries one shared group wait takes (8 servers of 38 entries each fit) */

@@ -13,7 +13,7 @@ Details live in `docs/`: `docs/dev/architecture.md` (layers, coding rules), `doc
 - CI-equivalent checks: `make`, `make tests`, `for p in profiles/*.scm; do ./mogbus --check "$p"; done` (also with `WITH_TLS=0`), `make asan` (`detect_leaks=0` is intentional), `make docs` + `tools/check_docs.sh examples ./mogbus`, and scan-build as CI runs it: `make clean && make -j$(nproc) third_party/s7/s7.o && scan-build --status-bugs --use-cc clang --exclude third_party/s7 -o scan-output make -j$(nproc)` (no ccache, no mold). `make fuzz` / `make fuzz-run FUZZ_SECONDS=N` run the libFuzzer harnesses in `tests/fuzz/`.
 - `./mogbus --check <config.scm>` validates a config silently (`--check=verbose` prints the summary). Keep every profile passing in TLS and no-TLS builds when changing config parsing or device behavior.
 - CI input rule: `ci.yml` path filters and `tools/changes.sh` (one file-to-category table for CI and `make tests` auto scope) decide what runs. When adding a top-level file/directory the build reads, add it to both.
-- After every push, check CI (`gh run list`/`gh run watch`) and open issues (`gh issue list --state open`). If an issue needs handling, finish the current push, pause the current loop, handle issues one at a time (branch/worktree, implement, test, review, fix, reverify, merge, clean up, push, re-check CI and issues), then resume.
+- After every push, check CI (`gh run list`/`gh run watch`) and fix what fails. GitHub issues are handled only when the user names one.
 
 ## Focused tests
 - `./mogbus-tests --list`; `./mogbus-tests -s <suite> -t <test>`; `make tests WHAT=c SUITES=obs`; `make tests WHAT=python`.
