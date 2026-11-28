@@ -25,7 +25,8 @@ typedef struct rtu_server_t rtu_server_t;
  * explicit inter-frame silence override. Otherwise baud is used to derive Modbus RTU t3.5; if
  * baud is also 0, RTU_DEFAULT_FRAME_GAP_MS is used. strict_t15 enables best-effort intra-frame
  * t1.5 discard checks in baud-derived auto mode; it is opt-in because read() boundaries do not
- * reflect UART timing. broadcast_execute runs unit-0 requests on every device without a
+ * reflect UART timing. char_timing models the UART instead (see rtu_framer_rx_chars()) and, on a
+ * handle that is not a real serial port, paces replies at the line rate. broadcast_execute runs unit-0 requests on every device without a
  * response.
  */
 struct rtu_server_options_t
@@ -35,6 +36,7 @@ struct rtu_server_options_t
 	u32		frame_gap_ms;	/**< explicit inter-frame silence override; 0 = auto */
 	u32		baud;		/**< serial baud rate for RTU timing; 0 = unknown */
 	bool		strict_t15;	/**< opt-in: discard partial frames on t1.5 gaps */
+	bool		char_timing;	/**< opt-in: character-level t1.5/t3.5 and line-rate replies; needs baud, supersedes strict_t15 */
 	bool		broadcast_execute; /**< opt-in: execute unit-0 requests on all devices */
 	device_t**	devices;
 	u32		device_count;
@@ -55,6 +57,8 @@ struct rtu_server_t
 	rtu_framer_t		framer;
 	bool			read_closed;
 	bool			open;
+	bool			pace_tx;	/**< replies leave one character time apart */
+	u64			tx_start_us;	/**< when the paced reply began; 0 = not started */
 	os_stop_flag_t	stop;
 };
 

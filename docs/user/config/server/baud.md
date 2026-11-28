@@ -37,3 +37,4 @@ tty's current rate is used where there is one. See [serial framing](framing.md).
 
 - [frame-gap-ms](frame-gap-ms.md)
 - [strict-t15](strict-t15.md)
+- [char-timing](char-timing.md)

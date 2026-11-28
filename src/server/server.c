@@ -167,6 +167,7 @@ server_open(server_t* server, const server_options_t* options)
 				.frame_gap_ms      = options->frame_gap_ms,
 				.baud              = options->baud,
 				.strict_t15        = options->strict_t15,
+				.char_timing       = options->char_timing,
 				.broadcast_execute = options->broadcast_execute,
 				.devices           = options->devices,
 				.device_count      = options->device_count,
@@ -185,10 +186,21 @@ server_open(server_t* server, const server_options_t* options)
 				/* PTY master/slave have no real UART baud; only auto-detect on real tty devices. */
 				if (o.baud == 0 && options->mode == SERVER_MODE_RTU_DEVICE)
 					o.baud = os_serial_baud(fd);
+				if (o.char_timing &&
+				    options->mode == SERVER_MODE_RTU_DEVICE &&
+				    !os_serial_low_latency(fd))
+					LOG_WARN("RTU: no low-latency mode on %s; characters are dated as late as the driver delivers them",
+						 options->path);
 			}
 			else if (!os_serial_supported())
 			{
 				fprintf(stderr, "RTU fd mode is not supported on this platform\n");
+				return 1;
+			}
+			if (o.char_timing &&
+			    o.baud == 0)
+			{
+				fprintf(stderr, "RTU: character timing needs a known baud rate\n");
 				return 1;
 			}
 			o.fd = fd;

@@ -6,6 +6,7 @@
 #include "net/rtu_framer.h"
 #include "net/rtu_server.h"
 #include "device/device.h"
+#include "os/os_serial.h"
 #include "os/os_time.h"
 #include "vlib/arena.h"
 #include <errno.h>
@@ -1912,4 +1913,197 @@ TEST(RtuServerBroadcastDoesNotConsumeFaultScheduleStep)
 	ASSERT_EQ(resp[0] == 0x83 && resp[1] == 0x06);
 	ASSERT_EQ(rtu_child_stop(&child));
 	arena_release(arena);
+}
+
+/* Character timing: server on `server_fd` in a child; `close_fd` (the test's end) is closed there. */
+static bool
+rtu_child_fork_char(rtu_child_t* child, int server_fd, int close_fd, device_t** devices, u32 baud,
+		    bool char_timing)
+{
+	child->pid = fork();
+	if (child->pid < 0)
+		return false;
+	if (child->pid == 0)
+	{
+		rtu_server_options_t opts = {
+			.fd           = server_fd,
+			.seed         = 1,
+			.baud         = baud,
+			.char_timing  = char_timing,
+			.devices      = devices,
+			.device_count = 1,
+		};
+
+		if (close_fd >= 0)
+			close(close_fd);
+		{ rtu_server_t srv; (void)rtu_server_run(&srv, &opts); }
+		_exit(0);
+	}
+	return true;
+}
+
+static bool
+rtu_child_start_char(rtu_child_t* child, device_t** devices, u32 baud, bool char_timing)
+{
+	int fds[2] = { -1, -1 };
+
+	child->pid = -1;
+	child->fd  = -1;
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0)
+		return false;
+	if (!rtu_child_fork_char(child, fds[1], fds[0], devices, baud, char_timing))
+	{
+		close(fds[0]);
+		close(fds[1]);
+		return false;
+	}
+	close(fds[1]);
+	child->fd = fds[0];
+	return true;
+}
+
+/*
+ * Writes a request in two chunks, the way a PTY peer can only pace it. The server dates the
+ * second chunk's characters back from its read time at one character time each, so the silence
+ * it sees is the pause minus the second chunk's line time: sleep `idle_us` plus that.
+ */
+static bool
+send_two_chunks(int fd, u32 baud, u32 idle_us)
+{
+	u8	req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8	frame[MODBUS_RTU_MAX_FRAME];
+	u32	flen = modbus_rtu_encode(frame, 1, req, sizeof(req));
+	u32	tail = 2;
+
+	if (!send_all_fd(fd, frame, flen - tail))
+		return false;
+	usleep(idle_us + tail * rtu_char_us(baud));
+	return send_all_fd(fd, frame + flen - tail, tail);
+}
+
+static bool
+request_is_answered(int fd, u32 timeout_ms)
+{
+	u8	req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 0x01 };
+	u8	resp[MODBUS_MAX_PDU];
+	u8	addr = 0;
+	u32	len = 0;
+
+	return send_rtu_req(fd, 1, req, sizeof(req)) &&
+	       recv_rtu_resp(fd, &addr, resp, &len, timeout_ms) &&
+	       addr == 1 &&
+	       len == 4;
+}
+
+TEST(RtuCharTimingSilenceBetweenCharacters)
+{
+	/* 300 baud: character 36.7 ms, t1.5 55 ms, t3.5 128 ms; the windows are wide so a loaded
+	 * machine does not tip a case over. A silence under t1.5 keeps the frame, one between t1.5
+	 * and t3.5 discards it (the rest is dropped too), one over t3.5 ends the first part as an
+	 * incomplete frame. Without char timing the same pause is only a read boundary. */
+	static const struct {
+		const char*	name;
+		bool		char_timing;
+		u32		idle_us;
+		bool		answered;
+	} cases[] = {
+		{ "under t1.5",			true,  20000,  true },
+		{ "between t1.5 and t3.5",	true,  90000,  false },
+		{ "over t3.5",			true,  250000, false },
+		{ "between, char timing off",	false, 90000,  true },
+	};
+
+	for (u32 c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+	{
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x4321);
+		device_t*	devices[] = { dev };
+		rtu_child_t	child = { 0 };
+		u8		resp[MODBUS_MAX_PDU];
+		u8		addr = 0;
+		u32		len = 0;
+		bool		ok;
+
+		ASSERT_EQ(dev != NULL);
+		ASSERT_EQ(rtu_child_start_char(&child, devices, 300, cases[c].char_timing));
+		ok = send_two_chunks(child.fd, 300, cases[c].idle_us);
+		if (cases[c].answered)
+			ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 3000) && get_be16(resp + 2) == 0x4321;
+		else
+		{
+			ok = ok && recv_none_fd(child.fd, 800);
+			/* The line is idle again: a clean request is served. */
+			ok = ok && request_is_answered(child.fd, 3000);
+		}
+		if (!ok)
+			fprintf(stderr, "char timing case failed: %s\n", cases[c].name);
+		ASSERT_EQ(rtu_child_stop(&child));
+		arena_release(arena);
+		ASSERT_EQ(ok);
+	}
+}
+
+TEST(RtuCharTimingOnPty)
+{
+	/* The same model through a real PTY pair: the peer's pacing is the only line timing. */
+	arena_t*	arena = ARENA_ALLOC();
+	device_t*	dev   = make_device(arena, 1, SPACE_HOLDING, 0, 0x4321);
+	device_t*	devices[] = { dev };
+	rtu_child_t	child = { .pid = -1, .fd = -1 };
+	char		name[128];
+	int		slave = -1;
+	int		master;
+	bool		ok;
+
+	ASSERT_EQ(dev != NULL);
+	master = os_serial_open(true, "RTU", NULL, 300, 8, PARITY_NONE, 1, &slave, name, sizeof(name));
+	ASSERT(master >= 0);
+	ASSERT_EQ(rtu_child_fork_char(&child, master, -1, devices, 300, true));
+	child.fd = slave;
+	ok = send_two_chunks(slave, 300, 90000) &&
+	     recv_none_fd(slave, 800) &&
+	     request_is_answered(slave, 3000);
+	ASSERT_EQ(rtu_child_stop(&child));
+	os_serial_close(master);
+	arena_release(arena);
+	ASSERT_EQ(ok);
+}
+
+TEST(RtuCharTimingPacesTheReply)
+{
+	/* A 45-byte reply takes 45 character times of 11 bits on the line: the last byte cannot
+	 * arrive sooner, however fast the handle is. Only the lower bound is exact; the upper one
+	 * leaves room for a busy machine. */
+	static const u32 bauds[] = { 9600, 19200 };
+
+	for (u32 b = 0; b < 2; b++)
+	{
+		arena_t*	arena = ARENA_ALLOC();
+		device_t*	dev   = make_holding_device(arena, "pace", 20, 0x100);
+		device_t*	devices[] = { dev };
+		rtu_child_t	child = { 0 };
+		u8		req[] = { FC_READ_HOLDING_REGISTERS, 0x00, 0x00, 0x00, 20 };
+		u8		resp[MODBUS_MAX_PDU];
+		u8		addr = 0;
+		u32		len = 0;
+		u64		start;
+		u64		took_us = 0;
+		u64		line_us = 45ULL * rtu_char_us(bauds[b]);
+		bool		ok;
+
+		ASSERT_EQ(dev != NULL);
+		ASSERT_EQ(rtu_child_start_char(&child, devices, bauds[b], true));
+		ok = send_rtu_req(child.fd, 1, req, sizeof(req));
+		start = os_now_us();
+		ok = ok && recv_rtu_resp(child.fd, &addr, resp, &len, 3000) && len == 42;
+		took_us = os_now_us() - start;
+		if (!ok || took_us < line_us * 95 / 100 || took_us > line_us + 400000)
+			fprintf(stderr, "pacing at %u baud: ok %d took %llu us, line %llu us\n", bauds[b], ok,
+				(unsigned long long)took_us, (unsigned long long)line_us);
+		ASSERT_EQ(rtu_child_stop(&child));
+		arena_release(arena);
+		ASSERT_EQ(ok);
+		ASSERT(took_us >= line_us * 95 / 100);
+		ASSERT(took_us <= line_us + 400000);
+	}
 }

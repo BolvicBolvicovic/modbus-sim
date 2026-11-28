@@ -41,7 +41,7 @@ LRC valid.
 
 ### Framing
 
-A frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5, `frame-gap-ms` or `strict-t15`
+A frame is complete as soon as `CR LF` arrives. There is no t3.5, t1.5, `frame-gap-ms`, `strict-t15` or `char-timing`
 behaviour for ASCII.
 
 - Complete frames are dispatched immediately, including several in one `read()`.

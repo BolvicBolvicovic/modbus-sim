@@ -59,6 +59,28 @@ TEST(ApiVersionAndDefaults)
 	mogbus_destroy(NULL);
 }
 
+TEST(ApiCharTimingIsValidated)
+{
+	mogbus_t*		ctx = NULL;
+	mogbus_device_t*	dev;
+	mogbus_point_t		p = holding(0, 1);
+	mogbus_server_options_t	o = mogbus_server_options_defaults();
+
+	ASSERT_EQ(!o.char_timing);
+	mogbus_create(&ctx);
+	mogbus_add_device(ctx, 1, "d", &dev);
+	ASSERT_EQ(mogbus_device_add_point(dev, &p) == MOGBUS_OK);
+	o.char_timing = true;
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_ERR_INVALID &&
+		  strstr(mogbus_last_error(ctx), "RTU serial modes") != NULL);
+	o.mode = MOGBUS_MODE_RTU_PTY;
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_ERR_INVALID &&
+		  strstr(mogbus_last_error(ctx), "needs a baud") != NULL);
+	o.baud = 9600;
+	ASSERT_EQ(mogbus_server_check(ctx, &o) == MOGBUS_OK);
+	mogbus_destroy(ctx);
+}
+
 TEST(ApiShowRegistersMsIsValidated)
 {
 	mogbus_t*		ctx = NULL;

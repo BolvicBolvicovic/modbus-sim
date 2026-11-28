@@ -22,6 +22,7 @@ server_options_from_config(config_t* config, u32 index)
 		.frame_gap_ms             = srv->frame_gap_ms,
 		.baud                     = srv->baud,
 		.strict_t15               = srv->strict_t15,
+		.char_timing              = srv->char_timing,
 		.broadcast_execute        = srv->broadcast_execute,
 		.data_bits                = srv->data_bits,
 		.parity                   = srv->parity,

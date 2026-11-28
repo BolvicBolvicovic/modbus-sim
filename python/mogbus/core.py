@@ -567,6 +567,7 @@ class ServerOptions:
     @param http_allowed_hosts Extra Host names `/api/` and the UI accept (loopback and the bind address always pass): a comma-separated string or a list of at most 8 names.
     @param id Names the server (at most 31 bytes, unique in the context); it serves the devices that list it with `Device.add_server`, a server without one the devices that list none.
     @param show_registers_ms Show the point values of the context every this many milliseconds (10 to 60000; 0 is off): a live table when stdout is a terminal, text lines otherwise. Written by `mogbus_step()`, so it needs a stepping `Server`.
+    @param char_timing RTU byte streams: date every character so t1.5 and t3.5 are measured between characters, and send replies at the line rate when the handle is not a real serial port; needs `baud` (a device may take it from the tty); supersedes `strict_t15`.
     """
     mode: Union[str, int, Mode] = Mode.TCP
     bind_address: Optional[str] = "127.0.0.1"
@@ -598,6 +599,7 @@ class ServerOptions:
     http_allowed_hosts: Union[None, str, Sequence[str]] = None
     id: Optional[str] = None
     show_registers_ms: int = 0
+    char_timing: bool = False
 
     def _to_c(self):
         """Returns (struct, keepalive). The struct points into the bytes objects in keepalive."""
@@ -631,7 +633,8 @@ class ServerOptions:
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise MogbusError(f"fd must be an integer, got {value!r}")
             elif f.name in ("strict_t15", "broadcast_execute", "tls_enabled",
-                            "tls_require_client_certificate", "http_control", "http_ui"):
+                            "tls_require_client_certificate", "http_control", "http_ui",
+                            "char_timing"):
                 value = bool(value)
             else:
                 value = _u(value, f.name, 1 << 32)

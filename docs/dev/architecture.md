@@ -248,6 +248,16 @@ length field, so frame boundaries are detected by inter-frame silence. When a ba
 for inter-frame boundaries. Optional `strict_t15` enables a best-effort t1.5 intra-frame discard
 heuristic in baud-derived auto mode for RTU byte streams. `frame-gap-ms` is an explicit inter-frame
 override. With no known baud, `frame-gap-ms` or the 20 ms default is used as a practical approximation.
+Optional `char_timing` (needs a baud; config `char-timing`, library `char_timing`) replaces both
+the read-boundary heuristics: `rtu_framer_rx_chars()` dates each character of a `read()` chunk
+(newest at the read, the others a character time apart, never closer than one to the previous one),
+discards a frame on a silence over t1.5 and drops characters until t3.5 of silence, and processes a
+frame at t3.5 without deferring incomplete ones; `frame-gap-ms` still overrides t3.5. The server
+paces replies through the poll timeout (`rtu_server_t.pace_tx`/`tx_start_us`: a reply character j
+may be written once `(j+1)` character times have passed since the first attempt) when the handle is
+not a real tty (`os_serial_baud() == 0`), and `server.c` asks a real `rtu-device` for low latency
+(`os_serial_low_latency()`, `ASYNC_LOW_LATENCY` on Linux, a stub on Windows). Precision limits are in
+`docs/user/config/server/char-timing.md`.
 After a gap, complete valid CRC frames are parsed/handled; bad CRC, unknown unit, and broadcast (unit 0)
 produce no response. Delayed fault responses use the same due-time poll pattern as TCP.
 

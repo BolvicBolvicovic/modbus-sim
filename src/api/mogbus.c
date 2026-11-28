@@ -1029,6 +1029,15 @@ validate_options(mogbus_t* ctx, server_options_t* o, struct strings_t* st, devic
 	{
 		return fail(ctx, MOGBUS_ERR_INVALID, "show_registers_ms must be 0 or 10 to 60000");
 	}
+	if (o->char_timing &&
+	    o->mode != SERVER_MODE_RTU_PTY &&
+	    o->mode != SERVER_MODE_RTU_DEVICE &&
+	    o->mode != SERVER_MODE_RTU_FD)
+		return fail(ctx, MOGBUS_ERR_INVALID, "char_timing is only valid in the RTU serial modes");
+	if (o->char_timing &&
+	    o->baud == 0 &&
+	    o->mode != SERVER_MODE_RTU_DEVICE)
+		return fail(ctx, MOGBUS_ERR_INVALID, "char_timing needs a baud rate");
 	if ((o->data_bits != 7 && o->data_bits != 8) ||
 	    (o->stop_bits != 1 && o->stop_bits != 2) ||
 	    (unsigned)o->parity > PARITY_SPACE)
@@ -1160,6 +1169,7 @@ options_from_public(mogbus_t* ctx, const mogbus_server_options_t* in, server_opt
 		.frame_gap_ms             = in->frame_gap_ms,
 		.baud                     = in->baud,
 		.strict_t15               = in->strict_t15,
+		.char_timing              = in->char_timing,
 		.broadcast_execute        = in->broadcast_execute,
 		.data_bits                = in->data_bits,
 		.parity                   = (parity_t)in->parity,
@@ -1263,6 +1273,7 @@ mogbus_config_server_options_at(mogbus_t* ctx, size_t index, mogbus_server_optio
 		.frame_gap_ms                   = o.frame_gap_ms,
 		.baud                           = o.baud,
 		.strict_t15                     = o.strict_t15,
+		.char_timing                    = o.char_timing,
 		.broadcast_execute              = o.broadcast_execute,
 		.data_bits                      = o.data_bits,
 		.parity                         = (mogbus_parity_t)o.parity,

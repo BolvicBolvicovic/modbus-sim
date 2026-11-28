@@ -9,7 +9,8 @@ How RTU and ASCII frames are delimited and what is dropped, in every mode that c
 RTU frame boundaries use baud-derived t3.5 when baud is known (`(baud N)` or the tty's current rate),
 unless `(frame-gap-ms N)` overrides it; with no known baud the fallback is 20 ms. `strict-t15` is a
 best-effort RTU byte-stream-only heuristic in baud-derived auto mode and never applies to
-RTU-over-TCP.
+RTU-over-TCP. `char-timing` replaces both with t1.5 and t3.5 measured between characters (see
+[char-timing](char-timing.md) for what that can and cannot achieve).
 
 ### ASCII
 
@@ -33,4 +34,5 @@ has no RTU timing options.
 - [baud](baud.md)
 - [frame-gap-ms](frame-gap-ms.md)
 - [strict-t15](strict-t15.md)
+- [char-timing](char-timing.md)
 - [broadcast-execute](broadcast-execute.md)

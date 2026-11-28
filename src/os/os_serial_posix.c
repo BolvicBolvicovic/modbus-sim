@@ -11,6 +11,7 @@
 #include <termios.h>
 #include <unistd.h>
 #if defined(__linux__)
+#include <linux/serial.h>
 #include <pty.h>
 #endif
 
@@ -360,6 +361,25 @@ fail:
 	close(fd);
 	*slave_fd = -1;
 	return -1;
+}
+
+bool
+os_serial_low_latency(os_serial_t fd)
+{
+#if defined(__linux__) && defined(TIOCGSERIAL) && defined(ASYNC_LOW_LATENCY)
+	struct serial_struct	ss;
+
+	if (!isatty(fd) ||
+	    ioctl(fd, TIOCGSERIAL, &ss) != 0)
+		return false;
+	if (ss.flags & ASYNC_LOW_LATENCY)
+		return true;
+	ss.flags |= ASYNC_LOW_LATENCY;
+	return ioctl(fd, TIOCSSERIAL, &ss) == 0;
+#else
+	(void)fd;
+	return false;
+#endif
 }
 
 s64

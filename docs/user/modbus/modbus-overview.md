@@ -58,10 +58,10 @@ dynamically or persisted, plus the limits below.
 
 ## Not supported (yet)
 
-- True UART character-level t1.5 timing on byte-stream transports. Optional `(server (strict-t15 on))`
-  enables a best-effort t1.5 discard heuristic at `read()` boundary granularity for RTU byte streams
-  in baud-derived auto mode; it is never applied to RTU-over-TCP, and RTU-over-UDP has no inter-frame
-  timing (one frame per datagram).
+- Hardware-exact UART timing. `(server (char-timing on))` dates every character of an RTU byte stream
+  and applies t1.5/t3.5 between them, but user space only sees when `read()` returns, so a real port
+  is as precise as its driver (see [char-timing](../config/server/char-timing.md)). RTU-over-TCP
+  and RTU-over-UDP have no UART timing (one frame per datagram or TCP read).
 - TLS for RTU-over-TCP, ASCII-over-TCP, UDP, ASCII-over-UDP and RTU-over-UDP (no DTLS);
   `(server (tls ...))` is rejected outside `mode tcp`. TLS is also build-optional.
 - Certificate revocation checking (CRL/OCSP): a client certificate signed by the configured CA is

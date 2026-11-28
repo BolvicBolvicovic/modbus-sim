@@ -52,6 +52,7 @@ struct config_t
 		u32		frame_gap_ms;		/**< RTU inter-frame silence override in ms; 0 = auto (baud-derived or default) */
 		u32		baud;			/**< RTU serial baud rate; 0 = unknown */
 		bool		strict_t15;		/**< RTU byte streams: opt-in t1.5 discard heuristic */
+		bool		char_timing;		/**< RTU byte streams: character-level timing and line-rate replies */
 		bool		broadcast_execute;	/**< RTU transports: execute unit-0 requests on all devices */
 		u32		data_bits;		/**< ASCII byte streams: 7 or 8 */
 		parity_t	parity;			/**< RTU and ASCII byte streams: serial parity */

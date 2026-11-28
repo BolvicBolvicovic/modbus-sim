@@ -94,6 +94,7 @@ class ServerOptionsC(ctypes.Structure):
         ("http_allowed_hosts", ctypes.c_char_p),
         ("id", ctypes.c_char_p),
         ("show_registers_ms", ctypes.c_uint32),
+        ("char_timing", ctypes.c_bool),
     ]
 
 

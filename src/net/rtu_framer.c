@@ -17,12 +17,12 @@ rtu_framer_init(rtu_framer_t* framer)
 }
 
 static bool
-rtu_framer_keep_incomplete(u32 frame_gap_ms, u32 baud)
+rtu_framer_keep_incomplete(u32 frame_gap_ms, u32 baud, bool char_timing)
 {
 	/* In baud-derived auto mode, read() boundaries do not reflect UART timing,
 	 * so keep incomplete bytes across a t3.5 gap. The caller bounds this by
 	 * deferring at most one extra gap window. */
-	return frame_gap_ms == 0 && baud != 0;
+	return frame_gap_ms == 0 && baud != 0 && !char_timing;
 }
 
 static void
@@ -150,7 +150,7 @@ rtu_framer_handle_frame(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
 bool
 rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms)
 {
-	bool keep_incomplete = rtu_framer_keep_incomplete(ctx->frame_gap_ms, ctx->baud);
+	bool keep_incomplete = rtu_framer_keep_incomplete(ctx->frame_gap_ms, ctx->baud, ctx->char_timing);
 
 	while (framer->rx_len > 0 && !framer->pending.active)
 	{
@@ -258,7 +258,7 @@ rtu_framer_on_new_data(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 no
 {
 	bool incomplete;
 
-	if (!rtu_framer_keep_incomplete(ctx->frame_gap_ms, ctx->baud) ||
+	if (!rtu_framer_keep_incomplete(ctx->frame_gap_ms, ctx->baud, ctx->char_timing) ||
 	    !framer->gap_deferred ||
 	    framer->rx_len <= framer->gap_deferred_len)
 		return;
@@ -327,7 +327,8 @@ rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_m
 	u32	t15;
 	u64	elapsed;
 
-	if (!framer->have_rx ||
+	if (ctx->char_timing ||
+	    !framer->have_rx ||
 	    framer->rx_len == 0 ||
 	    framer->pending.active)
 		return;
@@ -352,4 +353,55 @@ rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_m
 		discard_rx(framer, ctx);
 		framer->have_rx = false;
 	}
+}
+
+u32
+rtu_char_us(u32 baud)
+{
+	return baud == 0 ? 0 : (u32)((11000000ULL + baud - 1) / baud);
+}
+
+void
+rtu_framer_rx_chars(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, const u8* data, u32 n,
+		    u64 now_ms, u64 now_us)
+{
+	u64	chr = rtu_char_us(ctx->baud);
+	u64	t15 = rtu_t15_us(ctx->baud);
+	u64	t35 = ctx->frame_gap_ms > 0 ? (u64)ctx->frame_gap_ms * 1000 : rtu_t35_us(ctx->baud);
+
+	for (u32 i = 0; i < n; i++)
+	{
+		u64 at = now_us - (u64)(n - 1 - i) * chr;
+
+		if (framer->last_char_us != 0)
+		{
+			u64 idle;
+
+			if (at < framer->last_char_us + chr)
+				at = framer->last_char_us + chr;
+			idle = at - framer->last_char_us - chr;
+			if (idle >= t35)
+			{
+				if (!framer->skipping && framer->rx_len > 0)
+					(void)rtu_framer_process(framer, ctx, now_ms);
+				framer->skipping = false;
+			}
+			else if (idle > t15 &&
+				 !framer->skipping &&
+				 framer->rx_len > 0)
+			{
+				discard_rx(framer, ctx);
+				framer->skipping = true;
+			}
+		}
+		framer->last_char_us = at;
+		if (framer->skipping)
+			continue;
+		if (framer->rx_len >= sizeof(framer->rx))
+			rtu_framer_consume(framer, framer->rx_len - (MODBUS_RTU_MAX_FRAME - 1));
+		framer->rx[framer->rx_len++] = data[i];
+	}
+	framer->last_rx_us = framer->last_char_us;
+	framer->last_rx_ms = framer->last_char_us / 1000;
+	framer->have_rx = framer->rx_len > 0;
 }

@@ -19,7 +19,8 @@ Turns on a best-effort t1.5 discard heuristic for RTU byte streams.
 
 ## Behaviour
 
-Opt-in, in baud-derived auto mode only. It is never applied to RTU-over-TCP, because TCP `read()`
+Opt-in, in baud-derived auto mode only. [char-timing](char-timing.md) replaces it with real
+character-level timing and wins when both are set. It is never applied to RTU-over-TCP, because TCP `read()`
 boundaries do not reflect UART character timing.
 
 ## Examples
@@ -32,4 +33,5 @@ boundaries do not reflect UART character timing.
 ## See also
 
 - [baud](baud.md)
+- [char-timing](char-timing.md)
 - [serial framing](framing.md)

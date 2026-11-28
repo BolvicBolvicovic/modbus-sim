@@ -22,7 +22,7 @@ Modbus RTU frames (`[addr][PDU][CRC lo hi]`), exactly one per UDP datagram, no c
 ## Behaviour
 
 - The datagram boundary delimits the frame, so there is no t3.5 or t1.5 timing and `baud`,
-  `frame-gap-ms` and `strict-t15` are rejected.
+  `frame-gap-ms`, `strict-t15` and `char-timing` are rejected.
 - Request semantics are those of [`rtu-tcp`](transport-rtu-tcp.md): a bad CRC, a frame shorter than 4
   bytes and an unknown unit (see [any-unit](../config/device/any-unit.md)) get no response; unit 0 is broadcast with no response and, with
   `(broadcast-execute on)`, executes on every device.
@@ -38,7 +38,7 @@ Modbus RTU frames (`[addr][PDU][CRC lo hi]`), exactly one per UDP datagram, no c
 
 | Message | Meaning |
 |---|---|
-| load error | `baud`, `frame-gap-ms`, `strict-t15`, `tls`, `idle-timeout-ms` or `disconnect` |
+| load error | `baud`, `frame-gap-ms`, `strict-t15`, `char-timing`, `tls`, `idle-timeout-ms` or `disconnect` |
 
 ## Examples
 

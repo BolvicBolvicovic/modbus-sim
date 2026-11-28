@@ -32,6 +32,8 @@ struct rtu_framer_t
 	bool		fault_disconnect;	/**< handled frame asked the TCP transport to close */
 	bool		gap_deferred;
 	u32		gap_deferred_len;
+	u64		last_char_us;	/**< char timing: estimated arrival of the newest character; 0 = none yet */
+	bool		skipping;	/**< char timing: t1.5 was exceeded, drop characters until t3.5 of silence */
 	pending_response_t	pending;
 };
 
@@ -41,6 +43,9 @@ struct rtu_framer_t
  * Borrowed pointers; valid for the duration of the server run. frame_gap_ms == 0 means
  * baud-derived/auto timing. strict_t15 is best-effort and only meaningful for RTU byte
  * streams. broadcast_execute runs unit-0 requests on all devices without a response.
+ * char_timing (needs a baud) measures t1.5 and t3.5 between estimated character arrival times
+ * (rtu_framer_rx_chars) and replaces the strict_t15 heuristic and the deferral of incomplete
+ * frames.
  */
 struct rtu_framer_ctx_t
 {
@@ -50,6 +55,7 @@ struct rtu_framer_ctx_t
 	u32		frame_gap_ms;
 	u32		baud;
 	bool		strict_t15;
+	bool		char_timing;
 	bool		broadcast_execute;
 	const char*	peer;		/**< client for logs, NULL on a byte stream */
 	net_obs_t*	obs;		/**< metrics and request logs; NULL records nothing */
@@ -83,6 +89,20 @@ bool	rtu_framer_process(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 n
  *        RTU-over-TCP.
  */
 void	rtu_framer_note_gap(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, u64 now_ms, u64 now_us);
+
+/**
+ * @brief Character-level receive (ctx->char_timing): feeds `n` characters that one read() returned
+ *        at `now_us` and applies t1.5 and t3.5 between them.
+ *
+ * User space cannot see when each character really arrived, so the newest one is dated `now_us`
+ * and each earlier one a character time earlier, never closer than one character time to its
+ * predecessor (the line carries one character at a time). A silence over t1.5 inside a frame
+ * discards it and every character up to the next silence of t3.5; a silence of t3.5 ends the
+ * frame (processed, an incomplete one discarded). The frame still ends at the poll timeout when
+ * no further character follows.
+ */
+void	rtu_framer_rx_chars(rtu_framer_t* framer, const rtu_framer_ctx_t* ctx, const u8* data, u32 n,
+			    u64 now_ms, u64 now_us);
 
 /**
  * @brief True when a non-empty frame is waiting for its inter-frame gap (or for the read side
@@ -120,6 +140,9 @@ u32	rtu_t35_us(u32 baud);
  * t1.5 = ceil(1.5 * 11 * 1_000_000 / baud).
  */
 u32	rtu_t15_us(u32 baud);
+
+/** @brief Time of one RTU character (11 bits) in microseconds for `baud`; 0 when baud is 0. */
+u32	rtu_char_us(u32 baud);
 
 /**
  * @brief Resolves the inter-frame gap used by the RTU server. frame_gap_ms > 0 wins (explicit

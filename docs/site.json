@@ -286,6 +286,7 @@
                 "docs/user/config/server/baud.md",
                 "docs/user/config/server/frame-gap-ms.md",
                 "docs/user/config/server/strict-t15.md",
+                "docs/user/config/server/char-timing.md",
                 "docs/user/config/server/broadcast-execute.md",
                 "docs/user/config/server/data-bits.md",
                 "docs/user/config/server/parity.md",

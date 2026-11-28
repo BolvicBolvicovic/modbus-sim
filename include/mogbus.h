@@ -992,6 +992,7 @@ struct mogbus_server_options_t
 	const char*	http_allowed_hosts;	/**< extra Host names /api/ and the UI accept (loopback and the bind address always pass): up to 8 comma-separated names; NULL = none */
 	const char*	id;			/**< names the server: unique among the live servers of the context, at most 31 bytes; prefixes its log lines; NULL = none */
 	uint32_t	show_registers_ms;	/**< live register view of the context, 10 to 60000 ms; 0 = off (see below) */
+	bool		char_timing;		/**< RTU byte streams: date every character (t1.5 and t3.5 between them) and, off a real serial port, send replies at the line rate; needs `baud` (a device may take it from the tty); supersedes `strict_t15` */
 };
 
 /**

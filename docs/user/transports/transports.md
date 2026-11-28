@@ -8,7 +8,7 @@ A config selects exactly one mode. Every mode serves the same devices and the sa
 | Mode | Transport | Server entries allowed with `mode` |
 |---|---|---|
 | [`tcp`](transport-tcp.md) | Modbus TCP (MBAP) over TCP (IPv4 or IPv6 literal bind), optionally [TLS-wrapped](transport-tls.md) | `port`, `bind`, `seed`, `idle-timeout-ms`, `tls` |
-| [`rtu-pty`](transport-rtu.md) | Modbus RTU over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `frame-gap-ms`, `strict-t15`, `broadcast-execute`, `parity`, `stop-bits` |
+| [`rtu-pty`](transport-rtu.md) | Modbus RTU over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `frame-gap-ms`, `strict-t15`, `char-timing`, `broadcast-execute`, `parity`, `stop-bits` |
 | [`rtu-device`](transport-rtu.md) | Modbus RTU over an existing byte-stream device | `path`, plus the `rtu-pty` entries |
 | [`rtu-tcp`](transport-rtu-tcp.md) | Modbus RTU frames over a TCP listen socket (IPv4 or IPv6 literal bind) | `port`, `bind`, `seed`, `idle-timeout-ms`, `baud`, `frame-gap-ms`, `broadcast-execute` |
 | [`ascii-pty`](transport-ascii.md) | Modbus ASCII over a new Linux PTY (slave path printed at startup) | `seed`, `baud`, `data-bits`, `parity`, `stop-bits` |

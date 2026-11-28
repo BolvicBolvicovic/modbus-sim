@@ -3,12 +3,6 @@
 Implemented behaviour is documented in [Architecture](architecture.md) and the user docs; only
 outstanding work is listed here. When an item is done, document it there and remove it here.
 
-## RTU timing
-
-- Model true UART character-level timing. Why: t3.5/t1.5 are derived from baud and read
-  boundaries, which cannot reproduce byte-time-sensitive serial framing. RTU-over-TCP and
-  RTU-over-UDP need no change because they are explicit separate transports.
-
 ## Protocol validation and compatibility
 
 - Conformance and interoperability runs against commercial PLC/SCADA products, following the method

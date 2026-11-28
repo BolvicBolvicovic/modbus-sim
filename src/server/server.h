@@ -84,6 +84,7 @@ struct server_options_t
 	u32		frame_gap_ms;		/**< RTU modes; 0 = auto */
 	u32		baud;			/**< RTU timing and serial line speed; 0 = unknown */
 	bool		strict_t15;		/**< RTU byte streams */
+	bool		char_timing;		/**< RTU byte streams: character-level timing and line-rate replies; needs baud */
 	bool		broadcast_execute;	/**< RTU modes */
 	u32		data_bits;		/**< ASCII serial modes: 7 or 8 (RTU always uses 8) */
 	parity_t	parity;			/**< serial modes */
