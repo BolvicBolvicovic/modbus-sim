@@ -3,7 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
+#include "tests/tests_utils/test_support.h"
+#include <unistd.h>
 
 static char g_out[4096];
 
@@ -12,31 +13,16 @@ static int
 check_config(const char* config)
 {
 	const char*	bin = getenv("MOGBUS_BIN");
-	char		path[] = "/tmp/mogbus-hostname-XXXXXX";
-	char		command[512];
-	FILE*		file;
-	FILE*		pipe;
-	size_t		used = 0;
-	int		fd = mkstemp(path);
+	ts_server_t	file;
+	char*		argv[] = { (char*)(bin ? bin : "./mogbus"), "--check", file.config, NULL };
 	int		status;
 
-	if (fd < 0)
+	ts_server_init(&file, "hostname");
+	if (!ts_write_config(&file, "/tmp/mogbus-hostname-XXXXXX", config))
 		return -1;
-	file = fdopen(fd, "w");
-	fputs(config, file);
-	fclose(file);
-	snprintf(command, sizeof(command), "%s --check %s 2>&1", bin ? bin : "./mogbus", path);
-	pipe = popen(command, "r");
-	if (pipe)
-	{
-		used   = fread(g_out, 1, sizeof(g_out) - 1, pipe);
-		status = pclose(pipe);
-	}
-	else
-		status = -1;
-	g_out[used] = '\0';
-	remove(path);
-	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+	status = ts_exec(argv, NULL, g_out, sizeof(g_out));
+	unlink(file.config);
+	return status;
 }
 
 #define DEV " (device (unit-id 1) (holding 0 (static 1)))"

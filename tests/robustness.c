@@ -254,7 +254,6 @@ survives_datagram_garbage(mogbus_mode_t mode)
 {
 	fixture_t	f;
 	u8		req[MODBUS_ASCII_MAX_FRAME];
-	u8		silent[64];
 	u32		len;
 	int		fd;
 	bool		ok;
@@ -277,7 +276,7 @@ survives_datagram_garbage(mogbus_mode_t mode)
 	ok = ok && send(fd, req, len / 2, MSG_NOSIGNAL) == (ssize_t)(len / 2);
 	ok = ok && send(fd, req + len / 2, len - len / 2, MSG_NOSIGNAL) == (ssize_t)(len - len / 2);
 	step_for(&f, 50);
-	ok = ok && recv(fd, silent, sizeof(silent), MSG_DONTWAIT) < 0;
+	ok = ok && ts_no_data(fd, 1);
 	if (fd >= 0)
 		close(fd);
 	ok = ok && still_answers(&f);

@@ -235,13 +235,10 @@ TEST_SRCS   := $(filter-out tests/actions.c tests/config.c tests/ascii_cli.c tes
                             tests/machine_e2e.c tests/ascii_tcp_server.c tests/rtu_tcp_server.c \
                             tests/udp_server.c tests/%_udp_server.c,$(TEST_SRCS))
 endif
-# These fork, use PTYs, termios, poll() or POSIX sockets directly, or spawn the binary through
-# tests_utils/test_support.c; they stay out of the Windows test binary (docs/dev/architecture.md).
-TESTS_POSIX_ONLY = tests/api.c tests/poll_fds.c tests/client.c tests/client_calls.c tests/ascii_cli.c tests/ascii_tcp_server.c tests/ascii_udp_server.c \
-                   tests/decode_cli.c tests/machine_e2e.c tests/robustness.c tests/rtu_cli.c tests/rtu_server.c tests/show_registers_cli.c tests/multi_server_cli.c tests/host_name_cli.c \
-                   tests/rtu_tcp_server.c tests/rtu_udp_server.c tests/serial.c \
-                   tests/server_facade.c tests/server_objects.c tests/tcp_server.c tests/threads.c tests/udp_server.c \
-                   tests/tests_utils/test_support.c tests/tests_utils/tls_client.c
+# These need a PTY or termios (no PTY exists on Windows) or the TLS client; everything else builds for
+# Windows through tests/tests_utils/test_support_win32.c and the POSIX name shims in
+# tests/tests_utils/compat/ (docs/dev/architecture.md).
+TESTS_POSIX_ONLY = tests/ascii_cli.c tests/rtu_cli.c tests/rtu_server.c tests/serial.c tests/tests_utils/tls_client.c
 ifeq ($(PLATFORM),win32)
 TEST_SRCS   := $(filter-out $(TESTS_POSIX_ONLY),$(TEST_SRCS))
 endif
@@ -436,8 +433,11 @@ $(MAIN_OBJ): REV_FLAGS = $(if $(GIT_REVISION),-DMOGBUS_GIT_REVISION='"$(GIT_REVI
 $(REV_STAMP): FORCE
 	@printf '%s\n' '$(GIT_REVISION)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GIT_REVISION)' > $@
 
+ifeq ($(PLATFORM),win32)
+TEST_INC    = -Itests/tests_utils/compat
+endif
 tests/%$(OBJEXT): tests/%.c
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) -Ivlib -c $< -o $@
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(TLS_CFLAGS) $(DEPFLAGS) -Wno-unused-function $(INC) $(TEST_INC) -Ivlib -c $< -o $@
 
 # vtest.c relies on a newer gcc default for bool/true/false; force-include it so vlib stays untouched.
 vlib/vtest$(OBJEXT): vlib/vtest.c

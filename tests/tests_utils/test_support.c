@@ -1,22 +1,25 @@
 #define _GNU_SOURCE
 #include "tests/tests_utils/test_support.h"
+#include "tests/tests_utils/test_os.h"
 #include "modbus/ascii.h"
 #include "modbus/rtu.h"
 #include "os/os_time.h"
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 /* Process and temporary-file helpers. */
 
@@ -28,6 +31,7 @@ ts_verbose(void)
 	return v && v[0] && strcmp(v, "0") != 0;
 }
 
+#ifndef _WIN32  /* Windows: test_support_win32.c */
 bool
 ts_temp_file(char* path, size_t cap, const char* tmpl)
 {
@@ -69,6 +73,7 @@ ts_write_config(ts_server_t* s, const char* tmpl, const char* text)
 	fclose(file);
 	return true;
 }
+#endif
 
 bool
 ts_file_contains(const char* path, const char* needle)
@@ -124,6 +129,7 @@ ts_server_init(ts_server_t* s, const char* label)
 	snprintf(s->ready_needle, sizeof(s->ready_needle), "listening on");
 }
 
+#ifndef _WIN32  /* Windows: test_support_win32.c */
 /* waitid with WNOWAIT notices an early exit without reaping it. */
 bool
 ts_process_done(pid_t pid)
@@ -378,6 +384,99 @@ ts_server_cleanup(ts_server_t* s)
 	s->stdout_path[0] = '\0';
 	s->nofile = 0;
 }
+#endif
+
+#ifndef _WIN32
+int
+ts_exec(char* const argv[], const char* input, char* out, size_t cap)
+{
+	int   in_pipe[2];
+	int   out_pipe[2];
+	pid_t pid;
+	size_t used = 0;
+	int   status = 0;
+
+	out[0] = '\0';
+	if (pipe(in_pipe) < 0)
+		return -1;
+	if (pipe(out_pipe) < 0)
+	{
+		close(in_pipe[0]);
+		close(in_pipe[1]);
+		return -1;
+	}
+	pid = fork();
+	if (pid == 0)
+	{
+		dup2(in_pipe[0], STDIN_FILENO);
+		dup2(out_pipe[1], STDOUT_FILENO);
+		dup2(out_pipe[1], STDERR_FILENO);
+		close(in_pipe[0]);
+		close(in_pipe[1]);
+		close(out_pipe[0]);
+		close(out_pipe[1]);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	close(in_pipe[0]);
+	close(out_pipe[1]);
+	if (pid < 0)
+	{
+		close(in_pipe[1]);
+		close(out_pipe[0]);
+		return -1;
+	}
+	if (input && input[0] && write(in_pipe[1], input, strlen(input)) < 0)
+		status = -1;
+	close(in_pipe[1]);
+	for (;;)
+	{
+		char    sink[512];
+		ssize_t n = read(out_pipe[0], used + 1 < cap ? out + used : sink, used + 1 < cap ? cap - 1 - used : sizeof(sink));
+
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
+		if (used + 1 < cap)
+			used += (size_t)n;
+	}
+	close(out_pipe[0]);
+	out[used] = '\0';
+	if (waitpid(pid, &status, 0) != pid)
+		return -1;
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+#endif
+
+int
+ts_split_args(char* line, char* argv[], int max)
+{
+	int n = 0;
+
+	while (*line && n < max - 1)
+	{
+		char* w;
+
+		while (*line == ' ')
+			line++;
+		if (!*line)
+			break;
+		argv[n++] = w = line;
+		for (bool quoted = false; *line && (quoted || *line != ' '); line++)
+		{
+			if (*line == '\'')
+				quoted = !quoted;
+			else
+				*w++ = *line;
+		}
+		if (*line)
+			line++;
+		*w = '\0';
+	}
+	argv[n] = NULL;
+	return n;
+}
 
 /* fd and socket I/O. */
 
@@ -418,10 +517,16 @@ ts_send_socket(int fd, const u8* buf, u32 len)
 void
 ts_set_recv_timeout(int fd, u32 timeout_ms)
 {
+#ifdef _WIN32
+	DWORD ms = timeout_ms;	/* Winsock takes milliseconds, not a timeval */
+
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &ms, sizeof(ms));
+#else
 	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
 			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
 
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
 }
 
 bool
@@ -517,7 +622,7 @@ ts_free_port(void)
 		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		for (int type = 0; type < 2 && free_port; type++)
 		{
-			int fd = socket(AF_INET, type == 0 ? SOCK_STREAM : SOCK_DGRAM, 0);
+			int fd = (int)socket(AF_INET, type == 0 ? SOCK_STREAM : SOCK_DGRAM, 0);
 
 			free_port = fd >= 0 && bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0;
 			if (fd >= 0)
@@ -533,7 +638,7 @@ bool
 ts_ipv6_loopback_available(void)
 {
 	struct sockaddr_in6 addr = { 0 };
-	int                 fd   = socket(AF_INET6, SOCK_STREAM, 0);
+	int                 fd   = (int)socket(AF_INET6, SOCK_STREAM, 0);
 
 	if (fd < 0)
 		return false;
@@ -552,14 +657,25 @@ ts_ipv6_loopback_available(void)
 static int
 connect_loopback(u16 port, int family, int type, u32 timeout_ms)
 {
-	struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
-			      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
-	int            fd = socket(family, type, 0);
+	int fd = (int)socket(family, type, 0);
 
 	if (fd < 0)
 		return -1;
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+	ts_set_recv_timeout(fd, timeout_ms);
+#ifdef _WIN32
+	{
+		DWORD ms = timeout_ms;
+
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &ms, sizeof(ms));
+	}
+#else
+	{
+		struct timeval tv = { .tv_sec = (time_t)(timeout_ms / 1000),
+				      .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000 };
+
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+	}
+#endif
 	if (family == AF_INET)
 	{
 		struct sockaddr_in a = { 0 };

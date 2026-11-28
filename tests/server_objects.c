@@ -211,6 +211,7 @@ TEST(ServerObjectsInitFailureReportsAndLeavesNothingOpen)
 	arena_release(arena);
 }
 
+#ifndef _WIN32	/* a forked child and SIGTERM; the binary's stop request is covered by tcp_server.c */
 static tcp_server_t* volatile g_child_server;
 
 static void
@@ -264,6 +265,8 @@ TEST(ServerObjectsRunReturnsPromptlyWhenHostStopsFromSignalHandler)
 	close(probe);
 	arena_release(arena);
 }
+
+#endif
 
 static bool
 rtu_exchange(rtu_server_t** servers, u32 n, int fd, u8 unit, u16* value)

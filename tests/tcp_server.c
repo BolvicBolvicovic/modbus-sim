@@ -375,21 +375,9 @@ health_status(const char* config)
 	const char* bin    = getenv("MOGBUS_BIN");
 	char*	    argv[] = { (char*)(bin ? bin : "./mogbus"), "--health", (char*)config,
 			       "--timeout-ms", "1000", NULL };
-	int	    status = 0;
-	pid_t	    pid    = fork();
+	char	    out[512];
 
-	if (pid == 0)
-	{
-		int null_fd = open("/dev/null", O_WRONLY);
-
-		if (null_fd >= 0)
-			dup2(null_fd, STDERR_FILENO);
-		execv(argv[0], argv);
-		_exit(127);
-	}
-	if (pid < 0 || !ts_wait_pid(pid, &status, 5000) || !WIFEXITED(status))
-		return -1;
-	return WEXITSTATUS(status);
+	return ts_exec(argv, NULL, out, sizeof(out));
 }
 
 TEST(NetHealthFlagProbesTheRunningServer)
@@ -1644,6 +1632,7 @@ TEST(NetGetComEventCounterUnknownUnitDoesNotCount)
 	ASSERT_EQ(ok);
 }
 
+#ifndef _WIN32	/* /proc and RLIMIT_NOFILE */
 static bool
 proc_utime_ticks(pid_t pid, unsigned long long* out)
 {
@@ -1778,9 +1767,7 @@ TEST(NetAcceptEmfileBackoffDoesNotBusyLoop)
 	server_stop();
 	ASSERT_EQ(ok);
 }
-
-
-
+#endif
 
 TEST(NetIdleTimeoutClosesIdleClient)
 {

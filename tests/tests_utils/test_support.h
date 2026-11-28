@@ -2,6 +2,7 @@
 #define TESTS_TESTS_UTILS_TEST_SUPPORT_H
 
 #include "modbus/mbap.h"
+#include "tests/tests_utils/test_os.h"
 #include "vlib/bits.h"
 #include "vlib/c_types.h"
 #include <stdbool.h>
@@ -33,7 +34,7 @@ enum
 typedef struct ts_server ts_server_t;
 struct ts_server
 {
-	pid_t	pid;
+	pid_t	pid;		/* the process id; on Windows the process HANDLE (32 significant bits) */
 	int	master_fd;
 	u16	probe_port;	/* set for network fixtures: fallback readiness probe in verbose runs */
 	int	probe_family;
@@ -52,6 +53,14 @@ bool	ts_write_config(ts_server_t* s, const char* tmpl, const char* text);
 bool	ts_server_start(ts_server_t* s, char* const argv[]);
 bool	ts_server_stop(ts_server_t* s);		/* asserts via the caller's return value */
 void	ts_server_cleanup(ts_server_t* s);		/* best effort, never asserts */
+
+/* Runs argv without a shell, `input` (may be NULL) on stdin; stdout and stderr, merged, land in
+ * out (NUL-terminated, truncated at cap). Returns the exit status, or -1 when it did not run. */
+int	ts_exec(char* const argv[], const char* input, char* out, size_t cap);
+
+/* Splits line in place into argv (at most max - 1 words, NULL-terminated): words are separated by
+ * blanks and a '...' group keeps its blanks (no escapes). Returns the word count. */
+int	ts_split_args(char* line, char* argv[], int max);
 
 bool	ts_verbose(void);
 void	ts_dump_stderr(const ts_server_t* s);

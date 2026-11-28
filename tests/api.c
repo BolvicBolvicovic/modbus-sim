@@ -14,7 +14,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -699,32 +701,43 @@ TEST(ApiServesDevicesOverTcpAndRejectsBadServers)
 	mogbus_destroy(ctx);	/* closes `other` */
 }
 
-/* Runs mogbus_probe() == MOGBUS_OK in a child (it blocks) while this process steps the server. */
+/* Runs mogbus_probe() == MOGBUS_OK on a thread (it blocks) while this thread steps the server. */
+typedef struct probe_job probe_job_t;
+struct probe_job
+{
+	const mogbus_server_options_t*	o;
+	uint8_t				unit;
+	_Atomic int			done;
+	bool				ok;
+};
+
+static void*
+probe_thread(void* arg)
+{
+	probe_job_t* job = arg;
+
+	job->ok = mogbus_probe(job->o, job->unit, 2000) == MOGBUS_OK;
+	atomic_store(&job->done, 1);
+	return NULL;
+}
+
 static bool
 probe_child(mogbus_server_t* server, const mogbus_server_options_t* o, uint8_t unit)
 {
-	u64	deadline = os_now_ms() + 5000;
-	int	status   = 0;
-	pid_t	pid      = fork();
+	probe_job_t job = { .o = o, .unit = unit };
+	pthread_t thread;
 
-	if (pid == 0)
-		_exit(mogbus_probe(o, unit, 2000) == MOGBUS_OK ? 0 : 1);
-	if (pid < 0)
+	if (pthread_create(&thread, NULL, probe_thread, &job) != 0)
 		return false;
-	while (waitpid(pid, &status, WNOHANG) == 0)
+	while (!atomic_load(&job.done))
 	{
-		if (os_now_ms() > deadline)
-		{
-			kill(pid, SIGKILL);
-			waitpid(pid, &status, 0);
-			return false;
-		}
 		if (server)
 			(void)mogbus_server_step(server, 1);
 		else
 			usleep(1000);
 	}
-	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	pthread_join(thread, NULL);
+	return job.ok;
 }
 
 TEST(ApiProbeAnswersOnEveryNetworkMode)

@@ -166,19 +166,9 @@ static int
 cli_status(const char* flag, const char* config)
 {
 	char*	argv[] = { (char*)mogbus_bin(), (char*)flag, (char*)config, NULL };
-	int	status = 0;
-	pid_t	pid    = fork();
+	char	out[512];
 
-	if (pid == 0)
-	{
-		if (!freopen("/dev/null", "w", stderr))
-			_exit(126);
-		execv(argv[0], argv);
-		_exit(127);
-	}
-	if (pid < 0 || !ts_wait_pid(pid, &status, 5000) || !WIFEXITED(status))
-		return -1;
-	return WEXITSTATUS(status);
+	return ts_exec(argv, NULL, out, sizeof(out));
 }
 
 TEST(ShowRegistersRejectsAnIntervalOutOfRange)

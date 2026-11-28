@@ -132,18 +132,11 @@ static int
 run_mogbus(const char* flags, char* out, size_t cap)
 {
 	char	cmd[512];
-	FILE*	pipe;
-	size_t	n;
-	int	status;
+	char*	argv[8];
 
-	snprintf(cmd, sizeof(cmd), "%s %s %s 2>&1", mogbus_bin(), flags, g_multi.config);
-	pipe = popen(cmd, "r");
-	if (!pipe)
-		return -1;
-	n = fread(out, 1, cap - 1, pipe);
-	out[n] = '\0';
-	status = pclose(pipe);
-	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+	snprintf(cmd, sizeof(cmd), "%s %s %s", mogbus_bin(), flags, g_multi.config);
+	ts_split_args(cmd, argv, 8);
+	return ts_exec(argv, NULL, out, cap);
 }
 
 TEST(MultiServerCheckShowsEachServerAndItsDevices)

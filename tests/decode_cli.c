@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
+#include "tests/tests_utils/test_support.h"
 
 static char g_out[65536];
 
@@ -15,25 +15,24 @@ run_cli_in(const char* input, const char* args)
 {
 	const char*	bin = getenv("MOGBUS_BIN");
 	char		command[2048];
-	FILE*		pipe;
-	size_t		used = 0;
-	int		status;
+	char		text[512];
+	char*		argv[32];
+	size_t		n = 0;
 
-	snprintf(command, sizeof(command), "printf '%%b' '%s' | %s %s 2>&1", input, bin ? bin : "./mogbus", args);
-	pipe = popen(command, "r");
-	if (!pipe)
-		return -1;
-	while (used + 1 < sizeof(g_out))
+	/* printf %b: the escapes of `input` become bytes. */
+	for (const char* c = input; *c && n + 1 < sizeof(text); c++)
 	{
-		size_t n = fread(g_out + used, 1, sizeof(g_out) - 1 - used, pipe);
-
-		if (n == 0)
-			break;
-		used += n;
+		if (c[0] == '\\' && c[1] == 'n')
+			text[n++] = '\n', c++;
+		else if (c[0] == '\\' && c[1] == 'r')
+			text[n++] = '\r', c++;
+		else
+			text[n++] = *c;
 	}
-	g_out[used] = '\0';
-	status      = pclose(pipe);
-	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+	text[n] = '\0';
+	snprintf(command, sizeof(command), "%s %s", bin ? bin : "./mogbus", args);
+	ts_split_args(command, argv, 32);
+	return ts_exec(argv, text, g_out, sizeof(g_out));
 }
 
 static int
