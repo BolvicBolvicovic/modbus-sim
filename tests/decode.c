@@ -485,6 +485,23 @@ TEST(DecodeTruncatedPdusSayWhereTheyBreak)
 	ASSERT_EQ(strstr(g_text, "truncated at byte 13: the register data announces 4 bytes, 2 left") != NULL);
 }
 
+/* Found by fuzz_decode: an MBAP request ending right after 2B 0E read the device-id code byte past the end. */
+TEST(DecodeDeviceIdRequestCutAfterMeiType)
+{
+	static const u8	frame[] = { 0x21, 0x01, 0x00, 0x00, 0x00, 0x0C, 0x02, 0x02, 0x61, 0x01, 0x2B, 0x0E };
+	u8		copy[sizeof(frame)];
+
+	/* An exact-size copy so ASan catches a read one byte past the frame. */
+	memcpy(copy, frame, sizeof(copy));
+	ASSERT_EQ(run(copy, sizeof(copy), DECODE_FRAMING_AUTO, DECODE_DIRECTION_AUTO, false) != DECODE_INVALID);
+	ASSERT_EQ(run(copy, sizeof(copy), DECODE_FRAMING_AUTO, DECODE_DIRECTION_AUTO, true) != DECODE_INVALID);
+	ASSERT_EQ(json_valid(g_json));
+
+	copy[5] = 0x03;	/* MBAP length that matches: unit, 2B 0E, a request cut after the MEI type */
+	memcpy(copy + 7, (const u8[]){ 0x2B, 0x0E }, 2);
+	ASSERT_EQ(run(copy, 9, DECODE_FRAMING_MBAP, DECODE_DIRECTION_REQUEST, false) == DECODE_MALFORMED);
+}
+
 TEST(DecodeUnexpectedTrailingBytes)
 {
 	u8	pdu[MODBUS_MAX_PDU];

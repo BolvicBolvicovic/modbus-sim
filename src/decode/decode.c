@@ -679,10 +679,11 @@ read_device_id(dec_t* d, cur_t* c, bool response)
 {
 	static const char* const codes[] = { "basic stream", "regular stream", "extended stream",
 					     "individual object" };
-	u32 code = c->p[c->pos];
+	u32 code;
 
 	if (!need(d, c, 1, "read_device_id_code"))
 		return;
+	code = c->p[c->pos];
 	rd(d, c, "read_device_id_code", 1, true, code >= 1 && code <= 4 ? codes[code - 1] : "unknown");
 	if (!response)
 	{
