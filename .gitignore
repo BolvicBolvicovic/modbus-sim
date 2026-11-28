@@ -26,6 +26,8 @@ __pycache__/
 python/build/
 *.exe
 *.dll
+*.pdb
+*.lib
 *.exe.times
 src/webui/page_data.h
 examples/tutorial/pump_station_shared
