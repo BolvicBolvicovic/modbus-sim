@@ -2,11 +2,12 @@
  * @file
  * @brief Event wait over sockets; the only place poll() lives.
  *
- * os_wait_entry_t is the platform's own poll entry (struct pollfd, WSAPOLLFD), so the table the
- * callers fill goes to poll()/WSAPoll() untouched. This header includes the OS header for that
- * reason; check_deps.sh looks at direct includes only and net/ never includes the OS header itself.
- * The Windows build waits on sockets only (serial/PTY/fd modes are a stub that never opens a handle);
- * a COM-port wait will need its own wrapper.
+ * os_wait_entry_t has the exact layout of the platform's poll entry (struct pollfd, WSAPOLLFD)
+ * and the OS_WAIT_* bits are the platform's values, so the table callers fill goes to
+ * poll()/WSAPoll() untouched. The OS headers stay out of this header (winsock2.h would leak
+ * windows.h macros into every includer); os_wait_posix.c and os_wait_win32.c assert that layout
+ * and values match. The Windows build waits on sockets only (serial/PTY/fd modes are a stub that
+ * never opens a handle); a COM-port wait will need its own wrapper.
  */
 #ifndef OS_WAIT_H
 #define OS_WAIT_H
@@ -14,27 +15,32 @@
 #include "os/os_socket.h"
 #include "vlib/c_types.h"
 
-#ifdef _WIN32
-#include <winsock2.h>
-typedef WSAPOLLFD os_wait_entry_t;
-#else
-#include <poll.h>
-typedef struct pollfd os_wait_entry_t;
-#endif
+typedef struct os_wait_entry_t os_wait_entry_t;
 
-/** @brief Event bits of os_wait_entry_t.events and .revents (the platform's own values). */
+/** @brief One handle to wait on, laid out as the platform's poll entry. */
+struct os_wait_entry_t
+{
+	os_socket_t	fd;		/**< OS_SOCKET_INVALID entries are ignored */
+	short		events;		/**< requested OS_WAIT_* bits */
+	short		revents;	/**< reported OS_WAIT_* bits */
+};
+
+/** @brief Event bits of os_wait_entry_t.events and .revents (the platform's own poll values). */
 enum
 {
 #ifdef _WIN32
-	OS_WAIT_IN    = POLLRDNORM,
-	OS_WAIT_OUT   = POLLWRNORM,
+	OS_WAIT_IN    = 0x0100,	/* POLLRDNORM */
+	OS_WAIT_OUT   = 0x0010,	/* POLLWRNORM */
+	OS_WAIT_ERR   = 0x0001,
+	OS_WAIT_HUP   = 0x0002,
+	OS_WAIT_INVAL = 0x0004,
 #else
-	OS_WAIT_IN    = POLLIN,
-	OS_WAIT_OUT   = POLLOUT,
+	OS_WAIT_IN    = 0x0001,
+	OS_WAIT_OUT   = 0x0004,
+	OS_WAIT_ERR   = 0x0008,
+	OS_WAIT_HUP   = 0x0010,
+	OS_WAIT_INVAL = 0x0020,
 #endif
-	OS_WAIT_ERR   = POLLERR,
-	OS_WAIT_HUP   = POLLHUP,
-	OS_WAIT_INVAL = POLLNVAL,
 };
 
 /**

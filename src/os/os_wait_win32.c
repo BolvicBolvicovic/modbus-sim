@@ -6,6 +6,18 @@
 #include "os/os_win32.h"
 #include <winsock2.h>
 #include <windows.h>
+#include <stddef.h>
+
+_Static_assert(sizeof(os_wait_entry_t) == sizeof(WSAPOLLFD) &&
+	       offsetof(os_wait_entry_t, events) == offsetof(WSAPOLLFD, events) &&
+	       offsetof(os_wait_entry_t, revents) == offsetof(WSAPOLLFD, revents),
+	       "os_wait_entry_t must match WSAPOLLFD");
+_Static_assert(OS_WAIT_IN == POLLRDNORM &&
+	       OS_WAIT_OUT == POLLWRNORM &&
+	       OS_WAIT_ERR == POLLERR &&
+	       OS_WAIT_HUP == POLLHUP &&
+	       OS_WAIT_INVAL == POLLNVAL,
+	       "OS_WAIT_* must be the WSAPoll bits");
 
 /** @brief Longest single WSAPoll wait, so a stop request is seen quickly. */
 enum
@@ -40,7 +52,7 @@ os_wait(os_wait_entry_t* entries, u32 count, int timeout_ms)
 		/* WSAPoll rejects an empty table: sleep out the slice instead. */
 		if (count == 0)
 			Sleep((DWORD)slice);
-		else if (WSAPoll(entries, count, slice) < 0)
+		else if (WSAPoll((WSAPOLLFD*)entries, count, slice) < 0)
 			return -1;
 		/* WSAPoll reports INVALID_SOCKET entries as POLLNVAL; poll() ignores them. */
 		rc = 0;
