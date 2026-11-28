@@ -102,8 +102,8 @@ CFLAGS      ?= -std=gnu11 $(OPT_FLAGS) -Werror -Wextra -Wall -Wformat=2 -Wshadow
 # Hardening applies to every link, even when LDFLAGS is overridden; skip flags
 # the user already supplied so overrides stay free of duplicates.
 ifeq ($(PLATFORM),win32)
-# ASLR (dynamicbase, high-entropy-va) and DEP (nxcompat); static so the .exe needs no MinGW DLLs.
-HARDEN_LDFLAGS = -static -Wl,--dynamicbase,--nxcompat,--high-entropy-va
+# ASLR (dynamicbase, high-entropy-va) and DEP (nxcompat); static so the .exe needs no MinGW DLLs; no PE timestamp, so builds are reproducible.
+HARDEN_LDFLAGS = -static -Wl,--dynamicbase,--nxcompat,--high-entropy-va,--no-insert-timestamp
 else
 HARDEN_LDFLAGS = -pie -Wl,-z,relro,-z,now
 endif
@@ -363,7 +363,7 @@ endif
 ifeq ($(PLATFORM),win32)
 # mogbus.dll plus its import library; libgcc is linked statically so the DLL needs nothing from MinGW.
 $(LIB_SHARED): $(BUILD_STAMP) $(LIB_OBJS)
-	$(CC) $(CFLAGS) $(REPRO_FLAGS) -shared -static-libgcc -Wl,--out-implib,$(LIB_IMPORT) $(LDFLAGS) -Wl,--dynamicbase,--nxcompat,--high-entropy-va $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $(REPRO_FLAGS) -shared -static-libgcc -Wl,--out-implib,$(LIB_IMPORT) $(LDFLAGS) -Wl,--dynamicbase,--nxcompat,--high-entropy-va,--no-insert-timestamp $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
 else
 $(LIB_SHARED): $(BUILD_STAMP) $(LIB_OBJS)
 	$(CC) $(CFLAGS) $(REPRO_FLAGS) -shared -Wl,-soname,$@ $(filter-out -pie,$(LDFLAGS)) -Wl,-z,relro,-z,now $(filter-out $(BUILD_STAMP),$^) -o $@ $(LIBS)
@@ -508,6 +508,31 @@ install uninstall:
 	$(error make install is for PLATFORM=posix)
 endif
 
+ifeq ($(PLATFORM),win32)
+# Windows: one zip with bin/ (mogbus.exe, mogbus.dll), lib/ (import library, static library as libmogbus.a so
+# -lmogbus finds it; the import library wins for dynamic linking), include/, profiles/ and docs/, plus the SPDX
+# SBOM and SHA256SUMS. Needs SOURCE_DATE_EPOCH or git history; see docs/dev/release.md.
+DIST_NAME   = mogbus-$(VERSION)-windows-x86_64
+dist:
+ifneq ($(BUILD)$(SAN)$(WITH_CONFIG)$(WITH_TLS),prod010)
+	$(error make dist for PLATFORM=win32 needs BUILD=prod, SAN=0, WITH_CONFIG=1 and WITH_TLS=0)
+endif
+	@$(MAKE) $(BIN) lib
+	@epoch=$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct 2>/dev/null)}; \
+	[ -n "$$epoch" ] || { echo "make dist: set SOURCE_DATE_EPOCH (no git history)" >&2; exit 1; }; \
+	stage=$(DIST_DIR)/$(DIST_NAME); \
+	$(RM) -r $(DIST_DIR) && mkdir -p $$stage/bin $$stage/lib $$stage/include $$stage/profiles $$stage/docs && \
+	cp $(BIN) $(LIB_SHARED) $$stage/bin/ && \
+	cp $(LIB_IMPORT) $$stage/lib/ && cp $(LIB_STATIC) $$stage/lib/libmogbus.a && \
+	cp include/mogbus.h $$stage/include/ && cp profiles/*.scm $$stage/profiles/ && \
+	cp README.md LICENSE NOTICE.md $$stage/ && cp -R docs/user/. $$stage/docs/ && \
+	$(PYTHON) tools/make_zip.py $(DIST_DIR)/$(DIST_NAME).zip $(DIST_DIR) $(DIST_NAME) $$epoch && \
+	SOURCE_DATE_EPOCH=$$epoch ./tools/gen_sbom.sh $(DIST_DIR)/$(DIST_NAME).zip $$stage/bin/$(BIN) \
+		$(VERSION) $(WITH_TLS) $(DIST_DIR)/$(DIST_NAME).spdx.json && \
+	$(RM) -r $$stage && \
+	(cd $(DIST_DIR) && sha256sum $(DIST_NAME).zip $(DIST_NAME).spdx.json > SHA256SUMS) && \
+	cat $(DIST_DIR)/SHA256SUMS
+else
 dist:
 ifneq ($(BUILD)$(SAN)$(WITH_CONFIG)$(PLATFORM),prod01posix)
 	$(error make dist needs BUILD=prod, SAN=0, WITH_CONFIG=1 and PLATFORM=posix)
@@ -525,6 +550,7 @@ endif
 	$(RM) -r $$stage && \
 	(cd $(DIST_DIR) && sha256sum $(DIST_NAME).tar.gz $(DIST_NAME).spdx.json > SHA256SUMS) && \
 	cat $(DIST_DIR)/SHA256SUMS
+endif
 
 # libFuzzer harnesses (tests/fuzz/*.c) with ASan + UBSan, built straight from the parser and device
 # sources (no TLS, no config loader, no s7). `make fuzz-run FUZZ_SECONDS=N` runs each for N s.

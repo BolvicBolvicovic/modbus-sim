@@ -274,12 +274,12 @@ TEST(ClientRemainingCallsArgumentChecks)
 	uint8_t			buf[300];
 	uint16_t		v[40];
 	size_t			n = 0;
-	uint8_t			s8;
+	uint8_t			status8;
 	uint16_t		a, b, d;
 
 	mogbus_client_open(&o, &c);
 	ASSERT_EQ(c != NULL);
-	ASSERT_EQ(mogbus_client_read_exception_status(c, 0, &s8) == MOGBUS_ERR_INVALID);
+	ASSERT_EQ(mogbus_client_read_exception_status(c, 0, &status8) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(mogbus_client_read_exception_status(c, 1, NULL) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(mogbus_client_diagnostics(c, 1, 0, buf, 251, buf, 4, &n) == MOGBUS_ERR_INVALID);
 	ASSERT_EQ(mogbus_client_diagnostics(c, 1, 0, NULL, 2, buf, 4, &n) == MOGBUS_ERR_INVALID);
@@ -443,7 +443,7 @@ TEST(ClientRepliesAreValidatedStrictly)
 	static const u8 bad_objects[] = { 0x2B, 0x0E, 0x01, 0x81, 0x00, 0x00, 0x02, 0x00, 0x01, 'a' };
 	raw_t		r;
 	mogbus_client_t* c;
-	uint8_t		s8 = 0;
+	uint8_t		status8 = 0;
 	uint8_t		buf[64];
 	uint16_t	w[8];
 	uint16_t	x, y, z;
@@ -463,7 +463,7 @@ TEST(ClientRepliesAreValidatedStrictly)
 	ASSERT_EQ(raw_start(&r));
 	c = raw_client(&r, 1000, 0);
 	ASSERT_EQ(c != NULL);
-	ASSERT_EQ(mogbus_client_read_exception_status(c, 1, &s8) == MOGBUS_ERR_FRAME);
+	ASSERT_EQ(mogbus_client_read_exception_status(c, 1, &status8) == MOGBUS_ERR_FRAME);
 	ASSERT_EQ(mogbus_client_diagnostics(c, 1, 0x000A, (const uint8_t[]){ 0, 0 }, 2, buf, sizeof(buf), &n) == MOGBUS_ERR_FRAME);
 	ASSERT_EQ(mogbus_client_diagnostics(c, 1, 0x000A, (const uint8_t[]){ 0, 0 }, 2, buf, sizeof(buf), &n) == MOGBUS_ERR_FRAME);
 	ASSERT_EQ(mogbus_client_get_comm_event_counter(c, 1, &x, &y) == MOGBUS_ERR_FRAME);
@@ -791,7 +791,7 @@ TEST(ClientConfiguredValuesAndDeviceIdFollowUp)
 	mogbus_server_t*	server = NULL;
 	fx_t			fx;
 	mogbus_client_t*	c;
-	uint8_t			s8 = 0;
+	uint8_t			status8 = 0;
 	uint8_t			buf[1024];
 	uint8_t			ids[16];
 	uint8_t			level = 0;
@@ -834,7 +834,7 @@ TEST(ClientConfiguredValuesAndDeviceIdFollowUp)
 		mogbus_client_open(&o, &c);
 	}
 	ASSERT_EQ(c != NULL);
-	ASSERT_EQ(mogbus_client_read_exception_status(c, 1, &s8) == MOGBUS_OK && s8 == 5);
+	ASSERT_EQ(mogbus_client_read_exception_status(c, 1, &status8) == MOGBUS_OK && status8 == 5);
 	ASSERT_EQ(mogbus_client_report_server_id(c, 1, buf, sizeof(buf), &n) == MOGBUS_OK);
 	ASSERT_EQ(n == 4 && buf[0] == 7 && buf[1] == 0 && buf[2] == 0xAA && buf[3] == 0xBB);
 	ASSERT_EQ(mogbus_client_get_comm_event_counter(c, 1, &status, &events) == MOGBUS_OK && status == 0xFFFF);

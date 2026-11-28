@@ -91,7 +91,16 @@ cat <<JSON
       "comment": "Git submodule vlib/ (arena allocator and headers), unmodified, pinned to the commit in versionInfo and statically linked; it carries no license file."
     }
 JSON
-needed=$(readelf -d "$binary" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | LC_ALL=C sort)
+# ELF (Linux) or PE (Windows .exe): the runtime libraries the binary loads.
+if [ "$(head -c 2 "$binary")" = MZ ]; then
+	pe=1
+	bin_name=bin/mogbus.exe
+	needed=$(objdump -p "$binary" | sed -n 's/^[[:space:]]*DLL Name: //p' | LC_ALL=C sort -u)
+else
+	pe=0
+	bin_name=bin/mogbus
+	needed=$(readelf -d "$binary" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | LC_ALL=C sort)
+fi
 for lib in $needed; do
 	id=$(printf '%s' "$lib" | sed 's/[^A-Za-z0-9.-]/-/g')
 	ver=
@@ -104,14 +113,18 @@ for lib in $needed; do
 	[ -z "$ver" ] || printf '      "versionInfo": "%s",\n' "$ver"
 	printf '      "downloadLocation": "NOASSERTION",\n      "filesAnalyzed": false,\n'
 	printf '      "licenseConcluded": "NOASSERTION",\n      "licenseDeclared": "NOASSERTION",\n'
-	printf '      "copyrightText": "NOASSERTION",\n      "comment": "Dynamic runtime dependency (DT_NEEDED %s), not distributed in the tarball."\n    }\n' "$lib"
+	if [ "$pe" = 1 ]; then
+		printf '      "copyrightText": "NOASSERTION",\n      "comment": "Dynamic runtime dependency (PE import %s), supplied by Windows, not distributed in the archive."\n    }\n' "$lib"
+	else
+		printf '      "copyrightText": "NOASSERTION",\n      "comment": "Dynamic runtime dependency (DT_NEEDED %s), not distributed in the tarball."\n    }\n' "$lib"
+	fi
 done
 cat <<JSON
   ],
   "files": [
     {
       "SPDXID": "SPDXRef-File-mogbus-binary",
-      "fileName": "bin/mogbus",
+      "fileName": "$bin_name",
       "fileTypes": ["BINARY"],
       "checksums": [
         {"algorithm": "SHA1", "checksumValue": "$bin_sha1"},
