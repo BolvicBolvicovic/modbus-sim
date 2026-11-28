@@ -54,7 +54,7 @@ A no-TLS build rejects `(tls ...)` at config load time with `built without TLS s
 `--check` mode. Serial, RTU, ASCII, UDP and plaintext TCP configs behave identically in both builds.
 `make WITH_TLS=0 tests` runs the no-TLS test set; `make WITH_TLS=0 asan` and
 `make WITH_TLS=0 CC=clang` work as expected. Documentation examples containing `(tls ...)` are skipped
-by `check_doc_examples.sh` when checking a no-TLS binary.
+by `tools/check_docs.sh examples` when checking a no-TLS binary.
 
 ## Config loader: `WITH_CONFIG`
 

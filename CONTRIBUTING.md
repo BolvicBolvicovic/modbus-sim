@@ -29,7 +29,7 @@ slowest first: durations of the last run are kept in `mogbus-tests.times` / `mog
 (ignored by git, removed by `make clean`). `make asan` runs the tests under AddressSanitizer and UBSan
 (the vendored s7 interpreter is excluded from instrumentation). The suite includes network integration
 tests that start the real server on loopback; set `MOGBUS_BIN` to test a different binary.
-`make fuzz-run` fuzzes the frame parsers, `tools/loadtest.py` load-tests a running server, and
+`make fuzz-run` fuzzes the frame parsers, `tools/modbus_probe.py load` load-tests a running server, and
 `examples/interop/` checks mogbus against the independent pymodbus client stack (see
 [Architecture](docs/dev/architecture.md)).
 

@@ -63,7 +63,7 @@ src/            the program, one folder per module (headers next to their .c fil
   util/         arena implementation, clock, random numbers, logging
 profiles/       ready-made device profiles
 tests/          unit tests and integration tests (vtest); tests/fuzz/ has the libFuzzer harnesses (make fuzz-run)
-tools/          modbus_probe.py, loadtest.py, run_fuzz.sh, fuzz_seeds.py, check_deps.sh, check_doc_examples.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
+tools/          modbus_probe.py (client and `load` test), fuzz.py, changes.sh, check_deps.sh, check_docs.sh, check_reproducible.sh, check_toolchain.sh, gen_sbom.sh, run_tests.sh
 third_party/s7  the s7 Scheme interpreter (used only to read the config)
 vlib/           git submodule: the vlib toolchain (arena allocator, test framework), unmodified
 ```
@@ -368,7 +368,7 @@ faults arrive as flags (`tcp_like`, `mbap`) set by `server_init()`.
   Public functions in `include/mogbus.h` document every `@param` and `@return`; internal ones add
   them only when the brief does not already say it. Comments inside function bodies stay `/* */`.
   `make docs` (CI job `docs`) runs Doxygen with warnings as errors, then
-  `tools/check_doc_briefs.sh`, which fails for any file, struct, union, enum or opaque or
+  `tools/check_docs.sh briefs`, which fails for any file, struct, union, enum or opaque or
   function-pointer typedef without a brief, then builds the site (see [Documentation site](docs.md)).
 - Typedef layout: forward typedefs (`typedef struct x_t x_t;`, enums and unions alike) are grouped
   at the top of the file after the includes; the brief sits directly above the `struct x_t {` or
@@ -386,7 +386,7 @@ Robustness evidence beyond the unit tests:
   framer (fed in fuzzer-chosen chunks with simulated gaps), and ASCII scanning/decoding. Each checks
   invariants (response sizes, echoed function codes, encode/decode round trips). `make fuzz` builds
   them in `build/fuzz/`, `make fuzz-run FUZZ_SECONDS=N` seeds them with one valid request per FC
-  (`tools/fuzz_seeds.py`) and runs each for N s, in parallel (at most `FUZZ_JOBS`, default `nproc`); the CI `fuzz` job runs
+  and runs each (`tools/fuzz.py`) for N s, in parallel (at most `FUZZ_JOBS`, default `nproc`); the CI `fuzz` job runs
   30 s each per push, restoring and saving the corpus (`build/fuzz/corpus`) with `actions/cache`, and
   uploads crash reproducers. `.github/workflows/fuzz-nightly.yml` runs 600 s daily on the same corpus and
   opens (or comments on) the issue "Nightly fuzzing found a crash" on failure. Replay one with `build/fuzz/fuzz_NAME FILE`.
@@ -394,7 +394,7 @@ Robustness evidence beyond the unit tests:
   through the API: a request sent one byte at a time is answered, and after seeded random garbage
   (biased to frame-start bytes) in random chunks or datagrams, and frames split across datagrams,
   the server still answers a valid request.
-- **Load and stability:** `tools/loadtest.py` runs N concurrent TCP clients for a duration and reports
+- **Load and stability:** `tools/modbus_probe.py load` runs N concurrent TCP clients for a duration and reports
   throughput, latency percentiles, errors and the server's RSS (start, peak, end); it fails on any
   error or memory growth. CI runs 32 clients for 5 s; run it for hours for a soak test. On a laptop
   the Python client tops out near 26 000 req/s against one mogbus with flat RSS (about 10 MB).
@@ -415,15 +415,15 @@ pick free ports, so no two tests share a resource. The queue is ordered slowest 
 durations of the previous run (`BIN.times`, or `RUN_TESTS_TIMES`); new tests go first.
 `make tests` is a dispatcher over the scopes in `WHAT` (`c`, `python`, `docs`, `all`, `auto`): `c` is the run
 described above, `python` runs `python-tests` and `python-examples`, `docs` runs `make docs` and
-`tools/check_doc_examples.sh`. `auto` (the local default) chooses the scopes from the files changed versus the
-merge base with `origin/main` plus uncommitted and untracked files (`tools/test_scope.sh`, which prints its
+`tools/check_docs.sh examples`. `auto` (the local default) chooses the scopes from the files changed versus the
+merge base with `origin/main` plus uncommitted and untracked files (`tools/changes.sh scope`, which prints its
 choice); when the `CI` environment variable is set the default is `c`, and CI jobs for Python and docs keep their
 own targets. `SUITES=a,b` limits the `c` scope to those vtest suites (`RUN_TESTS_SUITES` for `run_tests.sh`).
 `make asan` builds separate `.asan.o` objects and runs the tests under ASan + UBSan; s7 is
 compiled without sanitizers because UBSan reports a misaligned load in its `local_strncmp`.
 Compilations emit `.d` dependency files (`-MMD -MP`), so editing a header rebuilds every
 object that includes it. CI (`.github/workflows/ci.yml`) starts only for code paths, and its
-`changes` job (`tools/ci_changes.sh`) skips the build and test jobs when C files changed only in
+`changes` job (`tools/changes.sh ci`, sharing one file-to-category table with the `make tests` scope selection) skips the build and test jobs when C files changed only in
 comments or only packaging files changed. It runs these checks plus a `WITH_TLS=0` job
 with no OpenSSL install step, which also runs `WITH_CONFIG=0` (and `WITH_CONFIG=0 WITH_TLS=0`) tests. The Makefile is based on the one `vlib/gen_makefile.py` creates, but finds
 sources recursively because modules have sub-folders. `WITH_TLS=auto` (default) detects OpenSSL

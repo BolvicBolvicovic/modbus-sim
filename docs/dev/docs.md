@@ -7,7 +7,6 @@ the generator renders them as one site with its own theme.
 ```bash
 make docs                                  # Doxygen (warnings are errors), brief check, site
 python3 -m http.server -d build/docs       # preview at http://localhost:8000
-make docs-fixtures                         # reference-template fixtures into build/docs-fixtures
 ```
 
 `build/docs/` holds the site (`index.html`, `user/`, `dev/`, `api/`, `assets/`), `build/docs/xml/`
@@ -115,9 +114,8 @@ One-sentence summary.
   and the list of its entries (title and summary, with the manifest's group headings). Typing narrows
   the list as you type.
 
-`tools/docs/fixtures/` holds one index and three entries (`(server (mode ...))`, `(ramp ...)`,
-`(fault (kind delay))`) that exercise the template. They are built by `make docs-fixtures` into
-`build/docs-fixtures/` and are never part of the real site. Start a new entry by copying one.
+Start a new entry by copying a real one, for example
+[`docs/user/config/server/char-timing.md`](https://github.com/BolvicBolvicovic/mogbus/blob/main/docs/user/config/server/char-timing.md).
 
 ## C API pages
 
@@ -157,9 +155,6 @@ load so the site also works when opened directly from disk): title, section, sum
 header search box (`/` focuses it, arrows and Enter navigate) runs entirely in the browser.
 The theme is `tools/docs/theme/style.css` and `site.js` (no frameworks, no CDN, system fonts; light
 and dark with a toggle). Syntax highlighting is a small tokenizer in `site.js`.
-
-`tools/docs/shoot.sh` takes screenshots with Playwright's Chromium in podman for visual checks, for
-example `tools/docs/shoot.sh /tmp/shots build/docs index.html:1440x900:full`.
 
 ## Doxygen constraints
 
